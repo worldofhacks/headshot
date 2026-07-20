@@ -35,8 +35,10 @@ PRD → intake → users & flows → constraints → research → decisions (ADR
 - **Tag everything:** `locked` / `proposed` / `open question` / `scope simplification`
   / `production-hardening` / `deferred` / `research required`.
 - **Never write application code.** Planning only.
-- **Deliverable names are law:** `./ARCHITECTURE.md`, `./AUDIT.md`, `./USERS.md` at
-  repo root. Planning artifacts live in `docs/planning/`.
+- **Deliverable names are law:** `./ARCHITECTURE.md`, `./THREAT_MODEL.md`, `./USERS.md`
+  at repo root. Planning artifacts live in `docs/planning/`. This project is greenfield —
+  there is no `AUDIT.md` and none is coming; `THREAT_MODEL.md` fills that slot and is an
+  artifact you *produce*, not one you inherit. Never create `AUDIT.md`.
 
 ---
 
@@ -46,7 +48,10 @@ Ask one at a time if missing:
 
 1. Path to the PRD (or pasted text). Read fully before anything else.
 2. Base repo root (for integration-surface recon).
-3. `AUDIT.md` and `USERS.md` if they exist yet — the architecture must trace to both.
+3. `THREAT_MODEL.md` and `USERS.md` if they exist yet — the architecture must trace to
+   both. Neither is inherited here: produce a first-pass `THREAT_MODEL.md` of the
+   **target** (endpoints, tools, auth) in Phase A/B — from the live target if reachable,
+   otherwise from its reference design.
 
 ---
 
@@ -84,7 +89,7 @@ real-time dashboard (requests, error rate, p50/p95, tool calls, retries,
 verification pass/fail) · ≥3 documented alerts · separate /health and /ready with
 real dependency checks · runnable API collection · load tests @ 10/50 concurrent ·
 baseline CPU/mem/latency/throughput profiles · AI cost analysis at 100/1K/10K/100K
-users (never cost-per-token × n) · eval suite where every case is boundary /
+**test runs** (never cost-per-token × n) · eval suite where every case is boundary /
 invariant / regression (happy-path-only fails).
 
 ## Phase D — Research
@@ -121,43 +126,88 @@ requirements mapped) · §8 evaluation strategy · §9 cost model skeleton ·
 
 Every § cites its ADRs. Every capability cites a USERS.md use case.
 
-## Phase G — Diagrams (rendered, not just planned)
+## Phase G — Diagrams (spec-first, then rendered)
 
-1. Write `docs/planning/DIAGRAM_PLAN.md`: which diagrams, what interview question
-   each must answer, presentation order, and a consistent color-zone legend.
-2. Render the standard four to `docs/diagrams/` as editable `.excalidraw` files
-   (hand-drawn style, color-zoned, per the **excalidraw-diagram** skill's layout,
-   schema, and contrast rules; use **architecture-excalidraw-comparison** when a
-   base-vs-proposed side-by-side is wanted):
-   - **System context** — components + trust zones; answers "where does it live,
-     where are the boundaries."
-   - **One verified request lifecycle** — numbered stages from user action to
-     verified response, correlation ID annotated end-to-end; the walkthrough diagram.
-   - **Trust boundaries & authz map** — token flow, what each zone can/can't do,
-     where enforcement lives; answers the hardest security question directly.
-   - **Deployment & CI topology** — services, data stores, deploy-on-green path,
-     rollback arrow.
-3. Every box label must trace to the draft — no diagram-only architecture. Remind
-   the user to export SVG/PNG for embedding (`.excalidraw` doesn't render on GitHub).
+1. Write `docs/planning/DIAGRAM_PLAN.md`: which diagrams, what interview question each
+   must answer, presentation order, and the shared color-zone legend.
+2. For **each** diagram write a build spec to `docs/diagrams/<ID>-<slug>.spec.md` using
+   the fixed template below — verbatim section order, verbatim headings. **The spec is
+   the source of truth; the `.excalidraw` is a render of it.** Any later change starts
+   in the spec.
+
+```
+DIAGRAM <ID> — <Title>
+Style: Excalidraw, hand-drawn, color-zoned. Export SVG + PNG.
+
+TITLE:    <canvas title>
+SUBTITLE: <one line>
+
+=== COLOR LEGEND ===     one line per plane: <color> = <meaning>
+=== ZONES ===            Z#  NAME  border-color, position
+=== NODES ===            grouped into horizontal BANDs; NAME  color  "sublabel"
+=== EDGES ===            numbered; FROM -> TO  "label"  [DASHED if not solid]
+=== POLICY BADGES ===    small dashed callouts + what each points at
+=== LAYOUT RULES ===     R1..Rn — banding, grouped connectors, forbidden routes
+```
+
+3. Render each spec to `docs/diagrams/<ID>-<slug>.excalidraw` (hand-drawn, color-zoned),
+   then export `.svg` + `.png` alongside it — `.excalidraw` does not render on GitHub.
+   NOTE: the `excalidraw-diagram` and `architecture-excalidraw-comparison` helper skills
+   are **not installed** — apply layout, color-zone, and contrast rules manually.
+   Excalidraw is the locked diagram format; do not substitute another.
+4. The standard set:
+   - **System context** — components + trust zones; "where does it live, where are the
+     boundaries."
+   - **Primary interaction loop** — the numbered end-to-end walkthrough diagram.
+   - **Trust boundaries & authz map** — what each zone can and cannot do, where
+     enforcement lives; answers the hardest security question directly. May be **merged**
+     with the interaction loop when one canvas carries both without crowding.
+   - **Deployment & CI topology** — services, data stores, deploy-on-green, rollback.
+5. Hard rules:
+   - Every box label must trace to the draft — no diagram-only architecture.
+   - **LAYOUT RULES are mandatory, not decorative.** At minimum: band the canvas and
+     forbid any edge crossing a band boundary twice; represent shared infrastructure as a
+     substrate band reached by **one grouped connector**, never one line per consumer;
+     give any quarantined zone **exactly one exit** and say so — that single edge is the
+     visual proof of containment.
+   - The legend must name **every** colour actually used on the canvas.
+   - Any colour word used in `docs/defense/DEFENSE_SCRIPT.md` must match the legend
+     exactly. A script that narrates a colour the diagram does not use is a live error.
 
 ## Phase H — Defense script
 
 Write `docs/defense/DEFENSE_SCRIPT.md` — the presentation walkthrough for the
-architecture defense. Format: airy, scannable, no timing marks, no quoted speech.
+architecture defense. **The format mirrors `DECISIONS.md`**: dense, declarative,
+every claim carrying its own counterfactual. Never loose prose sections.
 
-- **One section per load-bearing decision**, each in the same rhythm:
-  **Chose → Considered → Why mine wins.** Concrete specifics only — named
-  mechanisms, real numbers from RESEARCH.md, exact tradeoffs from the ADR.
-- **Small ASCII flow blocks** where flow beats prose (launch/auth, data access,
-  the verification pipeline, failure states, deploy pipeline).
-- **Opening:** the user + problem, with the evidence the persona choice rests on.
-- **A "What I cut" section** — researched removals with the reason; scope
-  discipline is presentation material, not a footnote.
-- **Closing position** — the system's safety invariants in four or five lines,
-  plus any honest calibration numbers (e.g., measured latency reality vs the
-  perceived-latency strategy).
-- **Appendix: a compressed ~5-minute spoken version** with timing blocks, for
-  time-boxed formats.
+Structure, in this order:
+1. **Framing blockquote** — what this is, the four bold labels used per beat, the
+   goal, the evidence pack, and the default tag.
+2. **Index table** — `| # | Beat | What it lands | Time |`, one row per beat, IDs
+   `S0…Sn`. It must be scannable standing alone.
+3. `---`, then **one section per beat**, headed ``### S# — Title `tag` ``.
+
+Every beat uses the same four bold-label paragraphs — this rhythm is the format:
+- **Say.** The line to deliver, in quotes where spoken verbatim.
+- **Why it holds.** The substantiation — named mechanisms, real numbers from
+  RESEARCH.md, exact tradeoffs from the ADR.
+- **If pushed.** The follow-up answer, with the likely question named inline
+  (e.g. *If pushed — "isn't this just microservices with prompts?"*).
+- **Concede.** The honest limit. Omit only where a beat genuinely has none.
+
+Tags mirror the DECISIONS status convention: `must-land` (default) · `spine` ·
+`reactive` · `pre-flight` · `volunteer these` · `scope`.
+
+- Use a **table** wherever content is already Q→A (anticipated hard questions),
+  tagged `reactive`.
+- Include a **run-of-show** beat tagged `pre-flight` — ordered, with any item other
+  beats depend on marked as blocking.
+- Include a **still-open** beat tagged `volunteer these` — unresolved items stated
+  proactively, each with where it is tracked.
+- Include a **what-I-cut** beat tagged `scope` when there are researched removals;
+  scope discipline is presentation material, not a footnote.
+- Optional appendix: a compressed ~5-minute version for time-boxed formats (the
+  index table's Time column is the budget).
 - Hard constraint: the script may only assert what DECISIONS.md / RESEARCH.md /
   the draft already contain — a claim invented for the podium is a claim that
   dies under one follow-up question. Tradeoffs are stated before an interviewer

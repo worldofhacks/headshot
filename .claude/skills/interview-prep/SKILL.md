@@ -4,7 +4,7 @@ version: 1.0.0
 description: >-
   Generate submission-grounded mock interview questions in the style of an AI video
   interview that probes PROCESS, FINDINGS, STRATEGY, SELF-CRITIQUE, and PRODUCTION
-  THINKING — not repo trivia. Reads the project's own artifacts (AUDIT.md,
+  THINKING — not repo trivia. Reads the project's own artifacts (THREAT_MODEL.md,
   ARCHITECTURE.md, DECISIONS.md, USERS.md, planning + defense docs) and produces 15
   specific, answerable questions with a "what a strong answer hits" scaffold for each,
   then optionally runs a timed mock and critiques answers. Invoke on "interview prep",
@@ -35,7 +35,7 @@ evidence, with a clear strong-vs-weak answer.
 
 1. Ask which submission stage this is for — **MVP / Early / Final** — and read that
    stage's requirements if a checklist exists. The stage shifts the question mix (§3).
-2. Read the grounding artifacts (whatever exists): `AUDIT.md`, `ARCHITECTURE.md`,
+2. Read the grounding artifacts (whatever exists): `THREAT_MODEL.md`, `ARCHITECTURE.md`,
    `USERS.md`, `docs/planning/DECISIONS.md`, `docs/planning/RESEARCH.md`, and the
    `docs/defense/*` prep docs. Questions must be answerable from these — no generic
    "tell me about microservices" filler.

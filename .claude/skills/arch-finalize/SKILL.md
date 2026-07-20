@@ -18,7 +18,7 @@ The draft is a hypothesis. This pass attacks it, patches it, and turns it into t
 binding contract the build phase implements against.
 
 ```
-PRD + docs/planning/* + AUDIT.md/USERS.md (if present)
+PRD + docs/planning/* + THREAT_MODEL.md/USERS.md (if present)
   → gap audit (12 dimensions, judged against posture)
   → findings resolved with the user
   → repo-root ARCHITECTURE.md (opens with ~500-word summary, §-anchored, ADR-cited)
@@ -32,7 +32,8 @@ PRD + docs/planning/* + AUDIT.md/USERS.md (if present)
 2. ALL of `docs/planning/` — `ls` it, read every artifact: PRESEARCH, RESEARCH,
    DECISIONS, ARCHITECTURE_DRAFT, DIAGRAM_PLAN, CLAUDE_CODE_HANDOFF. The audit is
    only possible against the sources; the draft alone can't tell you what it's missing.
-3. Root `AUDIT.md` and `USERS.md` if they exist — the architecture must trace to both.
+3. Root `THREAT_MODEL.md` and `USERS.md` if they exist — the architecture must trace
+   to both. There is no `AUDIT.md` on this project and none is coming.
 4. The **build posture** recorded in the handoff (`production-grade` | `prototype`).
    The audit is judged against it: under production-grade, testing, deploy/rollback,
    and failure-mode coverage are required, not nice-to-have.

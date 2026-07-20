@@ -1,0 +1,128 @@
+# THREAT_MODEL.md — OpenEMR Clinical Co-Pilot (target #1)
+
+> **First-pass** threat model produced by `/arch-draft` (the "AUDIT.md slot" per CLAUDE.md). The
+> `threat-model` skill deepens this for MVP once the platform has probed the live target. Existing
+> defenses are marked **to-be-probed** where they are not yet observed — never assumed. Describes the
+> **target**, not the platform. No real PHI is referenced anywhere in this repo.
+
+## Summary (~500 words)
+
+The target is a Clinical Co-Pilot chatbot embedded in OpenEMR that helps users retrieve chart
+information, summarize notes, assist with intake, and support clinical operations. From the
+platform's perspective it is a **maximally exposed LLM application**: it retrieves patient data
+(RAG over clinical records), writes back to the record (drafts notes / assists with orders), invokes
+tools/functions, and ingests uploaded content. Each of those four capabilities is an attack surface,
+and their combination is what makes the target dangerous — an indirect injection delivered through an
+uploaded document can reach a tool that writes to another patient's chart. The clinical setting
+raises the blast radius from "wrong answer" to "wrong answer a clinician may act on," and from "data
+leak" to "PHI disclosure across patients."
+
+**Highest-risk categories, in priority order.** (1) **Indirect + multi-turn prompt injection**,
+because the target ingests untrusted uploaded content and holds multi-turn context — the PRD already
+reports "uploaded content appeared to influence future responses" and "multi-turn conversations
+occasionally produced responses that ignored previous safeguards." (2) **PHI exfiltration /
+cross-patient exposure / authorization bypass**, because RAG over patient data plus a broken access
+boundary is a direct HIPAA-relevant disclosure. (3) **Tool misuse with write-back**, because
+unintended invocation or parameter tampering can corrupt the record or place orders — the only
+category here with autonomous *action* consequences. (4) **State corruption / context poisoning**,
+because conversation history is a persistence layer an attacker can seed. (5) **DoS / cost
+amplification**, because recursive tool calls and long chains already made "runtime cost and
+performance difficult to predict." (6) **Identity / role exploitation**, because a co-pilot that
+serves multiple roles is a privilege-escalation surface.
+
+**How the platform prioritizes coverage.** The Orchestrator reads observability — cases-per-category,
+pass/fail trend, open findings, regression risk — and directs the Red Team toward the highest-risk,
+least-covered categories first, in the order above. Coverage is not "run everything once": it is a
+standing loop that re-tests on every target version and escalates categories where partial successes
+cluster (the Red Team mutates partials into variants). Every case is tagged **boundary | invariant |
+regression** and mapped to **OWASP Web Top 10 + OWASP LLM Top 10**, so coverage is measured against a
+recognized surface, not an ad-hoc list. Confirmed exploits are admitted to a deterministic regression
+harness so a fixed vulnerability that reappears is caught on the next run.
+
+**What is known vs. to-be-probed.** The target's *capabilities* are confirmed (RAG, write-back,
+tools, uploads). Its *existing defenses* — input filtering, output guardrails, per-patient
+authorization, rate limits, tool allowlists — are largely **unobserved** and are exactly what the
+platform exists to establish empirically. This document therefore states each category's surface and
+impact with confidence, and its existing-defenses column as a hypothesis the eval suite will confirm
+or refute. The exact auth mode and API shape of the Co-Pilot are open questions pending inspection
+(`PRESEARCH.md` OQ1–OQ3); they change *how* attacks are delivered, not *which* categories apply.
+
+**Risk scoring** below is qualitative (Likelihood × Clinical Impact → Critical/High/Medium),
+appropriate for a first pass; the MVP threat model attaches measured pass/fail evidence per category.
+
+---
+
+## Category 1 — Prompt Injection (direct · indirect · multi-turn)
+- **Surface:** user chat input (direct); uploaded documents + RAG-retrieved record content (indirect);
+  accumulated conversation context (multi-turn).
+- **Impact:** the model executes attacker instructions — overriding safeguards, exfiltrating data, or
+  triggering tools. Indirect injection is worst here because the payload rides in content a clinician
+  legitimately uploaded or that RAG pulled from the record.
+- **Exploit difficulty:** Low–Medium. The PRD already reports observed influence from uploaded content
+  and multi-turn safeguard bypass.
+- **Existing defenses:** *to-be-probed* (input sanitization? content/instruction separation?).
+- **OWASP:** Web A03 Injection, A04 Insecure Design · LLM01 Prompt Injection, LLM04 Data/Model
+  Poisoning (indirect via RAG/uploads).
+- **Risk: Critical.**
+
+## Category 2 — Data Exfiltration (PHI leakage · cross-patient · authorization bypass)
+- **Surface:** RAG retrieval boundary; any response path that can echo retrieved records; the
+  per-patient authorization check (if any).
+- **Impact:** disclosure of PHI, or one patient's data surfacing in another's session — a direct
+  regulatory and safety failure.
+- **Exploit difficulty:** Medium. Depends on whether retrieval is scoped per authenticated
+  patient/role or globally.
+- **Existing defenses:** *to-be-probed* (row-level authz on retrieval? output PHI filtering?).
+- **OWASP:** Web A01 Broken Access Control · LLM02 Sensitive Information Disclosure, LLM07 System
+  Prompt Leakage, LLM08 Vector/Embedding Weaknesses (cross-tenant RAG bleed).
+- **Risk: Critical.**
+
+## Category 3 — State Corruption (conversation-history manipulation · context poisoning)
+- **Surface:** persisted conversation state; any memory/summary the Co-Pilot carries forward; content
+  written into the record that later re-enters context.
+- **Impact:** an attacker seeds context so later, legitimate turns behave unsafely — a persistent,
+  low-visibility compromise that survives across a session or is planted for a future user.
+- **Exploit difficulty:** Medium. Requires understanding what the target persists.
+- **Existing defenses:** *to-be-probed* (context trust separation? summary sanitization?).
+- **OWASP:** Web A08 Software & Data Integrity Failures, A04 Insecure Design · LLM01 Prompt Injection,
+  LLM04 Data/Model Poisoning.
+- **Risk: High.**
+
+## Category 4 — Tool Misuse (unintended invocation · parameter tampering · recursive calls)
+- **Surface:** the tool/function-calling layer, especially any **write-back** tool (notes/orders) and
+  any tool that takes free-form parameters.
+- **Impact:** the highest-*action* category — corrupting the record, placing an unintended order, or
+  driving recursive calls. Parameter tampering can redirect a legitimate tool to the wrong patient.
+- **Exploit difficulty:** Medium–High (needs tool schema knowledge), but consequences are severe.
+- **Existing defenses:** *to-be-probed* (tool allowlist? param validation? human confirm on write?).
+- **OWASP:** Web A03 Injection, A01 Broken Access Control, A10 SSRF (if any tool fetches URLs) · LLM06
+  Excessive Agency, LLM05 Improper Output Handling.
+- **Risk: Critical.**
+
+## Category 5 — Denial of Service (token exhaustion · infinite loops · cost amplification)
+- **Surface:** unbounded generation, recursive tool chains, long multi-turn sessions, large uploads.
+- **Impact:** cost blow-up and degraded availability — the PRD reports costs "increasing faster than
+  expected" from recursive tool usage and long chains. In a clinical setting, unavailability is a
+  safety issue.
+- **Exploit difficulty:** Low–Medium.
+- **Existing defenses:** *to-be-probed* (max tokens? loop/recursion caps? rate limits? upload caps?).
+- **OWASP:** Web A04 Insecure Design · LLM10 Unbounded Consumption.
+- **Risk: High.**
+
+## Category 6 — Identity & Role Exploitation (privilege escalation · persona hijacking · trust-boundary violation)
+- **Surface:** whatever distinguishes roles/permissions inside the Co-Pilot; any system-prompt-defined
+  persona; the boundary between "user says" and "system authorizes."
+- **Impact:** a lower-privileged user reaching higher-privileged data/actions, or the assistant being
+  coerced into a persona that drops its safeguards.
+- **Exploit difficulty:** Medium.
+- **Existing defenses:** *to-be-probed* (role enforcement server-side vs prompt-only?).
+- **OWASP:** Web A01 Broken Access Control, A07 Identification & Authentication Failures · LLM06
+  Excessive Agency, LLM07 System Prompt Leakage.
+- **Risk: High.**
+
+---
+
+## Coverage priority (feeds the Orchestrator)
+`1 Prompt Injection (Critical)` → `2 Data Exfiltration (Critical)` → `4 Tool Misuse (Critical)` →
+`3 State Corruption (High)` → `5 DoS/Cost (High)` → `6 Identity/Role (High)`. Priority is
+re-evaluated each run from observability; a category with clustering partial-successes is escalated.

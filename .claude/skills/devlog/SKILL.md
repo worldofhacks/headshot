@@ -61,7 +61,7 @@ If `docs/DEVLOG.md` doesn't exist yet, reconstruct the log from what's already t
 1. `git log --reverse --pretty=format:'%h %ad %s' --date=short` — the full commit spine,
    oldest first.
 2. Read the artifacts that record decisions and findings: `docs/planning/DECISIONS.md`
-   (D#), `AUDIT.md` (F#), `docs/planning/RESEARCH.md` (R#), `docs/prompts/*`, README /
+   (D#), `THREAT_MODEL.md` (F#), `docs/planning/RESEARCH.md` (R#), `docs/prompts/*`, README /
    DEPLOYMENT.md, and any defense docs.
 3. Weave them into dated entries in chronological order — every ADR becomes a decision
    entry, every major finding a finding entry, every reversal a pivot entry, each
@@ -113,7 +113,7 @@ Regenerate the narrative from the full log + git + ADRs. Structure:
   "why"; if it's unknown, mark it and ask.
 - DEVLOG.md is append-only — never rewrite past entries; a changed decision gets a new
   pivot entry pointing forward.
-- Link, don't duplicate — reference DECISIONS.md/AUDIT.md, don't restate them.
+- Link, don't duplicate — reference DECISIONS.md/THREAT_MODEL.md, don't restate them.
 - The narrative must stay sequential and honest, including the missteps and reversals —
   the pivots are the most valuable part of the story, not something to smooth over.
 - Reconcile against git so "track everything" is real: if it's committed, it's in the story.
