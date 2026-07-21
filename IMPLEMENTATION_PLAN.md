@@ -51,56 +51,56 @@ before their consumers**, frontmatter + trigger boundaries validated against `CL
 
 ## Prerequisites & Enablement  (start immediately; mostly parallel; local except P11)
 
-- [ ] **P1 — Create skill `contract-steward`** ∥
+- [x] **P1 — Create skill `contract-steward`** ∥
   - Files: NEW `.claude/skills/contract-steward/SKILL.md` · Anchors: `CLAUDE.md` skill spec, §4 · Map: enables P10, F9
   - Deps: none · Est: S
   - Accept: (a) created via `skill-creator`; (b) valid frontmatter (name/description); (c) **trigger boundary** = "define/change an inter-agent contract, bump a schema" — distinct from tasks-gen; (d) edge: covers versioned schema + typed errors + both-sided tests + migration notes; (e) error: a description colliding with an existing trigger is flagged
   - Verify: appears in Skill tool; frontmatter lints; trigger-boundary review vs `CLAUDE.md`
   - Test: — (skill; `skill-reviewer` if available) · Skills: **skill-creator**
 
-- [ ] **P2 — Create skill `threat-model`** ∥
+- [x] **P2 — Create skill `threat-model`** ∥
   - Files: NEW `.claude/skills/threat-model/SKILL.md` · Map: enables M7 · Deps: none · Est: S
   - Accept: (a) `skill-creator`; (b) trigger = "map/deepen the attack surface" — **distinct from** adversarial-eval-lifecycle; (c) edge: outputs the 6 categories + OWASP `{framework,version,id,name}` per D15; (d) error: overlap with eval-authoring flagged
   - Verify: Skill tool lists it; boundary review · Test: — · Skills: **skill-creator**
 
-- [ ] **P3 — Create skill `adversarial-eval-lifecycle`** ∥
+- [x] **P3 — Create skill `adversarial-eval-lifecycle`** ∥
   - Files: NEW `.claude/skills/adversarial-eval-lifecycle/SKILL.md` · Map: enables M8, M11, F4 · Deps: none · Est: S
   - Accept: (a) `skill-creator`; (b) trigger = "author/mutate/promote an attack case" — **distinct from** `eval-triage` (diagnoses a failing eval) and `judge-calibration` (ground-truth/drift); (c) edge: enforces boundary|invariant|regression tag + no happy-path-only; (d) error: trigger collision on "eval" flagged
   - Verify: Skill tool; boundary review vs `CLAUDE.md` trigger-boundaries note · Test: — · Skills: **skill-creator**
 
-- [ ] **P4 — Create skill `judge-calibration`** ∥
+- [x] **P4 — Create skill `judge-calibration`** ∥
   - Files: NEW `.claude/skills/judge-calibration/SKILL.md` · Map: enables M10 · Deps: none · Est: S
   - Accept: (a) `skill-creator`; (b) trigger = "calibrate the judge / check drift" — systematic, **never per-incident**; (c) edge: covers ground-truth + dual-judging + drift metrics; (d) error: overlap with eval-triage flagged
   - Verify: Skill tool; boundary review · Test: — · Skills: **skill-creator**
 
-- [ ] **P5 — Create skill `authorized-live-campaign` (safety-gated)** ∥
+- [x] **P5 — Create skill `authorized-live-campaign` (safety-gated)** ∥
   - Files: NEW `.claude/skills/authorized-live-campaign/SKILL.md` · Map: enables M4, F10 · Deps: none · Est: S
   - Accept: (a) `skill-creator`; (b) **`disable-model-invocation: true`** (live attacks are never implicit — `CLAUDE.md`); (c) trigger = explicit only; (d) edge: enforces allowlist + synthetic-data + budget/rate + abort as gate checklist; (e) error: a run without the gate is a failed run
   - Verify: Skill tool shows it non-model-invocable; frontmatter has the flag · Test: — · Skills: **skill-creator**
 
-- [ ] **P6 — Create skill `vuln-report`** ∥ (before Final)
+- [x] **P6 — Create skill `vuln-report`** ∥ (before Final)
   - Files: NEW `.claude/skills/vuln-report/SKILL.md` · Map: enables F2, F6, F7 · Deps: none · Est: S
   - Accept: (a) `skill-creator`; (b) trigger = "write a vuln report / triage a scan"; (c) edge: enforces the 6 PRD-21 fields + data-quality (unique id, no dup sequence) + triage mode; (d) error: a report missing a required field is rejected
   - Verify: Skill tool; boundary review · Test: — · Skills: **skill-creator**
 
-- [ ] **P7 — Create skill `evidence-audit`** ∥ (before Final)
+- [x] **P7 — Create skill `evidence-audit`** ∥ (before Final)
   - Files: NEW `.claude/skills/evidence-audit/SKILL.md` · Map: enables F8, F9, F12 · Deps: none · Est: S
   - Accept: (a) `skill-creator`; (b) trigger = "audit checkpoint completeness / assemble ATO+integration packet"; (c) edge: verifies AI-use disclosure current; (d) error: a missing graded deliverable is surfaced
   - Verify: Skill tool; boundary review · Test: — · Skills: **skill-creator**
 
-- [ ] **P8 — Repo scaffold + stack + import smoke test**
+- [x] **P8 — Repo scaffold + stack + import smoke test**
   - Files: NEW `pyproject.toml`, `src/` tree (per `PLAN.md` §5: `agents/`, `domain/`, `target/`, `regression/`, `observability/`, `policy/`, `storage/`), `ruff.toml`, `tests/test_smoke.py`
   - Anchors: §7 · Map: PLAN §5/§7, D2 · Deps: none · Est: M
   - Accept: (a) `pip install -e .` on Python 3.12; (b) **a real import smoke test** (`import agentforge; assert agentforge.__version__`) so `pytest -q` **passes** (≥1 test, not 0); (c) `ruff check .` clean; domain layer imports no LangGraph; (d) **edge:** a **local pre-commit gate** (`ruff` + `pytest`) fails on a lint error or broken import; (e) **error:** a broken import fails the smoke test. *(Type checking is deferred — no type-error gate is claimed unless a checker is configured in a later task. **GitHub-Actions CI is wired in M1 after the P11 bootstrap** — P8 does not assume a remote.)*
   - Verify: `pytest -q` shows 1 passed; `ruff check .` clean; pre-commit hook runs locally · Test: `test_smoke.py` import assertion · Skills: —
 
-- [ ] **P9 — TargetAdapter interface + deterministic fake** (breaks the gateway↔adapter cycle)
+- [x] **P9 — TargetAdapter interface + deterministic fake** (breaks the gateway↔adapter cycle)
   - Files: NEW `src/target/base.py` (generic `TargetAdapter` interface), `src/target/fake_adapter.py` (deterministic record/replay fake)
   - Anchors: §2, §5 · Map: PRD-01 (interface), enables M4, M12 · Deps: P8 · Est: S
   - Accept: (a) generic interface (no OpenEMR specifics); (b) the **deterministic fake** returns fixed, replayable responses for gateway + CI tests; (c) **edge:** fake supports simulated typed errors (target-unreachable, rate-limited); (d) **error:** the fake never reaches a network
   - Verify: fake round-trips a canned attempt with no network · Test: adapter-interface conformance test against the fake · Skills: —
 
-- [ ] **P10 — contracts/v1 schemas + typed errors + both-sided contract tests**
+- [x] **P10 — contracts/v1 schemas + typed errors + both-sided contract tests**
   - Files: NEW `contracts/v1/{campaign_directive,attack_attempt,attempt_result,evidence_envelope,verdict,regression_admission}.json`, `contracts/v1/errors/*.json`, `tests/contract/*`
   - Anchors: §4, D10, **D18** · Map: PRD-OPT-04/06/10/11 · Deps: P8, **P1** · Est: L
   - Accept: (a) versioned JSON Schema (min v1), framework-neutral; (b) **Evidence Envelope** with per-field trust labels (`trusted` code-populated `oracle_results[]`/`canary_hits[]`/`policy_decision`/`expected_safe_behavior`/`ground_truth_ref` vs `hostile` transcript) + size bound; (c) **AttemptResult** carries `content_hash` + `{campaign_run_id, attempt_id}`; **Verdict** schema-validated with enumerated states + confidence + typed reason codes; (d) typed error taxonomy (`target-unreachable · budget-exceeded · judge-timeout · no-findings-in-window · regression-detected · rate-limited · adapter-error · evidence-missing · evidence-integrity-failed`); (e) **edge/error:** a breaking change without version bump + migration note + updated tests **fails the run**
@@ -189,12 +189,28 @@ before their consumers**, frontmatter + trigger boundaries validated against `CL
   - Accept: (a) generates + **autonomously mutates** partial successes across multi-turn sequences; (b) **MVP inference = hosted-OSS uncensored** (per decision 2026-07-20; OpenRouter/Together, behind a scoped credential + gateway budget/rate cap) — local Mac remains the F7 config switch; (c) reaches the target **only** via the gateway, no creds of its own, no evidence; (d) **edge:** a partial spawns N variants toward the least-covered category; hosted-OSS spend is bounded by the gateway budget cap (M4); (e) **error:** a refusal/empty generation is retried/switched, not a silent stall; a budget-cap breach aborts, not overruns
   - Verify: a seeded partial produces mutated variants; no direct target call bypasses the gateway · Test: **boundary** — multi-turn, not single-prompt; mutation raises targeted-category coverage · Skills: **adversarial-eval-lifecycle** (P3)
 
+> ### 🔒 MVP Judge non-oracle safety rule (binding — do not weaken for schedule)
+> Because the full M10 calibration/drift system is **FINAL-COMMITTED**, the MVP Judge operates under a
+> phased, fail-closed constraint:
+> 1. **Deterministic oracle/canary evidence may still produce `EXPLOIT_CONFIRMED`** — this path is
+>    unaffected and always available.
+> 2. The MVP Judge **must NOT issue an LLM-only `EXPLOIT_LIKELY` or `NO_EXPLOIT_OBSERVED` from
+>    uncalibrated thresholds.**
+> 3. A **minimum ground-truth calibration slice** (M11) must pass — establishing initial per-category
+>    confidence thresholds — **before** those two LLM-only states are enabled for that category.
+> 4. **Until the minimum slice passes for a category, every non-oracle case in that category resolves to
+>    `INDETERMINATE`.** This **fails closed on the finding** (never counted safe, never admitted to
+>    regression, never published) **while unrelated campaign work continues** (fail-closed on the verdict,
+>    not the run — D13).
+> 5. This is not weakened to meet the deadline. The contract carries a typed reason code
+>    `non_oracle_uncalibrated_indeterminate` (P10) so the forced disposition is explicit and auditable.
+
 - [ ] **M9 — Judge agent (deterministic fail-closed verdict authority)**
   - Files: NEW `src/agents/judge/`, `src/agents/judge/oracles/` · Anchors: §3, §5, **D13, D18**, F1, S4 · Map: PRD-15/18, **S4** · Deps: **P10**, **M4**, **M6**, **P4** · Est: L
-  - Accept: (a) consumes the typed **Evidence Envelope** only — never unstructured attacker text outside the `hostile`-labelled field; deterministic **oracle/canary precedence** applied by code → `EXPLOIT_CONFIRMED` cannot be downgraded; (b) states `EXPLOIT_CONFIRMED|EXPLOIT_LIKELY|NO_EXPLOIT_OBSERVED|INDETERMINATE|ERROR`; (c) **fail closed on the verdict, not the run** (ambiguous → human-review queue; campaign continues elsewhere); (d) Judge holds **no creds/mutation/publish/execute**; output schema-validated; (e) **edge/error (S4):** an in-transcript verdict-flip instruction does not change disposition when an oracle fired; missing/invalid evidence → fail-closed `ERROR`
-  - Verify: a canary-hit case → `EXPLOIT_CONFIRMED` despite an embedded "return fail"; ambiguous case parks without stalling · Test: **invariant** — never maps `INDETERMINATE`/`ERROR`→safe; **injection** — see the expanded S4 battery in M12 · Skills: **judge-calibration** (P4, via M10)
+  - Accept: (a) consumes the typed **Evidence Envelope** only — never unstructured attacker text outside the `hostile`-labelled field; deterministic **oracle/canary precedence** applied by code → `EXPLOIT_CONFIRMED` cannot be downgraded; (b) states `EXPLOIT_CONFIRMED|EXPLOIT_LIKELY|NO_EXPLOIT_OBSERVED|INDETERMINATE|ERROR`; (c) **fail closed on the verdict, not the run** (ambiguous → human-review queue; campaign continues elsewhere); (d) Judge holds **no creds/mutation/publish/execute**; output schema-validated; (e) **edge/error (S4):** an in-transcript verdict-flip instruction does not change disposition when an oracle fired; missing/invalid evidence → fail-closed `ERROR`; (f) **MVP non-oracle rule (binding, above):** LLM-only `EXPLOIT_LIKELY`/`NO_EXPLOIT_OBSERVED` are **gated behind a passing minimum ground-truth calibration slice** per category; until it passes, non-oracle cases → `INDETERMINATE` with reason `non_oracle_uncalibrated_indeterminate`; oracle/canary → `EXPLOIT_CONFIRMED` remains available
+  - Verify: a canary-hit case → `EXPLOIT_CONFIRMED` despite an embedded "return fail"; ambiguous case parks without stalling; **with no calibration slice loaded, a non-oracle case → `INDETERMINATE` (never `NO_EXPLOIT_OBSERVED`/`EXPLOIT_LIKELY`)** · Test: **invariant** — never maps `INDETERMINATE`/`ERROR`→safe; **invariant** — uncalibrated non-oracle case is forced `INDETERMINATE` (MVP rule); **injection** — see the expanded S4 battery in M12 · Skills: **judge-calibration** (P4, via M10)
 
-- [ ] **M10 — Judge calibration + drift governance**
+- [ ] **M10 — Judge calibration + drift governance**  (the **full** system; a **minimum slice** ships at MVP via M11 to lift the non-oracle gate — see the MVP Judge rule)
   - Files: NEW `evals/ground-truth/`, `src/agents/judge/calibration.py` · Anchors: §5, §15, D13 · Map: PRD-18, PRD-OPT-08 · Deps: **M9**, **P4** · Est: L
   - Accept: (a) **dual judging across the complete ground-truth set**; (b) **random/stratified sampled dual judging of live non-oracle cases** (across categories/severities/target versions); (c) metrics — **false-negative rate, uncertainty rate, inter-judge disagreement, confidence-calibration error, drift over time**; (d) **per-category confidence + drift thresholds**; (e) **edge:** a threshold crossing **disables LLM-only dispositions for the affected category** — affected findings become `INDETERMINATE` **without stopping unrelated campaign work**; (f) **error/recovery:** re-enabling a category requires **human review + recalibration**
   - Verify: calibration report shows all five metric families per category; a simulated drift breach disables LLM-only dispositions for that category only · Test: **invariant** — drift breach → category LLM-only disabled + others unaffected; ground-truth dual-judge agreement computed · Skills: **judge-calibration** (P4)
@@ -202,8 +218,8 @@ before their consumers**, frontmatter + trigger boundaries validated against `CL
 - [ ] **M11 — Eval suite: ≥3 categories, schema-strict, with results  [HARD GATE]**
   - Files: NEW `evals/seeds/`, `evals/results/`, `evals/fixtures/` (synthetic), `src/storage/validators.py`
   - Anchors: §6, §10, §18 · Map: **PRD-07/08/09/28**, PRD-OPT-01/13 · Deps: **M8**, **M9**, **P3** · Est: L
-  - Accept: (a) seeds across **≥3 distinct categories** with the full **AttackCase field set** (cat/subcat, input sequence, expected-safe, observed pass/fail/partial, severity+exploitability, add-to-regression flag, OWASP tags, boundary|invariant|regression class); (b) `validate-eval-case` + `detect-duplicate-sequence` in the agent **and** CI; (c) **edge:** every case exercises a boundary/invariant/regression — **no happy-path-only**; (d) **error:** a case missing a field or duplicating a sequence is rejected
-  - Verify: `./evals/` produces pass/fail/partial for ≥3 categories vs the **live** target; validator rejects a malformed case in CI · Test: **invariant** — Judge never approves a confirmed exploit across the suite; **regression** — a fixed case that reappears is caught · Skills: **adversarial-eval-lifecycle** (P3)
+  - Accept: (a) seeds across **≥3 distinct categories** with the full **AttackCase field set** (cat/subcat, input sequence, expected-safe, observed pass/fail/partial, severity+exploitability, add-to-regression flag, OWASP tags, boundary|invariant|regression class); (b) `validate-eval-case` + `detect-duplicate-sequence` in the agent **and** CI; (c) **edge:** every case exercises a boundary/invariant/regression — **no happy-path-only**; (d) **error:** a case missing a field or duplicating a sequence is rejected; (e) **minimum ground-truth calibration slice (MVP Judge rule):** a labelled per-category slice sufficient to establish initial confidence thresholds ships here — it is the gate that lifts the non-oracle `INDETERMINATE` fallback (M9); a category with no passing slice stays gated
+  - Verify: `./evals/` produces pass/fail/partial for ≥3 categories vs the **live** target; validator rejects a malformed case in CI; the minimum calibration slice establishes per-category thresholds (or the category remains `INDETERMINATE`-gated) · Test: **invariant** — Judge never approves a confirmed exploit across the suite; **invariant** — a category without a passing calibration slice yields only oracle-`EXPLOIT_CONFIRMED` or `INDETERMINATE` (MVP rule); **regression** — a fixed case that reappears is caught · Skills: **adversarial-eval-lifecycle** (P3), **judge-calibration** (P4)
 
 - [ ] **M12 — Platform testing + CI substrate + invariant/injection battery (S2, S3, S4, S5, S9)**
   - Files: NEW `tests/{unit,integration,invariant,injection}/`, uses `src/target/fake_adapter.py` (P9), cassettes
