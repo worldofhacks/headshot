@@ -8,6 +8,14 @@ src = ["src", "tests"]
 select = ["E", "F", "I", "UP", "B", "SIM"]
 ignore = []
 
+[lint.per-file-ignores]
+# FROZEN M1a contract tests — byte-for-byte immutable (tdd-swarm IRON RULE). They carry an
+# intentional blank line after the import block that ruff's I001 would strip; exempt just
+# that rule for just these files rather than mutate a frozen test to satisfy the linter.
+"tests/test_config.py" = ["I001"]
+"tests/test_env_isolation.py" = ["I001"]
+"tests/test_health.py" = ["I001"]
+
 [lint.isort]
 known-first-party = ["agentforge"]
 

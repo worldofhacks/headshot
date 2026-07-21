@@ -1,0 +1,44 @@
+# Local development stack — app + Postgres. LOCAL DEV ONLY.
+# spec(M1a:AC-1) spec(M1a:AC-4)
+#
+# Synthetic data only; no live target is reached from here; no real credentials appear.
+# The values below are non-secret LOCAL placeholders — safe defaults for a throwaway dev
+# database. Production credentials are NEVER inline: they are resolved as secret
+# references by agentforge.config in the production environment only (O1 invariant), and
+# this compose file is pinned to environment=local so it cannot reach them.
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      # Local, non-secret placeholders. Do NOT reuse these anywhere real.
+      POSTGRES_USER: agentforge
+      POSTGRES_PASSWORD: local_dev_only
+      POSTGRES_DB: agentforge
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U agentforge -d agentforge"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      # local environment pins the isolation boundary: this app CANNOT resolve production
+      # target credentials (agentforge.config, O1).
+      AGENTFORGE_ENVIRONMENT: local
+      DATABASE_URL: postgresql://agentforge:local_dev_only@postgres:5432/agentforge
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  postgres_data:

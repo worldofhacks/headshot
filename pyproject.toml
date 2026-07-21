@@ -8,11 +8,14 @@ version = "0.1.0"
 description = "AgentForge / Adversarial Machine — a reusable multi-agent adversarial evaluation platform. This package holds the framework-neutral core (domain, target adapters, contracts); runtime agents land in later phases."
 requires-python = ">=3.12"
 license = { text = "UNLICENSED" }
-dependencies = []
+# Runtime deps are scoped to the deployment/health surface only. The framework-neutral
+# core (domain, contracts, config) imports NONE of these (D10); only agentforge.health
+# imports fastapi. uvicorn is the ASGI server the Dockerfile/compose run the app under.
+dependencies = ["fastapi>=0.111", "uvicorn[standard]>=0.30"]
 
 [project.optional-dependencies]
-# Local dev tooling only. Framework-neutral core has zero runtime deps by design (D10).
-dev = ["ruff>=0.6", "pytest>=8", "jsonschema>=4", "pre-commit>=3"]
+# Local dev tooling only. httpx backs fastapi's TestClient used by the health tests.
+dev = ["ruff>=0.6", "pytest>=8", "jsonschema>=4", "pre-commit>=3", "httpx>=0.27"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

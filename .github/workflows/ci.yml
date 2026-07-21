@@ -13,6 +13,25 @@ jobs:
   test:
     name: test
     runs-on: ubuntu-latest
+    # AC-4: an ephemeral PostgreSQL the test job can reach. Torn down with the job — no
+    # persistence, no real credentials (throwaway local-CI values only, never a secret).
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: agentforge
+          POSTGRES_PASSWORD: local_dev_only
+          POSTGRES_DB: agentforge
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U agentforge -d agentforge"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 5
+    env:
+      # Point the suite at the ephemeral service above (AC-4).
+      DATABASE_URL: postgresql://agentforge:local_dev_only@localhost:5432/agentforge
     steps:
       - uses: actions/checkout@v4
       - name: Set up Python
