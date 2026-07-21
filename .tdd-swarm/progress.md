@@ -146,3 +146,16 @@ NEXT: M5 (OpenEMR adapter + fail-closed preflight, NO network in tests/preflight
 (Red Team seed-replay full loop + fake/cassette; hosted behind explicit auth) -> offline deterministic e2e
 (M8->M4->P9->Recorder->M6a->M9: confirmed/no-exploit/indeterminate/integrity-fail/abort) -> docs/integration/
 packet -> presence-only preflight report. No hosted/target calls; no unverified model-name edits.
+
+## 2026-07-21 — Steps 6-9 COMPLETE (live-gate track)
+6. Offline deterministic e2e merged (960ce2c): real M8->M4->P9->Recorder->M6a->M9 chain proves
+   confirmed/no-exploit(->INDETERMINATE, honest)/indeterminate/integrity-fail(->ERROR)/budget-abort +
+   run/attempt correlation + observed-overrides-authored + coverage-aware dispatch + reconcile OK/DEGRADED.
+   Important (vacuous outcome-5 verdict assertion) + 2 minors resolved test-first. 476 passed/3 skipped.
+7. Integration packet: docs/integration/INTEGRATION_PACKET.md (interface diffs, contract compat, dependency
+   map, dataflow, CI/test evidence, failure-mode results, packaging verification, live-auth gate; NO secrets/
+   URLs/canaries/keys).
+9. Presence-only preflight reporter: scripts/preflight_status.py (set/empty + validity, NEVER a value).
+   Current status: Model=empty, Budget/AttemptCap/Rate/Timeout=missing, Canary=unavailable -> live NOT ready
+   (fail-closed). No hosted/target call made.
+NEXT: report to owner + STOP for explicit bounded live-campaign authorization.
