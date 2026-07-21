@@ -7,6 +7,40 @@
 This runbook defines the required staging and production topology and the evidence needed before a
 deployed status can be claimed.
 
+## Repository deployment artifacts
+
+The repository now prepares one multi-stage production image and three service-specific Railway
+config files. These files describe deployable process boundaries; they do **not** create a Railway
+project, environment, service, database, domain, variable, or deployment.
+
+| Railway service | Config-as-code path | Exact process |
+|---|---|---|
+| Web | `/railway/web.json` | `python -m agentforge.web` |
+| Runner | `/railway/runner.json` | `python -m agentforge.runner` |
+| Scheduler | `/railway/scheduler.json` | `python -m agentforge.scheduler` |
+| Web pre-deploy | `/railway/web.json` | `alembic upgrade head` |
+
+Each Railway service must be configured in the Dashboard to use its exact config path. The same
+reviewed `Dockerfile` is built for all three processes. Its final non-root Python image contains the
+installed wheel, `/app/alembic.ini`, the complete `/app/migrations` tree, and only the compiled Vite
+assets under `/app/console`. Node, npm, TypeScript sources, tests, source maps, and development servers
+remain outside the runtime stage.
+
+The commands are packaging contracts, not evidence that all private runtime composition exists. At
+this integration point Runner refuses to start without the trusted credential resolver, adapter
+factory, and atomic result/queue-completion composition; Scheduler refuses to start without an
+authoritative persisted schedule repository and queue composition. Keep both services private and
+stopped until those dependencies are implemented and verified. Do not set their readiness override
+variables merely to make Railway show a running process. Runner enablement also requires a gate before
+every outbound dispatch and a bounded active-work cancellation signal; a campaign-level queue claim
+cannot provide either invariant by itself.
+
+`VITE_CLERK_PUBLISHABLE_KEY` is the one frontend build argument. It is a public, environment-specific
+identifier, is required by every service build because all three services build the same image, and is
+consumed only by the throwaway Node stage. It is not an authentication secret or a private-service
+authority input. No Clerk secret, JWT verification key, session token, database URL, provider
+credential, or target credential may be a Docker build argument.
+
 ## Topology
 
 Create the same four-service pattern in separate Railway **staging** and **production** environments.
@@ -102,12 +136,23 @@ Deploy the same reviewed commit through staging before production.
 8. Re-enable scheduling only after readiness, queue, error-rate, and auth-denial signals are healthy.
 9. Promote the same commit to production with explicit human authorization and repeat the gates.
 
-The exact Railway process commands for runner and scheduler must be recorded when those composition
-entrypoints are integrated. Do not invent commands or mark those services deployed before they exist.
+The process commands are fixed in the repository artifact table above. A command's presence is not
+evidence that its external Railway service exists or is healthy. In particular, do not point Runner at
+the one-shot `python -m agentforge.campaign run` CLI: Railway Runner consumes durable `agent_work` jobs,
+while the campaign CLI consumes local files and is not a queue service.
+
+Only Web owns the schema-changing pre-deploy command. Runner and Scheduler must check that the database
+is already at the integrated Alembic head before consuming or producing work and must wait or exit
+fail-closed when it is not. This avoids concurrent Alembic writers if Railway builds the three services
+at the same time. For the first deployment and every migration-bearing release: deploy Web's pre-deploy
+migration, verify `/ready`, then activate Runner and Scheduler.
 
 ## Pre-deploy migrations
 
 - Alembic is the only schema apply path.
+- The checked-in `alembic.ini` intentionally has a blank `sqlalchemy.url`. Programmatic migration tests
+  may inject an isolated URL; normal CLI/pre-deploy execution uses the process `DATABASE_URL`. A usable
+  localhost value in the INI would override Railway and is forbidden.
 - Migrations are forward-compatible expansions first; application rollout follows; destructive
   contractions land only after all old consumers are gone.
 - The migrator uses a narrowly controlled database administration binding. Runtime Web/runner/scheduler
@@ -123,10 +168,15 @@ entrypoints are integrated. Do not invent commands or mark those services deploy
 `GET /health` is liveness only. It returns success when the process can serve and does not query
 PostgreSQL, Clerk, a model provider, or the target.
 
-`GET /ready` returns success only when the service can safely receive traffic. The current foundation
-checks PostgreSQL connectivity and schema/migration readiness. M1d must also ensure the local Clerk
-security configuration can be loaded and validated; it must not make a Clerk network request from the
-probe. A failed dependency/configuration check returns `503` and blocks promotion.
+`GET /ready` returns success only when the service can safely receive traffic. The integrated Web
+checks PostgreSQL connectivity, the exact Alembic head, packaged console availability, and local
+Clerk/Web security configuration parsing. It does not make a Clerk network request from the probe. A
+failed dependency or configuration check returns `503` and blocks promotion.
+
+Container CI exercises both sides without contacting Clerk: an unconfigured image must return `503`,
+while the same image connected to a migrated throwaway PostgreSQL database and given an in-memory
+generated RSA public fixture plus valid local settings must return `200`. This is packaging evidence,
+not real-user or deployed-environment verification.
 
 Readiness is not a reason to call the live target or a model. Those dependencies have separate runtime
 health, circuit-breaker, and campaign preflight behavior.
@@ -153,12 +203,16 @@ reference and never committed, printed, included in build arguments, or copied b
 | Variable or class | Service | Handling |
 |---|---|---|
 | `AGENTFORGE_ENVIRONMENT` | All | Plain enumerated setting; exact environment value |
+| `PORT` | Web | Assigned by Railway; Web binds this exact decimal port |
+| `AGENTFORGE_CONSOLE_DIR` | Web | Fixed packaged path `/app/console`; never a host/source directory in deployment |
+| `AGENTFORGE_MAX_REQUEST_BYTES` | Web | Explicit integer request-body cap from 1 KiB through 10 MiB |
 | `DATABASE_URL` | Each service that needs DB access | Railway reference to that environment's private Postgres; use least-privilege role per service |
-| `VITE_CLERK_PUBLISHABLE_KEY` | Web build/runtime as integration requires | Public identifier; environment-specific and safe to expose in browser bundle |
+| `VITE_CLERK_PUBLISHABLE_KEY` | Build of each shared-image service | Public identifier; required Docker build argument, environment-specific, consumed only when compiling the browser bundle |
 | `CLERK_PUBLISHABLE_KEY` | Web | Public backend identifier; environment-specific |
 | `CLERK_JWT_KEY` | Web | Multiline PEM public verification key; sealed/integrity-controlled |
 | `CLERK_AUTHORIZED_PARTIES` | Web | Exact HTTPS Web origins only; no wildcard |
 | `CLERK_REQUIRED_ORG_ID` | Web | Exact environment-specific Headshot Organization ID |
+| `CLERK_FRONTEND_API_ORIGIN` | Web | Exact environment-specific Clerk Frontend API HTTPS origin used by the CSP `connect-src`; no path or wildcard |
 | `CLERK_PRODUCTION_AUTHORIZED_PARTIES` | Staging Web only | Exact production-origin comparison guard; never treated as a staging origin |
 | `CLERK_PRODUCTION_ORG_ID` | Staging Web only | Exact production Organization comparison guard; never accepted as staging membership |
 | `CLERK_SECRET_KEY` | None for request auth | Absent. Future Backend API administration only after separate review |
@@ -185,6 +239,7 @@ keys, invitation links, session tokens, or backup codes.
 | Roles | Observer, Operator, Approver, Auditor | Observer, Operator, Approver, Auditor; Enhanced B2B add-on provisioned |
 | Permissions | Exact custom matrix in `docs/security/AUTHENTICATION.md` | Exact same keys; environment-local assignments |
 | Authorized parties | Exact staging Railway HTTPS origin | Exact production Railway HTTPS origin |
+| Frontend API origin | Exact staging Clerk FAPI HTTPS origin | Exact production Clerk FAPI HTTPS origin |
 | JWT verification | Environment's PEM public key, networkless | Environment's PEM public key, networkless |
 | Accepted human token | `session_token` only | `session_token` only |
 | Publishable-key class | `pk_test_…` | `pk_live_…` |
@@ -221,6 +276,10 @@ authentication to recover availability.
 - [ ] Environment-scoped variables and least-privilege database roles are verified.
 - [ ] Staging cannot resolve production target credentials or accept production Clerk configuration.
 - [ ] Alembic migration and revision evidence is captured without credentials.
+- [ ] The Web service uses `/railway/web.json`; Runner and Scheduler use their respective private config paths.
+- [ ] The built image contains `/app/alembic.ini`, the complete migration tree, and compiled console assets, and contains no Node/npm/source maps.
+- [ ] Clean-database and `0003 -> 0004 -> integrated head` migrations pass inside that exact image.
+- [ ] Web honors Railway `PORT`; Runner and Scheduler expose no HTTP listener.
 - [ ] `/health` and `/ready` behave as documented.
 - [ ] Public shell paths are enumerated; all other human routes deny by default.
 - [ ] Clerk restricted enrollment, Headshot Organization, MFA, roles, permissions, and add-on are verified.

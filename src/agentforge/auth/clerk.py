@@ -29,6 +29,25 @@ from agentforge.auth.principal import Principal
 Verifier = Callable[[Any, AuthenticateRequestOptions], Any]
 
 
+def _has_explicit_bearer_token(request: Any) -> bool:
+    """Require the M1d bearer boundary before the SDK can inspect Clerk cookies."""
+
+    try:
+        value = request.headers.get("authorization")
+    except Exception:
+        return False
+    if not isinstance(value, str):
+        return False
+    scheme, separator, credential = value.partition(" ")
+    return (
+        separator == " "
+        and scheme.lower() == "bearer"
+        and bool(credential)
+        and credential == credential.strip()
+        and not any(character.isspace() for character in credential)
+    )
+
+
 def _scrub_request_state(state: Any) -> None:
     """Best-effort removal of the SDK's credential-bearing request state."""
 
@@ -59,6 +78,17 @@ class ClerkAuthenticator:
 
     def authenticate(self, request: Any) -> Principal:
         """Authenticate one request without a Clerk/JWKS network call."""
+
+        if not _has_explicit_bearer_token(request):
+            # Cookie-only Clerk sessions are intentionally outside the API contract.  All
+            # meaningful requests use a request-time bearer token, so mutations do not
+            # inherit ambient-cookie CSRF risk.
+            request = None
+            raise AuthenticationError()
+
+        request_state = None
+        with suppress(Exception):
+            request_state = request.state
 
         options = AuthenticateRequestOptions(
             jwt_key=self._config.jwt_key,
@@ -106,6 +136,17 @@ class ClerkAuthenticator:
         if principal is None:
             payload.clear()
             raise AuthenticationUnavailableError()
+        expiration = payload.get("exp")
+        if (
+            request_state is not None
+            and isinstance(expiration, (int, float))
+            and not isinstance(expiration, bool)
+        ):
+            # The expiry timestamp is not a credential. Keeping only this deadline on the
+            # request lets long-lived streams terminate and reauthenticate without retaining
+            # the token, Authorization header, or complete claims.
+            with suppress(Exception):
+                request_state.clerk_session_expires_at = float(expiration)
         return principal
 
     def _principal_from_payload(self, payload: dict[str, Any]) -> Principal:

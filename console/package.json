@@ -3,23 +3,37 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "Headshot Operator Console — production frontend recreated from the frozen titanium & ceramic design (DESIGN_SYSTEM.md). Demo scenario + honest Integration state; no live console API yet (all PROPOSED).",
+  "description": "Headshot Operator Console — authenticated same-origin frontend for AgentForge.",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
-    "check:forbidden": "node scripts/check-forbidden-language.mjs"
+    "test": "vitest run",
+    "test:browser": "playwright test",
+    "dev:browser": "vite --mode browser-test --host 127.0.0.1 --port 4174",
+    "check:forbidden": "node scripts/check-forbidden-language.mjs",
+    "check:bundle": "node scripts/check-production-bundle.mjs"
   },
   "dependencies": {
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "@clerk/clerk-js": "6.25.6",
+    "@clerk/react": "6.12.6",
+    "@clerk/ui": "1.25.6",
+    "react": "18.3.1",
+    "react-dom": "18.3.1"
   },
   "devDependencies": {
-    "@types/react": "^18.3.5",
-    "@types/react-dom": "^18.3.0",
-    "@vitejs/plugin-react": "^5.2.0",
-    "typescript": "^5.5.4",
-    "vite": "^7.3.6"
+    "@playwright/test": "1.61.1",
+    "@testing-library/react": "16.3.2",
+    "@types/react": "18.3.31",
+    "@types/react-dom": "18.3.7",
+    "@vitejs/plugin-react": "5.2.0",
+    "jsdom": "29.1.1",
+    "typescript": "5.9.3",
+    "vite": "7.3.6",
+    "vitest": "4.1.10"
+  },
+  "overrides": {
+    "uuid": "11.1.1"
   }
 }

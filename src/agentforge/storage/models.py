@@ -46,6 +46,7 @@ import datetime
 
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     CheckConstraint,
     Enum,
     ForeignKey,
@@ -288,9 +289,13 @@ class AttemptResult(Base):
     schema_version: Mapped[str] = mapped_column(String(32), nullable=False, server_default="1")
     campaign_run_id: Mapped[str] = mapped_column(String(64), nullable=False)
     attempt_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    organization_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     campaign_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     target_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     target_version: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    surface_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    surface_version: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    authorization_scope_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     attack_attempt: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     request_transcript: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     response_transcript: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -310,6 +315,7 @@ class AttemptResult(Base):
     __table_args__ = (
         UniqueConstraint("campaign_run_id", "attempt_id", name="uq_attempt_result_run_attempt"),
         Index("ix_attempt_result_target_version", "target_version"),
+        Index("ix_attempt_result_org_run", "organization_id", "campaign_run_id"),
     )
 
 
@@ -331,6 +337,7 @@ class Verdict(Base):
     confidence: Mapped[float | None] = mapped_column(nullable=True)
     campaign_run_id: Mapped[str] = mapped_column(String(64), nullable=False)
     attempt_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    organization_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime.datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
     )
@@ -341,6 +348,7 @@ class Verdict(Base):
             ["attempt_result.campaign_run_id", "attempt_result.attempt_id"],
             name="fk_verdict_run_attempt_attempt_result",
         ),
+        Index("ix_verdict_org_run", "organization_id", "campaign_run_id"),
     )
 
 
@@ -356,18 +364,24 @@ class Finding(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     finding_id: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    organization_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     state: Mapped[str] = mapped_column(finding_state, nullable=False, server_default="candidate")
     severity: Mapped[str] = mapped_column(finding_severity, nullable=False)
     category: Mapped[str] = mapped_column(Text, nullable=False)
     target_version: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Added by the forward-only 0002 expand migration.  Keeping ORM metadata aligned
+    # prevents a later autogenerate from proposing a destructive drop.
+    exploitability: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime.datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
     )
 
     __table_args__ = (
+        UniqueConstraint("organization_id", "finding_id", name="uq_finding_org_finding_id"),
         Index("ix_finding_severity", "severity"),
         Index("ix_finding_category", "category"),
         Index("ix_finding_target_version", "target_version"),
+        Index("ix_finding_org_state", "organization_id", "state"),
     )
 
 
@@ -521,3 +535,469 @@ Index(
     postgresql_where=text("status = 'queued'::job_status"),
 )
 Index("ix_jobs_depth", Job.queue, Job.status)
+
+
+# ---------------------------------------------------------------------------
+# M1d control-plane identity, workflow, audit, and idempotency tables.
+# Definition/workflow/event rows are append-only by migration-level triggers.
+# ---------------------------------------------------------------------------
+class TargetIdentity(Base):
+    __tablename__ = "target_identities"
+
+    organization_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    target_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint("organization_id ~ '^org_[A-Za-z0-9]+$'", name="target_identity_org_id"),
+    )
+
+
+class TargetDefinitionRecord(Base):
+    __tablename__ = "target_definitions"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    organization_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    target_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    version: Mapped[str] = mapped_column(String(32), nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    payload: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    actor_user_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    actor_session_id: Mapped[str] = mapped_column(String(128), nullable=False)
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["organization_id", "target_id"],
+            ["target_identities.organization_id", "target_identities.target_id"],
+            name="fk_target_definitions_identity",
+        ),
+        UniqueConstraint(
+            "organization_id", "target_id", "version", name="uq_target_definitions_org_id_version"
+        ),
+        UniqueConstraint(
+            "organization_id",
+            "target_id",
+            "version",
+            "content_hash",
+            name="uq_target_definitions_org_id_version_hash",
+        ),
+        CheckConstraint("content_hash ~ '^[0-9a-f]{64}$'", name="target_definition_hash"),
+        CheckConstraint(
+            "version ~ '^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$'",
+            name="target_definition_semver",
+        ),
+        CheckConstraint(
+            "jsonb_typeof(payload) = 'object'", name="target_definition_payload_object"
+        ),
+    )
+
+
+class TargetLifecycleEvent(Base):
+    __tablename__ = "target_lifecycle_events"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    organization_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    target_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    target_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    from_lifecycle: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    to_lifecycle: Mapped[str] = mapped_column(String(16), nullable=False)
+    actor_user_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    actor_session_id: Mapped[str] = mapped_column(String(128), nullable=False)
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["organization_id", "target_id", "target_version"],
+            [
+                "target_definitions.organization_id",
+                "target_definitions.target_id",
+                "target_definitions.version",
+            ],
+            name="fk_target_lifecycle_definition",
+        ),
+        CheckConstraint(
+            "to_lifecycle IN ('draft','validating','ready','disabled','archived')",
+            name="target_lifecycle_to_allowed",
+        ),
+        CheckConstraint(
+            "from_lifecycle IS NULL OR from_lifecycle IN "
+            "('draft','validating','ready','disabled','archived')",
+            name="target_lifecycle_from_allowed",
+        ),
+        Index(
+            "ix_target_lifecycle_latest",
+            "organization_id",
+            "target_id",
+            "target_version",
+            "id",
+        ),
+    )
+
+
+class SurfaceIdentity(Base):
+    __tablename__ = "surface_identities"
+
+    organization_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    surface_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    target_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "organization_id",
+            "surface_id",
+            "target_id",
+            name="uq_surface_identities_org_surface_target",
+        ),
+        ForeignKeyConstraint(
+            ["organization_id", "target_id"],
+            ["target_identities.organization_id", "target_identities.target_id"],
+            name="fk_surface_identities_target",
+        ),
+    )
+
+
+class AttackSurfaceDefinitionRecord(Base):
+    __tablename__ = "attack_surface_definitions"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    organization_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    surface_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    version: Mapped[str] = mapped_column(String(32), nullable=False)
+    target_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    target_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    payload: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    actor_user_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    actor_session_id: Mapped[str] = mapped_column(String(128), nullable=False)
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["organization_id", "surface_id", "target_id"],
+            [
+                "surface_identities.organization_id",
+                "surface_identities.surface_id",
+                "surface_identities.target_id",
+            ],
+            name="fk_attack_surface_identity",
+        ),
+        ForeignKeyConstraint(
+            ["organization_id", "target_id", "target_version"],
+            [
+                "target_definitions.organization_id",
+                "target_definitions.target_id",
+                "target_definitions.version",
+            ],
+            name="fk_attack_surface_target_definition",
+        ),
+        UniqueConstraint(
+            "organization_id", "surface_id", "version", name="uq_attack_surface_org_id_version"
+        ),
+        UniqueConstraint(
+            "organization_id",
+            "surface_id",
+            "version",
+            "target_id",
+            name="uq_attack_surface_org_id_version_target",
+        ),
+        CheckConstraint("content_hash ~ '^[0-9a-f]{64}$'", name="attack_surface_hash"),
+        CheckConstraint("jsonb_typeof(payload) = 'object'", name="attack_surface_payload_object"),
+    )
+
+
+class SurfaceStateEvent(Base):
+    __tablename__ = "surface_state_events"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    organization_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    surface_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    surface_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    target_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    from_enabled: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    to_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    actor_user_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    actor_session_id: Mapped[str] = mapped_column(String(128), nullable=False)
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["organization_id", "surface_id", "surface_version", "target_id"],
+            [
+                "attack_surface_definitions.organization_id",
+                "attack_surface_definitions.surface_id",
+                "attack_surface_definitions.version",
+                "attack_surface_definitions.target_id",
+            ],
+            name="fk_surface_state_definition",
+        ),
+        Index(
+            "ix_surface_state_latest",
+            "organization_id",
+            "surface_id",
+            "surface_version",
+            "id",
+        ),
+    )
+
+
+class CampaignAuthorizationRequestRecord(Base):
+    __tablename__ = "campaign_authorization_requests"
+
+    request_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    organization_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    scope_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    scope_payload: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    launcher_user_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    launcher_session_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    expires_at: Mapped[datetime.datetime] = mapped_column(TIMESTAMP(timezone=True), nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "organization_id",
+            "request_id",
+            "scope_hash",
+            name="uq_campaign_authorization_request_scope",
+        ),
+        CheckConstraint(
+            "scope_hash ~ '^[0-9a-f]{64}$'", name="campaign_authorization_request_hash"
+        ),
+        CheckConstraint(
+            "jsonb_typeof(scope_payload) = 'object'", name="campaign_authorization_scope_object"
+        ),
+        CheckConstraint(
+            "launcher_user_id LIKE 'user_%'", name="campaign_authorization_launcher_user"
+        ),
+        CheckConstraint(
+            "launcher_session_id LIKE 'sess_%'", name="campaign_authorization_launcher_session"
+        ),
+        Index("ix_campaign_authorization_requests_org_created", "organization_id", "created_at"),
+    )
+
+
+class CampaignAuthorizationDecisionRecord(Base):
+    __tablename__ = "campaign_authorization_decisions"
+
+    decision_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    organization_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    request_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    scope_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    decision: Mapped[str] = mapped_column(String(16), nullable=False)
+    approver_user_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    approver_session_id: Mapped[str] = mapped_column(String(128), nullable=False)
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["organization_id", "request_id", "scope_hash"],
+            [
+                "campaign_authorization_requests.organization_id",
+                "campaign_authorization_requests.request_id",
+                "campaign_authorization_requests.scope_hash",
+            ],
+            name="fk_campaign_authorization_decision_request",
+        ),
+        UniqueConstraint(
+            "organization_id", "request_id", name="uq_campaign_authorization_decision_request"
+        ),
+        CheckConstraint(
+            "decision IN ('approved','rejected')", name="campaign_authorization_decision_allowed"
+        ),
+        CheckConstraint(
+            "scope_hash ~ '^[0-9a-f]{64}$'", name="campaign_authorization_decision_hash"
+        ),
+        CheckConstraint(
+            "approver_user_id LIKE 'user_%'", name="campaign_authorization_approver_user"
+        ),
+        CheckConstraint(
+            "approver_session_id LIKE 'sess_%'", name="campaign_authorization_approver_session"
+        ),
+    )
+
+
+class CampaignRunRecord(Base):
+    __tablename__ = "campaign_runs"
+
+    run_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    organization_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    authorization_request_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    scope_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    launcher_user_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    launcher_session_id: Mapped[str] = mapped_column(String(128), nullable=False)
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["organization_id", "authorization_request_id", "scope_hash"],
+            [
+                "campaign_authorization_requests.organization_id",
+                "campaign_authorization_requests.request_id",
+                "campaign_authorization_requests.scope_hash",
+            ],
+            name="fk_campaign_run_authorization_request",
+        ),
+        UniqueConstraint(
+            "organization_id", "authorization_request_id", name="uq_campaign_run_authorization_once"
+        ),
+        UniqueConstraint("organization_id", "run_id", name="uq_campaign_runs_org_run"),
+        CheckConstraint("scope_hash ~ '^[0-9a-f]{64}$'", name="campaign_run_scope_hash"),
+    )
+
+
+class CampaignRunEvent(Base):
+    __tablename__ = "campaign_run_events"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    organization_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    run_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    state: Mapped[str] = mapped_column(String(24), nullable=False)
+    actor_user_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    actor_session_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    reason_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["organization_id", "run_id"],
+            ["campaign_runs.organization_id", "campaign_runs.run_id"],
+            name="fk_campaign_run_event_run",
+        ),
+        CheckConstraint(
+            "state IN ('queued','running','complete','aborted','failed')",
+            name="campaign_run_event_state_allowed",
+        ),
+        Index("ix_campaign_run_events_latest", "organization_id", "run_id", "id"),
+    )
+
+
+class CampaignAttemptRecord(Base):
+    __tablename__ = "campaign_attempts"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    organization_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    run_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    attempt_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    ordinal: Mapped[int] = mapped_column(Integer, nullable=False)
+    case_id: Mapped[str] = mapped_column(String(128), nullable=False)
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["organization_id", "run_id"],
+            ["campaign_runs.organization_id", "campaign_runs.run_id"],
+            name="fk_campaign_attempt_run",
+        ),
+        UniqueConstraint(
+            "organization_id", "run_id", "attempt_id", name="uq_campaign_attempt_identity"
+        ),
+        UniqueConstraint(
+            "organization_id", "run_id", "ordinal", name="uq_campaign_attempt_ordinal"
+        ),
+        CheckConstraint("ordinal >= 0", name="campaign_attempt_ordinal_nonnegative"),
+    )
+
+
+class CommandIdempotency(Base):
+    __tablename__ = "command_idempotency"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    organization_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    actor_user_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    command_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    response_payload: Mapped[dict] = mapped_column(JSONB, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "organization_id",
+            "actor_user_id",
+            "command_type",
+            "idempotency_key",
+            name="uq_command_idempotency_scope",
+        ),
+        CheckConstraint("request_hash ~ '^[0-9a-f]{64}$'", name="command_idempotency_request_hash"),
+        CheckConstraint(
+            "jsonb_typeof(response_payload) = 'object'", name="command_idempotency_response_object"
+        ),
+    )
+
+
+class AuditEvent(Base):
+    __tablename__ = "audit_events"
+
+    cursor: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    organization_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    event_type: Mapped[str] = mapped_column(String(96), nullable=False)
+    aggregate_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    aggregate_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    actor_user_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    actor_session_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    payload: Mapped[dict] = mapped_column(JSONB, nullable=False)
+
+    __table_args__ = (
+        CheckConstraint("jsonb_typeof(payload) = 'object'", name="audit_event_payload_object"),
+        Index("ix_audit_events_org_cursor", "organization_id", "cursor"),
+    )
+
+
+class FindingDecisionEvent(Base):
+    __tablename__ = "finding_decision_events"
+
+    decision_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    organization_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    finding_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    decision: Mapped[str] = mapped_column(String(24), nullable=False)
+    actor_user_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    actor_session_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    rationale: Mapped[str] = mapped_column(Text, nullable=False)
+    reason_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["organization_id", "finding_id"],
+            ["finding.organization_id", "finding.finding_id"],
+            name="fk_finding_decision_finding",
+        ),
+        CheckConstraint(
+            "decision IN ('approved','rejected','resolved')", name="finding_decision_allowed"
+        ),
+        CheckConstraint(
+            "char_length(rationale) BETWEEN 1 AND 2000",
+            name="finding_decision_rationale_length",
+        ),
+        Index("ix_finding_decision_history", "organization_id", "finding_id", "created_at"),
+    )

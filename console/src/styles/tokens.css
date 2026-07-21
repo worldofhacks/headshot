@@ -1,7 +1,7 @@
 /*
  * Headshot Operator Console — canonical design tokens (titanium & ceramic, FROZEN).
- * Transcribed verbatim from the prototype :root / [data-theme="light"] custom properties.
- * This is the "real token layer" DESIGN_SYSTEM.md §10 asks production to re-express — do not
+ * Preserves the reviewed :root / [data-theme="light"] custom properties.
+ * This is the canonical token layer — do not
  * hand-edit values; the visual system is frozen. Assign colors by ROLE (§3.3), never per-component.
  */
 :root {

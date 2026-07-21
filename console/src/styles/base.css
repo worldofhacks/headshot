@@ -1,6 +1,6 @@
 /*
- * Headshot Operator Console — base / reset / motion, transcribed verbatim from the prototype
- * head. Utility classes (.mono, .lab, .glass, .scrim) and keyframes (hs-*) match the frozen
+ * Headshot Operator Console — base reset and motion layer. Utility classes
+ * (.mono, .lab, .glass, .scrim) and keyframes (hs-*) match the frozen
  * design system. prefers-reduced-motion / reduced-transparency / contrast are honored (§9).
  */
 * { box-sizing: border-box; }

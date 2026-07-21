@@ -51,6 +51,18 @@ def test_missing_token_maps_to_401(auth_config, request_factory) -> None:
     _assert_status(excinfo.value, 401)
 
 
+def test_clerk_cookie_cannot_replace_explicit_bearer_token(
+    auth_config, token_factory, request_factory
+) -> None:
+    token = token_factory()
+    request = request_factory(extra_headers={"Cookie": f"__session={token}"})
+
+    with pytest.raises(AuthenticationError) as excinfo:
+        ClerkAuthenticator(auth_config).authenticate(request)
+
+    _assert_status(excinfo.value, 401)
+
+
 def test_malformed_token_maps_to_401(auth_config, request_factory) -> None:
     with pytest.raises(AuthenticationError) as excinfo:
         ClerkAuthenticator(auth_config).authenticate(request_factory("not.a.valid.session-token"))

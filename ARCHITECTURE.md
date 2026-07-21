@@ -52,15 +52,24 @@ offensive work; deployed default is hosted, local Mac is a dev/cost-baseline swi
 Judge). We configure/wrap Garak, PyRIT, Giskard, Promptfoo, ZAP and Semgrep and build only the four
 capabilities no tool delivers.
 
-**Human identity and hosting boundary (selected/planned; not yet deployed).** The full console and API
-run on a public Railway **Web** service; runner, scheduler, and Postgres services remain on Railway's
-private network. **Clerk** is the managed human IdP: restricted/invitation-only enrollment, one required
+**Human identity and hosting boundary (locally integrated; not deployed).** The intended full console
+and API run on a public Railway **Web** service; runner, scheduler, and Postgres services remain on
+Railway's private network. This integration branch packages that topology and composes the protected
+same-origin console/API locally, but it has not provisioned or verified Railway or Clerk. **Clerk** is
+the managed human IdP: restricted/invitation-only enrollment, one required
 Headshot Organization, personal accounts and user-created organizations disabled, and MFA required for
 every user (TOTP plus backup codes preferred; SMS is never the only factor). The Web service verifies
 only Clerk `session_token` JWTs networklessly with a configured PEM key, binds them to explicit
 environment-specific authorized parties and the exact Headshot Organization, and derives authority only
 from verified custom organization permissions. This is human **authentication and application RBAC**;
 it never replaces the separate Policy Gateway authorization required to execute a live campaign.
+Revision `0005` persists immutable launcher identity, exact-scope authorization decisions, target/surface
+versions, and append-only audit history. Live campaign launch remains fail-closed unavailable until the
+private runner's trusted credential resolver and surface-bound execution composition exist. The
+immutable registry primitives are server-side only: public target/surface authoring remains typed
+unavailable until a trusted catalog exists, so browser-provided hosts, adapters, credential references,
+or endpoints cannot become dispatch authority. Existing server-authored versions still support audited
+lifecycle and enable/disable transitions.
 
 **Defensible to a CISO.** Inter-agent messages are versioned, framework-neutral JSON Schemas with typed
 errors and both-sided contract tests. Adversarial content is quarantined and treated as untrusted data
@@ -79,10 +88,11 @@ it forces. Numbers are deliberately deferred to measurement (§11, §17).
   Policy Gateway.
 - **Out of scope (external):** the OpenEMR Clinical Co-Pilot (**target**, attacked over its live URL — no
   target code here); the human's Browser; Clerk (managed IdP); model providers; Railway; GitHub.
-- **Human request boundary (selected/planned):** Browser → public Railway Web → Clerk session
+- **Human request boundary (locally integrated; deployment unverified):** Browser → public Railway Web → Clerk session
   verification and custom-permission authorization → application handler. Only liveness/readiness and
   the minimal Clerk sign-in/callback shell are public; console data, APIs, evidence, findings, event
-  streams, campaigns, and approvals default to protected. Clerk integration is not claimed deployed.
+  streams, campaigns, and approvals default to protected. The local composition is implemented and
+  offline-testable; Clerk Dashboard and Railway integration are not claimed deployed.
 - **Target reach:** a pluggable `TargetAdapter` invoked **only** through the trusted Policy Gateway
   (§5) behind an **allowlist**; API-primary, with a thin UI/browser path for evidence/e2e. Only target
   #1 (OpenEMR) is wired this week (`simplification`); the interface stays generic. **Generalize the
@@ -178,17 +188,20 @@ loop the platform runs attacks randomly; with it, coverage compounds. The loop c
 regression / observability = **governed**; **Red Team + all adversarial content = untrusted / quarantined**;
 target + providers = **external**.
 
-### Human authentication and application RBAC — `selected/planned`
+### Human authentication and application RBAC — `implemented locally; deployment unverified`
 
-Clerk is the selected managed identity provider; the integration and authenticated Railway deployment
-are not yet claimed complete. Enrollment is **restricted/invitation-only** into the one required
+Clerk is the selected managed identity provider. The React and FastAPI bearer boundaries are composed on
+this branch, but authenticated Railway deployment and real-user verification are not complete.
+Enrollment is **restricted/invitation-only** into the one required
 Headshot Organization for that environment. Personal accounts and user-created organizations are
 disabled. Every member must enroll MFA, preferring TOTP plus backup codes; SMS must not be the sole
 factor.
 
 **Request flow and verification boundary:**
 
-1. The Browser authenticates with Clerk and sends its session JWT to the public Railway Web service.
+1. The Browser authenticates with Clerk, obtains a token at request time, and sends it only in the
+   Bearer `Authorization` header to the same-origin Railway Web service. Cookie-only API authentication
+   and credentials in URLs are rejected.
    Human endpoints explicitly accept only Clerk `session_token`; machine/API tokens and client-authored
    role/permission fields are rejected as human authority.
 2. The Web service validates the environment's `CLERK_PUBLISHABLE_KEY`, then uses the official Clerk
@@ -204,8 +217,10 @@ factor.
    The token, Authorization header, request object, cookies, and raw claims are never retained in the
    Principal and must not appear in its `repr`, exceptions, logs, traces, or audit events.
 5. Endpoint dependencies require authentication, the Headshot organization, and the exact custom
-   permissions needed by that operation. Authentication is necessary but never sufficient for a live
-   campaign, critical publication, or remediation.
+   permissions needed by that operation. PostgreSQL projections and commands then use the Principal's
+   immutable Organization ID for lookup; no browser-supplied organization, role, or permission is
+   authoritative. Authentication is necessary but never sufficient for a live campaign, critical
+   publication, or remediation.
 
 **Roles describe a membership; custom permissions authorize backend actions.** Clerk system
 permissions are not sufficient because they are not present in the session claims used here. A role
@@ -224,20 +239,23 @@ assignment; backend code checks the named permission, not `organization_role`. T
 gate additionally proves `approver.user_id != launcher_user_id`, so even an Approver permission cannot
 waive identity separation.
 
-**Public-route allowlist and default deny.** Only `GET /health`, `GET /ready`, and the minimal
-static/sign-in/callback shell required to complete Clerk authentication may be unauthenticated. Concrete
-shell paths must be enumerated during integration rather than covered by a broad wildcard. No
-data-bearing console route, API, finding/evidence view, SSE/event stream, WebSocket, campaign endpoint,
-or approval endpoint is public. Every route not explicitly on the allowlist requires a verified
-Principal and its operation-specific permissions.
+**Public-route allowlist and default deny.** Only `GET /health`, `GET /ready`, built hashed assets, and
+the non-data SPA shell are unauthenticated. Clerk shell routes are `/sign-in` (including its nested
+path-routing state), `/session-tasks/choose-organization`, `/session-tasks/setup-mfa`, and
+`/session-tasks/reset-password`. Direct console routes also receive only the static shell; all data
+comes from protected `/api/v1`. Unknown API routes never receive the SPA fallback. No data-bearing
+finding/evidence view, event stream, campaign endpoint, or approval endpoint is public.
+The fetch-based event stream validates browser provenance and `org:console:read` before acceptance,
+then closes at verified token expiry or after 30 seconds so reconnect re-evaluates current membership
+and permissions without retaining a credential in stream state.
 
 **Failure semantics:** missing or invalid/expired authentication returns a generic **401**; a valid
 session lacking the required Headshot organization or custom permission returns a generic **403**.
 Rejected configuration (including wildcard authorized parties, insecure production origins, or a
 staging/production identity collision) prevents readiness; an unexpected Clerk SDK/verifier/configuration
 failure at request time returns a generic **503** and denies the operation. The service never falls back
-to unverified claims, a network JWKS fetch, a frontend decision, or anonymous access. Error bodies,
-logs, and traces include a correlation ID and safe reason code only—never the token or Authorization
+to unverified claims, a network JWKS fetch, a frontend decision, or anonymous access. Error bodies use
+generic details or safe reason codes only; logs and traces never include the token or Authorization
 header.
 
 **Environment-bound configuration:**
@@ -249,6 +267,8 @@ header.
 | `CLERK_JWT_KEY` | PEM public verification key; enables networkless verification. |
 | `CLERK_AUTHORIZED_PARTIES` | Explicit environment-specific origin list; no wildcard. Production entries are HTTPS. Localhost entries are valid only in local configuration. |
 | `CLERK_REQUIRED_ORG_ID` | Exact environment-specific Headshot Organization ID. |
+| `CLERK_FRONTEND_API_ORIGIN` | Exact HTTPS Clerk Frontend API origin admitted by the deployed CSP. |
+| `AGENTFORGE_MAX_REQUEST_BYTES` | Bounded request size, 1 KiB–10 MiB; defaults to 1 MiB. |
 | `CLERK_SECRET_KEY` | **Not required for request authentication.** Future sealed requirement only for Clerk Backend API user/invitation management. |
 
 Staging and production use distinct Clerk configuration. A staging config that includes the production
@@ -256,11 +276,16 @@ Railway origin or production Organization ID is invalid and fails readiness. No 
 substitute either value.
 
 **Authentication is not live-campaign authorization.** `org:campaign:launch` allows an Operator to
-request/launch within the application workflow; a different principal with
-`org:campaign:authorize` must authorize the operation. Only after identity separation succeeds may the
-Policy Gateway evaluate the exact target authorization, environment-scoped allowlist, target credential
-binding, synthetic-data assertion, budget/rate caps, egress policy, timeout, monitoring, and hard abort.
-Failure of any layer denies execution.
+create a canonical authorization request. Revision `0005` persists that authenticated user as the
+immutable launcher and binds approval to a hash over resolved target, surface, endpoint/method, auth
+posture, corpus, caps, and nonce. A different authenticated Principal with
+`org:campaign:authorize` must approve that exact stored scope; both application code and a database
+trigger reject self-approval. The launcher is never accepted from request input, and queue completion
+is never approval. Only after identity separation succeeds may the Policy Gateway evaluate the exact
+target authorization, environment-scoped allowlist, target credential binding, synthetic-data
+assertion, budget/rate caps, egress policy, timeout, monitoring, and hard abort. Failure of any layer
+denies execution. On this branch, launch remains explicitly unavailable because the trusted private-
+runner execution composition is incomplete.
 
 **F2 — the enforcement boundary is trusted, not the adapter.** Attack *generation* (untrusted) is split
 from attack *execution + evidence production* (trusted). The **Policy Gateway + Execution Recorder** is the
@@ -545,8 +570,10 @@ traces.
 
 ## §12. Deploy, Rollback & Environments
 
-- **Full platform on Railway** `locked` (D3), **selected/planned rather than deployed**: Docker build from
-  GitHub; a public **Web** service serves the console/API and performs Clerk verification; private
+- **Full platform on Railway** `locked` (D3), **packaged locally rather than deployed**: the multi-stage
+  image builds the Vite console and Python wheel, then carries only runtime Python, compiled assets,
+  `alembic.ini`, and the complete migration tree. A public **Web** service serves the console/API and
+  performs Clerk verification; private
   **runner** services execute queued agent work; a private **scheduler/cron** service only enqueues work;
   private managed **Postgres** holds domain records, checkpoints, and queues. Only Web receives public
   ingress. Runner, scheduler, and Postgres have no public hostname or inbound route. Deployment history +
@@ -574,6 +601,11 @@ traces.
   pre-deploy job → deploy Web/runner/scheduler → require `/health` and `/ready` → exercise an
   authenticated smoke path without invoking a live campaign → promote. A failed auth configuration or
   readiness check blocks promotion.
+- **Current integrated head and refusal boundary:** pre-deploy runs `alembic upgrade head`; the packaged
+  sole head is `0005`. `/ready` requires PostgreSQL connectivity, that exact head, built assets, and
+  locally parsed Clerk/Web security configuration without Clerk/JWKS/target/model egress. Runner and
+  scheduler entrypoints open no public socket and currently refuse operation because trusted execution
+  and authoritative scheduling composition are absent.
 - Perf baselines are measured **on Railway**, not locally (§19). Sensitive values use sealed Railway
   variables scoped per environment. Publishable keys are public identifiers; `CLERK_JWT_KEY`, provider
   credentials, and target bindings are not logged. `CLERK_SECRET_KEY` is absent from the request-verification
@@ -643,9 +675,9 @@ residual risk remains.
   DB-role enforcement, the deterministic oracles/canaries, and the shared validators (contract-compat,
   eval-case schema, duplicate-sequence, data-quality) + Semgrep/ZAP. AI where judgment is needed, determinism
   where it isn't.
-- **Owned limitation:** Clerk-backed enforcement and Railway integration are selected/planned, not yet
-  verified deployed. Until that integration passes, no user-facing or approval flow may be represented as
-  protected in production.
+- **Owned limitation:** Clerk-backed enforcement and console/API composition are implemented locally but
+  Railway and real-user verification are incomplete. Until those external checks pass, no user-facing or
+  approval flow may be represented as protected in a deployed environment.
 
 ## §16. Build-vs-Configure Summary → ADR-0001
 
@@ -682,9 +714,15 @@ residual risk remains.
 - **D12 (proposed):** MVP ships a hand-authored seed corpus + custom mutation loop; wrap PyRIT/Garak/Giskard
   post-MVP — a `tasks-gen`/`tdd-swarm` sequencing call to ratify.
 - Concrete regression **SLO budgets** (§10) and **alert SLAs** (§9) are MVP-measured.
-- **Clerk integration/deployment verification remains open:** Dashboard invitation restrictions, disabled
-  personal/user-created organizations, mandatory MFA, role/custom-permission assignments, concrete public
-  auth-shell paths, and the two-person flow must be verified by the integration owner before deployment.
+- **Clerk/Railway verification remains open:** Dashboard invitation restrictions, disabled
+  personal/user-created organizations, mandatory MFA, role/custom-permission assignments, exact public
+  auth-shell behavior, cross-Organization denial, and the two-real-user flow must be verified in Railway
+  staging before deployment can be claimed.
+- **Authoritative runtime repositories remain incomplete:** server-prepared campaign composition, the
+  trusted runner credential/executor composition, schedule repository, finding-to-evidence relation,
+  nonce-deduplicated hash-reconciled coverage, persisted traces, measured accounting, immutable
+  configuration snapshots, component heartbeats, resilience history, and the distinct live-probe
+  workflow return explicit unavailable states rather than fabricated data.
 - **Networkless verification freshness is an owned residual:** a correctly signed session token may retain
   a permission until token expiry after a Dashboard revocation. Use short session lifetimes, auditable
   revocation response, and re-authentication for high-risk actions; do not claim instantaneous revocation.

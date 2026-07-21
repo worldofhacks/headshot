@@ -1,14 +1,22 @@
-# GitLab CI — parity with .github/workflows/ci.yml. Do NOT weaken coverage to fit GitLab.
-# Job names mirror GitHub required checks: `test` and `secret-scan`.
+# GitLab parity for the GitHub test, console, container, and secret-scan gates.
 stages:
   - test
+  - package
   - security
 
-default:
-  image: python:3.12
+variables:
+  POSTGRES_USER: agentforge
+  POSTGRES_PASSWORD: local_dev_only
+  POSTGRES_DB: agentforge
 
 test:
   stage: test
+  image: python:3.12
+  services:
+    - name: postgres:16
+      alias: postgres
+  variables:
+    DATABASE_URL: postgresql://agentforge:local_dev_only@postgres:5432/agentforge
   script:
     - python -m pip install --upgrade pip
     - python -m pip install -e ".[dev]"
@@ -18,16 +26,90 @@ test:
     - PYTHONPATH=src python -m agentforge.evals detect-duplicate-sequence evals/seeds
     - pytest
     - pytest tests/contract -q
+    - bash scripts/wheel_outside_repo_check.sh
+
+console:
+  stage: test
+  image: node:22.17.1-bookworm-slim
+  before_script:
+    - export VITE_CLERK_PUBLISHABLE_KEY="pk_test_$(printf 'clerk.example.com$' | base64 | tr -d '\n')"
+    - cd console
+  script:
+    - npm ci --ignore-scripts
+    - npm audit --audit-level=high
+    - npm run typecheck
+    - npm test
+    - npm run check:forbidden
+    - npm run build
+    - npm run check:bundle
+    - npx playwright install --with-deps chromium
+    - npm run test:browser
+    - test -z "$(find dist -type f -name '*.map' -print -quit)"
+
+container:
+  stage: package
+  image: docker:27.5.1-cli
+  services:
+    - name: docker:27.5.1-dind
+      alias: docker
+  variables:
+    DOCKER_HOST: tcp://docker:2375
+    DOCKER_TLS_CERTDIR: ""
+    DOCKER_NETWORK_MODE: agentforge-ci
+    AGENTFORGE_SMOKE_HOST: docker
+    CLEAN_DATABASE_URL: postgresql://agentforge:local_dev_only@postgres:5432/agentforge_clean
+    UPGRADE_DATABASE_URL: postgresql://agentforge:local_dev_only@postgres:5432/agentforge_upgrade
+    READY_DATABASE_URL: postgresql://agentforge:local_dev_only@postgres:5432/agentforge_clean
+  before_script:
+    - apk add --no-cache bash curl
+    - export VITE_CLERK_PUBLISHABLE_KEY="pk_test_$(printf 'clerk.example.com$' | base64 | tr -d '\n')"
+  script:
+    - docker network create agentforge-ci
+    - >-
+      docker run -d --name postgres --network agentforge-ci
+      -e POSTGRES_USER="$POSTGRES_USER"
+      -e POSTGRES_PASSWORD="$POSTGRES_PASSWORD"
+      -e POSTGRES_DB="$POSTGRES_DB"
+      postgres:16
+    - >-
+      for i in $(seq 1 30); do
+        if docker exec postgres pg_isready -U agentforge -d agentforge; then break; fi;
+        if [ "$i" = 30 ]; then docker logs postgres; exit 1; fi;
+        sleep 1;
+      done
+    - docker exec postgres createdb -U agentforge agentforge_clean
+    - docker exec postgres createdb -U agentforge agentforge_upgrade
+    - >-
+      docker build
+      --build-arg VITE_CLERK_PUBLISHABLE_KEY="$VITE_CLERK_PUBLISHABLE_KEY"
+      -t agentforge:ci .
+    - bash scripts/verify_runtime_image.sh agentforge:ci
+    - bash scripts/verify_container_migrations.sh agentforge:ci
+    - bash scripts/smoke_ready_container.sh agentforge:ci
+    - bash scripts/smoke_runtime_container.sh agentforge:ci
+    - >-
+      docker run --rm --entrypoint python
+      -v "$CI_PROJECT_DIR/evals:/corpus:ro" agentforge:ci
+      -m agentforge.evals validate-corpus /corpus
+    - >-
+      docker run --rm --entrypoint python
+      -v "$CI_PROJECT_DIR/evals:/corpus:ro" agentforge:ci
+      -m agentforge.evals detect-duplicate-sequence /corpus/seeds
 
 secret-scan:
   stage: security
+  image: python:3.12
   variables:
-    GIT_DEPTH: "0" # full history so gitleaks scans every commit
+    GIT_DEPTH: "0"
   script:
     - apt-get update && apt-get install -y --no-install-recommends curl ca-certificates
-    - curl -sSfL
+    - >-
+      curl -sSfL
       https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz
       -o /tmp/gitleaks.tar.gz
+    - >-
+      echo "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  /tmp/gitleaks.tar.gz" |
+      sha256sum --check --strict
     - tar -xzf /tmp/gitleaks.tar.gz -C /usr/local/bin gitleaks
     - gitleaks version
     - gitleaks git . --redact --verbose

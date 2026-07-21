@@ -1,8 +1,10 @@
 # Headshot authentication and authorization
 
-> **Status:** Clerk is the locked human identity provider. The isolated M1c backend foundation is
-> implemented and offline-tested on this branch. Application/console route wiring, Clerk Dashboard
-> provisioning, and authenticated Railway deployment remain selected/planned until M1d is verified.
+> **Status — 2026-07-21:** Clerk is the locked human identity provider. This integration branch wires
+> the offline-tested M1c verifier into a bearer-only `/api/v1` boundary and a Clerk React console.
+> It is **not deployed** and has not been verified with real Clerk users. Dashboard provisioning,
+> Railway staging, and all external acceptance tests remain required before this can be called an
+> operational Clerk integration.
 
 This document is the security contract for human access to the Headshot console and API. It does not
 define agent/workload credentials and it does not authorize live campaigns.
@@ -49,7 +51,14 @@ closed. Environment values are never accepted from a request.
 | `CLERK_REQUIRED_ORG_ID` | Yes | Yes | Exact Organization ID of that environment's Headshot Organization |
 | `CLERK_PRODUCTION_AUTHORIZED_PARTIES` | No | Staging only | Explicit production-origin comparison guard; staging fails if its allowed origins intersect this list |
 | `CLERK_PRODUCTION_ORG_ID` | No | Staging only | Explicit production Organization comparison guard; staging fails if its required ID matches |
+| `CLERK_FRONTEND_API_ORIGIN` | Optional | Yes | Exact HTTPS Clerk Frontend API origin admitted by Web CSP; never a wildcard |
+| `AGENTFORGE_MAX_REQUEST_BYTES` | Optional | Optional | 1 KiB–10 MiB request-body ceiling; defaults to 1 MiB |
+| `AGENTFORGE_CONSOLE_DIR` | Optional | Image default | Built static asset directory; runtime image uses `/app/console` |
 | `CLERK_SECRET_KEY` | No | No | **Not used for request authentication.** Future-only Backend API user/invitation administration |
+
+`VITE_CLERK_PUBLISHABLE_KEY` is also a required Docker build argument for the console stage. It is
+public and may be embedded in the compiled JavaScript; it must still match the backend environment.
+No private/secret value may use a `VITE_` name.
 
 ### Authorized-party rules
 
@@ -85,7 +94,9 @@ form; private-key material is rejected.
 
 ## Request authentication flow
 
-1. A FastAPI dependency receives the request. It never logs the `Authorization` or cookie headers.
+1. A FastAPI dependency receives the request. It requires an explicit Bearer header and never logs the
+   `Authorization` or cookie headers. Cookie-only authentication is rejected from meaningful APIs, so
+   state-changing routes do not inherit ambient-cookie CSRF authority.
 2. Configuration validates the backend publishable identifier for the environment. The current Clerk
    Python verifier is invoked with the local PEM JWT key, exact authorized parties, and accepted token
    type `session_token`; its options do not include the publishable identifier.
@@ -98,7 +109,9 @@ form; private-key material is rejected.
    Clerk request state, and verifier message are discarded.
 7. The exact required Headshot Organization ID is checked.
 8. The route's required custom permissions are checked as an all-of set.
-9. Approval paths additionally compare approver and launcher user IDs.
+9. Approval paths reload the Organization-scoped authorization request and compare the authenticated
+   approver with its immutable persisted launcher user ID. The request accepts only the request ID and
+   decision—not a launcher identity. A database trigger repeats the separation check.
 10. Live-campaign paths then enter the separate Policy Gateway. Authentication success cannot skip it.
 
 The verifier's default clock-skew allowance must be accounted for in deterministic tests: expired and
@@ -190,6 +203,30 @@ respective endpoints. Both identities are persisted in the audit event. The Fast
 populate `request.state.launcher_user_id` only from the persisted workflow record after an
 Organization-scoped server lookup; a request parameter, header, body, or browser state must never set it.
 
+The integrated campaign-decision path performs the same rule inside the transactional control-plane
+store rather than trusting a client-visible dependency input: it loads the request by verified
+Organization and request ID, uses its stored launcher, and writes the authenticated approver. Revision
+`0005` enforces the rule again in PostgreSQL. Queue state and queue completion are not inputs to this
+decision and cannot manufacture an approval.
+
+### Protected integration manifest
+
+Every `/api/v1` endpoint requires an active Principal in the exact Headshot Organization. The read
+dependencies are:
+
+- console/campaigns/approvals/targets/configuration/components/costs/events:
+  `org:console:read`;
+- findings/coverage/resilience: `org:console:read` plus `org:findings:read`;
+- evidence/traces: `org:console:read` plus `org:evidence:read`; and
+- audit: `org:console:read` plus `org:audit:read`.
+
+Mutation dependencies are exact: campaign request/launch `org:campaign:launch`, campaign decision
+`org:campaign:authorize`, abort `org:campaign:abort`, finding decision
+`org:findings:approve`, finding resolution `org:findings:resolve`, target/surface management
+`org:targets:manage`, and configuration validation/publication `org:config:manage`. Every mutation
+also requires a bounded `Idempotency-Key`. The complete method/path matrix and current availability are
+in [M1d integration handoff](../planning/M1D_INTEGRATION_HANDOFF.md).
+
 ## Failure contract
 
 Client responses are intentionally generic. Internal diagnostic reason codes may be counted, but raw
@@ -207,6 +244,8 @@ failure, or disables the Organization/authorized-party checks.
 ## Browser and XSS handling
 
 - Use Clerk's supported React components/SDK flow; do not implement a custom password or OAuth flow.
+- The console uses `ClerkProvider`, restricted `SignIn`, explicit choose-Organization/setup-MFA/reset-
+  password task routes, `useAuth({ treatPendingAsSignedOut: true })`, and request-time `getToken()`.
 - Never persist a session token in `localStorage`, `sessionStorage`, IndexedDB, application state
   snapshots, service-worker caches, or analytics. Never put it in a URL or redirect parameter.
 - Treat `VITE_CLERK_PUBLISHABLE_KEY` as public. No secret or private key may use a `VITE_` variable.
@@ -218,8 +257,16 @@ failure, or disables the Organization/authorized-party checks.
 - If Clerk session cookies authenticate state-changing requests, apply CSRF protection and strict CORS
   in addition to SameSite/secure cookie settings. `authorizedParties` and CORS do not replace CSRF or
   server-side permissions.
+- The current `/api/v1` integration does not authenticate mutations from cookies: it requires the
+  request-time bearer token. CORS remains an exact-origin defense-in-depth boundary.
 - Event-stream and WebSocket authentication occurs before accepting the connection; validate the exact
   browser Origin and re-check permission for privileged messages/actions.
+
+The event stream uses authenticated `fetch()` because native `EventSource` cannot attach the Bearer
+header. Tokens in query strings are rejected before routing. Reconnect uses `Last-Event-ID`; payloads
+carry redacted audit data, never credentials. Each connection is bounded by the verified JWT expiry
+and a 30-second maximum lifetime, so permission/membership revocation is refreshed without retaining a
+token in stream state.
 
 ## Logging, tracing, and redaction
 
@@ -281,9 +328,11 @@ tokens, invitations, or backup codes into tickets or this repository.
       variables. Do not add `CLERK_SECRET_KEY` for request authentication.
 - [ ] Set exact HTTPS authorized parties for the Railway Web origin. Add loopback HTTP only to local.
 - [ ] Prove staging rejects the production Railway origin and production Organization ID.
-- [ ] Enumerate the minimal sign-in/callback shell paths; verify every other route defaults protected.
-- [ ] Run negative authentication, permission, redaction, and zero-network tests, then Railway smoke
-      tests, before changing status from planned to implemented/deployed.
+- [ ] Verify the enumerated shell routes (`/sign-in`, Clerk's nested sign-in route, and the three
+      `/session-tasks/*` routes) against the provisioned Clerk application; verify every `/api/v1`
+      route defaults protected.
+- [ ] Run negative authentication, permission, redaction, and zero-network tests, then two-real-user
+      Railway staging smoke tests, before changing status from local integration to deployed.
 
 ## Required automated tests
 

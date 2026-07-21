@@ -155,8 +155,9 @@ before their consumers**, frontmatter + trigger boundaries validated against `CL
   - Verify: `docker build` + `compose up` healthy; `/ready` reflects DB/migration state; env-isolation test green in CI on the ephemeral PG · Test: **invariant** — staging/local config cannot resolve prod target creds (O1) · Skills: —
   - **Local-complete does NOT satisfy the deployed-URL gate** (that is M1b).
 
-- [ ] **M1b — Full-platform Railway topology + deployment  ⚠ HUMAN AUTH (Railway, secrets)** — DEFERRED (external)
-  - Files: Railway config / deploy manifests (future integration work; not changed by M1c)
+- [ ] **M1b — Full-platform Railway topology + deployment  ⚠ HUMAN AUTH (Railway, secrets)** — PACKAGED LOCALLY; DEPLOYMENT DEFERRED
+  - Files: multi-stage `Dockerfile`, Railway service manifests, migration/container verification scripts,
+    `docs/deployment/RAILWAY.md`; resource provisioning and sealed values remain external
   - Anchors: §12, **D16** · Map: PRD-34 (deployed half) · Deps: **M1a**, **P11** (deploy-from-GitHub) · Est: M
   - Accept: (a) Railway project with isolated **staging and production** environments; (b) one
     Internet-reachable **Web** service plus private **Runner**, private **Scheduler**, and private managed
@@ -167,6 +168,11 @@ before their consumers**, frontmatter + trigger boundaries validated against `CL
     (i) **edge:** staging cannot resolve production target, Clerk Organization, origin, or database
     bindings; (j) **error:** migration or readiness failure blocks promotion without exposing another
     service publicly
+  - **Local status (2026-07-21):** one runtime image now carries the built console, Python wheel,
+    `alembic.ini`, and complete migration tree; Web/runner/scheduler/pre-deploy entrypoints and
+    staging/production configuration templates are present. This is not a Railway deployment. The
+    private runner and scheduler deliberately refuse operation while their authoritative compositions
+    are absent.
   - Verify: staging + production topology inventory; public-port scan; pre-deploy migration, health,
     readiness, and rollback smokes; URLs recorded only after a successful deploy · Test: environment
     isolation + deploy/rollback smoke on Railway · Skills: — · **⚠ HUMAN AUTH (Railway)**
@@ -189,9 +195,11 @@ before their consumers**, frontmatter + trigger boundaries validated against `CL
     environment isolation, verifier failure, and same-user rejection; prove the suite makes no network
     calls · Test: boundary + invariant cases in `tests/auth/` · Skills: security-best-practices
 
-- [ ] **M1d — Authenticated Railway Web/API/console integration  ⚠ HUMAN AUTH (Clerk + Railway)** — PLANNED
-  - Files: future `src/agentforge/app.py` wiring, `console/**` Clerk integration, Railway environment
-    variables/configuration (explicitly outside M1c's isolated foundation)
+- [ ] **M1d — Authenticated Railway Web/API/console integration  ⚠ HUMAN AUTH (Clerk + Railway)** — LOCAL INTEGRATION IMPLEMENTED; EXTERNAL VERIFICATION OPEN
+  - Files: `src/agentforge/app.py`, `src/agentforge/web.py`, `src/agentforge/readiness.py`,
+    `src/agentforge/api/`, `src/agentforge/control_plane/`, `src/agentforge/runner.py`,
+    `src/agentforge/scheduler.py`, `console/**`, revision `0005`, Railway packaging/configuration, and
+    `docs/planning/M1D_INTEGRATION_HANDOFF.md`
   - Anchors: identity ADR + Railway deployment guide · Map: **USR-01–07** · Deps: **M1b**, **M1c** · Est: M
   - Accept: (a) Clerk restricted/invitation-only access; one required **Headshot** Organization; personal
     accounts and user-created Organizations disabled; MFA required with TOTP plus backup codes available
@@ -202,13 +210,28 @@ before their consumers**, frontmatter + trigger boundaries validated against `CL
     role/permission data; (f) token/header values do not reach logs, traces, errors, event streams, or
     private worker messages; (g) staging cannot authenticate a production origin or Organization; (h)
     live launch/abort/approval still passes the separate campaign Policy Gateway and two-person controls;
-    (i) **error:** Clerk outage or invalid configuration cannot make a protected route public
+    (i) **error:** Clerk outage or invalid configuration cannot make a protected route public; (j)
+    organization-scoped revision `0005` persists immutable target/surface versions, authorization
+    requests/decisions, run state, idempotency and audit history; (k) the launcher is derived only from
+    persisted workflow state, self-approval is rejected in application and database enforcement, and
+    queue completion cannot create approval; (l) every screen uses a protected authoritative projection
+    or a typed unavailable result—never a fixture or simulated success
+  - **Local status (2026-07-21):** Clerk React session/task states, request-time bearer API access,
+    default-deny `/api/v1`, exact permission dependencies, PostgreSQL control-plane projections,
+    append-only approval/audit persistence, fetch-stream reconciliation, same-origin Web composition,
+    and fail-closed readiness are integrated. Coverage is unavailable until a nonce-deduplicated,
+    hash-reconciled projection exists. Findings, traces, costs, configuration, component heartbeats,
+    resilience, live probes, server-prepared campaign composition, campaign execution, and schedules
+    also report their exact missing dependency. No Railway/Clerk resource or live target/model was
+    contacted.
   - Verify: Clerk Dashboard checklist + protected-route matrix + two identities in staging; unauthenticated,
     wrong-org, missing-permission, XSS/log-redaction, SSE leakage, and fail-closed outage tests; inspect
     Railway service exposure and then record actual deployment/CI status · Test: integration/e2e tests
     against staging · Skills: security-best-practices · **⚠ HUMAN AUTH (Clerk + Railway)**
-  - **M1 is complete only when M1a–M1d all pass.** M1c can complete offline; M1b/M1d remain incomplete
-    until authorized Railway/Clerk configuration and staging verification occur.
+  - **M1 is complete only when M1a–M1d all pass.** M1c is complete offline. M1b/M1d remain incomplete
+    until authorized Railway/Clerk provisioning and staging verification with two real users prove
+    self-approval denial, cross-Organization denial, protected API/fetch-stream access, exact-scope
+    approval, and the private-service topology.
 
 - [ ] **M2 — Data model + migrations + per-agent DB roles + indexes**
   - Files: NEW `src/storage/models.py`, `migrations/` (Alembic), `src/storage/roles.sql`
@@ -475,9 +498,10 @@ Every **runtime** F/S/O finding has an implementing + verifying task. F9–F12 a
 - **Critical path → MVP (local):** `P8 → M1a → M1c` (runtime + authentication foundations) and
   `P8 → P10` (needs `P1`) `→ M2 → M4` (needs `P9`,`P5`) `→ M9` (needs `M6a`,`P4`) `→ M11`
   **[hard gate]**. After `M2`: `M3` and `M6a` proceed in parallel.
-- **External halves are deferred (do not block local foundations):** `M1b` (Railway ⚠) + `M1d`
-  (authenticated integration ⚠), `M6b` (Langfuse ⚠), `M5`/`M7` (live target ⚠, need `D1`), `M8`
-  (hosted-OSS ⚠).
+- **External halves are deferred (do not block local foundations):** `M1b` (Railway provisioning ⚠) +
+  `M1d` (Clerk Dashboard, two-real-user, and Railway verification ⚠), `M6b` (Langfuse ⚠), `M5`/`M7`
+  (live target ⚠, need `D1`), `M8` (hosted-OSS ⚠). M1d's local Web/API/console/control-plane slice is
+  implemented on the integration branch.
 - **Critical path → Final:** `M1c → M1d → F3/F8/F11`; independently, `M9/M11 → F4` and `→ F1`
   (Orchestrator) `→ F2` (Documentation) `→ F6/F8/F10 → F13`.
 - **Fully parallel, done or start-now (local, no ext auth):** `P1–P7` skills ✅, `P8` scaffold ✅, `P9` fake ✅, `P10` contracts ✅, `M14` matrix, `D2` dry-run, `F14` devlog. `D1` target-readiness (⚠) unblocks `M5`/`M7`. **`D3` is off the critical path** — a pre-presentation gate on `wip/d3-diagram`.
@@ -486,9 +510,9 @@ Every **runtime** F/S/O finding has an implementing + verifying task. F9–F12 a
   gates the Judge's evidence-integrity + the Orchestrator's learning signal. Land
   `M1a → M1c/M2 → M4/M6a` first.
 - **The DEPLOYED MVP gate (authenticated deployed URL + live traces + live eval results) needs the
-  EXTERNAL halves — `M1b`, `M1d`, `M6b`, `M5`, `M8` — and stays incomplete until those authorizations
-  land.** Local foundations (`M1a`, `M1c`, `M2`, `M3`, `M4`, `M6a`) are fully buildable now,
-  fake-backed/offline as applicable.
+  EXTERNAL halves — `M1b`, M1d's real-user/Railway verification, `M6b`, `M5`, and `M8` — and stays
+  incomplete until those authorizations land.** Local foundations (`M1a`, `M1c`, M1d's integration
+  slice, `M2`, `M3`, `M4`, `M6a`) are buildable/testable now, fake-backed/offline as applicable.
 
 ## Account & external blockers (classified — 2026-07-21)
 
@@ -500,15 +524,17 @@ bypassed.
 |---|---|---|
 | **GitHub branch protection** (private repo needs Pro/public — 403) | the repository-approved **`tdd-swarm` execution workflow** | local design/plan work |
 | **Gauntlet Labs GitLab auth** | **dual-remote checkpoint parity** (a repo policy, `CLAUDE.md` dual-remote law) | **intrinsic `tdd-swarm` prerequisites** — GitLab parity is a policy gate, not a swarm precondition |
-| **Railway authorization** | **M1b/M1d** (private-service topology, authenticated deploy, deployed URLs) | **M1a/M1c** local runtime + auth foundations |
-| **Clerk Dashboard authorization** | **M1d** (restricted mode, Headshot Organization, MFA, role/permission assignments, environment keys) | **M1c** offline verification/RBAC foundation |
+| **Railway authorization** | **M1b/M1d external half** (private-service topology, authenticated deploy, deployed URLs) | **M1a/M1c and M1d's local Web/API/console/control-plane integration** |
+| **Clerk Dashboard authorization** | **M1d external half** (restricted mode, Headshot Organization, MFA, role/permission assignments, environment keys, two-real-user verification) | **M1c and M1d's offline/local authentication boundary** |
+| **Trusted runtime/repository composition** | campaign execution, schedules, findings, verified coverage, traces, measured costs, configuration, component heartbeats, resilience, and live probes | explicit typed unavailable behavior and the rest of the local protected console |
 | **Langfuse authorization** | **M6b** (cloud traces, per-agent cost) | **M6a** local observability core |
 | **D1 inputs / live authorization** | **D1, M5, M7, and live eval results** | fake-backed foundations `M1a/M2/M3/M4/M6a` |
 | **Hosted-OSS credentials/budget** | **live M8 inference** | building M8's mutation loop against the fake |
 
 **GitLab, Railway/Clerk access, and D1 are NOT reasons to call the local architecture blocked.** Local
-foundations (M1a, M1c, M2, M3, M4, M6a) are fully buildable now; only their *external halves* and the
-*deployed/live* gate are deferred.
+foundations (M1a, M1c, M1d's integration slice, M2, M3, M4, M6a) are buildable/testable now; only their
+external halves and the deployed/live gate are deferred. Missing authoritative runtime repositories are
+reported as unavailable, not silently treated as complete.
 
 ## `tdd-swarm` local-MVP-foundations epic (pre-approved scope; NOT invoked)
 
@@ -540,9 +566,9 @@ foundation and authenticated deployment (M1c/M1d); the trusted **Policy Gateway 
 allowlist/scoped-creds/synthetic-data/budget/rate/hard-abort); the **independent Red Team *and* Judge**
 (M8 + M9); **deterministic fail-closed verdict handling** (M9 / D13); and the **security-invariant tests
 that prove them** — S1/S2 DB-role append-only (M2), S3 replay rejection (M4), S4 Judge-injection (M9/M12),
-S9 hash reconciliation (M6a). None of these may be deferred out of MVP. (Local halves M1a/M1c/M6a
-are buildable now; the *deployed* MVP gate additionally needs the external halves
-M1b/M1d/M6b/M5/M8.)
+S9 hash reconciliation (M6a). None of these may be deferred out of MVP. (Local halves M1a/M1c/M6a and
+M1d's integration slice are buildable now; the *deployed* MVP gate additionally needs M1b/M1d external
+verification plus M6b/M5/M8.)
 
 | Hard gate | Committed tasks |
 |---|---|

@@ -20,13 +20,23 @@ const EXT = /\.(ts|tsx|js|jsx|css|html)$/;
 const SKIP_DIRS = new Set(["node_modules", "dist", ".vite", "fonts"]); // fonts/: binary woff2
 
 // Whole-word / phrase patterns. Case-insensitive. (Verbatim from the handoff checker.)
-const FORBIDDEN = [
+const PRODUCT_COUPLING = [
   /clinical/i, /clinician/i, /\bpatient(s)?\b/i, /\bPHI\b/, /\bEHR\b/, /\bMRN\b/,
   /medication/i, /\breferral\b/i, /\bclinic\b/i, /dosing/i, /OpenEMR/i,
   /copilot/i, /co-pilot/i, /AgentForge/i, /Clinical Assistant/i,
   /\bwarfarin\b/i, /\bmetformin\b/i, /\blisinopril\b/i, /physician/i,
   /westgate/i, /northside/i, /\bpeds\b/i, /place_order/i, /order[_-]entry/i,
 ];
+
+const PRODUCTION_BOUNDARY = [
+  /RUN 042/i, /Atlas Support Agent/i, /F-1042/i, /AP-01/i, /A-0185/i,
+  /A-0177/i, /CN-7731/i, /Demo scenario/i, /prototype principal/i,
+  /simulat(?:e|ed|ion)/i, /Math\.random\s*\(/, /setInterval\s*\(/,
+  /dangerouslySetInnerHTML/, /localStorage/, /sessionStorage/, /IndexedDB/,
+  /from\s+["']\.\/?data["']/,
+];
+
+const FORBIDDEN = [...PRODUCT_COUPLING, ...PRODUCTION_BOUNDARY];
 
 function collect(dir, out) {
   for (const name of readdirSync(dir)) {
@@ -76,4 +86,4 @@ if (failures) {
   );
   process.exit(1);
 }
-console.log(`✓ Forbidden-language check passed — 0 clinical/OpenEMR terms across ${files.length} console UI files.`);
+console.log(`✓ Source policy passed — no target coupling, fixture data, browser authority, or persistent credential storage across ${files.length} console UI files.`);

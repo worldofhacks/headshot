@@ -14,6 +14,11 @@ env
 docs
 tests
 evals
+tmp
+.playwright-cli
+**/node_modules
+**/dist
+**/*.map
 # Never send env/secret material into the build context.
 .env
 .env.*

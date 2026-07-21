@@ -5,10 +5,11 @@ red-teaming AI applications. Its first target is the externally deployed OpenEMR
 Co-Pilot. The target is reached over an authorized live URL; its code does not live in this
 repository.
 
-> **Delivery status — 2026-07-21:** Railway is the locked hosting platform and Clerk is the
-> locked human identity provider. The isolated authentication foundation is implemented and
-> offline-tested on this branch, but it is not wired into the FastAPI application or console and is
-> not verified on Railway. No deployment or green deployment check is claimed here.
+> **Delivery status — 2026-07-21:** this integration branch composes the Clerk-backed React console,
+> protected FastAPI `/api/v1`, organization-scoped PostgreSQL control plane, and Railway-oriented
+> Web/runner/scheduler image locally. It is **not deployed**, has not been verified with real Clerk
+> users, and is not a fully live campaign system. Runner execution and several authoritative
+> repositories remain fail-closed unavailable; no live target, model, or provider traffic is claimed.
 
 | Endpoint | Status |
 |---|---|
@@ -81,12 +82,17 @@ python -m pip install -e '.[dev]'
 cp .env.example .env.local
 docker compose up -d postgres
 alembic upgrade head
-uvicorn agentforge.app:app --reload
+cd console
+npm ci
+VITE_CLERK_PUBLISHABLE_KEY=pk_test_your_local_fixture npm run build
+cd ..
+python -m agentforge.web
 ```
 
 `.env.local` is local-only and must never be committed. Use synthetic values. The Clerk
-authentication package can be tested offline with fixture keys before Clerk resources exist; it is
-not wired into `agentforge.app` in this foundation task.
+authentication path and protected API tests use locally generated fixture keys and make no Clerk,
+Railway, target, model, or JWKS request. `/ready` remains `503` until PostgreSQL is at the packaged
+Alembic head, the built console exists, and the complete Clerk and Web security configuration parses.
 
 ### Authentication configuration contract
 
@@ -99,6 +105,9 @@ not wired into `agentforge.app` in this foundation task.
 | `CLERK_REQUIRED_ORG_ID` | Exact environment-specific Headshot Organization ID | No, but security-sensitive configuration |
 | `CLERK_PRODUCTION_AUTHORIZED_PARTIES` | Staging-only comparison guard containing the exact production origin list | No, but security-sensitive configuration |
 | `CLERK_PRODUCTION_ORG_ID` | Staging-only comparison guard containing the exact production Headshot Organization ID | No, but security-sensitive configuration |
+| `CLERK_FRONTEND_API_ORIGIN` | Exact HTTPS Clerk Frontend API origin admitted by deployed CSP; optional locally | No |
+| `AGENTFORGE_MAX_REQUEST_BYTES` | Request-body ceiling, 1 KiB–10 MiB; defaults to 1 MiB | No |
+| `AGENTFORGE_CONSOLE_DIR` | Optional built-console directory; image default `/app/console` | No |
 | `CLERK_SECRET_KEY` | **Unset for request authentication**; future Backend API administration only | Yes |
 
 Production rejects HTTP origins. Loopback HTTP origins are accepted only when
@@ -120,12 +129,14 @@ The public route policy is an allowlist, not a list of exceptions:
 
 - `GET /health` — process liveness only.
 - `GET /ready` — readiness; returns unavailable when dependencies or schema are not ready.
-- The minimal static sign-in and callback shell required to complete Clerk authentication. Its
-  concrete paths must be enumerated during integration; broad authentication wildcards are forbidden.
+- Built static assets and the non-data SPA shell, including `/sign-in` and nested Clerk sign-in paths,
+  `/session-tasks/choose-organization`, `/session-tasks/setup-mfa`, and
+  `/session-tasks/reset-password`. Frozen console direct routes also receive only the shell; their data
+  stays closed until the browser presents a bearer session to protected `/api/v1`.
 
-Everything else defaults to protected. Console data, findings, evidence, event streams,
-WebSockets, campaign actions, target/configuration management, approvals, audit data, and
-remediation are never public.
+Every `/api/v1` route defaults to protected. Console data, findings, evidence, the event stream,
+campaign actions, target/configuration management, approvals, audit data, and remediation are never
+public. Unknown API paths never receive the SPA fallback.
 
 Missing, expired, malformed, not-yet-valid, incorrectly signed, wrong-algorithm, wrong-party, or
 non-session authentication receives a generic `401`. An active authenticated session that lacks the
@@ -164,8 +175,27 @@ separate decision:
 Failure at any stage denies the action. Clerk tokens are human credentials and must never be reused as
 agent, runner, scheduler, model-provider, or target credentials.
 
+## Current local availability
+
+Revision `0005` provides organization-scoped immutable target/surface versions, persisted campaign
+authorization requests and exact-scope decisions, run/abort state, idempotency records, and append-only
+audit history. The launcher comes only from authenticated persisted workflow state; application and
+database controls reject self-approval, and queue completion is never approval.
+
+The console displays typed unavailable states for dependencies that do not yet exist. New campaign
+requests await a server-prepared composition scope; campaign launch and execution await the trusted
+private-runner credential resolver/executor; scheduling awaits an authoritative schedule repository;
+target and surface authoring await a trusted server-side catalog so browser-provided hosts, adapters,
+credential references, and endpoints cannot become authority;
+finding actions await a finding-to-evidence relation; coverage awaits
+a hash-reconciled, nonce-deduplicated projection; and traces, measured accounting, immutable
+configuration snapshots, component heartbeats, resilience history, and live-probe authorization await
+their corresponding repositories/workflows. None is replaced by demo data or simulated success. See the
+[M1d integration handoff](docs/planning/M1D_INTEGRATION_HANDOFF.md) for the exact matrix.
+
 ## Further documentation
 
+- [M1d integration handoff](docs/planning/M1D_INTEGRATION_HANDOFF.md)
 - [Identity and access ADR](docs/adrs/0002-identity-and-access.md)
 - [Authentication security contract](docs/security/AUTHENTICATION.md)
 - [Railway deployment runbook](docs/deployment/RAILWAY.md)
