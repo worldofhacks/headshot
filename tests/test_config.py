@@ -20,7 +20,6 @@ import pytest
 # spec(M1a:AC-2) spec(M1a:AC-5/O1) — module under test does not exist yet (expected RED).
 from agentforge.config import EnvironmentIsolationError, Settings
 
-
 # ---------------------------------------------------------------------------
 # AC-2 — config env separation
 # ---------------------------------------------------------------------------

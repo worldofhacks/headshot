@@ -11,7 +11,13 @@ license = { text = "UNLICENSED" }
 # Runtime deps are scoped to the deployment/health surface only. The framework-neutral
 # core (domain, contracts, config) imports NONE of these (D10); only agentforge.health
 # imports fastapi. uvicorn is the ASGI server the Dockerfile/compose run the app under.
-dependencies = ["fastapi>=0.111", "uvicorn[standard]>=0.30"]
+# psycopg backs the /ready DB-connectivity probe (M1a); it is imported lazily inside the
+# readiness path only — never at config.py top level (D10).
+dependencies = [
+    "fastapi>=0.111",
+    "uvicorn[standard]>=0.30",
+    "psycopg[binary]>=3.1",
+]
 
 [project.optional-dependencies]
 # Local dev tooling only. httpx backs fastapi's TestClient used by the health tests.
