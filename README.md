@@ -204,6 +204,7 @@ authorization remain typed unavailable rather than being replaced by dummy data.
 - [Identity and access ADR](docs/adrs/0002-identity-and-access.md)
 - [Authentication security contract](docs/security/AUTHENTICATION.md)
 - [Railway deployment runbook](docs/deployment/RAILWAY.md)
+- [Measured-cost and nonlinear scale model](docs/cost/COST_ANALYSIS.md)
 - [Clinical Co-Pilot target/session readiness](docs/target/READINESS.md)
 - [Threat model](THREAT_MODEL.md)
 - [User workflows](USERS.md)
