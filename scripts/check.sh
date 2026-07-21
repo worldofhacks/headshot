@@ -10,6 +10,10 @@ ruff check .
 echo "== ruff format --check =="
 ruff format --check .
 
+echo "== eval corpus schema + duplicate validation =="
+PYTHONPATH=src python -m agentforge.evals validate-corpus evals
+PYTHONPATH=src python -m agentforge.evals detect-duplicate-sequence evals/seeds
+
 echo "== pytest =="
 pytest
 

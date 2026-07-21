@@ -46,6 +46,10 @@ jobs:
         run: ruff check .
       - name: Ruff format check
         run: ruff format --check .
+      - name: Eval schema and duplicate validation
+        run: |
+          PYTHONPATH=src python -m agentforge.evals validate-corpus evals
+          PYTHONPATH=src python -m agentforge.evals detect-duplicate-sequence evals/seeds
       - name: Pytest (full suite)
         run: pytest
       - name: Contract tests
