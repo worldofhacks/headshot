@@ -37,6 +37,12 @@ dev = ["ruff>=0.6", "pytest>=8", "jsonschema>=4", "pre-commit>=3", "httpx>=0.27"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+# Ship roles.sql inside the wheel so migration 0001's importlib.resources lookup resolves
+# under a NON-editable install (e.g. `pip install .` in the Dockerfile). Without this, an
+# `alembic upgrade` in a deployed container would crash — editable installs (CI/local) mask it.
+"agentforge.storage" = ["*.sql"]
+
 [tool.pytest.ini_options]
 # src-layout: make the package importable in tests without requiring an editable install.
 pythonpath = ["src"]
