@@ -27,6 +27,7 @@ from typing import Any
 from jsonschema import Draft202012Validator
 
 from agentforge.contracts import validator_for as contract_validator_for
+from agentforge.secrets import looks_like_provider_key
 
 MAX_FILE_BYTES = 512 * 1024
 MAX_CORPUS_ARTIFACTS = 256
@@ -204,7 +205,13 @@ def _issue_sort_key(issue: EvalValidationIssue) -> tuple[str, str, str, str]:
 
 def _safe_source(source: str | Path) -> str:
     text = str(source)[:512]
-    return "".join(ch if ch.isprintable() and ch not in "\r\n\t" else "?" for ch in text)
+    sanitized = "".join(ch if ch.isprintable() and ch not in "\r\n\t" else "?" for ch in text)
+    # A diagnostic must never echo a secret-bearing token verbatim: a hostile/malformed case_id
+    # (or any source) that looks like a provider key is redacted, so a human reading a validation
+    # failure never sees a live credential (reuses the platform's own detector).
+    if looks_like_provider_key(sanitized):
+        return "<redacted-secret>"
+    return sanitized
 
 
 def _pointer(parts: Iterable[Any]) -> str:

@@ -1173,3 +1173,18 @@ def test_json_serialization_of_valid_case_is_finite_and_strict() -> None:
     """Sanity-check the fixture itself does not hide non-JSON test-only values."""
     encoded = json.dumps(valid_case(), allow_nan=False)
     assert json.loads(encoded)["artifact_kind"] == "authored_eval_case"
+
+
+def test_safe_source_redacts_a_secret_looking_diagnostic_value() -> None:
+    """A validator diagnostic must never echo a secret-bearing token verbatim: a hostile/
+    malformed source (e.g. a case_id that looks like a provider key) is redacted before it
+    reaches a human-readable issue (integration-review hardening — no secrets in diagnostics)."""
+    from agentforge.evals.validation import _safe_source
+
+    for fake_key in ("sk-ant-FAKE-not-real-000", "sk-or-FAKE-not-real-111"):
+        out = _safe_source(fake_key)
+        assert fake_key not in out
+        assert "redacted" in out.lower()
+    # A conforming case_id / path is left intact (no false-positive redaction).
+    assert _safe_source("AF-M11-DX-001") == "AF-M11-DX-001"
+    assert _safe_source("evals/seeds/AF-M11-PI-001.json") == "evals/seeds/AF-M11-PI-001.json"
