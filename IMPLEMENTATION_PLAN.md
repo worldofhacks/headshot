@@ -155,12 +155,60 @@ before their consumers**, frontmatter + trigger boundaries validated against `CL
   - Verify: `docker build` + `compose up` healthy; `/ready` reflects DB/migration state; env-isolation test green in CI on the ephemeral PG · Test: **invariant** — staging/local config cannot resolve prod target creds (O1) · Skills: —
   - **Local-complete does NOT satisfy the deployed-URL gate** (that is M1b).
 
-- [ ] **M1b — Railway provisioning & deployment  ⚠ HUMAN AUTH (Railway, secrets)** — DEFERRED (external)
-  - Files: Railway config / deploy manifests
+- [ ] **M1b — Full-platform Railway topology + deployment  ⚠ HUMAN AUTH (Railway, secrets)** — DEFERRED (external)
+  - Files: Railway config / deploy manifests (future integration work; not changed by M1c)
   - Anchors: §12, **D16** · Map: PRD-34 (deployed half) · Deps: **M1a**, **P11** (deploy-from-GitHub) · Est: M
-  - Accept: (a) Railway project + **staging & production** environments; (b) managed **PostgreSQL** bindings per environment; (c) **environment-scoped secrets** (by reference, never inline); (d) **deploy-on-green**; (e) **health/readiness promotion checks** (`/health`+`/ready` gate promotion); (f) cron/scheduling infrastructure; (g) **deployed platform URLs**; (h) **edge:** a staging deploy cannot resolve prod's live-target credential binding; (i) **error:** a failed `/ready` blocks promotion
-  - Verify: staging + prod deploy green on Railway; promotion gated on health/readiness; deployed URLs recorded · Test: deploy/rollback smoke on Railway · Skills: — · **⚠ HUMAN AUTH (Railway)**
-  - **M1 is complete only when BOTH M1a and M1b pass.** M1a is local-complete; M1b is blocked on Railway authorization.
+  - Accept: (a) Railway project with isolated **staging and production** environments; (b) one
+    Internet-reachable **Web** service plus private **Runner**, private **Scheduler**, and private managed
+    **PostgreSQL** per environment; (c) no public Runner/Scheduler/Postgres endpoint; (d)
+    environment-scoped sealed variables by reference, never inline; (e) pre-deploy migrations complete
+    before Web/worker promotion; (f) deploy-on-green plus `/health` and `/ready` promotion gates; (g)
+    rollback to a previously healthy deployment is rehearsed; (h) deployed URLs are recorded honestly;
+    (i) **edge:** staging cannot resolve production target, Clerk Organization, origin, or database
+    bindings; (j) **error:** migration or readiness failure blocks promotion without exposing another
+    service publicly
+  - Verify: staging + production topology inventory; public-port scan; pre-deploy migration, health,
+    readiness, and rollback smokes; URLs recorded only after a successful deploy · Test: environment
+    isolation + deploy/rollback smoke on Railway · Skills: — · **⚠ HUMAN AUTH (Railway)**
+
+- [x] **M1c — Clerk authentication + custom-permission RBAC foundation**  (local/offline implemented; not deployed)
+  - Files: NEW `src/agentforge/auth/`, NEW `tests/auth/`, `pyproject.toml`, authentication/security docs
+  - Anchors: identity ADR + `docs/security/AUTHENTICATION.md` · Map: **USR-02/03/04/05/07** · Deps:
+    **M1a** · Est: M
+  - Accept: (a) official `clerk-backend-api` verifies only `session_token` values networklessly with
+    `CLERK_JWT_KEY`; (b) explicit, wildcard-free `CLERK_AUTHORIZED_PARTIES` and exact
+    `CLERK_REQUIRED_ORG_ID`; (c) staging rejects production Organization/origin values and production
+    rejects HTTP origins; (d) immutable Principal contains only verified user/session/Organization/role
+    and custom-permission claims—never a token/header; (e) backend authorization uses custom permissions,
+    never role text or client-supplied data; (f) missing/invalid/expired auth → 401, valid identity lacking
+    Organization/permission → 403, verifier/config failure fails closed; (g) distinct-approver invariant
+    requires `org:campaign:authorize` and a user different from the launcher; (h) authentication never
+    constitutes live-campaign authorization; (i) `CLERK_SECRET_KEY` is not required for request auth
+  - Verify: deterministic offline RSA-token suite covers missing/malformed/expired/not-yet-valid/bad
+    signature/algorithm/authorized-party claims, Organization and permission enforcement, redaction,
+    environment isolation, verifier failure, and same-user rejection; prove the suite makes no network
+    calls · Test: boundary + invariant cases in `tests/auth/` · Skills: security-best-practices
+
+- [ ] **M1d — Authenticated Railway Web/API/console integration  ⚠ HUMAN AUTH (Clerk + Railway)** — PLANNED
+  - Files: future `src/agentforge/app.py` wiring, `console/**` Clerk integration, Railway environment
+    variables/configuration (explicitly outside M1c's isolated foundation)
+  - Anchors: identity ADR + Railway deployment guide · Map: **USR-01–07** · Deps: **M1b**, **M1c** · Est: M
+  - Accept: (a) Clerk restricted/invitation-only access; one required **Headshot** Organization; personal
+    accounts and user-created Organizations disabled; MFA required with TOTP plus backup codes available
+    (SMS is not the sole factor); (b) backend and frontend publishable keys match the environment; (c)
+    only `/health`, `/ready`, and the minimal sign-in/authentication shell and its static assets are
+    public; all meaningful console/API/event-stream routes require the backend Principal and exact custom
+    permissions; (d) Web is the only public Railway service; (e) the browser never supplies authoritative
+    role/permission data; (f) token/header values do not reach logs, traces, errors, event streams, or
+    private worker messages; (g) staging cannot authenticate a production origin or Organization; (h)
+    live launch/abort/approval still passes the separate campaign Policy Gateway and two-person controls;
+    (i) **error:** Clerk outage or invalid configuration cannot make a protected route public
+  - Verify: Clerk Dashboard checklist + protected-route matrix + two identities in staging; unauthenticated,
+    wrong-org, missing-permission, XSS/log-redaction, SSE leakage, and fail-closed outage tests; inspect
+    Railway service exposure and then record actual deployment/CI status · Test: integration/e2e tests
+    against staging · Skills: security-best-practices · **⚠ HUMAN AUTH (Clerk + Railway)**
+  - **M1 is complete only when M1a–M1d all pass.** M1c can complete offline; M1b/M1d remain incomplete
+    until authorized Railway/Clerk configuration and staging verification occur.
 
 - [ ] **M2 — Data model + migrations + per-agent DB roles + indexes**
   - Files: NEW `src/storage/models.py`, `migrations/` (Alembic), `src/storage/roles.sql`
@@ -255,8 +303,13 @@ before their consumers**, frontmatter + trigger boundaries validated against `CL
   - Accept: (a) every PRD requirement → artifact/test/checkpoint/evidence; (b) **edge:** no blank cell; (c) **error:** a graded deliverable with no producing task flagged · Verify: rows = 37 + 18; machine-readable · Test: — · Skills: evidence-audit (P7, at Final)
 
 - [ ] **M15 — README + deployed URL  ⚠ HUMAN AUTH (Railway URL)**  ∥
-  - Files: extend `README.md` · Anchors: §2, §19 · Map: PRD-29/34 · Deps: **M1b**, M5 · Est: S
-  - Accept: (a) setup + arch overview + **deployed link** + run-vs-live-target instructions; (b) **edge:** synthetic-data + no-real-PHI stated; (c) **error:** a clean-checkout follow-through reaches a live run · Verify: clean-checkout reproduction · Test: — · Skills: — · **⚠ HUMAN AUTH**
+  - Files: extend `README.md` · Anchors: §2, §19 · Map: PRD-29/34 · Deps: **M1d**, M5 · Est: S
+  - Accept: (a) setup + arch overview + **deployed link** only after M1d verification + run-vs-live-target
+    instructions; (b) public/protected route model and Clerk prerequisites documented; (c) **edge:**
+    synthetic-data + no-real-PHI stated and authentication distinguished from campaign authorization;
+    (d) **error:** pending/degraded deployment is never described as live or green · Verify: clean-checkout
+    reproduction after **M1d**; until then the deployed URL remains explicitly pending · Test: — · Skills:
+    — · **⚠ HUMAN AUTH**
 
 ---
 
@@ -275,9 +328,18 @@ before their consumers**, frontmatter + trigger boundaries validated against `CL
   - Verify: a confirmed exploit → schema-valid report; a critical report blocks on the gate; a doc-injection attempt controls no field · Test: **invariant** — no critical publish without approval; **injection** — hostile content laundering blocked (S4) · Skills: **vuln-report** (P6)
 
 - [ ] **F3 — Human approval gates + two-person rule**
-  - Files: NEW `src/policy/approval.py`, audit-log wiring · Anchors: §14, **S7** · Map: PRD-27 · Deps: M3, F2 · Est: M
-  - Accept: (a) critical-publish + remediation gates runtime-enforced; (b) **two-person rule** — `approver_id != launcher_id` for critical, both in the append-only audit log; (c) **edge:** single-operator Week-3 exception explicitly disclosed; (d) **error:** a self-approval on a critical finding is rejected
-  - Verify: launcher-only critical publish rejected; two-identity approval succeeds + audited · Test: **invariant** — self-approval rejected for critical (S7) · Skills: —
+  - Files: NEW `src/policy/approval.py`, audit-log wiring · Anchors: §14, **S7** · Map: PRD-27,
+    **USR-03/04/07** · Deps: M3, F2, **M1c, M1d** · Est: M
+  - Accept: (a) critical-publish + remediation gates runtime-enforced; (b) authenticated Principal has the
+    exact Headshot Organization and `org:campaign:authorize` custom permission; (c) **two-person rule** —
+    `approver_user_id != launcher_user_id`, with both verified identities in the append-only audit log;
+    (d) role labels and client-supplied identity/permission text have no authority; (e) there is no
+    single-operator bypass—lack of a distinct authorized Approver leaves the operation blocked; (f)
+    authentication alone never authorizes the campaign; (g) **error:** self-approval is rejected even when
+    that user has the Approver role and permission
+  - Verify: launcher-only critical action rejected; a different authenticated Approver succeeds + both
+    identities are audited · Test: **invariant** — self-approval rejected for critical (S7) · Skills:
+    security-best-practices
 
 - [ ] **F4 — Regression & validation harness (tiered) + SLO-in-CI promotion**
   - Files: NEW `src/regression/`, `evals/regressions/` · Anchors: §10, **O5** · Map: PRD-23/24, PRD-OPT-16 · Deps: M3, M9, M11, **P3** · Est: L
@@ -298,8 +360,15 @@ before their consumers**, frontmatter + trigger boundaries validated against `CL
   - Accept: (a) simulated scan report with **≥10 findings across critical/high/medium/false-positive**; (b) validate/remediate/defer/document per finding; (c) **edge:** false positives explicitly dispositioned; (d) **error:** reuses the VulnReport schema · Verify: 10+ findings, all four categories, each dispositioned · Test: — · Skills: **vuln-report** (P6, triage mode)
 
 - [ ] **F8 — ATO-style evidence packet**
-  - Files: NEW `docs/evidence/ato/` · Anchors: §19 · Map: PRD-OPT-07 · Deps: **M1a**, M12, F2, **P7** · Est: L
-  - Accept: (a) arch + data-flow diagram, **auth-model matrix** (agent → callable target → credential via the gateway), **dependency list with versions**, **self-scan** (Semgrep + the platform's eval suite run against itself), test evidence, **incident/postmortem** from §13; (b) **edge:** distinct artifact from `ARCHITECTURE.md`; (c) **error:** no unversioned dependency · Verify: packet assembled + cross-checked vs the matrix · Test: self-scan produces real evidence · Skills: **evidence-audit** (P7)
+  - Files: NEW `docs/evidence/ato/` · Anchors: §19 · Map: PRD-OPT-07 · Deps: **M1d**, M12, F2,
+    **P7** · Est: L
+  - Accept: (a) arch + data-flow diagram, **two distinct auth-model matrices** (human Principal → route →
+    Clerk custom permission, and workload/agent → callable target → credential via the Policy Gateway),
+    **dependency list with versions**, **self-scan** (Semgrep + the platform's eval suite run against
+    itself), authentication/deployment test evidence, **incident/postmortem** from §13; (b) **edge:**
+    distinct artifact from `ARCHITECTURE.md`; (c) **error:** no unversioned dependency or unverified
+    authentication/deployment claim · Verify: packet assembled after M1d + cross-checked vs the matrix ·
+    Test: self-scan produces real evidence · Skills: **evidence-audit** (P7)
 
 - [ ] **F9 — Integration packet**
   - Files: NEW `docs/integration/` · Anchors: §4, §19 · Map: PRD-OPT-05/09 · Deps: **P10**, M11, **P1** · Est: M
@@ -311,8 +380,15 @@ before their consumers**, frontmatter + trigger boundaries validated against `CL
   - Verify: baseline + load metrics committed; bottleneck named; the run shows the full authorized-live-campaign gate trace · Test: — (measurement) · Skills: **authorized-live-campaign** (P5) · **⚠ HUMAN AUTH**
 
 - [ ] **F11 — Observability dashboards (the six questions, live)**  ∥
-  - Files: extend `src/observability/`, NEW dashboard config · Anchors: §9 · Map: PRD-25/26, O3 · Deps: **M6a**, **M6b**, F1 · Est: M
-  - Accept: (a) all six questions answerable for a human **and** the Orchestrator; resilience trend live; (b) **edge:** alert conditions active (approval-pending SLA, regression/reopen, budget breaker, target-unreachable, queue-depth, emission failure); (c) **error:** alerts tied to the durable source, not Langfuse alone · Verify: each question returns a real answer; an alert fires end-to-end · Test: — · Skills: —
+  - Files: extend `src/observability/`, NEW dashboard config · Anchors: §9 · Map: PRD-25/26, O3 · Deps:
+    **M6a**, **M6b**, F1, **M1d** · Est: M
+  - Accept: (a) all six questions answerable for an authenticated, custom-permission-authorized human
+    **and** the Orchestrator; resilience trend live; (b) console/event streams expose no token, header,
+    secret, or unauthorized finding/evidence; (c) **edge:** alert conditions active (approval-pending SLA,
+    regression/reopen, budget breaker, target-unreachable, queue-depth, emission failure); (d) **error:**
+    alerts tied to the durable source, not Langfuse alone · Verify: each question returns a real authorized
+    answer; an alert fires end-to-end; observer/auditor boundaries tested · Test: access-control + no-leak
+    tests · Skills: security-best-practices
 
 - [ ] **F12 — AI-use disclosure + evidence-audit completeness**  ∥
   - Files: verify `ARCHITECTURE.md` §15 current; NEW `docs/evidence/AUDIT_SUMMARY.md` · Anchors: §15 · Map: PRD-OPT-08 · Deps: F8, F9, **P7** · Est: M
@@ -350,10 +426,10 @@ before their consumers**, frontmatter + trigger boundaries validated against `CL
 | **S4** Evaluator-injection containment | M9, F2, P10 (envelope) | M12 Judge battery (4 cases) + F2 Documentation doc-control battery | mapped |
 | **S5** Judge.vendor ≠ Doc.vendor | M13, F1 | M12 + F1 | mapped |
 | **S6** Verified coverage only | M6a, F1 | M6a invariant | mapped |
-| **S7** Two-person rule | F3 | F3 invariant | mapped |
+| **S7** Two-person rule | M1c (identity separation), F3 (runtime gate) | M1c/F3 invariants | mapped |
 | **S8** Canary provisioning / honesty | D1, M5, M9/M10 | M7 + M10 | mapped |
 | **S9** Hash reconciliation | M6a | M6a invariant | mapped |
-| **O1** Environments | M1a (local) + M1b (Railway) | M1a env-isolation test | mapped |
+| **O1** Environments | M1a (local) + M1b/M1d (Railway + Clerk) | M1a + M1c/M1d isolation tests | mapped |
 | **O2** Expand/contract + drain + PITR | M2 (expand/contract), M1b (drain/PITR) | M2 migration test | mapped |
 | **O3** Alerting | M6a, F11 | M6a/F11 | mapped |
 | **O4** Platform testing | M12 | M12 | mapped |
@@ -378,11 +454,11 @@ Every **runtime** F/S/O finding has an implementing + verifying task. F9–F12 a
 | Boundary/invariant/regression test design | PRD-OPT-01 | M·M11/M12 |
 | Data-quality checks | PRD-OPT-13 | M·M2/M11, F·F2 |
 | Migrations / queue / workflow state | PRD-OPT-14 | M·M2/M3 |
-| Data model + access control | PRD-OPT-15 | M·M2, F·F3 |
+| Data model + access control | PRD-OPT-15 + USR-02/03 | M·M1c/M1d/M2, F·F3 |
 | SQL indexes + regression SLO in CI | PRD-OPT-16 | M·M2, F·F4 |
 | ≥3 vulnerability reports | PRD-32 | F·F6 |
 | Triage report (10+ findings) | PRD-OPT-03 | F·F7 |
-| ATO evidence packet | PRD-OPT-07 | F·F8 |
+| ATO evidence packet | PRD-OPT-07 | M·M1d → F·F8 |
 | Integration packet | PRD-OPT-05/09 | F·F9 |
 | Baselines + load test | PRD-OPT-17/18 | F·F10 |
 | Cost analysis @ runs | PRD-33 | F·F5 |
@@ -390,18 +466,29 @@ Every **runtime** F/S/O finding has an implementing + verifying task. F9–F12 a
 | Regression harness | PRD-23/24 | F·F4 |
 | AI-use disclosure | PRD-OPT-08 | ✓ §15 · verify F·F12 |
 | Rate limits / auth / backoff-queue-abort | PRD-OPT-12 | M·M4 (+ §5/§11) |
-| Human approval gates | PRD-27 | F·F3 |
-| README (deployed link) | PRD-29 | M·M15 |
+| Human approval gates | PRD-27 + USR-04/07 | M·M1c/M1d → F·F3 |
+| README (deployed link) | PRD-29 + USR-01/02 | M·M1d → M15 |
 | Demo video · social post | PRD-31/35 | F·F13 |
 
 ## Critical path & parallel workstreams
 
-- **Critical path → MVP (local):** `P8 → M1a` (local runtime) and `P8 → P10` (needs `P1`) `→ M2 → M4` (needs `P9`,`P5`) `→ M9` (needs `M6a`,`P4`) `→ M11` **[hard gate]**. After `M2`: `M3` and `M6a` proceed in parallel.
-- **External halves are deferred (do not block local foundations):** `M1b` (Railway ⚠), `M6b` (Langfuse ⚠), `M5`/`M7` (live target ⚠, need `D1`), `M8` (hosted-OSS ⚠).
-- **Critical path → Final:** `M9/M11 → F4` (regression) and `→ F1` (Orchestrator) `→ F2` (Documentation) `→ F6/F8/F10 → F13`.
+- **Critical path → MVP (local):** `P8 → M1a → M1c` (runtime + authentication foundations) and
+  `P8 → P10` (needs `P1`) `→ M2 → M4` (needs `P9`,`P5`) `→ M9` (needs `M6a`,`P4`) `→ M11`
+  **[hard gate]**. After `M2`: `M3` and `M6a` proceed in parallel.
+- **External halves are deferred (do not block local foundations):** `M1b` (Railway ⚠) + `M1d`
+  (authenticated integration ⚠), `M6b` (Langfuse ⚠), `M5`/`M7` (live target ⚠, need `D1`), `M8`
+  (hosted-OSS ⚠).
+- **Critical path → Final:** `M1c → M1d → F3/F8/F11`; independently, `M9/M11 → F4` and `→ F1`
+  (Orchestrator) `→ F2` (Documentation) `→ F6/F8/F10 → F13`.
 - **Fully parallel, done or start-now (local, no ext auth):** `P1–P7` skills ✅, `P8` scaffold ✅, `P9` fake ✅, `P10` contracts ✅, `M14` matrix, `D2` dry-run, `F14` devlog. `D1` target-readiness (⚠) unblocks `M5`/`M7`. **`D3` is off the critical path** — a pre-presentation gate on `wip/d3-diagram`.
-- **Bottlenecks:** `P10` (contracts ✅) gates all agents; `M1a` gates `M2`; `M4` (gateway) gates all live work; `M6a` (local observability) gates the Judge's evidence-integrity + the Orchestrator's learning signal. Land `M1a → M2 → M4/M6a` first.
-- **The DEPLOYED MVP gate (deployed URL + live traces + live eval results) needs the EXTERNAL halves — `M1b`, `M6b`, `M5`, `M8` — and stays incomplete until those authorizations land.** Local foundations (`M1a`, `M2`, `M3`, `M4`, `M6a`) are fully buildable now, fake-backed.
+- **Bottlenecks:** `P10` (contracts ✅) gates all agents; `M1a` gates `M2` and `M1c`; `M1c` gates
+  every meaningful human-facing route and two-person approval; `M4` (gateway) gates all live work; `M6a`
+  gates the Judge's evidence-integrity + the Orchestrator's learning signal. Land
+  `M1a → M1c/M2 → M4/M6a` first.
+- **The DEPLOYED MVP gate (authenticated deployed URL + live traces + live eval results) needs the
+  EXTERNAL halves — `M1b`, `M1d`, `M6b`, `M5`, `M8` — and stays incomplete until those authorizations
+  land.** Local foundations (`M1a`, `M1c`, `M2`, `M3`, `M4`, `M6a`) are fully buildable now,
+  fake-backed/offline as applicable.
 
 ## Account & external blockers (classified — 2026-07-21)
 
@@ -413,13 +500,15 @@ bypassed.
 |---|---|---|
 | **GitHub branch protection** (private repo needs Pro/public — 403) | the repository-approved **`tdd-swarm` execution workflow** | local design/plan work |
 | **Gauntlet Labs GitLab auth** | **dual-remote checkpoint parity** (a repo policy, `CLAUDE.md` dual-remote law) | **intrinsic `tdd-swarm` prerequisites** — GitLab parity is a policy gate, not a swarm precondition |
-| **Railway authorization** | **M1b** (deployed envs, managed PG, deployed URLs) | **M1a** local runtime foundation |
+| **Railway authorization** | **M1b/M1d** (private-service topology, authenticated deploy, deployed URLs) | **M1a/M1c** local runtime + auth foundations |
+| **Clerk Dashboard authorization** | **M1d** (restricted mode, Headshot Organization, MFA, role/permission assignments, environment keys) | **M1c** offline verification/RBAC foundation |
 | **Langfuse authorization** | **M6b** (cloud traces, per-agent cost) | **M6a** local observability core |
 | **D1 inputs / live authorization** | **D1, M5, M7, and live eval results** | fake-backed foundations `M1a/M2/M3/M4/M6a` |
 | **Hosted-OSS credentials/budget** | **live M8 inference** | building M8's mutation loop against the fake |
 
-**GitLab and D1 are NOT reasons to call the local architecture blocked.** Local foundations (M1a, M2, M3,
-M4, M6a) are fully buildable now; only their *external halves* and the *deployed/live* gate are deferred.
+**GitLab, Railway/Clerk access, and D1 are NOT reasons to call the local architecture blocked.** Local
+foundations (M1a, M1c, M2, M3, M4, M6a) are fully buildable now; only their *external halves* and the
+*deployed/live* gate are deferred.
 
 ## `tdd-swarm` local-MVP-foundations epic (pre-approved scope; NOT invoked)
 
@@ -445,16 +534,19 @@ the smallest slice that satisfies the four MVP hard gates **while keeping the fu
 All **other graded requirements are FINAL-COMMITTED** (scheduled into the Fri Final gate — **not optional,
 not stretch, not cut**).
 
-**Security spine — non-deferrable, in the MVP slice:** the trusted **Policy Gateway + Execution Recorder**
+**Security spine — non-deferrable, in the MVP slice:** the Clerk authentication/custom-permission
+foundation and authenticated deployment (M1c/M1d); the trusted **Policy Gateway + Execution Recorder**
 (M4); **live-target authorization controls** (M5 + `authorized-live-campaign` P5 + the gateway's
 allowlist/scoped-creds/synthetic-data/budget/rate/hard-abort); the **independent Red Team *and* Judge**
 (M8 + M9); **deterministic fail-closed verdict handling** (M9 / D13); and the **security-invariant tests
 that prove them** — S1/S2 DB-role append-only (M2), S3 replay rejection (M4), S4 Judge-injection (M9/M12),
-S9 hash reconciliation (M6a). None of these may be deferred out of MVP. (Local halves M1a/M6a are buildable now; the *deployed* MVP gate additionally needs the external halves M1b/M6b/M5/M8.)
+S9 hash reconciliation (M6a). None of these may be deferred out of MVP. (Local halves M1a/M1c/M6a
+are buildable now; the *deployed* MVP gate additionally needs the external halves
+M1b/M1d/M6b/M5/M8.)
 
 | Hard gate | Committed tasks |
 |---|---|
-| Deployed platform + URL | P8 · P11 (GitHub✅; protection⛔/GitLab⛔) · **M1a** (local) · **M1b**⚠ · M5⚠ · M15⚠ (+ D1⚠ readiness) |
+| Deployed platform + URL | P8 · P11 (GitHub✅; protection⛔/GitLab⛔) · **M1a/M1c** (local) · **M1b/M1d**⚠ · M5⚠ · M15⚠ (+ D1⚠ readiness) |
 | Threat model deepened | D1⚠ → M7⚠ (+ P2) |
 | `./evals/` ≥3 categories + ≥1 live agent (**full loop** per decision) | P1 → P10 · P9 · P3 · P5 · M1a → M2 → M3 → M4 · **M6a** · **M8⚠ + M9** → M11 (+ M12 **CI-substrate portion** for validation; P4 for the Judge's calibration hook) |
 | `contracts/v1` + typed errors | P10 (needs P1) |

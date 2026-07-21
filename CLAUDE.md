@@ -38,6 +38,54 @@ nice-to-have. `arch-draft` and `arch-finalize` judge their audits against this p
 - Cost is **never** modeled as tokens × N.
 - **"Optional Engineering Deliverables" are mandatory** — the PRD grades them.
 - **No real PHI** — synthetic fixtures only.
+- **Railway hosts the full platform**: the console/API Web service is the only public
+  service; runner, scheduler, and Postgres services are private. Staging and production
+  have separate service bindings, databases, secrets, target authorization, and Clerk
+  configuration.
+- **Clerk authentication is mandatory for every meaningful human-facing route.** Access
+  is invitation-only/restricted, requires the exact Headshot Organization, and requires
+  MFA for every user. Personal accounts and user-created organizations are disabled.
+- Authentication is not campaign authorization. No authenticated user, role, or custom
+  permission may bypass the Policy Gateway's exact live-target authorization controls.
+
+## Human identity, authorization, and public routes (locked)
+
+**Provider and enrollment.** Clerk is the managed human identity provider. Signup is
+restricted/invitation-only; every user must belong to the one required **Headshot** Clerk
+Organization. Personal accounts and user-created organizations are disabled. MFA is required for
+all users, preferring TOTP plus backup codes; SMS must never be the only available factor. Clerk
+integration and authenticated Railway deployment remain **selected/planned until integration is
+verified** — do not describe them as deployed.
+
+**Backend authority only.** The backend accepts only a verified Clerk `session_token` for human
+requests, verifies it networklessly with `CLERK_JWT_KEY`, checks an explicit non-wildcard
+`CLERK_AUTHORIZED_PARTIES`, and requires the exact `CLERK_REQUIRED_ORG_ID`. Authorization uses the
+immutable set of **custom organization permissions from verified Clerk claims**. A frontend role
+label, request field, cookie value, client-supplied permission, or Clerk system permission has no
+authority. Frontend controls improve UX; they never enforce access.
+
+| Clerk Organization role | Backend-authoritative custom permissions |
+|---|---|
+| `org:observer` | `org:console:read`, `org:findings:read`, `org:evidence:read` |
+| `org:operator` | `org:console:read`, `org:findings:read`, `org:evidence:read`, `org:campaign:launch`, `org:campaign:abort`, `org:targets:manage`, `org:config:manage` |
+| `org:approver` | `org:console:read`, `org:findings:read`, `org:evidence:read`, `org:campaign:authorize`, `org:findings:approve`, `org:findings:resolve` |
+| `org:auditor` | `org:console:read`, `org:findings:read`, `org:evidence:read`, `org:audit:read` |
+
+**Two-person invariant.** A launcher cannot approve or authorize their own operation. Approval
+requires a different authenticated `org:approver` principal carrying the required custom permission;
+role or permission alone never overrides `approver.user_id != launcher_user_id`. There is no solo-user
+or emergency self-approval bypass. Both immutable identities are audit fields.
+
+**Public-route allowlist.** Only `GET /health`, `GET /ready`, and the minimal static/sign-in/callback
+shell required to complete Clerk authentication may be public. Before integration, that shell's
+concrete paths must be enumerated rather than matched by a broad wildcard. No console data, API,
+finding/evidence response, SSE/event stream, WebSocket, campaign action, or approval endpoint is
+public. Everything not explicitly allowlisted defaults to authenticated and authorized.
+
+**Identity separation.** Clerk principals represent human users. Agent/workload identity continues to
+use service boundaries, per-agent database roles, and target-scoped credential bindings; a Clerk token
+is never an agent credential. Human authentication alone never constitutes authorization to attack a
+target, publish a critical finding, or perform remediation.
 
 ## Runtime agents (application code — defined in ARCHITECTURE.md, not yet written)
 - **Orchestrator** — reads observability (coverage gaps, open findings, regressions),

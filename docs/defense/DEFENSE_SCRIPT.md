@@ -4,15 +4,17 @@
 > holds** (the substantiation), **If pushed** (the follow-up), **Concede** (the honest limit).
 > Goal: defend every architectural decision — *especially where agents act autonomously* — to a
 > hospital-CISO standard. Evidence pack: `ARCHITECTURE.md` (binding), diagrams **D2** (agent interaction)
-> + **D4** (trust boundaries), `ADR-0001` (build-vs-configure), `THREAT_MODEL.md`.
+> + **D4** (trust boundaries), `ADR-0001` (build-vs-configure), `ADR-0002` (identity/access),
+> `docs/security/AUTHENTICATION.md`, `docs/deployment/RAILWAY.md`, and `THREAT_MODEL.md`.
 > Tag: `must-land` unless noted.
 >
 > **Status-label convention (F11 — never claim a system you have not built).** Every load-bearing claim
 > is one of `[implemented]` (code exists + runs), `[selected]` (decided, not yet built), `[measured]`
-> (a real number from a real trace), or `[planned]` (designed, scheduled). **At Architecture Defense the
-> platform is not built** — there is no `src/`, `contracts/`, or `evals/` yet — so nearly everything here
-> is `[selected]` or `[planned]`; the diagrams and this script are the deliverables, the running platform
-> is not. Do not present a `[selected]` decision in the present tense as if it were `[implemented]`.
+> (a real number from a real trace), or `[planned]` (designed, scheduled). Local foundations now exist,
+> but every claim still needs its own evidence. Railway provisioning, Clerk Dashboard configuration,
+> FastAPI/console authentication wiring, and authenticated deployment remain `[selected]`/`[planned]`
+> until their integration checks pass. Do not present a `[selected]` decision in the present tense as if
+> it were `[implemented]`, and do not infer a deployed/green state from local tests.
 
 | # | Beat | What it lands | Time |
 |---|---|---|---|
@@ -24,6 +26,8 @@
 | S4b | Per-role models | The refusal problem, solved structurally | 90s |
 | S4c | Trust boundaries | Where autonomy stops | 90s |
 | S4d | Contracts + regression | A test passing for the wrong reason | 90s |
+| S4e | Railway boundary | Full platform on Railway; only Web is public | 60s |
+| S4f | Clerk identity | Invitation-only MFA, backend permissions, two people | 90s |
 | S5 | Threat model | Full surface, OWASP-mapped, honestly unproven | 60s |
 | S6 | Hard questions | `reactive` — answers pre-loaded | — |
 | S7 | Run of show | `pre-flight` — not spoken | — |
@@ -188,10 +192,11 @@ of *how* a run was triggered (Claude, a direct Python call, or Railway cron). Di
 on the campaign skill is a convenience that stops *Claude* auto-invoking it; it is **not** the control,
 because it does nothing against a direct run or a cron fire. Every run is fully traced and attributable."
 
-**Concede.** Anyone with repo access and credentials can widen the allowlist — the control is
-auditability plus a **two-person rule** on critical publish and remediation (`approver_id != launcher_id`),
-not prevention. For the Week-3 timeline a single operator may wear both hats; where that happens we state
-it explicitly rather than let "distinct role" quietly permit self-approval.
+**Concede.** Anyone with sufficient administrative access could attempt to widen the allowlist — the
+controls are least privilege, runtime enforcement, review, and auditability. The two-person rule is not
+waived for the Week-3 timeline: `approver.user_id != launcher_user_id` is enforced from immutable Clerk
+identities. If no second authorized human is available, the operation remains pending or is aborted;
+there is no emergency self-approval path.
 
 ---
 
@@ -214,6 +219,60 @@ deterministic regression oracle — never by an LLM-only verdict."
 for a target we cannot pre-seed (likely for the flagship PHI-exfiltration category), detection is
 Judge-judgment **plus human escalation**, not deterministic. We state that honestly rather than imply an
 oracle the ownership boundary denies; the ground-truth calibration set is the control there (S6).
+
+---
+
+### S4e — Railway hosting boundary `must-land`
+
+**Say.** "`[selected]` Railway hosts the **full platform**, not only a worker: one public Web service for
+the console/API and only the minimal health/authentication shell; private runner, scheduler, and Postgres
+services behind it. `[planned]` Staging and production have different databases, variables, target
+authorization, Clerk applications, exact Organization IDs, and origins. No Railway URL is claimed until
+Worker 2 provisions and verifies it."
+
+**Why it holds.** Public exposure is intentionally one service. The scheduler only enqueues; the runner
+claims durable work; Postgres carries queue, checkpoints, evidence, findings, approvals, and audit data.
+Pre-deploy Alembic migrations use expand/contract discipline, `/health` proves liveness, `/ready` gates
+DB/schema/local-auth-config readiness, and deployment-history rollback is paired with Postgres PITR because
+rolling back a container does not roll back data.
+
+**If pushed — "what is actually live?"** "Nothing in this beat is presented as live yet. Railway is the
+locked selection and the runbook is written; project creation, domains, sealed variables, smoke tests,
+rollback exercise, and URLs remain a human-authorized integration task. README says `PENDING`."
+
+**Concede.** Railway private networking is not application authorization. Every service still uses
+least-privilege bindings and per-agent DB roles, and the Web service still defaults every non-allowlisted
+route to authenticated.
+
+---
+
+### S4f — Clerk human identity and RBAC `must-land` → ADR-0002
+
+**Say.** "`[selected]` Clerk is the managed human IdP — no custom password, OAuth, or session database.
+Enrollment is restricted/invitation-only into the exact **Headshot** Organization; Personal Accounts and
+user-created Organizations are disabled; MFA is required with TOTP plus backup codes, never SMS-only.
+The backend accepts only a verified Clerk `session_token`, verifies it networklessly from a pinned PEM
+public key, checks exact non-wildcard authorized parties and the exact Organization ID, then authorizes
+from custom permission claims — never a frontend role label or Clerk system permission."
+
+**Why it holds.** The Principal is frozen and minimum-data: user ID, session ID, Organization ID, role for
+audit context, and an immutable custom-permission set. It never contains the bearer token or headers. Four
+roles map to exact permissions: Observer reads console/findings/evidence; Operator adds launch, abort,
+target and config management; Approver adds campaign authorization and finding approval/resolution; Auditor
+adds audit read. Current Clerk production pricing makes the **Enhanced B2B Authentication add-on** a
+prerequisite for four custom roles; missing it blocks deployment rather than collapsing the roles.
+
+**If pushed — "does an Approver role authorize a launch?"** "No. A verified custom permission authorizes
+the application action; the role is assignment/audit context. Campaign execution still crosses the Policy
+Gateway. Approval also proves a second identity — role or permission never overrides
+`approver.user_id != launcher_user_id`."
+
+**Concede.** `[implemented]` The isolated identity foundation is offline-tested, including FastAPI
+dependency-shape tests, but `[planned]` it is not yet wired into `app.py`/the console, the Clerk Dashboard
+is not provisioned, and Railway auth has not been smoke-tested. Networkless JWT verification also means
+permission revocation freshness is bounded by session-token refresh/expiry; short-lived sessions and a
+future critical-action freshness/step-up check are the hardening path. Verifier/config failures fail
+closed (`503`), not open.
 
 ---
 
@@ -245,6 +304,9 @@ with the reason — the eval suite draws its ≥3 categories from the live-testa
 | What if the Red Team produces genuinely harmful content? | Quarantined; holds no credentials; only ever executed via the trusted gateway against the allowlisted target; never runs against our control plane; treated as untrusted data even by the Judge/Documentation. |
 | How is cost not tokens × N? | Two line families on different functions: **hosting** is a step function of peak concurrency; **inference** is modeled *separately* — hosted = measured tokens × current rates (prompt-cache + Batch adjusted), local = amortized capacity — never a `list_price ÷ throughput` figure (that is dimensionally invalid). Each tier (100→100K) names the architectural change it forces. **Numbers are deferred to measurement.** |
 | Deploy / rollback? | Railway Docker-from-GitHub; **≥2 environments** (prod alone holds live-target creds); managed Postgres; cron enqueues regression. Rollback: deployment history reverts *code*; **expand/contract migrations + Postgres PITR** roll back *data*; drain-before-deploy avoids mid-lease landings. Perf baselines measured on Railway. |
+| Who can access the console/API? | `[selected/planned]` Only invited MFA-complete members of the exact Headshot Clerk Organization. Backend custom permissions authorize actions; frontend labels and Clerk system permissions do not. Public routes are only `/health`, `/ready`, and enumerated minimal sign-in/callback shell paths. |
+| What happens if Clerk or auth config fails? | Issued sessions verify networklessly from the pinned PEM key, so JWKS is not a hot-path dependency. Missing/invalid auth is `401`, valid identity without org/permission/distinct approver is `403`, and SDK/verifier/security-config failure is fail-closed `503`. Never log the token or authorization header. |
+| Can the launcher approve their own campaign? | No. The backend compares immutable verified user IDs in addition to the custom approval permission. There is no solo or emergency bypass; without a second authorized human the action waits or aborts. |
 | What backs the queue, and what happens when it backs up? | One Postgres (`SKIP LOCKED`); jobs accumulate *durably* — nothing dropped — depth is visible, and the cost governor throttles new campaigns. Graceful, observable degradation. |
 | One honest weakness? | LangGraph checkpoints are crash-persistence, not exactly-once durable execution — mitigated with an app-level lock; DBOS-on-Postgres is the path if unattended multi-hour campaigns come into scope. |
 
@@ -258,20 +320,27 @@ with the reason — the eval suite draws its ≥3 categories from the live-testa
 4. Dry-run S2–S4 aloud (~8 min).
 5. Stand up Langfuse Cloud Hobby so the demo shows inter-agent traces + per-agent cost.
 6. Confirm the deployed target URL is in hand (Stage-1 hard gate).
+7. Keep Railway platform URLs marked `PENDING` until staging/production provisioning and smoke tests pass.
+8. Verify Clerk Restricted mode, Headshot Organization, required MFA, four-role add-on, exact permission
+   matrix, and two distinct test users before presenting auth as implemented.
 
 ---
 
 ### S8 — Still-open `volunteer these`
 
-**Say.** "Four things aren't settled, and none of them block the architecture."
+**Say.** "Six things remain open or unverified. They do not change the architecture, but they do block
+specific deployed claims."
 
 - Target's exact auth mode + API shape — pending inspection.
 - Whether the target exposes a web surface for ZAP.
 - Real per-agent token profiles + Mac tok/s — measured at MVP **before any cost number is presented**.
 - PyRIT/Garak/Giskard wrapping deferred to post-MVP (D12 is the only `proposed` decision).
+- Railway staging/production services, domains, rollback smoke, and URLs — selected/planned, not deployed.
+- Clerk Dashboard resources, Enhanced B2B add-on, app/console wiring, and Railway auth smoke —
+  selected/planned, not deployed.
 
-**Why it holds.** All four are tracked (`PRESEARCH.md §9`, `RESEARCH.md` open items) with owners and
-trigger conditions — surfaced deliberately, not discovered live.
+**Why it holds.** All six are explicit here and in the corresponding planning, security, and deployment
+documents with acceptance gates — surfaced deliberately, not discovered live.
 
 **If pushed.** "Naming them is the point. A platform whose operator can't say what's unproven isn't one
 you'd trust with continuous testing."
