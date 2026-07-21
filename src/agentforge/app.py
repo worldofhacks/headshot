@@ -31,6 +31,7 @@ from collections.abc import Callable
 
 from fastapi import FastAPI
 
+from agentforge.config import Settings
 from agentforge.health import create_app
 
 _logger = logging.getLogger(__name__)
@@ -80,6 +81,8 @@ def _placeholder_schema_check() -> bool:
 
     # M2 (AC): replace with the Alembic current-head == expected-head comparison.
     """
+    # Make the schema-half 503 reason traceable (sanitized — no DSN / secret in logs).
+    _logger.debug("readiness: schema_check_not_configured (placeholder — M2 wires Alembic head)")
     return False
 
 
@@ -94,6 +97,10 @@ def build_app(database_url: str | None, schema_check: Callable[[], bool]) -> Fas
     return create_app(readiness_check=lambda: _db_ok(database_url) and bool(schema_check()))
 
 
-# The ASGI entrypoint the container runs (``agentforge.app:app``). DATABASE_URL is read from
-# the environment; the schema half is fail-closed until M2 wires the real Alembic check.
+# The ASGI entrypoint the container runs (``agentforge.app:app``). The deployment
+# environment is read via ``Settings.from_env()`` (AGENTFORGE_ENVIRONMENT, fail-safe
+# ``local``) so the O1 isolation boundary is pinned to the *deployed* environment wherever
+# a ``Settings`` is needed; DATABASE_URL is read from the environment; the schema half is
+# fail-closed until M2 wires the real Alembic check.
+_settings = Settings.from_env()
 app = build_app(os.environ.get("DATABASE_URL"), _placeholder_schema_check)

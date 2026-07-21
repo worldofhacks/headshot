@@ -50,6 +50,10 @@ jobs:
         run: pytest
       - name: Contract tests
         run: pytest tests/contract -q
+      - name: Docker build (AC-1 image gate)
+        # Gate the container image on every push/PR so AC-1 is no longer only manually
+        # verified — a broken Dockerfile fails CI here.
+        run: docker build -t agentforge:ci-smoke .
 
   secret-scan:
     name: secret-scan

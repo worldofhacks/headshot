@@ -16,7 +16,10 @@ services:
       POSTGRES_PASSWORD: local_dev_only
       POSTGRES_DB: agentforge
     ports:
-      - "5432:5432"
+      # Loopback-only publish: the app reaches Postgres over the compose network as
+      # postgres:5432; publishing to the host is dev-convenience only, never exposed
+      # off-box.
+      - "127.0.0.1:5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -35,7 +38,9 @@ services:
       AGENTFORGE_ENVIRONMENT: local
       DATABASE_URL: postgresql://agentforge:local_dev_only@postgres:5432/agentforge
     ports:
-      - "8000:8000"
+      # Loopback-only publish: dev-convenience access to the health surface, never exposed
+      # off-box.
+      - "127.0.0.1:8000:8000"
     depends_on:
       postgres:
         condition: service_healthy
