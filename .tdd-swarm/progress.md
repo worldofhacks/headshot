@@ -42,3 +42,28 @@ migration invariants must RUN, not skip). CI already provides ephemeral postgres
 ### Live-call posture (unchanged, confirmed): NO hosted-model call, NO target call now. A loaded key is
 NOT authorization. No paid inference until M4 green + M8 built + preflight passes + explicit owner authz.
 No target traffic until M5 + D1 authorization. Offline fake/cassette mode stays usable without external values.
+
+## 2026-07-21 — Phase 0 LANDED (CI-green) + M2 LAUNCHED
+- Phase 0 merged to swarm @ 6aebf50; draft PR #4 CI = success. dotenv env-isolation + redacted Secret
+  type (deep redact_mapping — resolved the Important shallow-redactor finding test-first). 134 passed/3 skipped.
+- Deps: SQLAlchemy 2.0.51 + Alembic 1.18.5 committed (ticket/m2-datamodel @ 94c1fe7); psycopg3 dialect
+  postgresql+psycopg://. Local PG up (compose postgres); agentforge = superuser (SET ROLE tests valid).
+- M2 workflow LAUNCHED (wzo6zjcwu / wf_59cbeaf8): storage/models.py (§5.2 state machines + D14 append-only
+  AttemptResult, UNIQUE(campaign_run_id,attempt_id), severity/category/target_version indexes) + Alembic
+  0001 (schema+roles) / 0002 (expand-only) + roles.sql (headshot_redteam INSERT-only staging no-read-back;
+  headshot_recorder INSERT-only attempt_result NO UPDATE/DELETE = append-only; headshot_judge SELECT-only) +
+  S1/S2 invariant tests (SET ROLE, SQLSTATE 42501 = genuine DB rejection). On completion: orchestrator
+  re-runs all gates, resolves Critical/Important findings, merges to swarm, CI-green, then authors M4∥M6a
+  against the REAL landed schema.
+
+## 2026-07-21 — M2 LANDED (ticket/m2-datamodel @ 4a649b3)
+Both reviewers changes_requested; resolved test-first: (1) off-by-one test bug in
+test_attack_case_has_class_and_owasp_tags (impl was correct), (2) [Important] verdict→attempt_result
+composite FK (orphan verdict → 23503) + documented finding-chain deferral, (3) minors: alembic
+path_separator=os, renamed tests/_db.py test_* helpers.
+PHYSICAL EVIDENCE (live, superuser=off): attempt_result grants {judge:SELECT, recorder:INSERT} — NO
+UPDATE/DELETE to any role; red_team_staging {recorder:SELECT, redteam:INSERT}. SET ROLE probes: recorder
+UPDATE/DELETE/TRUNCATE + redteam INSERT attempt_result + redteam read-back + judge INSERT → REJECTED 42501;
+recorder INSERT / judge SELECT → allowed. Migration 0001↔0002 lossless round-trip. Gates: 173 passed/3
+skipped, ruff clean, import-purity clean, docker build OK, gitleaks clean, git diff --check clean.
+NEXT: merge to swarm → CI green → launch M4 ∥ M6a against this landed schema.

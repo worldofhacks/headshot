@@ -21,6 +21,13 @@ dependencies = [
     # lazily inside from_env only — never at config.py top level (D10). Secrets are read
     # by reference at use time, never logged or inlined.
     "python-dotenv>=1.0",
+    # Storage layer only (agentforge.storage / migrations). The framework-neutral core
+    # (config, domain, contracts, secrets) imports NONE of these — enforced by the
+    # import-purity test. SQLAlchemy 2.x models the exploit DB; Alembic runs the
+    # expand/contract migrations (D7). Both bind to Postgres via the psycopg (v3) driver
+    # using the `postgresql+psycopg://` dialect.
+    "sqlalchemy>=2.0",
+    "alembic>=1.13",
 ]
 
 [project.optional-dependencies]
