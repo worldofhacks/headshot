@@ -158,6 +158,53 @@ def test_run_command_missing_database_url_is_a_fail_closed_operational_error(
     assert "database_url" in stderr
 
 
+def test_scope_command_runs_without_a_database_url(tmp_path: Path) -> None:
+    """The ``scope`` command runs via the ACTUAL module entry with NO ``DATABASE_URL`` — the router
+    composes no runtime for it (it is network-free and needs no DB), and it emits an immutable
+    authorization-REQUEST that names the operation hash but carries no grant (no deadline).
+
+    This proves the composition root ROUTES scope away from the run runtime: requesting an
+    authorization needs no live resource, no DB, and no target — only an authenticated Approver
+    (not this command) can later approve the exact hash.
+    """
+    binding, caps = _write_run_inputs(tmp_path)
+    out = tmp_path / "authorization-request.json"
+    argv = [
+        sys.executable,
+        "-m",
+        "agentforge.campaign",
+        "scope",
+        "--binding",
+        str(binding),
+        "--caps",
+        str(caps),
+        "--seeds-dir",
+        "evals/seeds",
+        "--run-nonce",
+        "run-nonce-composition-root-0001",
+        "--out",
+        str(out),
+    ]
+    completed = subprocess.run(
+        argv,
+        cwd=_repo_root(),
+        env=_base_env(),  # DATABASE_URL deliberately absent — scope needs none
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+
+    assert completed.returncode == 0, (
+        f"scope should run with no DATABASE_URL. stderr={completed.stderr!r}"
+    )
+    assert out.exists()
+    artifact = json.loads(out.read_text(encoding="utf-8"))
+    assert artifact["artifact"] == "authorization-request"
+    assert "operation_hash" in artifact
+    assert "deadline" not in artifact  # a request is not a grant
+    assert "approval required" in completed.stdout.lower()
+
+
 def _base_env() -> dict[str, str]:
     """A minimal, network-free environment for the subprocess with DATABASE_URL stripped.
 

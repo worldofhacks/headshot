@@ -85,6 +85,64 @@ class CampaignAbort(Exception):
         self.code = code
 
 
+def operation_hash_for(
+    binding: TargetBinding,
+    *,
+    policy: RunPolicy,
+    corpus_id: str,
+    corpus_sha: str,
+    run_nonce: str,
+) -> str:
+    """THE canonical operation hash for a run (D14) — the SINGLE production function every path
+    computes: the coordinator's per-case gate, the ``run`` pre-adapter gate, and the ``scope``
+    authorization-request command. Because they all call this, the hash an approver signs, the hash
+    the runner re-verifies, and the hash the request advertises can never diverge.
+    """
+    return operation_hash(
+        target_id=binding.target_id,
+        host=binding.host,
+        adapter_kind=binding.adapter_kind,
+        auth_mode=binding.auth_mode,
+        credential_marker=binding.credential_marker(),
+        corpus_id=corpus_id,
+        corpus_sha=corpus_sha,
+        caps=policy,
+        run_nonce=run_nonce,
+    )
+
+
+def verify_authorization_gate(
+    binding: TargetBinding,
+    *,
+    policy: RunPolicy,
+    corpus_id: str,
+    corpus_sha: str,
+    run_nonce: str,
+    authorization: RunAuthorization | None,
+    now: float,
+) -> str:
+    """FAIL-CLOSED authorization gate — compute the op hash and VERIFY the grant. Returns the hash.
+
+    Blocks (raises :class:`AuthorizationError`) on a MISSING / EXPIRED / nonce-mismatched /
+    scope-mismatched grant — where "scope" includes every bound identity field (target/host/adapter/
+    auth/credential-marker/corpus-id/corpus-content-sha/caps). This is the gate the ``run`` command
+    runs BEFORE constructing the live adapter, and the coordinator re-runs per case (defense in
+    depth) — the SAME function, so the pre-adapter gate and the per-case re-verification cannot
+    diverge. It touches no adapter, no engine, and opens no socket.
+    """
+    op_hash = operation_hash_for(
+        binding,
+        policy=policy,
+        corpus_id=corpus_id,
+        corpus_sha=corpus_sha,
+        run_nonce=run_nonce,
+    )
+    RunAuthorization.verify_optional(
+        authorization, operation_hash=op_hash, run_nonce=run_nonce, now=now
+    )
+    return op_hash
+
+
 @dataclass(frozen=True)
 class RunConfig:
     """The immutable run config the coordinator verifies before every dispatch.
@@ -247,26 +305,17 @@ class SecureCampaignCoordinator:
                 code="caps-invalid",
             )
 
-        # The operation hash the authorization must be in scope for — over the WHOLE immutable run
-        # identity (D14): target id + exact host + adapter kind + auth mode + credential marker
-        # (no-auth marker or a ref digest) + corpus id + corpus content sha + caps + run nonce.
-        op_hash = operation_hash(
-            target_id=binding.target_id,
-            host=binding.host,
-            adapter_kind=binding.adapter_kind,
-            auth_mode=binding.auth_mode,
-            credential_marker=binding.credential_marker(),
+        # (1) AUTHORIZATION — compute the canonical op hash over the WHOLE immutable run identity
+        # (D14) and verify the grant (missing / expired / nonce / scope) BLOCKS before dispatch.
+        # This RE-VERIFIES the SAME gate the `run` command already ran BEFORE building the adapter,
+        # via the shared verify_authorization_gate — defense in depth that cannot drift.
+        verify_authorization_gate(
+            binding,
+            policy=policy,
             corpus_id=self.config.corpus_id,
             corpus_sha=self.config.corpus_sha,
-            caps=policy,
             run_nonce=self.config.run_nonce,
-        )
-
-        # (1) AUTHORIZATION — missing / expired / scope-mismatch BLOCKS before dispatch.
-        RunAuthorization.verify_optional(
-            self.config.authorization,
-            operation_hash=op_hash,
-            run_nonce=self.config.run_nonce,
+            authorization=self.config.authorization,
             now=self.clock.now(),
         )
 
