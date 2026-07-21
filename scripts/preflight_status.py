@@ -67,17 +67,16 @@ def main() -> None:
     https, parseable = _https_and_parseable("HEADSHOT_TARGET_BASE_URL")
     synthetic = os.environ.get("HEADSHOT_SYNTHETIC_ONLY", "").strip().lower() == "true"
     provider = os.environ.get("HEADSHOT_RED_TEAM_PROVIDER", "").strip().lower()
+    url_status = f"set={_set('HEADSHOT_TARGET_BASE_URL')} https={https} format-valid={parseable}"
+    provider_ready = provider in _SUPPORTED_PROVIDERS and _set(f"{provider.upper()}_API_KEY")
 
     rows = [
-        ("Target URL", f"set={_set('HEADSHOT_TARGET_BASE_URL')} https={https} format-valid={parseable}"),
+        ("Target URL", url_status),
         ("Allowlist (target_id)", f"configured={_set('HEADSHOT_TARGET_ID')}"),
         ("Auth mode", _auth_consistency()),
         ("Synthetic provenance", "ready" if synthetic else "not-ready"),
         ("Canary", "deterministic" if _set("HEADSHOT_CANARY_VALUE") else "unavailable"),
-        (
-            "Provider",
-            "ready" if provider in _SUPPORTED_PROVIDERS and _set(f"{provider.upper()}_API_KEY") else "not-ready",
-        ),
+        ("Provider", "ready" if provider_ready else "not-ready"),
         ("Model", "set" if _set("HEADSHOT_RED_TEAM_MODEL") else "empty"),
         ("Budget (USD)", _positive_number("HEADSHOT_RUN_BUDGET_USD")),
         ("Attempt cap", _positive_number("HEADSHOT_MAX_ATTEMPTS_PER_RUN")),
@@ -85,7 +84,7 @@ def main() -> None:
         ("Timeout (s)", _positive_number("HEADSHOT_RUN_TIMEOUT_SECONDS")),
         # Abort path is runtime code in the M4 gateway; monitoring is the M6a observability core.
         ("Abort path", "ready (gateway hard-abort, code)"),
-        ("Monitoring", "ready (M6a observability core; M6b Langfuse external)"),
+        ("Monitoring", "ready (M6a core; M6b Langfuse external)"),
     ]
     print("=== LIVE-CAMPAIGN PREFLIGHT — PRESENCE ONLY (no values) ===")
     for label, status in rows:

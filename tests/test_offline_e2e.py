@@ -523,7 +523,7 @@ def test_outcome5_budget_cap_hard_aborts_no_evidence_no_verdict(
         verdicts_after = conn.execute(text("SELECT count(*) FROM verdict")).scalar_one()
     assert case_result_rows == 0  # no AttemptResult for the refused case
     assert attempts_after == attempts_before  # no evidence appended at all
-    assert verdicts_after == verdicts_before  # and no verdict produced (count delta, not a vacuous LIKE)
+    assert verdicts_after == verdicts_before  # no verdict (count delta, not a vacuous LIKE)
 
 
 # ============================================================================================
