@@ -1,6 +1,7 @@
 ---
 name: tdd-swarm
 description: Orchestrate parallel sub-agents through ticketed, test-driven development. Use when turning a PRD, epic, or feature list into implemented code — break work into tickets, generate frozen tests first, dispatch implementation sub-agents in dependency waves on isolated branches, and gate every ticket and wave with independent verification agents. Triggers include "run tdd-swarm", "execute this PRD", "ticket this epic", "build this with sub-agents", "implement with TDD loop".
+disable-model-invocation: true
 ---
 
 # TDD Swarm

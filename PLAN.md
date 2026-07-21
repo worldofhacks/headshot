@@ -2,7 +2,7 @@
 
 **Project:** AgentForge / Adversarial Machine — a multi-agent adversarial evaluation
 platform that continuously red-teams the OpenEMR Clinical Co-Pilot.
-**Status:** Greenfield. Skills wired; repo instruction files written; git pending.
+**Status:** Greenfield. Skills wired; repo instruction files + planning artifacts committed on `main` (3 commits); GitHub remote + push still pending.
 **Source of truth:** `Week_3_AgentForge.pdf`. **Operating rules:** `CLAUDE.md`.
 
 This document answers two questions: **what skills we need to create**, and **what
@@ -221,7 +221,7 @@ Adversarial Machine/
 │   ├── prompts/                 prompt log — feeds devlog + the AI-use disclosure
 │   └── DEVLOG.md · PROJECT_STORY.md                                                        [← devlog]
 ├── evals/
-│   ├── seeds/                   schema-strict seed cases (boundary/invariant/regression + OWASP)  [HARD GATE ← eval-authoring]
+│   ├── seeds/                   schema-strict seed cases (boundary/invariant/regression + OWASP)  [HARD GATE ← adversarial-eval-lifecycle]
 │   ├── regressions/             confirmed exploits → deterministic repeatable tests
 │   ├── fixtures/                synthetic PHI / patient fixtures — NO real data
 │   ├── ground-truth/            judge calibration set                                     [← judge-calibration]
@@ -250,12 +250,12 @@ Every PRD requirement → where it's satisfied and by when. A machine-readable v
 |---|---|---|---|
 | Live target + deployed URL | running Co-Pilot + URL in README | Stage 1 standup | every checkpoint |
 | Threat model (6 categories + OWASP) | `THREAT_MODEL.md` | threat-model | MVP |
-| Eval suite ≥3 categories, reproducible | `evals/seeds/`, `results/` | eval-authoring + tdd-swarm | MVP |
+| Eval suite ≥3 categories, reproducible | `evals/seeds/`, `results/` | adversarial-eval-lifecycle + tdd-swarm | MVP |
 | ≥1 live agent prototype | Red Team or Judge vs live target | tdd-swarm | MVP |
 | Architecture doc (agents, diagram, ~500w) | `ARCHITECTURE.md` | arch-draft → arch-finalize | MVP (draft @ Defense) |
 | Users doc | `USERS.md` | arch-draft | MVP |
-| Inter-agent contracts + tests | `contracts/v1/` + `tests/contract/` | contract-gen + tdd-swarm | MVP→Final |
-| Typed success + error schemas | error taxonomy in `contracts/v1/` | contract-gen | MVP→Final |
+| Inter-agent contracts + tests | `contracts/v1/` + `tests/contract/` | contract-steward + tdd-swarm | MVP→Final |
+| Typed success + error schemas | error taxonomy in `contracts/v1/` | contract-steward | MVP→Final |
 | Build-vs-configure ADR | `docs/adrs/…` (Burp/ZAP/Semgrep/Garak/…) | arch-draft | **Defense** |
 | 10-finding triage report | `docs/triage/…` | vuln-report + manual | Final |
 | Integration packet + e2e trace | `docs/integration/…` | tdd-swarm + contract tests | Final |
@@ -275,7 +275,8 @@ Every PRD requirement → where it's satisfied and by when. A machine-readable v
 ## 7. Roadmap by checkpoint
 
 **Now — setup (this session).** ✅ skills → `.claude/skills/`; `CLAUDE.md`; slim
-`AGENTS.md`; `.gitignore`; this plan. ⏳ git init + first commit.
+`AGENTS.md`; `.gitignore`; this plan; git initialized + planning artifacts committed on `main`.
+⏳ add GitHub remote + push.
 
 **→ Architecture Defense (~2.5h post-kickoff).** Run `arch-draft` →
 `docs/planning/*`, `USERS.md`, `docs/defense/DEFENSE_SCRIPT.md`, the **build-vs-configure
@@ -320,9 +321,10 @@ JSON contracts **framework-neutral** so this choice never forces a rewrite.
 
 ## 9. Immediate next actions
 
-1. **git init + first commit** (this session) — `main`, `.gitignore`, everything staged.
-   Add a secret-scanning pre-commit (e.g. gitleaks) before the first push. Push to
-   **GitHub** (PRD asks for it; confirm with the instructor if GitLab is your host).
+1. **Add GitHub remote + push** — git is initialized and planning artifacts are committed
+   on `main`; the remote is not yet configured. Add a secret-scanning pre-commit (e.g.
+   gitleaks) before the first push. Push to **GitHub** (PRD asks for it; confirm with the
+   instructor if GitLab is your host).
 2. **Gather target details** — the #1 external blocker for Stage 1.
 3. **Run `arch-draft`** in a focused session → Defense packet (script + diagrams
    + build-vs-configure ADR). This is the burning path given the ~2.5h defense window.
