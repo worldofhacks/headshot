@@ -84,3 +84,22 @@ re-verify on swarm → CI green. Clean up worktree+branch after merge.
 SEQUENCE: when M4 lands → launch M5 (no-network adapter/preflight) + M8 (fake/cassette). When BOTH M4+M6a
 integrated → launch M9. Codex owns codex/m11-eval-corpus (worktree present at ../Adversarial Machine-codex-m11)
 — HANDS OFF. No hosted-model/target calls. Report only at M9 or a red blocker.
+
+## 2026-07-21 — Worktree-parallel FAILED → reverted to reliable single-branch sequential
+Worktree isolation defeated by nondeterministic agent path-anchoring: M4's Test Agent wrote tests to the
+MAIN repo (not wt-m4), so M4's Impl (in wt-m4) found none. M6a's Test Agent DID use its worktree. Inconsistent
+→ unreliable. Salvaged both waves' frozen RED tests (+ M6a partial impl: tracing/reconcile/alerts) to
+.tdd-swarm/salvage/; tore down worktrees. LESSON: run waves single-branch IN THE MAIN REPO (Phase0/M2 did this
+flawlessly); sequential when a migration-chain coupling exists.
+
+## 2026-07-21 — M4 LANDED (ticket/m4-policy-gateway @ 82ba730)
+Re-ran M4 Impl+Review in the main repo against the salvaged frozen tests. Reviewer approved; Security
+changes_requested → 3 Important findings resolved test-first: (A) budget per_call_usd now a REQUIRED
+_Accounting Protocol member + fail-closed if missing (was getattr(...,0.0) silent-collapse); (B) backoff
+retries now cap-rechecked + charged per physical send (were un-metered/un-gated); (C) recorder replay catch
+narrowed to SQLSTATE 23505 (was mislabeling NOT-NULL/FK/CHECK as replay). Minor deferred→M5: synthetic-data
+guard keys off http(s):// prefix (mitigated: allowlist admits only fake). Gates: 210 passed/3 skipped, ruff
+clean, docker OK, gitleaks clean, diff --check clean.
+NEXT (sequential, main-repo): re-run M6a (reuse salvaged test + partial impl; finish coverage_view + 0003) →
+land → M9 (needs M4+M6a). M5 (no-network adapter/preflight) + M8 (fake/cassette) as follow-on. Codex m11 lane
+untouched. No hosted/target calls.
