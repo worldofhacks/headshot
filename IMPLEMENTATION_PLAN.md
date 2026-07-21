@@ -133,12 +133,14 @@ before their consumers**, frontmatter + trigger boundaries validated against `CL
   - Accept: (a) `ADR-0001` clean incl. F12 Promptfoo + F3 Langfuse-Cloud corrections; (b) `THREAT_MODEL.md` summary + `USERS.md` confirmed; (c) dry-run S2–S4 aloud; (d) **edge:** every `DEFENSE_SCRIPT` claim carries `[implemented|selected|measured|planned]`; (e) **error:** no beat asserts a built platform that does not exist. **Uses the diagram only if D3 has landed** (else present without it).
   - Verify: read-through checklist; Langfuse Cloud Hobby project live with a sample trace · Test: — · Skills: grilling (optional)
 
-- [ ] **D3 — Regenerate the D2/D4 trust-boundary diagram  [PRE-PRESENTATION GATE ONLY — blocks nothing else]**
-  - Files: extend `docs/planning/DIAGRAM_PLAN.md` (legend text only), regen `docs/diagrams/D2-D4-agent-interaction-trust.{excalidraw,svg,png}`, NEW `scripts/check_diagram_stale.*`
+- [ ] **D3 — Complete the D2/D4 trust-boundary diagram  [ISOLATED on `wip/d3-diagram`; PRE-PRESENTATION GATE ONLY — blocks nothing else]**
+  - **Isolation:** all diagram work lives on branch **`wip/d3-diagram`** (WIP commit `47e7209` — partial hand-edit: `POLICY GATEWAY` present, `EXECUTION RECORDER` label + SVG/PNG exports still missing). **Never restore the `.excalidraw` into `main`** (no `git checkout <branch> -- <file>` — it would re-dirty `main`). To export, use a dedicated worktree: `git worktree add ../headshot-d3 wip/d3-diagram` (path handed to the human).
+  - Files (on `wip/d3-diagram` only): `docs/diagrams/D2-D4-agent-interaction-trust.{excalidraw,svg,png}`, NEW render sidecar `…render.json`, NEW `scripts/check_diagram_stale.*`, `docs/planning/DIAGRAM_PLAN.md` (terminology), spec banner removal
   - Anchors: §3, §5, D14 · Map: PRD-12 (diagram), **F2** · Deps: none · Est: M
-  - Accept: (a) correct the stale "Target adapter" trust language in `DIAGRAM_PLAN.md` (content only; keep six-colour legend); (b) render shows Red Team untrusted, exiting only via the trusted **Policy Gateway + Execution Recorder**; (c) render shows the attacker holds no creds + never produces the Judge's authoritative evidence; (d) **edge:** provider-neutral **hash-based staleness check** fails the build on spec-hash drift; (e) **error:** if render can't be produced, artifacts stay flagged non-binding + unused
-  - Verify: visual inspection vs `ARCHITECTURE.md` §3/§5 + `DEFENSE_SCRIPT.md` S3/S4c; staleness check passes on match / fails on a deliberate edit · Test: staleness-check unit test · Skills: — (manual Excalidraw)
-  - **GATE:** the stale diagram must **not** be used while it contradicts the binding architecture; it must be corrected **before** any Architecture Defense/presentation that uses it. It does **not** block planning, repo setup, skill creation, target-readiness, or MVP implementation. **Deferred — not executed in the current pass.**
+  - **Label requirement:** the trusted blue component must communicate **both** responsibilities — **`POLICY GATEWAY + EXECUTION RECORDER`**. "POLICY GATEWAY + RECORDER" is acceptable **only if the legend explicitly expands Recorder → Execution Recorder**. A box containing only "POLICY GATEWAY" is **incomplete**.
+  - Close-out artifacts (**all** required — not an arbitrary "four files"): (1) corrected `.excalidraw` source; (2) regenerated **SVG**; (3) regenerated **PNG**; (4) render **sidecar** `{spec_sha256, rendered_at}`; (5) **provider-neutral staleness-check script**; (6) a **test proving a match passes and a deliberate drift fails**; (7) **local pre-commit integration** of the staleness check; (8) **stale-banner removal** from the spec; (9) remaining **`DIAGRAM_PLAN.md` terminology correction**; (10) **visual verification** against `ARCHITECTURE.md` §3/§5 and `DEFENSE_SCRIPT.md` S3/S4c.
+  - Flow: open a **normal PR from the completed `wip/d3-diagram`**; **do not delete the WIP branch** until the PR is merged, **both remotes are synchronized**, and the rendered artifacts are verified.
+  - **GATE:** the stale diagram must **not** be used in any presentation while it contradicts the binding architecture. **D3 is a pre-presentation gate, NOT an MVP implementation blocker** — it does not block foundations, repo setup, skills, target-readiness, or MVP work. **Not executed in the current pass.**
 
 ---
 
@@ -146,15 +148,23 @@ before their consumers**, frontmatter + trigger boundaries validated against `CL
 
 **Spec anchors:** §2–§12, §16, §18. **Exit:** platform deployed (staging + prod) with health check; `contracts/v1` both-sided-green; Policy Gateway enforces allowlist/creds/budget/abort (verified against the fake, then live); Red Team + Judge run live vs the target; `./evals/` ≥3 categories with results; `THREAT_MODEL.md` deepened; observability shows inter-agent traces + per-agent cost; requirements matrix committed.
 
-- [ ] **M1 — Deploy pipeline + 2 environments + Postgres + health + basic CI  ⚠ HUMAN AUTH (Railway, secrets)**
-  - Files: NEW `Dockerfile`, Railway config, `src/health.py`; CI extended from P11's `ci.yml`
-  - Anchors: §12, D3, **D16**, **O1** · Map: PRD-34 · Deps: P8, **P11** (GitHub-based CI) · Est: L
-  - Accept: (a) **staging** points TargetAdapter at the **fake/non-prod allowlist** with its own Postgres; **prod** alone holds live-target creds; (b) health endpoint 200; deploy-from-GitHub works; (c) **basic CI** (lint + unit + contract) + env isolation; (d) **edge:** a staging build **cannot resolve** the live-target credential binding; (e) **error:** a failed health check blocks promotion. *(Migration enforcement lives in M2; regression-SLO promotion lives in F4 — not here.)*
-  - Verify: staging + prod deploy green; health 200; env-scoped-allowlist test (staging can't reach prod creds) · Test: env-isolation test · Skills: — · **⚠ HUMAN AUTH**
+- [ ] **M1a — Local runtime & deployment foundation**  (no external authorization)
+  - Files: NEW production-style `Dockerfile`, `compose.yaml` (app + PostgreSQL), `src/config.py` (env-separated config model), `src/health.py` (`/health` liveness + `/ready` DB-connectivity + migration/schema readiness); CI extends P11's `ci.yml` with an ephemeral PostgreSQL service
+  - Anchors: §12, **D16**, **O1** · Map: PRD-34 (local half) · Deps: P8 · Est: L
+  - Accept: (a) production-style `Dockerfile` builds; `compose.yaml` runs app + PostgreSQL locally; (b) config model with **explicit environment separation** (local/staging/prod); (c) `/health` (process liveness) + `/ready` (DB connectivity + migration/schema readiness); (d) CI runs against an **ephemeral PostgreSQL service**; (e) **invariant (O1):** an **environment-isolation test proves a staging/local config cannot resolve production target credentials**; (f) the **fake TargetAdapter (P9) is the only target available locally** — **no live URL, no live credential, no hosted-model secret**; (g) **MUST NOT contain** domain/data-model migrations, per-agent DB roles, append-only permissions, or queue migrations — those are **M2/M3**
+  - Verify: `docker build` + `compose up` healthy; `/ready` reflects DB/migration state; env-isolation test green in CI on the ephemeral PG · Test: **invariant** — staging/local config cannot resolve prod target creds (O1) · Skills: —
+  - **Local-complete does NOT satisfy the deployed-URL gate** (that is M1b).
+
+- [ ] **M1b — Railway provisioning & deployment  ⚠ HUMAN AUTH (Railway, secrets)** — DEFERRED (external)
+  - Files: Railway config / deploy manifests
+  - Anchors: §12, **D16** · Map: PRD-34 (deployed half) · Deps: **M1a**, **P11** (deploy-from-GitHub) · Est: M
+  - Accept: (a) Railway project + **staging & production** environments; (b) managed **PostgreSQL** bindings per environment; (c) **environment-scoped secrets** (by reference, never inline); (d) **deploy-on-green**; (e) **health/readiness promotion checks** (`/health`+`/ready` gate promotion); (f) cron/scheduling infrastructure; (g) **deployed platform URLs**; (h) **edge:** a staging deploy cannot resolve prod's live-target credential binding; (i) **error:** a failed `/ready` blocks promotion
+  - Verify: staging + prod deploy green on Railway; promotion gated on health/readiness; deployed URLs recorded · Test: deploy/rollback smoke on Railway · Skills: — · **⚠ HUMAN AUTH (Railway)**
+  - **M1 is complete only when BOTH M1a and M1b pass.** M1a is local-complete; M1b is blocked on Railway authorization.
 
 - [ ] **M2 — Data model + migrations + per-agent DB roles + indexes**
   - Files: NEW `src/storage/models.py`, `migrations/` (Alembic), `src/storage/roles.sql`
-  - Anchors: §6, §7, D6, D7, **D14** · Map: **S1, S2**, PRD-OPT-13/14/15/16 · Deps: M1 · Est: L
+  - Anchors: §6, §7, D6, D7, **D14** · Map: **S1, S2**, PRD-OPT-13/14/15/16 · Deps: **M1a** · Est: L
   - Accept: (a) entities + state machines from **`docs/planning/PRESEARCH.md` §5.2**; (b) **per-agent DB roles** — Red Team INSERT-only staging (no read-back); **Execution Recorder role INSERT-only** on the authoritative append-only AttemptResult table with **append-only enforced by DB permissions (no UPDATE/DELETE grant to any role, Recorder included)**; Judge SELECT-only; (c) indexes on severity/category/target-version; (d) **edge:** adding a VulnReport field migrates existing rows without loss (**expand/contract migrations, destructive ones forbidden alongside their consumers**); (e) **error:** a Red Team (or Recorder UPDATE/DELETE) write to the authoritative AttemptResult table is **DB-rejected**
   - Verify: migration up/down on a fixture DB; role-permission suite · Test: **invariant** — Red-Team write / any UPDATE/DELETE on the append-only AttemptResult table → DB rejection (S1/S2); migration round-trip preserves rows · Skills: —
 
@@ -174,11 +184,18 @@ before their consumers**, frontmatter + trigger boundaries validated against `CL
   - Accept: (a) OpenEMR impl of the P9 interface, target #1 only; (b) reached **only** through the gateway; API-primary + thin UI/e2e; (c) per-target credential binding, secrets by reference; (d) **edge:** live integration performed **only after** both the interface/fake (P9) and the gateway (M4) exist and pass against the fake; (e) **error:** adapter errors → typed `adapter-error`
   - Verify: a real attempt round-trips generator→gateway→adapter→target→recorder→AttemptResult · Test: adapter contract test (same suite as the fake); **error** — injected failure → typed error · Skills: — · **⚠ HUMAN AUTH**
 
-- [ ] **M6 — Observability (Langfuse Cloud) + correlation IDs + SoR split + fallback + alerts + S9  ⚠ HUMAN AUTH (Langfuse account)**
-  - Files: NEW `src/observability/tracing.py`, `src/observability/coverage_view.sql`, `src/observability/alerts.py`, `src/observability/reconcile.py`
-  - Anchors: §9, §13, **D5** · Map: **S6, S9, O3, O6, O7**, PRD-25/26 · Deps: M2 · Est: L
-  - Accept: (a) **Langfuse Cloud (Hobby)** wiring, OTEL SDK v4, one-request=one-trace, **synthetic data only**; (b) durable `campaign_id/attempt_id/finding_id` as span attributes **and** row columns (O6); (c) coverage/resilience from **hash-verified, nonce-deduped verdicts only** + Orchestrator sanity invariants (S6); (d) **SoR split** (Postgres authoritative for Q3/Q4 via a view); (e) **S9:** reconcile the authoritative `AttemptResult.content_hash` against the trace transcript hash — **a mismatch marks the run degraded** rather than trusting the trace; (f) **edge:** the six questions answerable; (g) **error (O7):** **Langfuse-unavailable → fall back to Postgres-derived coverage/priority** + emit an alert (never random/blocked)
-  - Verify: a live run shows inter-agent traces + per-agent cost; kill Langfuse → coverage still derives from Postgres; a hash mismatch marks the run degraded; a budget-breaker trip fires an alert · Test: **invariant** — coverage can't flip "covered" without N verified attempts + ≥1 oracle/human case (S6); **invariant** — hash mismatch → degraded (S9) · Skills: — · **⚠ HUMAN AUTH**
+- [ ] **M6a — Provider-neutral local observability core**  (no external account)
+  - Files: NEW `src/observability/tracing.py` (OTEL interfaces + local/no-op/console exporter), `src/observability/coverage_view.sql`, `src/observability/alerts.py` (interfaces), `src/observability/reconcile.py`
+  - Anchors: §9, §13, **D5** · Map: **S6, S9, O3, O6, O7**, PRD-25/26 (local half) · Deps: M2 · Est: L
+  - Accept: (a) **OpenTelemetry instrumentation + interfaces** with a **local/no-op/console exporter** for tests (no external account); (b) durable `campaign_id/attempt_id/finding_id` correlation IDs as span attributes **and** row columns (O6); (c) **Postgres authoritative source-of-record views** (Q3/Q4 SoR split); (d) **S9:** hash reconciliation between the authoritative `AttemptResult.content_hash` and the trace representation — **a mismatch marks the run degraded**; (e) coverage from **hash-verified, nonce-deduped verdicts only** + sanity invariants (S6); (f) **alert interfaces + deterministic tests**; (g) **Langfuse-unavailable fallback (O7)** → Postgres-derived coverage/priority (never random/blocked); (h) **synthetic data only**
+  - Verify: tests run with the console/no-op exporter (no account); kill-Langfuse fallback derives coverage from Postgres; hash mismatch → degraded; alert fires deterministically · Test: **invariant** — coverage can't flip "covered" without N verified attempts + ≥1 oracle/human case (S6); **invariant** — hash mismatch → degraded (S9) · Skills: —
+
+- [ ] **M6b — Langfuse Cloud integration  ⚠ HUMAN AUTH (Langfuse account)** — DEFERRED (external)
+  - Files: extend `src/observability/tracing.py` (Langfuse OTEL exporter)
+  - Anchors: §9, **D5** · Map: PRD-25/26 (cloud half) · Deps: **M6a** · Est: M
+  - Accept: (a) **Langfuse Cloud (Hobby)** project; (b) credential binding **by secret reference** (never inline); (c) OTEL export to Langfuse; (d) **live trace verification** (inter-agent order); (e) **per-agent cost visibility**; (f) **cloud-unavailable fallback verified** (degrades to M6a's Postgres path); (g) **no PHI or secret leakage into traces**
+  - Verify: a live run shows inter-agent traces + per-agent cost in Langfuse; cloud-outage falls back to Postgres; traces carry no PHI/secret · Test: fallback + no-leak checks · Skills: — · **⚠ HUMAN AUTH (Langfuse)**
+  - **M6 is complete only when BOTH M6a and M6b pass.** M9 may build against **M6a** locally (fake-backed); the **MVP observability gate still requires M6b**.
 
 - [ ] **M7 — Deepen the threat model against the live target  ⚠ HUMAN AUTH (live probing)**
   - Files: extend `THREAT_MODEL.md` · Anchors: THREAT_MODEL, §5 · Map: PRD-04/05/06, **F8** · Deps: M5, **P2** · Est: M
@@ -207,7 +224,7 @@ before their consumers**, frontmatter + trigger boundaries validated against `CL
 >    `non_oracle_uncalibrated_indeterminate` (P10) so the forced disposition is explicit and auditable.
 
 - [ ] **M9 — Judge agent (deterministic fail-closed verdict authority)**
-  - Files: NEW `src/agents/judge/`, `src/agents/judge/oracles/` · Anchors: §3, §5, **D13, D18**, F1, S4 · Map: PRD-15/18, **S4** · Deps: **P10**, **M4**, **M6**, **P4** · Est: L
+  - Files: NEW `src/agents/judge/`, `src/agents/judge/oracles/` · Anchors: §3, §5, **D13, D18**, F1, S4 · Map: PRD-15/18, **S4** · Deps: **P10**, **M4**, **M6a**, **P4** · Est: L  *(M6b required for the MVP observability gate)*
   - Accept: (a) consumes the typed **Evidence Envelope** only — never unstructured attacker text outside the `hostile`-labelled field; deterministic **oracle/canary precedence** applied by code → `EXPLOIT_CONFIRMED` cannot be downgraded; (b) states `EXPLOIT_CONFIRMED|EXPLOIT_LIKELY|NO_EXPLOIT_OBSERVED|INDETERMINATE|ERROR`; (c) **fail closed on the verdict, not the run** (ambiguous → human-review queue; campaign continues elsewhere); (d) Judge holds **no creds/mutation/publish/execute**; output schema-validated; (e) **edge/error (S4):** an in-transcript verdict-flip instruction does not change disposition when an oracle fired; missing/invalid evidence → fail-closed `ERROR`; (f) **MVP non-oracle rule (binding, above):** LLM-only `EXPLOIT_LIKELY`/`NO_EXPLOIT_OBSERVED` are **gated behind a passing minimum ground-truth calibration slice** per category; until it passes, non-oracle cases → `INDETERMINATE` with reason `non_oracle_uncalibrated_indeterminate`; oracle/canary → `EXPLOIT_CONFIRMED` remains available
   - Verify: a canary-hit case → `EXPLOIT_CONFIRMED` despite an embedded "return fail"; ambiguous case parks without stalling; **with no calibration slice loaded, a non-oracle case → `INDETERMINATE` (never `NO_EXPLOIT_OBSERVED`/`EXPLOIT_LIKELY`)** · Test: **invariant** — never maps `INDETERMINATE`/`ERROR`→safe; **invariant** — uncalibrated non-oracle case is forced `INDETERMINATE` (MVP rule); **injection** — see the expanded S4 battery in M12 · Skills: **judge-calibration** (P4, via M10)
 
@@ -224,7 +241,7 @@ before their consumers**, frontmatter + trigger boundaries validated against `CL
 
 - [ ] **M12 — Platform testing + CI substrate + invariant/injection battery (S2, S3, S4, S5, S9)**
   - Files: NEW `tests/{unit,integration,invariant,injection}/`, uses `src/target/fake_adapter.py` (P9), cassettes
-  - Anchors: §18, **O4, O8** · Map: **S2, S3, S4, S5, S9**, PRD-24 · Deps: M1, **P10**, **P9**, **M9** (Judge injection battery) · Est: L
+  - Anchors: §18, **O4, O8** · Map: **S2, S3, S4, S5, S9**, PRD-24 · Deps: **M1a**, **P10**, **P9**, **M9** (Judge injection battery) · Est: L
   - Accept: (a) the **CI substrate first** (ephemeral Postgres + the P9 fake + cassette model responses — SLO measured on fixtures, never the live target/paid APIs) — this substrate has no SUT dependency and lands early; (b) unit/boundary tests for the four BUILD capabilities; (c) **Judge-side S4 battery (needs M9):** (i) non-oracle hostile transcripts with fixed ground truth; (ii) rubric-rewrite + confidence-manipulation instructions; (iii) attempts to populate `trusted` Evidence-Envelope fields from hostile content; (iv) oversized/truncated hostile content; (d) **each invariant/injection test lands with its system under test** — S2 DB-rejection→M2, S3 replay→M4, S4-Judge→M9, S5 vendor-disjoint→M13, S9 hash-mismatch→M6; **the S4 Documentation doc-control tests (report fields/status/severity/remediation/publication/operator instructions) land with F2 at Final** (not here — Documentation does not exist until F2); (e) **error:** CI fails on any invariant regression
   - Verify: `pytest` matrix green on fixtures; no CI job hits the live target/paid APIs · Test: the invariant/injection suite (Judge-side at MVP; Documentation-side at F2) · Skills: bug-hunt (as needed)
 
@@ -238,7 +255,7 @@ before their consumers**, frontmatter + trigger boundaries validated against `CL
   - Accept: (a) every PRD requirement → artifact/test/checkpoint/evidence; (b) **edge:** no blank cell; (c) **error:** a graded deliverable with no producing task flagged · Verify: rows = 37 + 18; machine-readable · Test: — · Skills: evidence-audit (P7, at Final)
 
 - [ ] **M15 — README + deployed URL  ⚠ HUMAN AUTH (Railway URL)**  ∥
-  - Files: extend `README.md` · Anchors: §2, §19 · Map: PRD-29/34 · Deps: M1, M5 · Est: S
+  - Files: extend `README.md` · Anchors: §2, §19 · Map: PRD-29/34 · Deps: **M1b**, M5 · Est: S
   - Accept: (a) setup + arch overview + **deployed link** + run-vs-live-target instructions; (b) **edge:** synthetic-data + no-real-PHI stated; (c) **error:** a clean-checkout follow-through reaches a live run · Verify: clean-checkout reproduction · Test: — · Skills: — · **⚠ HUMAN AUTH**
 
 ---
@@ -248,7 +265,7 @@ before their consumers**, frontmatter + trigger boundaries validated against `CL
 **Spec anchors:** §3, §9–§15, §18, §19. **Exit:** Orchestrator + Documentation live; regression harness with tiered runs + SLO in CI; ≥3 vuln reports; measured cost analysis; triage report; ATO packet; integration packet; perf baselines + load test; two-person human gate; demo video; social post.
 
 - [ ] **F1 — Orchestrator (governor) + S5 enforcement**
-  - Files: NEW `src/agents/orchestrator/` · Anchors: §3, §9, §11, §13 · Map: PRD-14/19, **S5, S6** · Deps: M3, M6, M8, M9, **M13** · Est: L
+  - Files: NEW `src/agents/orchestrator/` · Anchors: §3, §9, §11, §13 · Map: PRD-14/19, **S5, S6** · Deps: M3, **M6a**, M8, M9, **M13** · Est: L
   - Accept: (a) reads **verified** coverage/findings/budget → prioritizes; triggers regression; **cost governor + circuit-breaker**; (b) does **not** generate attacks or render verdicts; (c) enforces the **S5 run-start vendor-disjoint guard** (M13) before dispatch; (d) **edge:** no-priority → fallback (least-covered → oldest open → regression sweep); (e) **error:** no-signal spend → breaker halts/redirects + alert; Langfuse-down → Postgres fallback (O7)
   - Verify: overnight-style loop prioritizes least-covered; a no-signal spend trips the breaker; a vendor collision aborts the run · Test: **invariant** — never trusts an unverified coverage aggregate (S6); **error** — breaker fires at threshold · Skills: —
 
@@ -268,7 +285,7 @@ before their consumers**, frontmatter + trigger boundaries validated against `CL
   - Verify: a re-introduced vuln caught; a wrong-reason pass rejected; SLO check green in CI on fixtures · Test: **regression** — fixed→reappear caught; **invariant** — wrong-reason pass rejected (PRD-24) · Skills: **adversarial-eval-lifecycle** (P3), eval-triage
 
 - [ ] **F5 — Cost analysis @ 100/1K/10K/100K runs (deterministic script/template — NOT a skill)**
-  - Files: NEW `docs/cost/COST_ANALYSIS.md`, `scripts/cost_model.py` (template) · Anchors: §11, **D17** · Map: PRD-33, **F4-finding** · Deps: M6, F1 · Est: M
+  - Files: NEW `docs/cost/COST_ANALYSIS.md`, `scripts/cost_model.py` (template) · Anchors: §11, **D17** · Map: PRD-33, **F4-finding** · Deps: **M6a**, F1 · Est: M
   - Accept: (a) **two independent line families** — hosted = measured tokens × current rates (cache+batch adjusted); local = amortized capacity; hosting/storage/egress separate; **never tokens × N**; (b) per-tier architectural change named at each of 100/1K/10K/100K; (c) **measured** per-agent token profiles + Mac tok/s + `exploit_rate` from real traces + CI/dev line (O8); (d) **edge:** the invalid `list_price ÷ throughput` framing is absent; (e) **error:** no placeholder presented as measured
   - Verify: numbers trace to real trace records; dimensional sanity per line · Test: — · Skills: — *(deterministic cost script + template, not a skill)* · **Blocked-until:** token profiles / Mac tok/s / exploit_rate measured (`open question` §17)
 
@@ -281,7 +298,7 @@ before their consumers**, frontmatter + trigger boundaries validated against `CL
   - Accept: (a) simulated scan report with **≥10 findings across critical/high/medium/false-positive**; (b) validate/remediate/defer/document per finding; (c) **edge:** false positives explicitly dispositioned; (d) **error:** reuses the VulnReport schema · Verify: 10+ findings, all four categories, each dispositioned · Test: — · Skills: **vuln-report** (P6, triage mode)
 
 - [ ] **F8 — ATO-style evidence packet**
-  - Files: NEW `docs/evidence/ato/` · Anchors: §19 · Map: PRD-OPT-07 · Deps: M1, M12, F2, **P7** · Est: L
+  - Files: NEW `docs/evidence/ato/` · Anchors: §19 · Map: PRD-OPT-07 · Deps: **M1a**, M12, F2, **P7** · Est: L
   - Accept: (a) arch + data-flow diagram, **auth-model matrix** (agent → callable target → credential via the gateway), **dependency list with versions**, **self-scan** (Semgrep + the platform's eval suite run against itself), test evidence, **incident/postmortem** from §13; (b) **edge:** distinct artifact from `ARCHITECTURE.md`; (c) **error:** no unversioned dependency · Verify: packet assembled + cross-checked vs the matrix · Test: self-scan produces real evidence · Skills: **evidence-audit** (P7)
 
 - [ ] **F9 — Integration packet**
@@ -294,7 +311,7 @@ before their consumers**, frontmatter + trigger boundaries validated against `CL
   - Verify: baseline + load metrics committed; bottleneck named; the run shows the full authorized-live-campaign gate trace · Test: — (measurement) · Skills: **authorized-live-campaign** (P5) · **⚠ HUMAN AUTH**
 
 - [ ] **F11 — Observability dashboards (the six questions, live)**  ∥
-  - Files: extend `src/observability/`, NEW dashboard config · Anchors: §9 · Map: PRD-25/26, O3 · Deps: M6, F1 · Est: M
+  - Files: extend `src/observability/`, NEW dashboard config · Anchors: §9 · Map: PRD-25/26, O3 · Deps: **M6a**, **M6b**, F1 · Est: M
   - Accept: (a) all six questions answerable for a human **and** the Orchestrator; resilience trend live; (b) **edge:** alert conditions active (approval-pending SLA, regression/reopen, budget breaker, target-unreachable, queue-depth, emission failure); (c) **error:** alerts tied to the durable source, not Langfuse alone · Verify: each question returns a real answer; an alert fires end-to-end · Test: — · Skills: —
 
 - [ ] **F12 — AI-use disclosure + evidence-audit completeness**  ∥
@@ -317,11 +334,11 @@ before their consumers**, frontmatter + trigger boundaries validated against `CL
 |---|---|---|---|
 | **F1** Judge deterministic invariant | M9 | M9 invariant + M12 | mapped |
 | **F2** Trust split / recorder | M4 (P9 interface) | M4 + M12 | mapped |
-| **F3** Langfuse Cloud MVP | M6 (config) | M6 | mapped |
+| **F3** Langfuse Cloud MVP | M6b (config) | M6b | mapped |
 | **F4** Cost two-line model | F5 | F5 | mapped |
 | **F5** Runtime live-campaign gate | M4 | M4 invariant | mapped |
 | **F6** Queue delivery semantics | M3 | M3 invariant | mapped |
-| **F7** Hosted-OSS Red Team default | M8 (config), M1 | M8 | mapped |
+| **F7** Hosted-OSS Red Team default | M8 (config), M1a | M8 | mapped |
 | **F8** OWASP 2021 tags | M7, M11 | M11 schema check | mapped |
 | **F9** PLAN.md stale content | — | — | **COMPLETED (doc-only)** |
 | **F10** tdd-swarm gated | — | — | **COMPLETED (doc-only)** |
@@ -332,18 +349,18 @@ before their consumers**, frontmatter + trigger boundaries validated against `CL
 | **S3** Run-nonce / replay | M2 (UNIQUE), M4 | M4 + M12 | mapped |
 | **S4** Evaluator-injection containment | M9, F2, P10 (envelope) | M12 Judge battery (4 cases) + F2 Documentation doc-control battery | mapped |
 | **S5** Judge.vendor ≠ Doc.vendor | M13, F1 | M12 + F1 | mapped |
-| **S6** Verified coverage only | M6, F1 | M6 invariant | mapped |
+| **S6** Verified coverage only | M6a, F1 | M6a invariant | mapped |
 | **S7** Two-person rule | F3 | F3 invariant | mapped |
 | **S8** Canary provisioning / honesty | D1, M5, M9/M10 | M7 + M10 | mapped |
-| **S9** Hash reconciliation | M6 | M6 invariant | mapped |
-| **O1** Environments | M1 | M1 env-isolation test | mapped |
-| **O2** Expand/contract + drain + PITR | M2, M1 | M2 migration test | mapped |
-| **O3** Alerting | M6, F11 | M6/F11 | mapped |
+| **S9** Hash reconciliation | M6a | M6a invariant | mapped |
+| **O1** Environments | M1a (local) + M1b (Railway) | M1a env-isolation test | mapped |
+| **O2** Expand/contract + drain + PITR | M2 (expand/contract), M1b (drain/PITR) | M2 migration test | mapped |
+| **O3** Alerting | M6a, F11 | M6a/F11 | mapped |
 | **O4** Platform testing | M12 | M12 | mapped |
 | **O5** Stratified regression | F4 | F4 | mapped |
-| **O6** Correlation IDs | M6 | M6 | mapped |
-| **O7** Langfuse-down fallback | M6, F1 | M6 invariant | mapped |
-| **O8** CI substrate + cost line | M12, F5 | M12 | mapped |
+| **O6** Correlation IDs | M6a | M6a | mapped |
+| **O7** Langfuse-down fallback | M6a, F1 | M6a invariant | mapped |
+| **O8** CI substrate + cost line | M12 (+ M1a ephemeral PG), F5 | M12 | mapped |
 
 Every **runtime** F/S/O finding has an implementing + verifying task. F9–F12 are documentation-only and already **COMPLETED** (committed `6e592ea`/`2557e4b`/`bca61e2`).
 
@@ -351,7 +368,7 @@ Every **runtime** F/S/O finding has an implementing + verifying task. F9–F12 a
 
 | Deliverable | PRD | Phase · Task |
 |---|---|---|
-| Deployed target URL (every checkpoint) | PRD-01/34 | D·D1, M·M1/M5/M15, F |
+| Deployed target URL (every checkpoint) | PRD-01/34 | D·D1, M·M1b/M5/M15, F |
 | `THREAT_MODEL.md` (6 cats + OWASP) | PRD-04/05/06 | D (first pass ✓) · M·M7 |
 | `ARCHITECTURE.md` + diagram | PRD-10/11/12/13 | ✓ finalized · diagram D·D3 |
 | `USERS.md` | PRD-30 | ✓ (arch-draft) |
@@ -369,7 +386,7 @@ Every **runtime** F/S/O finding has an implementing + verifying task. F9–F12 a
 | Integration packet | PRD-OPT-05/09 | F·F9 |
 | Baselines + load test | PRD-OPT-17/18 | F·F10 |
 | Cost analysis @ runs | PRD-33 | F·F5 |
-| Observability layer (6 questions) | PRD-25/26 | M·M6, F·F11 |
+| Observability layer (6 questions) | PRD-25/26 | M·M6a+M6b, F·F11 |
 | Regression harness | PRD-23/24 | F·F4 |
 | AI-use disclosure | PRD-OPT-08 | ✓ §15 · verify F·F12 |
 | Rate limits / auth / backoff-queue-abort | PRD-OPT-12 | M·M4 (+ §5/§11) |
@@ -379,10 +396,47 @@ Every **runtime** F/S/O finding has an implementing + verifying task. F9–F12 a
 
 ## Critical path & parallel workstreams
 
-- **Critical path → MVP:** `P8 → P10` (needs `P1`) `→ M4` (needs `P9`, `P5`) `→ M9` (needs `M6`, `P4`) `→ M11` **[hard gate]**. In parallel and required for MVP: `M1` (deploy, needs `P11 ⚠`), `M2→M3` (storage/queue), `M6` (observability ⚠), `D1` (target readiness ⚠) → `M5` (live) → `M7` (threat model ⚠).
+- **Critical path → MVP (local):** `P8 → M1a` (local runtime) and `P8 → P10` (needs `P1`) `→ M2 → M4` (needs `P9`,`P5`) `→ M9` (needs `M6a`,`P4`) `→ M11` **[hard gate]**. After `M2`: `M3` and `M6a` proceed in parallel.
+- **External halves are deferred (do not block local foundations):** `M1b` (Railway ⚠), `M6b` (Langfuse ⚠), `M5`/`M7` (live target ⚠, need `D1`), `M8` (hosted-OSS ⚠).
 - **Critical path → Final:** `M9/M11 → F4` (regression) and `→ F1` (Orchestrator) `→ F2` (Documentation) `→ F6/F8/F10 → F13`.
-- **Fully parallel, start now:** all skill creation `P1–P7`, `P8` scaffold, `P9` fake, `M14` matrix, `D1` target-readiness (⚠), `D2` dry-run, `F14` devlog. **`D3` diagram is off the critical path entirely** — a pre-presentation gate only.
-- **Bottlenecks:** `P10` (contracts) gates all agents; `M4` (gateway) gates all live work; `M6` (observability) gates the Judge's evidence-integrity + the Orchestrator's learning signal. Land these three first after scaffolding.
+- **Fully parallel, done or start-now (local, no ext auth):** `P1–P7` skills ✅, `P8` scaffold ✅, `P9` fake ✅, `P10` contracts ✅, `M14` matrix, `D2` dry-run, `F14` devlog. `D1` target-readiness (⚠) unblocks `M5`/`M7`. **`D3` is off the critical path** — a pre-presentation gate on `wip/d3-diagram`.
+- **Bottlenecks:** `P10` (contracts ✅) gates all agents; `M1a` gates `M2`; `M4` (gateway) gates all live work; `M6a` (local observability) gates the Judge's evidence-integrity + the Orchestrator's learning signal. Land `M1a → M2 → M4/M6a` first.
+- **The DEPLOYED MVP gate (deployed URL + live traces + live eval results) needs the EXTERNAL halves — `M1b`, `M6b`, `M5`, `M8` — and stays incomplete until those authorizations land.** Local foundations (`M1a`, `M2`, `M3`, `M4`, `M6a`) are fully buildable now, fake-backed.
+
+## Account & external blockers (classified — 2026-07-21)
+
+Each blocker is scoped to exactly what it blocks; none is used to claim the **local** architecture is
+technically blocked. The GitHub-protection requirement imposed by `CLAUDE.md`/`tdd-swarm` is **not**
+bypassed.
+
+| Blocker | Blocks | Does NOT block |
+|---|---|---|
+| **GitHub branch protection** (private repo needs Pro/public — 403) | the repository-approved **`tdd-swarm` execution workflow** | local design/plan work |
+| **Gauntlet Labs GitLab auth** | **dual-remote checkpoint parity** (a repo policy, `CLAUDE.md` dual-remote law) | **intrinsic `tdd-swarm` prerequisites** — GitLab parity is a policy gate, not a swarm precondition |
+| **Railway authorization** | **M1b** (deployed envs, managed PG, deployed URLs) | **M1a** local runtime foundation |
+| **Langfuse authorization** | **M6b** (cloud traces, per-agent cost) | **M6a** local observability core |
+| **D1 inputs / live authorization** | **D1, M5, M7, and live eval results** | fake-backed foundations `M1a/M2/M3/M4/M6a` |
+| **Hosted-OSS credentials/budget** | **live M8 inference** | building M8's mutation loop against the fake |
+
+**GitLab and D1 are NOT reasons to call the local architecture blocked.** Local foundations (M1a, M2, M3,
+M4, M6a) are fully buildable now; only their *external halves* and the *deployed/live* gate are deferred.
+
+## `tdd-swarm` local-MVP-foundations epic (pre-approved scope; NOT invoked)
+
+The human pre-approved the **epic scope M1a · M2 · M3 · M4 · M6a** and the M1a/M1b + M6a/M6b boundaries —
+but **not** unseen detailed tickets. **`tdd-swarm` cannot run until GitHub `main` protection is active**
+(`CLAUDE.md`/`tdd-swarm` require it). When protection lands, invoke `tdd-swarm` and present, at the
+**mandatory human checkpoint before any production code**:
+- **Phase 0:** production-grade posture · clean baseline · current passing-test count · gate commands ·
+  protected-`main` status · CI status · the existing **P9/P10** contract baseline.
+- **Phase 1:** the epic decomposed into **≤ ~½-day tickets** with stable acceptance-criterion IDs, **frozen
+  failing tests before implementation**, file ownership, requirement/architecture traceability, dependency
+  waves, **no same-wave file-scope collisions**, and independent plan review.
+
+The swarm proceeds through approved waves without routine interruptions, stopping only for the four
+escalation classes (safety/correctness · blocked-after-retry-cap · deferral/posture change · load-bearing
+architecture/contract change), and **never merges its final PR to `main`** — it stops with the PR open and
+checks green for human review.
 
 ## Minimal MVP hard-gate subset (committed for Tue 2026-07-21 23:59)
 
@@ -396,13 +450,13 @@ not stretch, not cut**).
 allowlist/scoped-creds/synthetic-data/budget/rate/hard-abort); the **independent Red Team *and* Judge**
 (M8 + M9); **deterministic fail-closed verdict handling** (M9 / D13); and the **security-invariant tests
 that prove them** — S1/S2 DB-role append-only (M2), S3 replay rejection (M4), S4 Judge-injection (M9/M12),
-S9 hash reconciliation (M6). None of these may be deferred out of MVP.
+S9 hash reconciliation (M6a). None of these may be deferred out of MVP. (Local halves M1a/M6a are buildable now; the *deployed* MVP gate additionally needs the external halves M1b/M6b/M5/M8.)
 
 | Hard gate | Committed tasks |
 |---|---|
-| Deployed platform + URL | P8 · P11⚠ · M1⚠ · M5⚠ · M15⚠ (+ D1⚠ readiness) |
+| Deployed platform + URL | P8 · P11 (GitHub✅; protection⛔/GitLab⛔) · **M1a** (local) · **M1b**⚠ · M5⚠ · M15⚠ (+ D1⚠ readiness) |
 | Threat model deepened | D1⚠ → M7⚠ (+ P2) |
-| `./evals/` ≥3 categories + ≥1 live agent (**full loop** per decision) | P1 → P10 · P9 · P3 · P5 · M2 → M3 → M4 · **M8⚠ + M9** → M11 (+ M12 **CI-substrate portion** for validation; P4 for the Judge's calibration hook) |
+| `./evals/` ≥3 categories + ≥1 live agent (**full loop** per decision) | P1 → P10 · P9 · P3 · P5 · M1a → M2 → M3 → M4 · **M6a** · **M8⚠ + M9** → M11 (+ M12 **CI-substrate portion** for validation; P4 for the Judge's calibration hook) |
 | `contracts/v1` + typed errors | P10 (needs P1) |
 | Requirements matrix | M14 |
 
