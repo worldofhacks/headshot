@@ -30,7 +30,7 @@ fails the assignment, the budget, and the governance model.
 | **Promptfoo** (MIT) | Deterministic **eval-runner + OWASP mapping** (no-custom-code presets: `owasp:llm` OWASP LLM Top 10 · `owasp:api` OWASP API Security Top 10 · `mitre:atlas` · `nist:ai:measure`) | Satisfies the mandatory per-case **OWASP LLM** mapping with *no custom code*. **Correction (F12, verified 2026-07-20 against promptfoo.dev/docs):** Promptfoo ships **no `owasp:web` preset** — the OWASP **Web** Top 10 category mapping is done by **our own deterministic validator over OWASP ZAP output**, not by Promptfoo. `owasp:api` partially covers the API/write-back surface (authz, SSRF, injection) but is not equivalent to the OWASP Web Top 10 |
 | **OWASP ZAP** | **Web-layer DAST** + CI gate for the OWASP *Web* Top 10 half (upload/ingestion, write-back API, SSRF, path traversal, authz) | Deterministic web scanning is a solved problem; an LLM is the wrong tool. *Contingent on the target exposing a web surface — confirm at inspection* |
 | **Semgrep** (free CLI) | **SAST on our own platform code** (agents, adapter, prompt-construction, policy) | Scans *our* code, never the target; deterministic beats an LLM here |
-| **LangGraph** (MIT engine), **self-hosted Langfuse**, **Postgres `SKIP LOCKED` queue**, **Railway cron** | Infrastructure we configure | Reinventing orchestration/observability/queue is not the assignment |
+| **LangGraph** (MIT engine), **Langfuse Cloud (Hobby) for MVP** (self-host post-MVP), **Postgres `SKIP LOCKED` queue**, **Railway cron** | Infrastructure we configure | Reinventing orchestration/observability/queue is not the assignment. Observability = Langfuse **Cloud Hobby (synthetic data only)** for MVP; self-hosting (Web+Worker+PG+ClickHouse+Redis+S3) is a documented post-MVP path (F3) |
 
 ### B. BUILD custom (the four graded capabilities no tool delivers)
 1. **Orchestrator** — reads observability (coverage gaps, open findings, regressions), prioritizes the
@@ -50,8 +50,11 @@ fails the assignment, the budget, and the governance model.
 - **Orchestration = configure LangGraph OSS engine** (not Platform/LangSmith) + PostgresSaver.
   Human-approval gate via `interrupt()`; Judge independence via per-node clients. Reject AutoGen
   (maintenance) / CrewAI (no first-class Postgres checkpointer).
-- **Observability = configure self-hosted Langfuse** (OTEL SDK v4); exploit DB is system-of-record for
-  finding status. Reject LangSmith/Braintrust (Enterprise-only self-host).
+- **Observability = configure Langfuse Cloud (Hobby) for MVP** (OTEL SDK v4, synthetic data only);
+  **self-hosted Langfuse is a documented post-MVP path only** (its full Web+Worker+PG+ClickHouse+Redis+S3
+  footprint is not the MVP choice — F3). The **Postgres exploit DB is the authoritative system of record**
+  for finding status, and Langfuse failure falls back to Postgres-derived coverage/priority signals. Reject
+  LangSmith/Braintrust (Enterprise-only self-host).
 - **Models = assemble per role** (not one model): local uncensored 24–33B Red Team (Mac), Claude Sonnet
   4.6 Judge, Opus 4.8 Orchestrator, GPT-5.4 Documentation (cross-vendor from Judge). Frontier models
   refuse offensive generation → they cannot be the Red Team.

@@ -39,14 +39,17 @@ rewrite). Layer DBOS-on-Postgres *under* LangGraph if unattended multi-hour camp
 **Invalidate if.** LangGraph 1.x breaks `interrupt()`/PostgresSaver before MVP; a hard exactly-once
 requirement lands. **Action:** pin the LangGraph 1.x version before the ADR is frozen.
 
-### D5 — Observability: self-hosted Langfuse; exploit DB is system-of-record `locked`
+### D5 — Observability: Langfuse Cloud (Hobby) for MVP, self-host post-MVP; exploit DB is system-of-record `locked (rev. 2026-07-20, F3)`
 **Why.** OTEL-native SDK keeps emission framework-neutral; one-request=one-trace with per-agent span
 tags gives native per-agent cost + inter-agent order. LangSmith/Braintrust self-host is Enterprise-
-only (fails Railway/budget). **Split pinned:** Langfuse observes the *campaign*; the Postgres exploit
-DB is system-of-record for finding status (Q4) and resilience trend (Q3) — surfaced via a Postgres
-view so the two never drift.
-**Fallback.** Langfuse Cloud Hobby (free) for the ~2.5h Defense demo → Railway self-host for MVP with
-zero re-instrumentation.
+only (fails Railway/budget). **Split pinned:** Langfuse observes the *campaign*; the **Postgres exploit
+DB is the authoritative system of record** for finding status (Q4) and resilience trend (Q3) — surfaced
+via a Postgres view so the two never drift. On Langfuse failure the Orchestrator falls back to
+**Postgres-derived coverage and priority signals** (§13, O7), never random or blocked.
+**MVP choice (binding).** Langfuse **Cloud (Hobby, free)** with **synthetic data only** — for both the
+Defense demo and MVP. **Post-MVP option:** self-hosted Langfuse with its full Web + Worker + Postgres +
+ClickHouse + Redis/Valkey + S3 footprint — a documented hardening/migration path (zero re-instrumentation
+via the OTEL SDK), **not** the MVP choice.
 **Invalidate if.** Real BAA/HIPAA/SOC2 grading appears (it does not — D11) → paid tier + masking.
 
 **Revision 2026-07-20 (F3, verified against langfuse.com/self-hosting + /pricing).** MVP now runs on

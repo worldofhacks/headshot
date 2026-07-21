@@ -132,8 +132,9 @@ loop the platform runs attacks randomly; with it, coverage compounds. The loop c
   `content_hash` (canonical serialization, e.g. RFC 8785 JCS or explicit field-ordered bytes). The Judge
   and Orchestrator **recompute and verify `content_hash` before every read** and fail-closed on any
   missing/malformed/integrity-invalid record.
-- **Evidence Envelope — the Judge's typed input (S4/D18):** the Judge never receives free text. It consumes
-  a canonical, **size-bounded, typed evidence envelope** in which every field carries an explicit **trust
+- **Evidence Envelope — the Judge's typed input (S4/D18):** the Judge **never receives unstructured
+  attacker-controlled text outside a typed, size-bounded, explicitly `hostile`-labelled Evidence Envelope
+  field**. It consumes a canonical, **size-bounded, typed evidence envelope** in which every field carries an explicit **trust
   label** — `trusted` code-populated fields (`oracle_results[]`, `canary_hits[]`, `policy_decision`,
   `expected_safe_behavior`, `ground_truth_ref`, each provenance-labelled) vs `hostile` fields (the recorder's
   canonical request/response transcript, carried as **data, never instructions**). **Deterministic
@@ -194,7 +195,8 @@ output are **hostile data**: a successful indirect-injection payload echoed back
 injection aimed at whatever LLM reads it next. Containment is explicit and layered:
 
 - **Typed, trust-labelled, size-bounded evidence envelope (§4).** The Judge reads a canonical typed
-  envelope, never free text. Deterministic **oracle/canary results are provenance-labelled typed fields,
+  envelope; it **never receives unstructured attacker-controlled text outside the explicitly
+  `hostile`-labelled transcript field**. Deterministic **oracle/canary results are provenance-labelled typed fields,
   populated and applied by code** — the model never parses them from the transcript. The rubric is passed
   as SYSTEM; the transcript is a clearly-fenced, escaped `hostile`-labelled user-data block; oversized
   transcripts are truncated (recorded) so a flooding payload cannot exhaust the Judge.
@@ -202,7 +204,9 @@ injection aimed at whatever LLM reads it next. Containment is explicit and layer
   authority, and cannot execute actions** (§3) — it emits a **schema-validated `Verdict`** (enumerated
   state + confidence + typed reason codes, §4) and nothing else. So even a fully-successful injection of the
   Judge cannot reach the target, mutate an attack, publish a finding, or take any action; the worst it can
-  do is influence a *non-oracle* verdict — a false negative caught by calibration (§15), not a breach.
+  do is influence a *non-oracle* verdict — a false negative that calibration *may* detect (§15) and that
+  per-category thresholds, drift-shutdown, and human review *contain* (a bounded residual, **not** a
+  guaranteed catch), never a breach.
 - **Deterministic oracle precedence bounds the blast radius (D13).** Prompt injection **cannot downgrade
   `EXPLOIT_CONFIRMED`**, because oracle/canary precedence is enforced **outside the model**, in code.
   Injection is a **residual risk** only for non-oracle judgments and for documentation — addressed by
@@ -219,10 +223,11 @@ injection aimed at whatever LLM reads it next. Containment is explicit and layer
 
 **S1/S2 — storage-layer enforcement (per-agent DB roles).** Within one shared Postgres, integrity rests on
 **canonical hashing + append-only storage + role separation**, not signatures (D14): the Red Team role has
-INSERT-only into a staging table it cannot read back; the Execution Recorder writes the canonical transcript
-into an **append-only** table with no UPDATE/DELETE grant to any agent role; the Judge role has SELECT-only
-and joins strictly on the hash-verified payload, never on a Red-Team-supplied id. A contract test asserts a
-Red Team role write to the signed-transcript table is **rejected by the DB, not by convention** (§18). This
+INSERT-only into a staging table it cannot read back; the **Execution Recorder role is itself INSERT-only**
+on the authoritative AttemptResult table — **append-only is enforced by DB permissions (no UPDATE/DELETE grant
+to any role, Recorder included), not by convention**; the Judge role has SELECT-only and joins strictly on the
+hash-verified payload, never on a Red-Team-supplied id. A contract test asserts a Red Team role write to the
+Recorder-owned append-only AttemptResult table is **rejected by the DB, not by convention** (§18). This
 gives integrity, lineage and tamper-evidence *within* the trust domain; it does **not** claim isolation from
 a fully-compromised process or DBA — asymmetric recorder signing / KMS-backed verification is the documented
 **hardening path** for when the recorder crosses a process/service/network/administrative boundary.
@@ -558,7 +563,7 @@ optional, under production-grade posture, and boundary/invariant/regression, not
   rejection** hold; `Judge.vendor != Documentation.vendor` is enforced (S5).
 - **Invariant/property tests** for the ten load-bearing invariants (`PRESEARCH.md §5.3`), including: the
   verdict state machine never maps `INDETERMINATE`/`ERROR` → safe; run-nonce UNIQUE rejects replay (S3);
-  **a Red Team DB role write to the signed-transcript table is rejected by the DB, not by convention** (S2).
+  **a Red Team DB role write to the Recorder-owned append-only AttemptResult table is rejected by the DB, not by convention** (S2).
 - **Evaluator-injection tests (S4/D18):** a transcript carrying an in-band instruction to flip the verdict
   does **not** change the Judge's disposition when a deterministic oracle fired (`EXPLOIT_CONFIRMED` cannot be
   downgraded); the evidence envelope rejects an oracle/canary field sourced from `hostile`-labelled text;
@@ -617,7 +622,7 @@ detail: `docs/planning/gap-audit.md`.
 | **F11** | DEFENSE_SCRIPT claims labeled + "contract schemas" removed + F1/F2/F5 content | `DEFENSE_SCRIPT.md` |
 | **F12** | ADR-0001 softened: no Promptfoo `owasp:web`; OWASP-Web = our validator over ZAP; `owasp:api` partial | §16; ADR-0001 |
 | **S1** | Signing-key custody: within one shared trust domain a signature adds nothing over canonical-hash + append-only + DB-role separation (a compromised in-process node could read the key); separate-recorder-principal signing/KMS = documented hardening path | §5, §21; D14 |
-| **S2** | Per-agent DB roles: Red Team INSERT-only staging (no read-back); recorder writes append-only transcript (no UPDATE/DELETE to agent roles); Judge SELECT-only on hash-verified payload; a Red Team write to the signed-transcript table is DB-rejected (contract test) | §5, §6, §18; D14 |
+| **S2** | Per-agent DB roles: Red Team INSERT-only staging (no read-back); **Recorder role INSERT-only** on the append-only authoritative AttemptResult table (no UPDATE/DELETE to any role); Judge SELECT-only on hash-verified payload; a Red Team write to the Recorder-owned AttemptResult table is DB-rejected (contract test) | §5, §6, §18; D14 |
 | **S3** | Run-nonce `{campaign_run_id, attempt_id}` in hashed payload + UNIQUE constraint; regression re-executes live | §4, §6, §10 |
 | **S4** | Evaluators consume a typed, trust-labelled, size-bounded **evidence envelope**; oracle/canary results are code-applied typed fields so injection **cannot downgrade `EXPLOIT_CONFIRMED`**; Judge holds no creds/mutation/publish/execute and emits a schema-validated Verdict; Documentation gets the validated Verdict + sanitized excerpts by default; raw evidence quarantined behind a warned operator action; separation/encoding are mitigations, not proof (residual owned) | §3, §4, §5, §15, §18; **D18** |
 | **S5** | Vendor-disjoint Judge failover invariant | §8; D8 |

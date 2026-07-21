@@ -56,6 +56,12 @@ no first-class Postgres checkpointer).
   learn.microsoft.com (AutoGen→Agent Framework migration) · framework comparison (Latenode 2025).
 
 ## R3 — Observability backend (confidence: high)
+
+> **SUPERSEDED (2026-07-20, F3) — historical research.** The binding decision is **Langfuse Cloud
+> (Hobby) for MVP** (synthetic data only); **self-hosting is a documented post-MVP path only**. See
+> `DECISIONS.md` D5 and `ARCHITECTURE.md` §9 (authoritative). The self-host footprint discussion below
+> is retained as factual research, not as the MVP choice.
+
 **Finding.** **Self-hosted Langfuse** (MIT) on Railway, instrumented with the **OTEL-native Langfuse
 SDK v4** so emission stays framework-neutral. One-request = one-trace: Orchestrator opens the root
 span; Red Team/Judge/Documentation are child spans tagged `{agent, attack_category, owasp_web,
