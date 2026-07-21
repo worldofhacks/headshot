@@ -138,12 +138,15 @@ No type checker is configured; `IMPLEMENTATION_PLAN.md` explicitly defers type c
 dedicated task, so no type-check success is claimed. Docker CI was not run locally because its build
 can fetch packages and this assignment prohibits network activity.
 
-The offline CLI is CI-ready from a repository checkout with dev dependencies, but it is not yet an
-agent-runtime package surface: `jsonschema` is currently a dev dependency, and the repo-level
-`evals/schemas/` and `contracts/v1/` resources are not packaged with the wheel or existing Docker
-image. Deployment configuration is outside this lane. M8/M9 integration must arrange one
-authoritative packaged schema source, promote the validator dependency to the consuming runtime, and
-add wheel/container CLI smoke tests rather than copying schemas into competing locations.
+**RESOLVED (packaging integration on `swarm/mvp-live-gate`).** The gap this paragraph described is fixed:
+`jsonschema` is now a **runtime** dependency (promoted in M9); the authoritative schemas were **relocated
+into the package** — `agentforge.contracts` (subdirectory `v1`, 7 schemas) and `agentforge.evals`
+(subdirectory `schemas`, 3 schemas) — as **exactly one authoritative copy each** (the repo-root
+`contracts/v1/` and `evals/schemas/` copies were removed, not duplicated). Both resolve via
+`importlib.resources` (zip-safe, CWD-independent), with the `AGENTFORGE_CONTRACTS_DIR` override preserved
+for tooling. They ship in the wheel and the Docker image, verified by an **out-of-repo wheel-install
+corpus-validation test** and a **container validation smoke test** in CI. A strict schema-name allowlist
+prevents path traversal in the resource lookup. No competing schema copies exist.
 
 ## Security review
 

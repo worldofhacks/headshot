@@ -1,8 +1,11 @@
 """Versioned inter-agent contract tooling (P10).
 
-The JSON Schemas themselves live at the repo-root ``contracts/v1/`` so they are language- and
-framework-neutral (DECISIONS.md D10). This package is the deterministic loader + compatibility
-checker shared by the ``contract-steward`` skill and CI, so guidance and enforcement cannot drift.
+The JSON Schemas ship INSIDE this package at ``agentforge/contracts/v1/`` and are resolved via
+``importlib.resources`` (so a wheel installed outside a repo checkout still finds them). They stay
+language- and framework-neutral JSON (DECISIONS.md D10); an ``AGENTFORGE_CONTRACTS_DIR`` override
+lets tooling point the loader at an on-disk copy. This package is the deterministic loader +
+compatibility checker shared by the ``contract-steward`` skill and CI, so guidance and enforcement
+cannot drift.
 
 Importing ``agentforge`` does not import this module (it pulls in ``jsonschema``), keeping the
 top-level package dependency-free.
