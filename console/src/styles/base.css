@@ -1,0 +1,62 @@
+/*
+ * Headshot Operator Console — base / reset / motion, transcribed verbatim from the prototype
+ * head. Utility classes (.mono, .lab, .glass, .scrim) and keyframes (hs-*) match the frozen
+ * design system. prefers-reduced-motion / reduced-transparency / contrast are honored (§9).
+ */
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+#root { height: 100dvh; }
+body {
+  background: var(--bg-app);
+  color: var(--tx);
+  font-family: "Geist", "Segoe UI", system-ui, sans-serif;
+  font-size: var(--fs-base);
+  line-height: 1.45;
+  letter-spacing: -0.005em;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  font-optical-sizing: auto;
+  font-synthesis: none;
+}
+button { font: inherit; color: inherit; background: none; border: none; padding: 0; margin: 0; cursor: pointer; }
+button { transition: transform 0.1s var(--ease-out), background-color 0.12s var(--ease-out), border-color 0.12s var(--ease-out), color 0.12s var(--ease-out), filter 0.12s var(--ease-out); touch-action: manipulation; }
+button:active { transform: scale(0.97); }
+button:disabled { cursor: not-allowed; }
+button:disabled:active { transform: none; }
+input, textarea { font: inherit; color: inherit; transition: border-color 0.12s var(--ease-out), background-color 0.12s var(--ease-out); }
+::selection { background: var(--brand-tint); }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: var(--r-xs); }
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: var(--bd-2); border-radius: var(--r-sm); border: 3px solid transparent; background-clip: content-box; }
+::-webkit-scrollbar-thumb:hover { background: var(--tx3); }
+::-webkit-scrollbar-track { background: transparent; }
+
+.mono { font-family: "Geist Mono", "SF Mono", ui-monospace, monospace; font-variant-numeric: tabular-nums; }
+.lab { font-size: var(--fs-2xs); letter-spacing: 0.02em; color: var(--tx3); font-weight: 600; }
+.glass { background: var(--mat-over); -webkit-backdrop-filter: blur(24px) saturate(180%); backdrop-filter: blur(24px) saturate(180%); box-shadow: var(--shadow), var(--mat-edge); }
+.glass-sm { background: var(--mat-over-sm); -webkit-backdrop-filter: blur(16px) saturate(180%); backdrop-filter: blur(16px) saturate(180%); box-shadow: var(--shadow), var(--mat-edge); }
+.scrim { background: var(--scrim); -webkit-backdrop-filter: blur(3px); backdrop-filter: blur(3px); }
+
+@keyframes hs-fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes hs-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+@keyframes hs-row { from { opacity: 0; background: var(--phos-tint); } to { opacity: 1; background: transparent; } }
+@keyframes hs-sheet { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
+@keyframes hs-pop { from { opacity: 0; transform: scale(0.98); } to { opacity: 1; transform: none; } }
+@keyframes hs-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.55; } }
+@keyframes hs-spin { to { transform: rotate(360deg); } }
+@keyframes hs-sweep { 0% { transform: translateX(-100%); } 100% { transform: translateX(300%); } }
+
+@media (prefers-reduced-motion: reduce) {
+  * { animation-duration: 0.001ms !important; animation-iteration-count: 1 !important; transition-duration: 0.001ms !important; }
+  button:active { transform: none !important; }
+}
+@media (prefers-reduced-transparency: reduce) {
+  .glass, .glass-sm { background: var(--bg-raise) !important; -webkit-backdrop-filter: none !important; backdrop-filter: none !important; }
+  .scrim { background: rgba(8, 9, 12, 0.8) !important; -webkit-backdrop-filter: none !important; backdrop-filter: none !important; }
+}
+@media (prefers-contrast: more) {
+  :root { --bd: #3c434f; --bd-2: #525a68; --tx2: #aeb6c4; }
+  [data-theme="light"] { --bd: #b7bcc7; --bd-2: #9aa0ad; --tx2: #454b58; }
+  .glass, .glass-sm { background: var(--bg-raise) !important; }
+  :focus-visible { outline-width: 3px; }
+}

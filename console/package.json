@@ -1,0 +1,25 @@
+{
+  "name": "headshot-console",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Headshot Operator Console — production frontend recreated from the frozen titanium & ceramic design (DESIGN_SYSTEM.md). Demo scenario + honest Integration state; no live console API yet (all PROPOSED).",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "check:forbidden": "node scripts/check-forbidden-language.mjs"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.5",
+    "@types/react-dom": "^18.3.0",
+    "@vitejs/plugin-react": "^5.2.0",
+    "typescript": "^5.5.4",
+    "vite": "^7.3.6"
+  }
+}
