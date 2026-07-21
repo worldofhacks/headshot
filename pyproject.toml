@@ -8,14 +8,64 @@ version = "0.1.0"
 description = "AgentForge / Adversarial Machine — a reusable multi-agent adversarial evaluation platform. This package holds the framework-neutral core (domain, target adapters, contracts); runtime agents land in later phases."
 requires-python = ">=3.12"
 license = { text = "UNLICENSED" }
-dependencies = []
+# Runtime deps are scoped to the deployment/health surface only. The framework-neutral
+# core (domain, contracts, config) imports NONE of these (D10); only agentforge.health
+# imports fastapi. uvicorn is the ASGI server the Dockerfile/compose run the app under.
+# psycopg backs the /ready DB-connectivity probe (M1a); it is imported lazily inside the
+# readiness path only — never at config.py top level (D10).
+dependencies = [
+    "fastapi>=0.111",
+    "uvicorn[standard]>=0.30",
+    "psycopg[binary]>=3.1",
+    # Loads .env / .env.local so Settings.from_env resolves file-provided vars. Imported
+    # lazily inside from_env only — never at config.py top level (D10). Secrets are read
+    # by reference at use time, never logged or inlined.
+    "python-dotenv>=1.0",
+    # Storage layer only (agentforge.storage / migrations). The framework-neutral core
+    # (config, domain, contracts, secrets) imports NONE of these — enforced by the
+    # import-purity test. SQLAlchemy 2.x models the exploit DB; Alembic runs the
+    # expand/contract migrations (D7). Both bind to Postgres via the psycopg (v3) driver
+    # using the `postgresql+psycopg://` dialect.
+    "sqlalchemy>=2.0",
+    "alembic>=1.13",
+    # Runtime contract validation. The independent Judge (M9) is the first RUNTIME validator:
+    # it validates every Evidence Envelope it consumes and every Verdict it emits through the
+    # contract registry (agentforge.contracts), which is backed by jsonschema. That makes
+    # jsonschema a runtime dependency, not merely dev tooling. It stays a validation library —
+    # not an orchestration framework — so the framework-neutral posture (D10) holds.
+    "jsonschema>=4",
+    # RUNTIME HTTP client for the live OpenEMR TargetAdapter (M5). Imported LAZILY inside
+    # OpenEmrAdapter.send() only — never at module import time and never in the activation
+    # preflight (D10), so a bare import and preflight pull in no client and open no connection.
+    # A live send() over this client is reachable ONLY inside an authorized live campaign.
+    "httpx>=0.27",
+]
 
 [project.optional-dependencies]
-# Local dev tooling only. Framework-neutral core has zero runtime deps by design (D10).
-dev = ["ruff>=0.6", "pytest>=8", "jsonschema>=4", "pre-commit>=3"]
+# Local dev tooling only. (httpx is now a runtime dep — the OpenEMR adapter uses it; it also
+# backs fastapi's TestClient used by the health tests.)
+dev = ["ruff>=0.6", "pytest>=8", "pre-commit>=3"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+# Ship roles.sql inside the wheel so migration 0001's importlib.resources lookup resolves
+# under a NON-editable install (e.g. `pip install .` in the Dockerfile). Without this, an
+# `alembic upgrade` in a deployed container would crash — editable installs (CI/local) mask it.
+"agentforge.storage" = ["*.sql"]
+# Same rationale for migration 0003's coverage_view.sql: ship it so the importlib.resources
+# lookup resolves under a non-editable install and `alembic upgrade` creates the view in a
+# deployed container.
+"agentforge.observability" = ["*.sql"]
+# The seven versioned inter-agent contract schemas. They now live INSIDE the package and are
+# resolved via importlib.resources (registry.py), so they must ship in the wheel — otherwise a
+# non-editable/wheel install outside a repo checkout cannot validate any inter-agent message.
+"agentforge.contracts" = ["v1/*.json"]
+# The three eval-authoring schemas (AttackCase / ground-truth-slice / synthetic-fixture). Same
+# rationale: validation.py resolves them via importlib.resources, so a wheel/container must carry
+# them or `validate-corpus` fails with no repo on disk.
+"agentforge.evals" = ["schemas/*.json"]
 
 [tool.pytest.ini_options]
 # src-layout: make the package importable in tests without requiring an editable install.

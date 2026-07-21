@@ -2,7 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    # main + the swarm/* integration branches (so live-gate work is CI-verified on push, not
+    # only via a PR to main). All existing checks (test, secret-scan) run unchanged.
+    branches: [main, "swarm/**"]
   pull_request:
     branches: [main]
 
@@ -13,6 +15,25 @@ jobs:
   test:
     name: test
     runs-on: ubuntu-latest
+    # AC-4: an ephemeral PostgreSQL the test job can reach. Torn down with the job — no
+    # persistence, no real credentials (throwaway local-CI values only, never a secret).
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: agentforge
+          POSTGRES_PASSWORD: local_dev_only
+          POSTGRES_DB: agentforge
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U agentforge -d agentforge"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 5
+    env:
+      # Point the suite at the ephemeral service above (AC-4).
+      DATABASE_URL: postgresql://agentforge:local_dev_only@localhost:5432/agentforge
     steps:
       - uses: actions/checkout@v4
       - name: Set up Python
@@ -27,10 +48,37 @@ jobs:
         run: ruff check .
       - name: Ruff format check
         run: ruff format --check .
+      - name: Eval schema and duplicate validation
+        run: |
+          PYTHONPATH=src python -m agentforge.evals validate-corpus evals
+          PYTHONPATH=src python -m agentforge.evals detect-duplicate-sequence evals/seeds
       - name: Pytest (full suite)
         run: pytest
       - name: Contract tests
         run: pytest tests/contract -q
+      - name: Wheel packaging gate (schemas resolve with NO repo checkout)
+        # The contract + eval schemas now ship INSIDE the package and resolve via
+        # importlib.resources. Build the wheel, install ONLY it (+ jsonschema) into a fresh venv
+        # in a temp dir OUTSIDE the repo, copy just the corpus DATA (never the schemas), and run
+        # the installed console from a CWD outside the repo — proving schema resolution needs no
+        # repo on disk. This is the regression guard against the repo-relative-path packaging bug.
+        run: bash scripts/wheel_outside_repo_check.sh
+      - name: Docker build (AC-1 image gate)
+        # Gate the container image on every push/PR so AC-1 is no longer only manually
+        # verified — a broken Dockerfile fails CI here.
+        run: docker build -t agentforge:ci-smoke .
+      - name: Container validation smoke (schemas ship in the image)
+        # The image installs the package as a wheel (non-editable), so the schemas must ride in
+        # the image itself. Copy ONLY the corpus DATA into the container and run the installed
+        # validator — proving the packaged schemas resolve inside the container with no repo mount.
+        # Lightweight + deterministic: one validate-corpus + one detect-duplicate-sequence run.
+        run: |
+          docker run --rm --entrypoint python \
+            -v "$PWD/evals:/corpus:ro" agentforge:ci-smoke \
+            -m agentforge.evals validate-corpus /corpus
+          docker run --rm --entrypoint python \
+            -v "$PWD/evals:/corpus:ro" agentforge:ci-smoke \
+            -m agentforge.evals detect-duplicate-sequence /corpus/seeds
 
   secret-scan:
     name: secret-scan

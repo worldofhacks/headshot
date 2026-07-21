@@ -14,6 +14,8 @@ test:
     - python -m pip install -e ".[dev]"
     - ruff check .
     - ruff format --check .
+    - PYTHONPATH=src python -m agentforge.evals validate-corpus evals
+    - PYTHONPATH=src python -m agentforge.evals detect-duplicate-sequence evals/seeds
     - pytest
     - pytest tests/contract -q
 

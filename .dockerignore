@@ -1,0 +1,24 @@
+# Keep the build context small and secret-free.
+.git
+.venv
+venv
+env
+**/__pycache__
+*.py[cod]
+*.egg-info
+.pytest_cache
+.ruff_cache
+.mypy_cache
+.tdd-swarm
+.claude
+docs
+tests
+evals
+# Never send env/secret material into the build context.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets
+credentials*.json

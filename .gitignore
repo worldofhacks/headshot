@@ -39,3 +39,7 @@ htmlcov/
 
 # Raw eval run outputs (large / regenerated). Keep seeds, regressions, ground-truth.
 evals/results/**/raw/
+.tdd-swarm/salvage/
+
+# Local Playwright CLI debug snapshots — never ship.
+.playwright-cli/

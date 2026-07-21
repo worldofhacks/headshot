@@ -86,8 +86,9 @@ Standard mode · production-grade · Python · Railway (Docker/GitHub, managed P
 deployment-history rollback, no GPU) · LangGraph OSS engine + PostgresSaver · **Langfuse Cloud (Hobby)
 for MVP, self-host post-MVP** (F3; exploit DB = authoritative system-of-record for finding status;
 Langfuse failure → Postgres-derived coverage/priority) · one Postgres for DB+checkpoints+`SKIP LOCKED`
-queue · per-role models (RedTeam local 24–33B uncensored · Judge Sonnet 4.6 · Orchestrator Opus 4.8 ·
-Docs GPT-5.4) · configure/wrap OSS + build the four capabilities (ADR-0001) · versioned framework-
+queue · per-role models (configurable defaults via `HEADSHOT_*_MODEL`: RedTeam hosted-OSS default /
+local 24–33B switch · Judge `claude-sonnet-5` · Orchestrator `claude-opus-4-8` · Docs `gpt-5.4`) ·
+configure/wrap OSS + build the four capabilities (ADR-0001) · versioned framework-
 neutral JSON-Schema contracts + typed error taxonomy · compliance = synthetic-data simulation.
 
 ## Still-open questions the finalize pass should track (never invent values)
