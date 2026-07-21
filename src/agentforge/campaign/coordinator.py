@@ -92,6 +92,10 @@ class RunConfig:
     run_nonce: str
     canary_token: str
     environment: str = "production"
+    # The authored-corpus identity the authorization is scoped to (target / surface / corpus).
+    # A grant authorizes attacking a target's surface with THIS corpus under the given caps —
+    # changing the corpus id changes the operation hash and thus refuses a stale grant.
+    corpus_id: str = "m11-seed-corpus-v1"
 
 
 @dataclass(frozen=True)
@@ -214,13 +218,14 @@ class SecureCampaignCoordinator:
                 code="caps-invalid",
             )
 
-        # The operation hash the authorization must be in scope for — over the immutable run
-        # config exactly as the coordinator holds it.
+        # The operation hash the authorization must be in scope for — over the target IDENTITY the
+        # run attacks (target / surface / corpus) plus the caps + nonce, NOT the adapter transport.
+        # The bound host is the attacked SURFACE; adapter kind + credential ref are HOW the wire is
+        # made, deliberately excluded so a grant stays adapter-generic (OpenEMR is the 1st adapter).
         op_hash = operation_hash(
             target_id=binding.target_id,
-            host=binding.host,
-            adapter_kind=binding.adapter_kind,
-            credential_ref=binding.credential_ref,
+            surface=binding.host,
+            corpus_id=self.config.corpus_id,
             caps=policy,
             run_nonce=self.config.run_nonce,
         )
@@ -293,12 +298,20 @@ class SecureCampaignCoordinator:
     # ------------------------------------------------------------------ gate helpers
 
     def _verify_binding(self, binding: TargetBinding) -> None:
-        """Verify the SELECTED live adapter matches the bound target exactly; else BLOCK.
+        """Verify the SELECTED live adapter matches the bound ADAPTER KIND + HOST; else BLOCK.
 
-        Fail-closed, with NO fallback: the adapter's kind and the bound target id must both equal
-        the bound adapter kind, and the adapter's base-URL host must EXACTLY match the bound host.
-        A mismatch raises :class:`BindingError` — the coordinator never substitutes a fallback
-        (the P9 fake) for a blocked live path.
+        Fail-closed, with NO fallback: the adapter's kind must equal the bound adapter kind and the
+        adapter's base-URL host must EXACTLY match the bound host. A mismatch raises
+        :class:`BindingError` — the coordinator never substitutes a fallback (the P9 fake) for a
+        blocked live path.
+
+        The bound ``target_id`` is a target IDENTITY, deliberately decoupled from the adapter's
+        ``name`` (its transport kind): OpenEMR is merely the FIRST adapter, so ``target_id`` and
+        adapter kind may legitimately differ (a target reached through a differently-named
+        connector). Binding is verified against adapter kind + host — never ``target_id ==
+        adapter.name`` — so the coordinator stays adapter-generic at this seam. (The full
+        target/adapter registry is a post-M11 integration; see the Codex-branch note in
+        :mod:`agentforge.campaign.binding`.)
         """
         adapter_name = getattr(self.adapter, "name", None)
         if adapter_name != binding.adapter_kind:
@@ -306,11 +319,6 @@ class SecureCampaignCoordinator:
                 f"selected adapter kind {adapter_name!r} does not match the bound adapter kind "
                 f"{binding.adapter_kind!r} — a live run dispatches only through the bound live "
                 "adapter (no fallback)"
-            )
-        if binding.target_id != adapter_name:
-            raise BindingError(
-                f"bound target_id {binding.target_id!r} does not match the selected live adapter "
-                f"identity {adapter_name!r} — a cross-target binding is refused (no fallback)"
             )
         base_url = getattr(self.adapter, "base_url", "")
         binding.validate_host(base_url)
@@ -324,13 +332,15 @@ class SecureCampaignCoordinator:
     ) -> AttemptResult:
         """Dispatch exactly one attempt through the gateway to the BOUND live adapter.
 
-        The scoped credential (already resolved to a :class:`Secret` at this boundary) is injected
-        into the bound adapter, and the gateway — the SOLE cap-enforcing exit — owns
-        budget/rate/timeout/abort. The allowlist admits ONLY the bound target mapped to the bound
-        adapter kind, so an off-target dispatch can never reach the adapter.
+        The scoped credential (resolved to a :class:`Secret` at this boundary, or ``None`` for an
+        ``auth_mode=none`` target) is injected into the bound adapter, and the gateway — the SOLE
+        cap-enforcing exit — owns budget/rate/timeout/abort. The allowlist admits ONLY the bound
+        target mapped to the bound adapter kind, so an off-target dispatch can never reach the
+        adapter.
         """
         # Inject the scoped Secret into the bound adapter for THIS dispatch only (the raw value
-        # never leaves the Secret; the adapter reveals it solely at the HTTPS call boundary).
+        # never leaves the Secret; the adapter reveals it solely at the HTTPS call boundary). A
+        # None credential is an auth_mode=none dispatch — the adapter sends without injecting one.
         self.adapter.credential = credential
 
         allowlist = Allowlist(

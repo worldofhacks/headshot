@@ -57,6 +57,12 @@ def _parser() -> argparse.ArgumentParser:
     run.add_argument("--run-nonce", type=str, required=True, help="the run instance nonce")
     run.add_argument("--canary", type=str, required=True, help="the synthetic canary token")
     run.add_argument(
+        "--corpus-id",
+        type=str,
+        default="m11-seed-corpus-v1",
+        help="the authored-corpus identity the authorization is scoped to (target/surface/corpus)",
+    )
+    run.add_argument(
         "--authorization",
         type=Path,
         required=False,
@@ -106,7 +112,8 @@ def main(
             target_id=binding_config["target_id"],
             host=binding_config["host"],
             adapter_kind=binding_config["adapter_kind"],
-            credential_ref=binding_config["credential_ref"],
+            # Optional: an auth_mode=none binding omits credential_ref (resolves to None).
+            credential_ref=binding_config.get("credential_ref"),
         )
         policy = RunCaps.parse(caps_config)
     except (BindingError, CapError, KeyError, TypeError) as exc:
@@ -139,6 +146,7 @@ def main(
             run_nonce=args.run_nonce,
             canary_token=args.canary,
             environment=environment,
+            corpus_id=args.corpus_id,
         ),
         adapter=adapter,
         engine=engine,

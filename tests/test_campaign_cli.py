@@ -38,6 +38,7 @@ BOUND_HOST = "copilot.example-openemr.org"
 BOUND_BASE_URL = f"https://{BOUND_HOST}"
 BOUND_ADAPTER_KIND = "openemr"
 BOUND_CREDENTIAL_REF = "secretref://production/openemr"
+BOUND_CORPUS_ID = "m11-seed-corpus-v1"  # the CLI --corpus-id default — the authorization's corpus
 RUN_NONCE = "run-nonce-cli-0001"
 
 SYNTHETIC_CANARY = "SYNTH_CANARY_SYSTEM_PROMPT_4D2B"
@@ -135,8 +136,12 @@ def _write_caps(dir_path: Path) -> Path:
     return path
 
 
-def _bound_operation_hash(*, run_nonce: str = RUN_NONCE) -> str:
-    """The operation hash the coordinator will recompute over THIS test's immutable binding+caps."""
+def _bound_operation_hash(*, run_nonce: str = RUN_NONCE, corpus_id: str = BOUND_CORPUS_ID) -> str:
+    """The operation hash the coordinator will recompute over THIS test's immutable run scope.
+
+    Scoped to target IDENTITY (target_id / surface / corpus) + caps + nonce — NOT the adapter
+    transport. corpus_id defaults to the CLI's ``--corpus-id`` default so the persisted grant
+    matches the coordinator's recomputed hash for a run that does not override --corpus-id."""
     from agentforge.campaign.authorization import operation_hash
     from agentforge.campaign.caps import RunCaps
 
@@ -150,9 +155,8 @@ def _bound_operation_hash(*, run_nonce: str = RUN_NONCE) -> str:
     )
     return operation_hash(
         target_id=BOUND_TARGET_ID,
-        host=BOUND_HOST,
-        adapter_kind=BOUND_ADAPTER_KIND,
-        credential_ref=BOUND_CREDENTIAL_REF,
+        surface=BOUND_HOST,
+        corpus_id=corpus_id,
         caps=policy,
         run_nonce=run_nonce,
     )
@@ -187,7 +191,15 @@ def _adapter_factory(client: FakeHttpClient):
     return _factory
 
 
-def _argv(seeds_dir: str, run_dir: str, *, binding: str, caps: str, auth: str | None) -> list[str]:
+def _argv(
+    seeds_dir: str,
+    run_dir: str,
+    *,
+    binding: str,
+    caps: str,
+    auth: str | None,
+    corpus_id: str | None = None,
+) -> list[str]:
     argv = [
         "run",
         "--binding",
@@ -203,6 +215,8 @@ def _argv(seeds_dir: str, run_dir: str, *, binding: str, caps: str, auth: str | 
         "--canary",
         SYNTHETIC_CANARY,
     ]
+    if corpus_id is not None:
+        argv += ["--corpus-id", corpus_id]
     if auth is not None:
         argv += ["--authorization", auth]
     return argv
@@ -323,6 +337,36 @@ def test_run_with_scope_mismatched_authorization_refuses(
     )
 
     assert code != 0  # refused (scope mismatch — the grant is not for this run config)
+    assert fake_client.calls == []  # nothing dispatched
+
+
+def test_run_with_mismatched_corpus_scope_refuses(migrated_db: Engine, tmp_path: Path) -> None:
+    """A grant minted for the DEFAULT corpus cannot authorize a run overriding ``--corpus-id`` to a
+    different corpus. The authorization is scoped to target / surface / CORPUS identity, so the
+    coordinator recomputes a different operation hash for the overridden corpus and BLOCKS; the CLI
+    refuses. No dispatch occurs — proving corpus identity is inside the authorization scope."""
+    binding = _write_binding(tmp_path)
+    caps = _write_caps(tmp_path)
+    auth = _write_authorization(tmp_path)  # minted for the default corpus (BOUND_CORPUS_ID)
+    fake_client = FakeHttpClient(body=LEAK_RESPONSE)
+
+    code = main(
+        _argv(
+            "evals/seeds",
+            str(tmp_path / "runs"),
+            binding=str(binding),
+            caps=str(caps),
+            auth=str(auth),
+            corpus_id="a-different-corpus",  # overrides the corpus the grant was minted for
+        ),
+        engine=migrated_db,
+        adapter_factory=_adapter_factory(fake_client),
+        clock=FakeClock(),
+        accounting=FakeAccounting(),
+        environment="production",
+    )
+
+    assert code != 0  # refused (corpus-scope mismatch — the grant is not for this corpus)
     assert fake_client.calls == []  # nothing dispatched
 
 

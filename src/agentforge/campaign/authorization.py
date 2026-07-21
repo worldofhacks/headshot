@@ -6,9 +6,10 @@ An authorization is NOT a config flag and NOT an environment: a configured, cred
 never on its own authorized to attack a live target. A run is authorized only by a minted
 :class:`RunAuthorization` that:
 
-* binds a canonical **operation hash** of the immutable run config (target id + exact host +
-  adapter kind + credential reference + caps + run nonce) — so a grant minted for one run config
-  can never authorize a *different* config (scope is content-addressed);
+* binds a canonical **operation hash** of the run's IDENTITY scope (target id + surface/host +
+  corpus id + caps + run nonce) — NOT the adapter transport (adapter kind + credential reference
+  are deliberately excluded; OpenEMR is merely the first adapter). A grant minted for one scope
+  can never authorize a *different* one (scope is content-addressed);
 * carries an absolute **expiry** on the injectable clock — a grant is a bounded window, never a
   standing permission; and
 * pins the **run nonce** — the grant rides exactly one run instance, so a stale/replayed auth
@@ -46,25 +47,26 @@ class AuthorizationError(Exception):
 def operation_hash(
     *,
     target_id: str,
-    host: str,
-    adapter_kind: str,
-    credential_ref: str,
+    surface: str,
+    corpus_id: str,
     caps: RunPolicy,
     run_nonce: str,
 ) -> str:
-    """Return the canonical 64-hex operation hash of the immutable run config.
+    """Return the canonical 64-hex operation hash scoping the authorization to WHAT is attacked.
 
-    A pure function of the bound run config — the same config always hashes to the same digest,
-    so an auth minted for it can be re-verified independently. Serialized with sorted keys and
-    explicit separators (order-independent, byte-reproducible), then sha256-hexed. Changing ANY
-    bound field (host, adapter, credential reference, any cap, the nonce) changes the hash, so a
-    grant can never silently authorize a different target/host/credential/budget.
+    The authorization is scoped to the **target / surface / corpus identity** plus the caps and the
+    run nonce — NOT to the adapter implementation. OpenEMR is merely the first adapter; the adapter
+    kind and credential reference are HOW the transport is made, not the authorization scope, so
+    they are deliberately EXCLUDED (a grant authorizes attacking a target's surface with a given
+    corpus under given ceilings, regardless of which adapter/credential wires the connection). A
+    pure function of the bound scope — sorted keys, explicit separators, order-independent and
+    byte-reproducible, then sha256-hexed — so a grant can be re-verified independently; changing the
+    target, surface, corpus, any cap, or the nonce changes the hash (and thus refuses the grant).
     """
     payload = {
         "target_id": target_id,
-        "host": host,
-        "adapter_kind": adapter_kind,
-        "credential_ref": credential_ref,
+        "surface": surface,
+        "corpus_id": corpus_id,
         "caps": {
             "budget_usd": caps.budget_usd,
             "max_attempts_per_run": caps.max_attempts_per_run,

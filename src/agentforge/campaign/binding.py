@@ -2,13 +2,23 @@
 
 M11-coordinator (ARCHITECTURE.md §5 live-campaign gate F5/F7, S3; DECISIONS.md D16).
 
-A :class:`TargetBinding` freezes the four facts a live run must never drift on:
+A :class:`TargetBinding` freezes the facts a live run must never drift on:
 ``{target_id, host, adapter_kind, credential_ref}``. It validates, at construction:
 
 * the **adapter kind** is a live adapter, NEVER the P9 ``fake`` — a live-path binding can never
   resolve to the :class:`~agentforge.target.fake_adapter.FakeTargetAdapter`; and
-* the **credential_ref** is a well-formed ``secretref://`` reference (a shape, never an inline
-  secret).
+* the **credential_ref**, WHEN PRESENT, is a well-formed ``secretref://`` reference (a shape,
+  never an inline secret). ``credential_ref`` is OPTIONAL: an ``auth_mode=none`` target binds no
+  credential (``credential_ref=None``), and :meth:`resolve_credential` returns ``None`` for it —
+  the bound live adapter then dispatches without injecting a secret. A credential_ref that is
+  *present* is still validated as a ``secretref://`` shape (a supplied credential is never inline).
+
+OpenEMR is merely the FIRST adapter this binding wires. The full target/adapter REGISTRY — many
+targets, each with its own adapter kind / auth mode / surface — is a POST-M11 integration; its
+source is the ``codex/target-agnostic-core`` branch (recorded here as the post-M11 integration
+lane). Do NOT expand this binding into that registry inside the M11 timebox; this module stays
+deliberately single-target and adapter-generic at its seams so the registry can graft on later
+without reworking the authorization/binding contract.
 
 At dispatch time :meth:`validate_host` enforces an EXACT-host match against the selected
 adapter's base URL — no subdomain/suffix lookalike, and no insecure ``http://`` scheme is
@@ -56,16 +66,18 @@ class BindingError(Exception):
 class TargetBinding:
     """A frozen binding of one run to one target/host/adapter/credential reference.
 
-    Frozen so the four bound facts cannot be mutated to point at a different target/host after
-    construction — the scope is immutable. ``__post_init__`` validates the adapter kind and the
-    credential-reference shape up front; the exact-host match is enforced at dispatch time
-    against the selected adapter's base URL by :meth:`validate_host`.
+    Frozen so the bound facts cannot be mutated to point at a different target/host after
+    construction — the scope is immutable. ``__post_init__`` validates the adapter kind and (when
+    present) the credential-reference shape up front; the exact-host match is enforced at dispatch
+    time against the selected adapter's base URL by :meth:`validate_host`.
     """
 
     target_id: str
     host: str
     adapter_kind: str
-    credential_ref: str
+    # Optional: None binds an auth_mode=none target (no credential). A present ref is validated
+    # as a secretref:// shape — a supplied credential is a reference, never an inline value.
+    credential_ref: str | None = None
 
     def __post_init__(self) -> None:
         if self.adapter_kind == _FORBIDDEN_ADAPTER_KIND:
@@ -78,7 +90,9 @@ class TargetBinding:
             raise BindingError(
                 f"adapter_kind {self.adapter_kind!r} is not a valid live adapter kind"
             )
-        self._validate_credential_ref(self.credential_ref)
+        # auth_mode=none binds no credential; validate the secretref shape only when one is present.
+        if self.credential_ref is not None:
+            self._validate_credential_ref(self.credential_ref)
 
     @staticmethod
     def _validate_credential_ref(credential_ref: str) -> None:
@@ -131,14 +145,19 @@ class TargetBinding:
                 f"{self.host!r} — a subdomain/suffix lookalike is refused (fail closed)"
             )
 
-    def resolve_credential(self, settings: Settings) -> Secret:
+    def resolve_credential(self, settings: Settings) -> Secret | None:
         """Resolve the bound credential into a :class:`Secret` at the dispatch boundary (O1).
 
-        Delegated to a scoped :class:`~agentforge.policy.credentials.CredentialBinding`, which
-        enforces the O1 isolation boundary: in production it returns a redacting
-        :class:`Secret` wrapping a ``secretref://`` handle; in local/staging it refuses with
-        :class:`~agentforge.config.EnvironmentIsolationError`. The raw reference is never
-        inlined or logged — only the redacting :class:`Secret` leaves this method.
+        Returns ``None`` for an ``auth_mode=none`` binding (no ``credential_ref``): the bound live
+        adapter then dispatches without injecting a secret — the absence of a credential is a valid
+        binding, not a failure. When a credential IS bound, resolution is delegated to a scoped
+        :class:`~agentforge.policy.credentials.CredentialBinding`, which enforces the O1 isolation
+        boundary: in production it returns a redacting :class:`Secret` wrapping a ``secretref://``
+        handle; in local/staging it refuses with
+        :class:`~agentforge.config.EnvironmentIsolationError`. The raw reference is never inlined or
+        logged — only the redacting :class:`Secret` leaves this method.
         """
+        if self.credential_ref is None:
+            return None
         binding = CredentialBinding(target_id=self.target_id, secret_ref=self.credential_ref)
         return binding.resolve(self.target_id, settings)

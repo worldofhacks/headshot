@@ -52,6 +52,7 @@ BOUND_HOST = "copilot.example-openemr.org"
 BOUND_BASE_URL = f"https://{BOUND_HOST}"
 BOUND_ADAPTER_KIND = "openemr"
 BOUND_CREDENTIAL_REF = "secretref://production/openemr"
+BOUND_CORPUS_ID = "m11-seed-corpus-v1"
 RUN_NONCE = "run-nonce-0001"
 
 
@@ -84,12 +85,17 @@ def _no_network(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def _op_hash() -> str:
-    """The canonical operation hash over the immutable run config the auth is scoped to."""
+    """The canonical operation hash the auth is scoped to — target / surface / corpus + caps.
+
+    Scoped to the target IDENTITY the run attacks (target_id / surface / corpus), NOT the adapter
+    transport: the adapter kind + credential ref are deliberately EXCLUDED (OpenEMR is merely the
+    first adapter). See ``operation_hash`` — the same grant authorizes a target's surface regardless
+    of which adapter/credential wires the connection.
+    """
     return operation_hash(
         target_id=BOUND_TARGET_ID,
-        host=BOUND_HOST,
-        adapter_kind=BOUND_ADAPTER_KIND,
-        credential_ref=BOUND_CREDENTIAL_REF,
+        surface=BOUND_HOST,
+        corpus_id=BOUND_CORPUS_ID,
         caps=RunPolicy(
             budget_usd=10.0,
             max_attempts_per_run=9,
@@ -131,9 +137,9 @@ def test_operation_hash_is_stable_and_hex() -> None:
     assert all(c in "0123456789abcdef" for c in h1)
 
 
-def test_operation_hash_changes_when_any_bound_field_changes() -> None:
-    """Changing ANY bound field (here the host) changes the operation hash — an auth minted for
-    one host can never silently authorize a different host (scope is content-addressed)."""
+def test_operation_hash_changes_when_a_scope_field_changes() -> None:
+    """Changing a SCOPE field (surface or corpus) changes the operation hash — an auth minted for
+    one surface/corpus can never silently authorize a different one (scope is content-addressed)."""
     caps = RunPolicy(
         budget_usd=10.0,
         max_attempts_per_run=9,
@@ -142,21 +148,49 @@ def test_operation_hash_changes_when_any_bound_field_changes() -> None:
     )
     base = operation_hash(
         target_id=BOUND_TARGET_ID,
-        host=BOUND_HOST,
-        adapter_kind=BOUND_ADAPTER_KIND,
-        credential_ref=BOUND_CREDENTIAL_REF,
+        surface=BOUND_HOST,
+        corpus_id=BOUND_CORPUS_ID,
         caps=caps,
         run_nonce=RUN_NONCE,
     )
-    other_host = operation_hash(
+    other_surface = operation_hash(
         target_id=BOUND_TARGET_ID,
-        host="evil-lookalike.example-openemr.org",
-        adapter_kind=BOUND_ADAPTER_KIND,
-        credential_ref=BOUND_CREDENTIAL_REF,
+        surface="evil-lookalike.example-openemr.org",
+        corpus_id=BOUND_CORPUS_ID,
         caps=caps,
         run_nonce=RUN_NONCE,
     )
-    assert base != other_host
+    other_corpus = operation_hash(
+        target_id=BOUND_TARGET_ID,
+        surface=BOUND_HOST,
+        corpus_id="some-other-corpus",
+        caps=caps,
+        run_nonce=RUN_NONCE,
+    )
+    assert base != other_surface
+    assert base != other_corpus
+
+
+def test_operation_hash_ignores_adapter_transport() -> None:
+    """The operation hash is scoped to the target IDENTITY, not the adapter transport: it takes
+    NO adapter_kind / credential_ref argument, so a grant stays adapter-generic. Two runs against
+    the same target/surface/corpus/caps/nonce hash identically regardless of how the wire is made
+    (OpenEMR is merely the first adapter). This pins that the transport is out of authorization
+    scope — a regression folding adapter_kind back into the hash would raise a TypeError here."""
+    caps = RunPolicy(
+        budget_usd=10.0,
+        max_attempts_per_run=9,
+        target_requests_per_second=1.0,
+        run_timeout_seconds=60.0,
+    )
+    kwargs = dict(
+        target_id=BOUND_TARGET_ID,
+        surface=BOUND_HOST,
+        corpus_id=BOUND_CORPUS_ID,
+        caps=caps,
+        run_nonce=RUN_NONCE,
+    )
+    assert operation_hash(**kwargs) == operation_hash(**kwargs)
 
 
 # ============================================================================================
@@ -302,6 +336,20 @@ def test_binding_resolves_secret_only_at_dispatch_boundary_in_production() -> No
     assert isinstance(secret, Secret)
     # The Secret redacts — the raw reference never renders in a log/evidence string.
     assert "***REDACTED***" in repr(secret)
+
+
+def test_binding_without_credential_supports_auth_mode_none() -> None:
+    """A binding MAY omit credential_ref (auth_mode=none): it constructs with no credential, and
+    resolve_credential returns None so the bound adapter dispatches WITHOUT injecting a secret. A
+    no-credential target is a valid binding — OpenEMR is merely the first adapter/auth-mode, not the
+    only one. This keeps the binding adapter-generic (no credential is forced onto every target)."""
+    binding = TargetBinding(
+        target_id="public-surface",
+        host=BOUND_HOST,
+        adapter_kind=BOUND_ADAPTER_KIND,
+    )  # no credential_ref supplied — auth_mode=none
+    assert binding.credential_ref is None
+    assert binding.resolve_credential(Settings(environment="production")) is None
 
 
 # ============================================================================================
