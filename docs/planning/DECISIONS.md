@@ -14,7 +14,7 @@
 | D5 | Observability = **Langfuse Cloud for MVP** (OTEL SDK v4), self-host post-MVP; exploit DB = system-of-record for finding status | locked (rev. 2026-07-20, F3) |
 | D6 | State + queue = one Postgres; `SKIP LOCKED` jobs table + **full delivery semantics**; cron enqueues; no Redis; **per-agent DB roles** | locked (rev. 2026-07-20, F6/S2) |
 | D7 | Exploit DB = Railway Postgres (Alembic migrations; partition/BRIN at scale) | locked |
-| D8 | Models: RedTeam=**hosted-OSS default + local 24–33B switch** · Judge=Sonnet 4.6 · Orch=Opus 4.8 · Docs=GPT-5.4; **cross-vendor = defense-in-depth, not the invariant** | locked (rev. 2026-07-20, F7/S5) |
+| D8 | Models — per-role **configurable defaults** via `HEADSHOT_*_MODEL` (not hard-coded runtime requirements): RedTeam=**hosted-OSS default + local 24–33B switch** (`HEADSHOT_RED_TEAM_MODEL`) · Judge=`claude-sonnet-5` (`HEADSHOT_JUDGE_MODEL`) · Orch=`claude-opus-4-8` (`HEADSHOT_ORCHESTRATOR_MODEL`) · Docs=`gpt-5.4` (`HEADSHOT_DOCUMENTATION_MODEL`); **cross-vendor = defense-in-depth, not the invariant** | locked (rev. 2026-07-21, F7/S5) |
 | D9 | Security tooling = configure/wrap OSS; build the 4 graded capabilities; buy nothing | locked (→ ADR-0001) |
 | D10 | Contracts = versioned JSON Schema, framework-neutral, typed error taxonomy | locked |
 | D11 | Compliance = synthetic-data simulation, ATO-*style*; OSS self-host sufficient, no BAA tier | locked |
@@ -84,11 +84,15 @@ with a **drain-before-deploy** step (D16, O2).
 ### D8 — Per-role models `locked`
 **Why.** RedTeam must not refuse authorized offensive generation → local uncensored open-weights;
 **on the confirmed 32–48GB Mac, default 24–33B (Dolphin-Mixtral / WhiteRabbitNeo-33B)**, hosted-OSS
-burst for the hardest cases and 10K+ scale (a 70B is throughput-tight here). Judge = Claude Sonnet 4.6
-(refusal-integrity is the "never approve an exploit" property; structurally independent of the local
-Red Team). Orchestrator = Opus 4.8 (planning reasoning, low call volume). Documentation = GPT-5.4
-(*different vendor from the Judge* → breaks correlated failure; schema-gated output).
-**Fallback.** RedTeam→hosted-OSS uncensored if the Mac saturates/offline; Judge→GPT-5.4.
+burst for the hardest cases and 10K+ scale (a 70B is throughput-tight here). Per-role models are
+**configurable defaults sourced from `HEADSHOT_*_MODEL`**, not hard-coded runtime requirements. Judge
+default = `claude-sonnet-5` (`HEADSHOT_JUDGE_MODEL`; structurally independent of the local Red Team — its
+refusal behavior is a characteristic, not the invariant, which is deterministic per D13/S5 below).
+Orchestrator default = `claude-opus-4-8` (`HEADSHOT_ORCHESTRATOR_MODEL`; planning reasoning, low call
+volume). Documentation default = `gpt-5.4` (`HEADSHOT_DOCUMENTATION_MODEL`; *different vendor from the
+Judge* → breaks correlated failure; schema-gated output). `claude-sonnet-5` is the current Sonnet;
+`claude-sonnet-4-6` remains available as its predecessor.
+**Fallback.** RedTeam→hosted-OSS uncensored if the Mac saturates/offline; Judge→`gpt-5.4`.
 **Invalidate if.** Real per-agent token/throughput traces move the local-vs-hosted crossover; a
 provider ships a reliable authorized-offensive mode. **Action:** measure token profiles + Mac tok/s at
 MVP before presenting a cost number.
@@ -204,7 +208,7 @@ spend is **insufficient**, not absent — token accounting stays. **Numbers are 
 future `cost-model` artifact. No placeholder number is presented.
 
 ### D18 — Evaluator-injection containment (Judge + Documentation) `locked` (S4)
-**Why.** The Judge (Claude Sonnet 4.6) and Documentation (GPT-5.4) both ingest attacker-controlled text — a
+**Why.** The Judge (`claude-sonnet-5`) and Documentation (`gpt-5.4`) both ingest attacker-controlled text — a
 successful indirect-injection payload echoed back by the target is a *live* injection aimed at whatever LLM
 reads it next. F1's deterministic invariant + calibration address *drift*, not a novel in-transcript injection
 that flips a real success to "fail" or launders attacker content into a human-facing report. Binding controls:
