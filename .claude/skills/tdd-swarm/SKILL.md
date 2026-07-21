@@ -14,6 +14,47 @@ Turn a PRD into merged, tested code via a factory of sub-agents. Tests are writt
 3. **Trust nothing**: the orchestrator re-runs gates itself before accepting any DONE report. Sub-agent self-reports are claims, not evidence.
 4. **Waves unlock waves**: downstream tickets stay locked until every gate of the current wave passes.
 
+## 🎯 Headshot MVP vertical-slice profile (active for this repo/run)
+
+This run builds the **secure local MVP vertical slice** for Headshot against the Tue deadline. It compresses
+the *ceremony* below; the Core principles and every PRESERVE item are non-negotiable.
+
+**Approved inputs — do NOT regenerate.** `IMPLEMENTATION_PLAN.md` is the **approved task source**; the epic
+scope (**M1a · M2 · M3 · M6a · M4**) and the M1a/M1b + M6a/M6b boundaries are already human-approved. Do
+**not** regenerate the architecture/roadmap/plan, do **not** write another planning document, and do
+**not** touch the diagrams (D3 stays isolated on `wip/d3-diagram`). **Skip the Phase-1 plan-approval
+CHECKPOINT — it is already done.** Skip the GitHub-Issues mirror. Create only the **minimum execution
+manifest** → `references/headshot-mvp.md` (stable AC-IDs, file scopes, deps, test ownership per ticket,
+drawn straight from the plan). No large new ticket plan.
+
+**PRESERVE — non-negotiable:** no production code without a failing test first · Test Agent owns+freezes
+tests, Implementation Agent cannot edit them · orchestrator **re-runs gates itself** (never trusts DONE) ·
+independent code review + security review · isolated worktrees + non-overlapping file scopes · 3-attempt
+cap + explicit test-dispute adjudication · architecture-drift check · durable `progress`+`LESSONS` ledgers ·
+**no direct/force pushes to main** · **no swarm self-approval or autonomous final merge** (owner merges).
+
+**Execution waves (plan dependency order):** Wave 1 **M1a** → Wave 2 **M2** → Wave 3 **M3 + M6a** (parallel
+**only if** file scopes are genuinely disjoint — `src/agentforge/storage/queue.py` vs
+`src/agentforge/observability/*`; else serialize) → Wave 4 **M4** (against the **P9 fake adapter**).
+
+**Never defer (production-quality secure slice, not a prototype):** environment isolation · Recorder
+append-only enforcement · per-agent DB-role boundaries · Policy Gateway allowlist + scoped credentials +
+rate/budget caps + hard abort · oracle precedence **outside the LLM** · typed/size-bounded/hostile-labelled
+evidence · fail-closed `INDETERMINATE` · Judge independence · synthetic-data-only enforcement · secret
+scanning + migration/invariant tests.
+
+**External services are OUT of this run** (they are the deferred external halves M1b/M6b/M5/M8): no
+live-target traffic · no Railway changes · no Langfuse Cloud calls · no hosted-model calls · no account or
+credential creation. Use **local Postgres, local OTEL/console export, and the P9 fake adapter** only.
+
+**Remote policy:** push the `swarm/<epic>` integration branch to **GitHub** regularly (backup + CI); push
+checkpoint/release **main** commits to **both GitHub and GitLab**; **verify both remote `main` refs resolve
+to the same SHA before declaring a checkpoint complete**. If GitLab auth is unavailable, continue safe
+local/GitHub work and **report GitLab as a checkpoint blocker — do not idle**.
+
+**No interrupts between tasks:** passing routine gates + review findings go to the ledger; only the four
+escalation classes reach the human.
+
 ## Roles
 
 | Agent | Owns | Never does |
