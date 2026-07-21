@@ -27,7 +27,7 @@ fails the assignment, the budget, and the governance model.
 | **NVIDIA Garak** v0.15.0 | Breadth **seed** source (50+ probes + Agent-breaker/GOAT multi-turn) | Reimplementing a probe corpus is wasted effort; its output normalizes into our contract JSON |
 | **Microsoft PyRIT** | Multi-turn **engine** inside the Red Team (Crescendo/TAP/RedTeaming + converters + memory) | Best-in-class multi-turn orchestrators; building them from scratch buys nothing. Its *scorers are NOT our verdict authority* |
 | **Giskard RAGET** v3 | **RAG-specific seeds** (retrieval poisoning, cross-patient context leakage) | The one seed gap Garak/PyRIT leave open for a clinical RAG target |
-| **Promptfoo** (MIT) | Deterministic **eval-runner + OWASP mapping** (OWASP LLM Top 10 + MITRE ATLAS + NIST AI RMF presets) | Satisfies the mandatory per-case OWASP-Web+LLM mapping with *no custom code* |
+| **Promptfoo** (MIT) | Deterministic **eval-runner + OWASP mapping** (no-custom-code presets: `owasp:llm` OWASP LLM Top 10 · `owasp:api` OWASP API Security Top 10 · `mitre:atlas` · `nist:ai:measure`) | Satisfies the mandatory per-case **OWASP LLM** mapping with *no custom code*. **Correction (F12, verified 2026-07-20 against promptfoo.dev/docs):** Promptfoo ships **no `owasp:web` preset** — the OWASP **Web** Top 10 category mapping is done by **our own deterministic validator over OWASP ZAP output**, not by Promptfoo. `owasp:api` partially covers the API/write-back surface (authz, SSRF, injection) but is not equivalent to the OWASP Web Top 10 |
 | **OWASP ZAP** | **Web-layer DAST** + CI gate for the OWASP *Web* Top 10 half (upload/ingestion, write-back API, SSRF, path traversal, authz) | Deterministic web scanning is a solved problem; an LLM is the wrong tool. *Contingent on the target exposing a web surface — confirm at inspection* |
 | **Semgrep** (free CLI) | **SAST on our own platform code** (agents, adapter, prompt-construction, policy) | Scans *our* code, never the target; deterministic beats an LLM here |
 | **LangGraph** (MIT engine), **self-hosted Langfuse**, **Postgres `SKIP LOCKED` queue**, **Railway cron** | Infrastructure we configure | Reinventing orchestration/observability/queue is not the assignment |
@@ -66,8 +66,10 @@ Defense**. Excluded on three independent grounds: **budget** (sales-only, $10k�
 *optional-at-Final* for manual web pentest; never Burp DAST/Enterprise.
 
 ## Consequences
-- **Positive:** near-zero integration cost; OWASP mapping + multi-turn scaffolding + web DAST come for
-  free; the four custom capabilities are exactly the graded, defensible work; wrapped-tool output is
+- **Positive:** near-zero integration cost; OWASP **LLM** mapping (`owasp:llm`) + multi-turn scaffolding +
+  web DAST come for free — **OWASP Web category mapping is our own deterministic validator over OWASP ZAP
+  output, not a Promptfoo preset** (F12); the four custom capabilities are exactly the graded, defensible
+  work; wrapped-tool output is
   normalized into versioned contract JSON, so **no tool choice can force a schema rewrite**; the whole
   stack runs under our own cost/allowlist governance.
 - **Negative / risks:** wrapping PyRIT/Garak/Giskard is real Python engineering (CSA notes it needs

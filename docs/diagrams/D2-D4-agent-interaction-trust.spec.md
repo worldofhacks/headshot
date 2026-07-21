@@ -4,6 +4,12 @@
 > is a render of it. Any change to the diagram starts here. Export `.svg` + `.png` alongside
 > the `.excalidraw` — it does not render on GitHub.
 > Serves `DEFENSE_SCRIPT.md` **S3** (walkthrough) and **S4c** (trust boundaries).
+>
+> ⚠️ **RENDER STALE — REGENERATE (2026-07-20, F2).** This spec was updated by `/arch-finalize` for the
+> trust-split correction: the Red Team's one exit is now a **trusted Policy Gateway + Execution Recorder**
+> (blue), not a red "Target Adapter," and the Judge reads the recorder's hashed `AttemptResult` — not the
+> raw target response. The `.excalidraw` / SVG / PNG still show the old red-adapter framing and **must be
+> regenerated from this spec** before the Defense. (`ARCHITECTURE.md` §5, `DECISIONS.md` D14.)
 
 ```
 DIAGRAM D2/D4 — AgentForge Agent Interaction + Trust Boundaries (merged)
@@ -29,7 +35,10 @@ Z3  RAILWAY               gray rounded bar, full width, bottom
 === NODES (5 horizontal bands inside Z1) ===
 BAND A  ORCHESTRATOR          blue    "trusted control plane"
 BAND B  RED TEAM              red     "untrusted / quarantined"   (dashed border)
-        TARGET ADAPTER        red     "allowlist + synthetic data" (shield icon, on Z1 edge)
+        POLICY GATEWAY +      blue    "TRUSTED enforcement boundary: allowlist · scoped creds ·
+        EXECUTION RECORDER            synthetic data · budget/rate · hard abort · hashed AttemptResult"
+                                      (shield icon, on Z1 edge — the Red Team's ONE exit; holds the
+                                       TargetAdapter + the only target credentials)
 BAND C  JUDGE                 purple  "independent evaluator"
         DOCUMENTATION         teal    "gated reporting"
 BAND D  REGRESSION HARNESS    blue    "deterministic admission · target-change + cron"
@@ -50,13 +59,14 @@ solid unless noted
  1  COVERAGE+FINDINGS -> ORCHESTRATOR   "coverage gaps · open findings · resilience trend"
  2  ORCHESTRATOR      -> RED TEAM       "campaign brief"
  3  ORCHESTRATOR      -> REGRESSION     "trigger regression run"
- 4  RED TEAM          -> TARGET ADAPTER "attack sequence"
- 5  TARGET ADAPTER    -> LIVE OPENEMR   "allowlisted · synthetic data only"
- 6  LIVE OPENEMR      -> JUDGE          "target response"
+ 4  RED TEAM          -> POLICY GATEWAY "AttackAttempt (proposed input — no creds, no evidence)"
+ 5  POLICY GATEWAY    -> LIVE OPENEMR   "execute: allowlisted · scoped creds · synthetic data only"
+ 5b LIVE OPENEMR      -> EXECUTION RECORDER "target response (recorded)"
+ 6  EXECUTION RECORDER-> JUDGE          "AttemptResult (hashed · append-only)"
  7  JUDGE             -> RED TEAM       "partial -> mutate"        [DASHED]
  8  JUDGE             -> DOCUMENTATION  "confirmed exploit"
  9  JUDGE             -> REGRESSION     "admission candidate"
-10  REGRESSION        -> TARGET ADAPTER "replay on target change + cron"
+10  REGRESSION        -> POLICY GATEWAY "replay (new run-nonce, re-executes live) on target change + cron"
 11  DOCUMENTATION     -> HUMAN APPROVAL "draft report"
 12  HUMAN APPROVAL    -> VULN REPORT    "publish"
 13  BAND B/C/D (grouped) -> POSTGRES    "state · findings · queue"   [ONE edge]
@@ -70,16 +80,17 @@ solid unless noted
 === POLICY BADGES (small dashed callouts, top-right inside Z1) ===
 blue dashed    "Versioned JSON Schemas"            -> points at inter-agent edges 2,7,8,11
 purple dashed  "OWASP Web + LLM Top 10"            -> points at RED TEAM
-red dashed     "Budget · rate limits · hard abort" -> points at ORCHESTRATOR + TARGET ADAPTER
+red dashed     "Budget · rate limits · hard abort" -> points at ORCHESTRATOR + POLICY GATEWAY
 
 === LAYOUT RULES ===
 R1  Five bands, top to bottom: A, B, C, D, E. No edge crosses a band boundary twice.
 R2  Band E is a SUBSTRATE the agents sit on. Draw ONE grouped connector from the
     agent stack to Postgres and ONE to Langfuse. Never one line per agent.
-R3  RED TEAM's only rightward exit is TARGET ADAPTER. No other edge leaves the red
-    zone toward Z2 — that visual is the proof of quarantine.
-R4  Edge 6 enters JUDGE from the right; edge 7 leaves JUDGE from the left. The mutate
-    loop must read as a loop, not a tangle.
+R3  RED TEAM's only exit is the trusted POLICY GATEWAY. The attacker holds no credentials
+    and never produces the evidence the Judge reads — no edge carries a raw target response
+    or a Red-Team-authored transcript to the Judge. That visual is the proof of quarantine.
+R4  Edge 6 (EXECUTION RECORDER -> JUDGE) enters JUDGE carrying the hashed AttemptResult;
+    edge 7 leaves JUDGE toward the RED TEAM. The mutate loop must read as a loop, not a tangle.
 R5  Route model-provider dashed edges (16-19) outside the platform border. They are
     supply, not flow.
 R6  HUMAN APPROVAL sits outside Z1 — autonomy visibly stops at the platform boundary.
@@ -97,3 +108,8 @@ R6  HUMAN APPROVAL sits outside Z1 — autonomy visibly stops at the platform bo
   connector instead of one line per consumer.
 - **R3 turns quarantine into evidence.** A single exit from the red zone is the picture
   that answers S4c before it is asked.
+- **The exit is trusted, not red (F2).** The enforcement boundary — allowlist, scoped
+  credentials, budget/rate, hard abort — cannot be an untrusted component; it is the blue
+  **Policy Gateway + Execution Recorder**. The Judge reads that recorder's hashed
+  `AttemptResult`, so the attacker never controls the evidence the Judge evaluates. This is
+  the diagram's load-bearing correction (`ARCHITECTURE.md` §5, `DECISIONS.md` D14).

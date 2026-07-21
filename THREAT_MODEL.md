@@ -50,6 +50,19 @@ or refute. The exact auth mode and API shape of the Co-Pilot are open questions 
 **Risk scoring** below is qualitative (Likelihood × Clinical Impact → Critical/High/Medium),
 appropriate for a first pass; the MVP threat model attaches measured pass/fail evidence per category.
 
+## OWASP taxonomy version (2021 anchor + 2025 crosswalk)
+
+The **Web** `A0x` identifiers below are **OWASP Top 10:2021** — the set the PRD enumerates (it lists SSRF
+as a standalone category, which exists only in 2021). **LLM** `LLM0x` identifiers are **OWASP LLM Top 10
+(2025)**. Verified against owasp.org/Top10/2021 and owasp.org/Top10/2025 (2026-07-20). In the eval-case
+schema each mapping is stored as a **structured tag `{framework, version, id, name}`** (e.g.
+`{OWASP Web, 2021, A10, Server-Side Request Forgery}`), never a bare `A10` — because `A10` is *SSRF* in 2021
+but *Mishandling of Exceptional Conditions* in 2025 (`DECISIONS.md` D15). **2021 → 2025 crosswalk** for the
+categories used here: SSRF `A10:2021` → folded into `A01:2025` Broken Access Control · Injection `A03:2021`
+→ `A05:2025` · `A08:2021` Software & Data Integrity Failures → `A08:2025` · `A07:2021` Identification & Auth
+Failures → `A07:2025`. New in 2025 (forward-looking coverage candidates, not required by the PRD's 2021
+anchor): `A03:2025` Software Supply Chain Failures, `A10:2025` Mishandling of Exceptional Conditions.
+
 ---
 
 ## Category 1 — Prompt Injection (direct · indirect · multi-turn)
