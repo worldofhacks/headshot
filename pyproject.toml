@@ -17,6 +17,10 @@ dependencies = [
     "fastapi>=0.111",
     "uvicorn[standard]>=0.30",
     "psycopg[binary]>=3.1",
+    # Loads .env / .env.local so Settings.from_env resolves file-provided vars. Imported
+    # lazily inside from_env only — never at config.py top level (D10). Secrets are read
+    # by reference at use time, never logged or inlined.
+    "python-dotenv>=1.0",
 ]
 
 [project.optional-dependencies]

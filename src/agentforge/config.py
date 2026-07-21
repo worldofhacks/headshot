@@ -88,7 +88,32 @@ class Settings:
         production credentials. Construction reuses ``__post_init__`` validation, so an
         unknown value (e.g. the near-miss ``"prod"``) raises ``ValueError`` here.
         """
+        cls._load_dotenv()
         return cls(environment=os.environ.get(_ENVIRONMENT_ENV_VAR, "local"))
+
+    @staticmethod
+    def _load_dotenv() -> None:
+        """Load ``.env.local`` and ``.env`` into the process env so file-provided variables
+        are resolvable via ``os.environ``.
+
+        Precedence: a **real process env var wins** over both files; ``.env.local`` wins over
+        ``.env``. Enforced with ``override=False`` and loading ``.env.local`` first, so a
+        container's real environment (and a test's monkeypatched env) always take priority,
+        and a var set by ``.env.local`` is not clobbered by ``.env``.
+
+        ``python-dotenv`` is imported *lazily* here so a bare ``import agentforge.config``
+        stays framework-neutral (D10) and does not require the package. Missing files are a
+        no-op — a production container sets its environment directly, and ``.env.local`` is
+        gitignored (real secrets never enter git). Any secret loaded this way is resolved by
+        **reference** at use time (a ``secretref://`` handle or a per-agent client reading
+        its own env var) and is **never logged or inlined**.
+        """
+        try:
+            from dotenv import load_dotenv
+        except ImportError:  # optional at import; a directly-set environment still works
+            return
+        load_dotenv(".env.local", override=False)
+        load_dotenv(".env", override=False)
 
     def resolve_target_credential(self, target_id: str) -> str:
         """Return a secret *reference* for ``target_id`` — production only (O1 invariant).
