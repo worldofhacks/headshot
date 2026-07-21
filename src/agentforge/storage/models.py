@@ -1,4 +1,4 @@
-"""agentforge.storage.models — the M2 exploit-DB data model (SQLAlchemy 2.0 DeclarativeBase).
+"""agentforge.storage.models — M2/M3 Postgres metadata (SQLAlchemy 2.0 DeclarativeBase).
 
 Anchors: ARCHITECTURE.md §4 (AttemptResult / D14 evidence field set), §5 (S1/S2 trust
 boundaries, per-agent DB roles), §6 (data model, PRD-OPT-16 indexes, S3 replay UNIQUE);
@@ -10,9 +10,9 @@ state machines (PRESEARCH §5.2) or the S1/S2 evidence spine the local MVP slice
 ``verdict``, ``finding``, ``regression_case``. The remaining nouns from ARCHITECTURE §6 /
 PRESEARCH §5.1 — ``CostRecord``, ``CoverageMetric``, ``GroundTruthLabel``,
 ``ContractVersion``, ``Incident``, ``Target``, ``TargetAdapter``, ``AllowlistEntry``,
-``CredentialBinding``, ``Transcript``, ``RegressionRun``, the LangGraph checkpoint tables,
-and the ``jobs`` work/regression queue — are **intentionally deferred** and land with their
-consumers in later milestones. They are not modelled here on purpose.
+``CredentialBinding``, ``Transcript``, ``RegressionRun``, and the LangGraph checkpoint tables
+— are **intentionally deferred** and land with their consumers in later milestones. The M3
+``jobs`` queue is modelled here because this module is Alembic's autogenerate metadata source.
 
 Referential integrity, scoped (deliberate). This slice DB-enforces the links whose targets
 exist here: ``attempt`` → ``campaign`` (FK, CASCADE), ``regression_case`` → ``finding`` (FK,
@@ -45,6 +45,8 @@ from __future__ import annotations
 import datetime
 
 from sqlalchemy import (
+    BigInteger,
+    CheckConstraint,
     Enum,
     ForeignKey,
     ForeignKeyConstraint,
@@ -55,6 +57,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB, TIMESTAMP
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -157,6 +160,23 @@ regression_case_state = Enum(
     **_ENUM_KW,
 )
 
+job_queue = Enum(
+    "agent_work",
+    "regression_run",
+    name="job_queue",
+    **_ENUM_KW,
+)
+
+job_status = Enum(
+    "queued",
+    "leased",
+    "completed",
+    "cancelled",
+    "dead_letter",
+    name="job_status",
+    **_ENUM_KW,
+)
+
 
 # A naming convention keeps constraint/index names stable across Alembic autogenerate and
 # hand-written migrations (so downgrade() can drop by name deterministically).
@@ -170,7 +190,7 @@ _NAMING_CONVENTION = {
 
 
 class Base(DeclarativeBase):
-    """Declarative base carrying the M2 storage MetaData (Alembic ``target_metadata``)."""
+    """Declarative base carrying storage metadata used by Alembic ``target_metadata``."""
 
     metadata = MetaData(naming_convention=_NAMING_CONVENTION)
 
@@ -371,3 +391,133 @@ class RegressionCase(Base):
     created_at: Mapped[datetime.datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
     )
+
+
+# ---------------------------------------------------------------------------
+# jobs — M3 durable at-least-once work/regression queue
+# ---------------------------------------------------------------------------
+class Job(Base):
+    """Queue metadata kept aligned with migration 0004 for Alembic autogenerate safety."""
+
+    __tablename__ = "jobs"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    job_id: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    queue: Mapped[str] = mapped_column(job_queue, nullable=False)
+    campaign_run_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    attempt_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    payload_schema: Mapped[str] = mapped_column(String(64), nullable=False)
+    payload_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    payload: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    enqueue_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    priority: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    run_after: Mapped[datetime.datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    max_attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default="3")
+    status: Mapped[str] = mapped_column(job_status, nullable=False, server_default="queued")
+    worker_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    lease_token: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    leased_at: Mapped[datetime.datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    lease_expires_at: Mapped[datetime.datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    last_heartbeat_at: Mapped[datetime.datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    last_failure_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    last_failure_message: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    last_failure_at: Mapped[datetime.datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    last_failure_worker_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    completion_worker_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    completion_lease_token: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    completed_at: Mapped[datetime.datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    cancelled_at: Mapped[datetime.datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    dead_lettered_at: Mapped[datetime.datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime.datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "queue", "campaign_run_id", "attempt_id", name="uq_jobs_queue_campaign_attempt"
+        ),
+        CheckConstraint("payload_version > 0", name="job_payload_version_positive"),
+        CheckConstraint("jsonb_typeof(payload) = 'object'", name="job_payload_object"),
+        CheckConstraint("char_length(enqueue_fingerprint) = 64", name="job_fingerprint_length"),
+        CheckConstraint(
+            "attempts >= 0 AND max_attempts > 0 AND attempts <= max_attempts",
+            name="job_attempt_bounds",
+        ),
+        CheckConstraint(
+            "status <> 'queued'::job_status OR attempts < max_attempts",
+            name="job_queued_attempt_budget",
+        ),
+        CheckConstraint(
+            "(status = 'leased'::job_status AND worker_id IS NOT NULL "
+            "AND lease_token IS NOT NULL AND leased_at IS NOT NULL "
+            "AND lease_expires_at IS NOT NULL AND last_heartbeat_at IS NOT NULL "
+            "AND lease_expires_at > leased_at) OR "
+            "(status <> 'leased'::job_status AND worker_id IS NULL "
+            "AND lease_token IS NULL AND leased_at IS NULL "
+            "AND lease_expires_at IS NULL AND last_heartbeat_at IS NULL)",
+            name="job_active_lease_shape",
+        ),
+        CheckConstraint(
+            "(status = 'completed'::job_status AND completed_at IS NOT NULL "
+            "AND completion_worker_id IS NOT NULL AND completion_lease_token IS NOT NULL) OR "
+            "(status <> 'completed'::job_status AND completed_at IS NULL "
+            "AND completion_worker_id IS NULL AND completion_lease_token IS NULL)",
+            name="job_completion_shape",
+        ),
+        CheckConstraint(
+            "(status = 'cancelled'::job_status) = (cancelled_at IS NOT NULL)",
+            name="job_cancellation_shape",
+        ),
+        CheckConstraint(
+            "(status = 'dead_letter'::job_status) = (dead_lettered_at IS NOT NULL)",
+            name="job_dead_letter_shape",
+        ),
+        CheckConstraint(
+            "last_failure_message IS NULL OR char_length(last_failure_message) <= 512",
+            name="job_failure_message_length",
+        ),
+    )
+
+
+Index(
+    "ix_jobs_claim",
+    Job.queue,
+    Job.priority.desc(),
+    Job.run_after,
+    Job.id,
+    postgresql_where=text("status = 'queued'::job_status"),
+)
+Index(
+    "ix_jobs_reap",
+    Job.lease_expires_at,
+    Job.id,
+    postgresql_where=text("status = 'leased'::job_status"),
+)
+Index(
+    "ix_jobs_campaign_cancel",
+    Job.campaign_run_id,
+    Job.queue,
+    Job.id,
+    postgresql_where=text("status = 'queued'::job_status"),
+)
+Index("ix_jobs_depth", Job.queue, Job.status)
