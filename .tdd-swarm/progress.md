@@ -129,3 +129,20 @@ STILL PENDING (post-M9): M5 (no-network OpenEMR adapter + preflight, fail-closed
 M8 (fake/cassette provider path — live activation = config change not refactor), M10/M11 (calibration slice
 to lift the non-oracle gate; M11 = HARD GATE). Codex owns codex/m11-eval-corpus (hands off). GitLab remains a
 checkpoint auth blocker. No hosted-model/target calls made anywhere.
+
+## 2026-07-21 — Steps 1-4 COMPLETE (live-gate track)
+1. PR #4 retitled 'MVP secure local spine: M1a→M2→M4→M6a→M9 (f518daf)' + full body, READY FOR REVIEW (not merged).
+   swarm/mvp-local-slice FROZEN at f518daf. All further work on swarm/mvp-live-gate.
+2. codex/m11-eval-corpus (5ffe0db) backed up to origin (unmodified).
+3. M11 corpus cherry-picked (06165c2, 5ffe0db) — additive, 0 deletions, no contracts/v1 change. Integration
+   review COMPATIBLE across contract-steward/adversarial-eval-lifecycle/judge-calibration/validator (27/27
+   contract tests). Fixed 1 minor test-first: _safe_source redacts provider-key-shaped diagnostic tokens (307dc87).
+4. PACKAGING (614bbbe): relocated contracts/v1 (7) + evals/schemas (3) INTO the package (single copy each,
+   repo-root removed, byte-for-byte renames), importlib.resources resolution (AGENTFORGE_CONTRACTS_DIR override
+   preserved), package-data, out-of-repo wheel test + container smoke in CI. Resolved test-first: safe_schema_name
+   path-traversal guard on both loaders + override fail-closed wrap + handoff-doc 'not packaged'->RESOLVED. 388
+   passed/3 skipped, docker OK, wheel ships all 10 schemas, single copy confirmed.
+NEXT: M5 (OpenEMR adapter + fail-closed preflight, NO network in tests/preflight, no fallback to fake) -> M8
+(Red Team seed-replay full loop + fake/cassette; hosted behind explicit auth) -> offline deterministic e2e
+(M8->M4->P9->Recorder->M6a->M9: confirmed/no-exploit/indeterminate/integrity-fail/abort) -> docs/integration/
+packet -> presence-only preflight report. No hosted/target calls; no unverified model-name edits.
