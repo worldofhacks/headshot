@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "agentforge/contracts/v1/attempt_result",
+  "title": "AttemptResult",
+  "version": "1",
+  "description": "The authoritative evidence object emitted by the trusted Execution Recorder (ExecutionRecorder -> Judge). The Red Team never produces this. content_hash is a canonical hash the Judge/Orchestrator recompute and verify before every read (DECISIONS.md D14).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "campaign_run_id",
+    "attempt_id",
+    "campaign_id",
+    "target_id",
+    "target_version",
+    "attack_attempt",
+    "transcript",
+    "policy_decision_id",
+    "recorder_identity",
+    "content_hash"
+  ],
+  "properties": {
+    "schema_version": { "const": "1" },
+    "campaign_run_id": { "type": "string", "minLength": 1 },
+    "attempt_id": { "type": "string", "minLength": 1 },
+    "campaign_id": { "type": "string", "minLength": 1 },
+    "target_id": { "type": "string" },
+    "target_version": { "type": "string" },
+    "attack_attempt": { "type": "object" },
+    "transcript": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["request", "response"],
+      "properties": {
+        "request": { "type": "array", "items": { "type": "string" } },
+        "response": { "type": "string" },
+        "truncated": { "type": "boolean" }
+      }
+    },
+    "policy_decision_id": { "type": "string" },
+    "started_at": { "type": "string" },
+    "finished_at": { "type": "string" },
+    "trace_id": { "type": "string" },
+    "recorder_identity": { "type": "string" },
+    "content_hash": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+  }
+}

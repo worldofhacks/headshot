@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "agentforge/contracts/v1/errors",
+  "title": "TypedErrors",
+  "version": "1",
+  "description": "The typed error taxonomy published alongside the success schemas (PRD-OPT-11, ARCHITECTURE.md §4). Every agent boundary emits one of these on a known failure mode. A payload validates iff it matches exactly one typed error (distinguished by its `code` const).",
+  "oneOf": [
+    { "$ref": "#/$defs/target_unreachable" },
+    { "$ref": "#/$defs/budget_exceeded" },
+    { "$ref": "#/$defs/judge_timeout" },
+    { "$ref": "#/$defs/no_findings_in_window" },
+    { "$ref": "#/$defs/regression_detected" },
+    { "$ref": "#/$defs/rate_limited" },
+    { "$ref": "#/$defs/adapter_error" },
+    { "$ref": "#/$defs/evidence_missing" },
+    { "$ref": "#/$defs/evidence_integrity_failed" }
+  ],
+  "$defs": {
+    "target_unreachable": { "$ref": "#/$defs/base", "properties": { "code": { "const": "target-unreachable" }, "message": { "type": "string" }, "retryable": { "type": "boolean" } } },
+    "budget_exceeded": { "$ref": "#/$defs/base", "properties": { "code": { "const": "budget-exceeded" }, "message": { "type": "string" }, "retryable": { "type": "boolean" } } },
+    "judge_timeout": { "$ref": "#/$defs/base", "properties": { "code": { "const": "judge-timeout" }, "message": { "type": "string" }, "retryable": { "type": "boolean" } } },
+    "no_findings_in_window": { "$ref": "#/$defs/base", "properties": { "code": { "const": "no-findings-in-window" }, "message": { "type": "string" }, "retryable": { "type": "boolean" } } },
+    "regression_detected": { "$ref": "#/$defs/base", "properties": { "code": { "const": "regression-detected" }, "message": { "type": "string" }, "retryable": { "type": "boolean" } } },
+    "rate_limited": { "$ref": "#/$defs/base", "properties": { "code": { "const": "rate-limited" }, "message": { "type": "string" }, "retryable": { "type": "boolean" }, "retry_after_s": { "type": "number" } } },
+    "adapter_error": { "$ref": "#/$defs/base", "properties": { "code": { "const": "adapter-error" }, "message": { "type": "string" }, "retryable": { "type": "boolean" } } },
+    "evidence_missing": { "$ref": "#/$defs/base", "properties": { "code": { "const": "evidence-missing" }, "message": { "type": "string" }, "retryable": { "type": "boolean" } } },
+    "evidence_integrity_failed": { "$ref": "#/$defs/base", "properties": { "code": { "const": "evidence-integrity-failed" }, "message": { "type": "string" }, "retryable": { "type": "boolean" } } },
+    "base": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "message"],
+      "properties": {
+        "code": { "type": "string" },
+        "message": { "type": "string" },
+        "retryable": { "type": "boolean" },
+        "retry_after_s": { "type": "number" }
+      }
+    }
+  }
+}
