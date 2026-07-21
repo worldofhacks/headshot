@@ -1,0 +1,143 @@
+- generic [ref=e4]:
+  - generic [ref=e5]:
+    - complementary [ref=e6]:
+      - navigation [ref=e20]:
+        - button "Live" [ref=e21] [cursor=pointer]
+        - button "Findings" [ref=e25] [cursor=pointer]
+        - button "4" [ref=e29] [cursor=pointer]
+        - button "Coverage" [ref=e35] [cursor=pointer]
+        - button "Resilience" [ref=e39] [cursor=pointer]
+        - button "Traces" [ref=e43] [cursor=pointer]
+        - button "Costs" [ref=e47] [cursor=pointer]
+        - button "Targets" [ref=e51] [cursor=pointer]
+        - button "Configuration" [ref=e55] [cursor=pointer]
+      - button "Switch principal (prototype)" [ref=e60] [cursor=pointer]:
+        - generic [ref=e61]: AO
+    - generic [ref=e63]:
+      - banner [ref=e64]:
+        - generic [ref=e66]:
+          - generic [ref=e68]: RUN 042
+          - generic [ref=e69]: ·
+          - generic [ref=e70]: Clinical Assistant
+          - generic [ref=e71]: v0.9.7
+          - generic [ref=e72]: Staging
+        - generic "Campaign state" [ref=e73]: Running
+        - generic [ref=e76]:
+          - generic "Synthetic fixtures only" [ref=e77]: Synthetic data
+          - generic [ref=e80]: Allowlisted
+          - generic [ref=e81]: Authorized
+        - generic [ref=e82]:
+          - generic "Connection live · fresh 2s ago" [ref=e83]: Live
+          - button "Open command palette" [ref=e85] [cursor=pointer]:
+            - generic [ref=e88]: Search
+            - generic [ref=e89]: ⌘K
+          - button "4" [ref=e90] [cursor=pointer]
+          - generic [ref=e95]:
+            - button "Desktop" [ref=e96] [cursor=pointer]
+            - button "Mobile" [ref=e99] [cursor=pointer]
+          - button "Toggle theme" [ref=e102] [cursor=pointer]
+          - button "Abort campaign RUN 042" [ref=e105] [cursor=pointer]: Abort
+      - main [ref=e108]:
+        - generic [ref=e572]:
+          - generic [ref=e573]:
+            - generic [ref=e574]: Target registry
+            - generic [ref=e575]: Lifecycle & attack-surface management
+            - generic [ref=e576]: Credential values are never shown
+            - button "New target" [active] [ref=e579] [cursor=pointer]
+          - generic [ref=e582]:
+            - region "Targets" [ref=e583]:
+              - generic [ref=e584]:
+                - textbox "Search targets" [ref=e588]
+                - generic [ref=e589]:
+                  - button "All" [ref=e590] [cursor=pointer]
+                  - button "Ready" [ref=e591] [cursor=pointer]
+                  - button "Draft" [ref=e592] [cursor=pointer]
+                  - button "Disabled" [ref=e593] [cursor=pointer]
+                  - button "Archived" [ref=e594] [cursor=pointer]
+              - generic [ref=e595]:
+                - button "Clinical Assistant Staging · v0.9.7 Ready" [ref=e596] [cursor=pointer]:
+                  - generic [ref=e599]:
+                    - generic [ref=e600]: Clinical Assistant
+                    - generic [ref=e601]: Staging · v0.9.7
+                  - generic [ref=e602]: Ready
+                - button "Customer Support Agent Test · v2.4.1 Disabled" [ref=e603] [cursor=pointer]:
+                  - generic [ref=e606]:
+                    - generic [ref=e607]: Customer Support Agent
+                    - generic [ref=e608]: Test · v2.4.1
+                  - generic [ref=e609]: Disabled
+                - button "Internal Knowledge Agent Sandbox · v1.8.0 Ready" [ref=e610] [cursor=pointer]:
+                  - generic [ref=e613]:
+                    - generic [ref=e614]: Internal Knowledge Agent
+                    - generic [ref=e615]: Sandbox · v1.8.0
+                  - generic [ref=e616]: Ready
+                - button "Claims Automation Copilot Staging · v0.6.3 Draft" [ref=e617] [cursor=pointer]:
+                  - generic [ref=e620]:
+                    - generic [ref=e621]: Claims Automation Copilot
+                    - generic [ref=e622]: Staging · v0.6.3
+                  - generic [ref=e623]: Draft
+            - region "Target detail" [ref=e624]:
+              - generic [ref=e625]:
+                - generic [ref=e626]:
+                  - generic [ref=e627]: Clinical Assistant
+                  - generic [ref=e628]: v0.9.7
+                  - generic [ref=e629]: Ready
+                  - generic [ref=e630]:
+                    - button "Disable" [ref=e631] [cursor=pointer]
+                    - button "Archive" [ref=e632] [cursor=pointer]
+                - generic [ref=e633]: Eligible for campaigns
+                - tablist "Target sections" [ref=e636]:
+                  - tab "Overview" [selected] [ref=e637] [cursor=pointer]
+                  - tab "Attack surfaces" [ref=e640] [cursor=pointer]
+                  - tab "Controls" [ref=e643] [cursor=pointer]
+                  - tab "Credentials" [ref=e646] [cursor=pointer]
+                  - tab "Authorization" [ref=e649] [cursor=pointer]
+                  - tab "History" [ref=e652] [cursor=pointer]
+              - generic [ref=e655]:
+                - generic [ref=e656]:
+                  - generic [ref=e657]:
+                    - generic [ref=e658]: Environment
+                    - generic [ref=e659]: Staging
+                  - generic [ref=e660]:
+                    - generic [ref=e661]: Adapter type
+                    - generic [ref=e662]: HTTP/JSON
+                  - generic [ref=e663]:
+                    - generic [ref=e664]: Target version
+                    - generic [ref=e665]: v0.9.7
+                  - generic [ref=e666]:
+                    - generic [ref=e667]: Base URL
+                    - generic [ref=e668]: https://clinical-copilot.staging.internal
+                  - generic [ref=e669]:
+                    - generic [ref=e670]: Authorization owner
+                    - generic [ref=e671]: A. Okafor
+                  - generic [ref=e672]:
+                    - generic [ref=e673]: Last verified
+                    - generic [ref=e674]: 2s ago
+                - generic [ref=e675]:
+                  - generic [ref=e676]:
+                    - text: Synthetic data
+                    - generic [ref=e677]: Verified
+                  - generic [ref=e678]:
+                    - text: Allowlist
+                    - generic [ref=e679]: Active
+                  - generic [ref=e680]:
+                    - text: Attack surfaces
+                    - generic [ref=e681]: 3 / 4 on
+                - text: Readiness checklist
+                - generic [ref=e682]:
+                  - generic [ref=e687]:
+                    - generic [ref=e688]: Allowlist entry
+                    - generic [ref=e689]: Environment-scoped to staging
+                  - generic [ref=e694]:
+                    - generic [ref=e695]: Scoped credential
+                    - generic [ref=e696]: cb-clin-stg-01 bound to this target only
+                  - generic [ref=e701]:
+                    - generic [ref=e702]: Synthetic-data policy
+                    - generic [ref=e703]: Fixtures verified · no real PHI
+                  - generic [ref=e708]:
+                    - generic [ref=e709]: Connectivity
+                    - generic [ref=e710]: Last success 2s ago
+                  - generic [ref=e715]:
+                    - generic [ref=e716]: Budget & rate
+                    - generic [ref=e717]: 60 rpm within policy
+  - status [ref=e570]
+  - generic [ref=e780]: Target created in DRAFT (prototype) · audited
