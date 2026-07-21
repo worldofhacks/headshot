@@ -17,3 +17,5 @@ M2 -> (M4 ∥ M6a after M2) -> M9 (after M4+M6a) -> M5 (on D1) -> M8 (on hosted-
 - M6a is NOT deferrable (M9 depends on it; S9 hash-reconciliation is locked MVP security spine).
 - M3 runs parallel ONLY if genuinely disjoint agent/worktree and does not delay M4/M6a; else PARK immediately after the M11 path. M3 stays FINAL-COMMITTED/graded — not deleted, not relabelled optional.
 Critical path to M11: M2 -> {M4, M6a} -> M9 -> (M5 needs D1, M8 needs hosted-OSS cred) -> M11.
+
+Config: Settings.from_env now loads .env.local/.env (python-dotenv, real-env-wins). Secrets via .env.local (gitignored, untracked, never in history; gitleaks clean). SECRETS NEVER inlined/logged/committed. NAMING: model var is HEADSHOT_RED_TEAM_MODEL; user calls it OPENROUTER_MODEL — reconcile before M8. BUDGET: M4 Policy Gateway MUST enforce HEADSHOT_RUN_BUDGET_USD + MAX_ATTEMPTS_PER_RUN + TARGET_REQUESTS_PER_SECOND + RUN_TIMEOUT_SECONDS (hard abort) before ANY live inference; NO live model/target calls occur until M4 passes + explicit go-ahead. Current wave M2 uses no models.
