@@ -1,5 +1,10 @@
 # M3 Durable Queue Handoff
 
+## Status
+
+M3 implementation and CI are complete on draft PR #8. **Railway deployment is blocked.**
+PR #8 must land before F1, F3, or F4 queue consumers are integrated or deployed.
+
 ## Scope delivered
 
 M3 adds one Postgres `jobs` table and a storage-only API for exactly two logical queues:
@@ -65,14 +70,27 @@ Follow D16 during payload changes: deploy readers that support the new version f
 or migrate old queued work, then remove old-version support. Unknown rows fail closed into
 dead letter; they are never interpreted optimistically.
 
-## Deployment prerequisite outside this lane
+## Railway deployment block
 
-The current production wheel/container copies the Python package but does not ship
-`alembic.ini` or the repository `migrations/` tree. Therefore the image alone cannot apply
-revision `0004`. Before any F1/F3/F4 consumer uses this queue, the authorized deployment
-composition must run `alembic upgrade 0004` (normally `alembic upgrade head`) from a trusted
-repository migration artifact, or a later packaging change must ship migrations. Docker,
-CI, and deployment configuration were explicitly outside this task and remain unchanged.
+The current runtime image copies the Python package but does not include `alembic.ini` or
+the repository `migrations/` tree. Revision `0004` therefore cannot be applied from inside
+the deployed image, and M3 is not yet Railway-deployable.
+
+Deployment remains blocked until the Railway integration lane:
+
+1. Includes trusted `alembic.ini` and `migrations/` artifacts in the final runtime image.
+2. Runs `alembic upgrade head` as the Railway pre-deploy command.
+3. Verifies both clean-database migration and `0003 -> 0004` upgrade paths inside the built
+   image.
+4. Prevents the web process and every queue worker from becoming ready when the database
+   schema revision is older than `0004`.
+5. Runs migrations with a trusted deployment principal, never a Red Team, Recorder, Judge,
+   agent, or queue-worker role.
+
+Consumers must remain idempotent and safe under at-least-once delivery. Queue completion
+must never count as human approval. This handoff authorizes no live service, credential,
+target, hosted model, or paid-provider access. Railway, Dockerfile, CI, and runtime wiring
+remain outside this lane.
 
 ## Verification
 
