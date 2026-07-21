@@ -82,38 +82,70 @@ class Settings:
     def from_env(cls) -> Settings:
         """Construct ``Settings`` from the deployment environment variable (AC-2).
 
-        Reads ``AGENTFORGE_ENVIRONMENT`` (default ``"local"``) so the isolation boundary
-        is enforced from the *deployed* environment rather than accidentally-everywhere. An
-        un-configured deployment is a fail-safe ``local`` and is therefore isolated from
-        production credentials. Construction reuses ``__post_init__`` validation, so an
-        unknown value (e.g. the near-miss ``"prod"``) raises ``ValueError`` here.
+        Env-isolated dotenv loading, in this exact order:
+
+        1. Read ``AGENTFORGE_ENVIRONMENT`` from the **real process environment**
+           (``os.environ``) FIRST, defaulting to ``"local"``. The deployment environment is
+           decided by the process env *alone* — a dotenv file can never set or elevate it.
+        2. **Validate** that value against the enumerated set BEFORE loading any file. An
+           unknown value (e.g. the near-miss ``"prod"``) raises ``ValueError`` and loads
+           NOTHING — no ``.env`` / ``.env.local`` is read.
+        3. Load ``.env.local`` and ``.env`` ONLY when the process-level environment is
+           ``"local"``. ``staging`` and ``production`` skip dotenv loading ENTIRELY, so a
+           deployed box never absorbs a stray dotenv file or file-provided secret.
+
+        An un-configured deployment is a fail-safe ``local`` and is therefore isolated from
+        production credentials. Construction reuses ``__post_init__`` validation as
+        defense-in-depth for direct construction.
         """
-        cls._load_dotenv()
-        return cls(environment=os.environ.get(_ENVIRONMENT_ENV_VAR, "local"))
+        environment = os.environ.get(_ENVIRONMENT_ENV_VAR, "local")
+        # Validate BEFORE loading any file: an unknown environment loads NOTHING.
+        if environment not in _ALLOWED_ENVIRONMENTS:
+            allowed = ", ".join(sorted(_ALLOWED_ENVIRONMENTS))
+            raise ValueError(f"unknown environment {environment!r}; expected one of: {allowed}")
+        if environment == "local":
+            cls._load_local_dotenv()
+        return cls(environment=environment)
 
     @staticmethod
-    def _load_dotenv() -> None:
-        """Load ``.env.local`` and ``.env`` into the process env so file-provided variables
-        are resolvable via ``os.environ``.
+    def _load_local_dotenv() -> None:
+        """Load ``.env.local`` and ``.env`` into the process env — **local mode only**.
 
-        Precedence: a **real process env var wins** over both files; ``.env.local`` wins over
-        ``.env``. Enforced with ``override=False`` and loading ``.env.local`` first, so a
-        container's real environment (and a test's monkeypatched env) always take priority,
-        and a var set by ``.env.local`` is not clobbered by ``.env``.
+        Called by :meth:`from_env` only when the process-level environment is ``"local"``;
+        ``staging``/``production`` never reach this method, so a deployed box never reads a
+        dotenv file.
+
+        Precedence for every variable it loads: a **real process env var wins** over both
+        files (``os.environ.setdefault`` only fills unset keys); ``.env.local`` wins over
+        ``.env`` (the merged dict reads ``.env`` first, then ``.env.local`` overrides it).
+
+        Isolation guarantee: the ``AGENTFORGE_ENVIRONMENT`` key is **popped** from the merged
+        dict before anything is written back, so a dotenv FILE can NEVER set or elevate the
+        deployment environment (the file cannot promote ``local`` -> ``staging``/
+        ``production``). The environment is decided by the process env alone in
+        :meth:`from_env`.
 
         ``python-dotenv`` is imported *lazily* here so a bare ``import agentforge.config``
         stays framework-neutral (D10) and does not require the package. Missing files are a
-        no-op — a production container sets its environment directly, and ``.env.local`` is
+        safe no-op — ``dotenv_values`` of an absent path is empty, and ``.env.local`` is
         gitignored (real secrets never enter git). Any secret loaded this way is resolved by
-        **reference** at use time (a ``secretref://`` handle or a per-agent client reading
-        its own env var) and is **never logged or inlined**.
+        **reference** at use time and is **never logged or inlined**.
         """
         try:
-            from dotenv import load_dotenv
+            from dotenv import dotenv_values
         except ImportError:  # optional at import; a directly-set environment still works
             return
-        load_dotenv(".env.local", override=False)
-        load_dotenv(".env", override=False)
+        # .env first, then .env.local overrides it, so .env.local wins over .env.
+        merged: dict[str, str] = {}
+        for path in (".env", ".env.local"):
+            for key, value in dotenv_values(path).items():
+                if value is not None:  # skip bare keys with no value
+                    merged[key] = value
+        # A FILE must never decide the deployment environment: drop it entirely.
+        merged.pop(_ENVIRONMENT_ENV_VAR, None)
+        # Process env wins: only fill keys not already set in the real environment.
+        for key, value in merged.items():
+            os.environ.setdefault(key, value)
 
     def resolve_target_credential(self, target_id: str) -> str:
         """Return a secret *reference* for ``target_id`` — production only (O1 invariant).
