@@ -3,6 +3,58 @@
 > The instruction set the next stage consumes. Produced by `/arch-draft`. **Run `/arch-finalize` in a
 > fresh session or subagent** — the value of the pass is cold eyes on this draft.
 
+---
+
+## ✅ Finalize complete (2026-07-20) → next step: `/tasks-gen`
+
+`/arch-finalize` ran and produced the binding repo-root **`ARCHITECTURE.md`** (§1–§21, opens with the
+~500-word summary, preserves the draft's `§N` anchors). Inputs folded: the mandatory external review
+(`REVIEW_FINDINGS.md` F1–F12), a primary-source verification pass, and a cold-eyes re-audit (findings
+S1–S9 / O1–O8). Audit trail + zero-blank-cell PRD coverage table: **`docs/planning/gap-audit.md`**.
+Decision-log amendments + new decisions **D13–D17**: `DECISIONS.md`. **`/tasks-gen` binds to
+`ARCHITECTURE.md`'s `§N` anchors — do not renumber them.**
+
+**Gate decisions (user):** Langfuse **Cloud** for MVP (F3) · Red Team inference is a **config switch,
+hosted-OSS default** (F7) · Judge invariant is **deterministic fail-closed** (F1, D13) · Target Adapter
+**split** into untrusted generator / trusted Policy Gateway + Execution Recorder / external target, with
+**canonical-hash + append-only** evidence, not signatures (F2, D14) · **full content propagation** of fixes.
+
+**Architecture-changing outcomes to carry forward:** the enforcement boundary is a **trusted** Policy
+Gateway (not the red adapter); the Judge evaluates the **recorder's** hashed transcript only; per-agent DB
+roles; a deterministic verdict state machine; ≥2 deploy environments; the cost model is two line families
+with **no invented numbers**.
+
+**Supporting artifacts corrected (content-only, no format changes):** `THREAT_MODEL.md` (F8 versioning),
+`docs/adrs/0001-build-vs-configure.md` (F12 Promptfoo), `docs/diagrams/D2-D4-…spec.md` (F2 zones/edges —
+**render flagged for regeneration**), `docs/defense/DEFENSE_SCRIPT.md` (F11 status labels + F1/F2/F5 content).
+
+### Diagram materials are STALE and NON-BINDING
+
+**`ARCHITECTURE.md` and `docs/planning/DECISIONS.md` are the authoritative trust-boundary sources.** The
+diagram set — `docs/diagrams/D2-D4-agent-interaction-trust.{excalidraw,svg,png}` and the legend text in
+`docs/planning/DIAGRAM_PLAN.md` — still shows the **pre-F2** "Target adapter" red-quarantine framing and is
+**stale and non-binding** until regenerated. The diagram **spec** (`…spec.md`) has been corrected and carries
+a visible regen banner; the rendered artifacts have **not** been touched in this pass (deliberately deferred).
+Do not treat the diagram, its SVG/PNG, or `DIAGRAM_PLAN.md`'s legend as current until the deferred task below
+completes.
+
+### Deferred `/tasks-gen` task — D2/D4 diagram regeneration (do BEFORE any Defense/presentation use)
+
+`/tasks-gen` must emit an explicit task covering, in order:
+1. Correct the stale "Target adapter" trust language in `DIAGRAM_PLAN.md` (content-only; keep the six-colour
+   legend format).
+2. Regenerate `.excalidraw` + SVG + PNG from the corrected **F2 trust boundary** in the spec.
+3. Verify the render shows the **Red Team Generator as untrusted, exiting only through the trusted Policy
+   Gateway + Execution Recorder**.
+4. Verify the render shows the **attacker holds no credentials and never produces the Judge's authoritative
+   evidence** (the Judge reads the recorder's hashed `AttemptResult`).
+5. Visually inspect the generated artifacts against `ARCHITECTURE.md` (§3/§5) and `DEFENSE_SCRIPT.md` (S3/S4c).
+6. Add a **provider-neutral hash-based staleness check** (hash the spec; fail if the committed render's
+   recorded spec-hash differs) — a build/CI check, not a diagram edit.
+7. **Gate:** this task must complete before the diagram is used in an Architecture Defense or any presentation.
+
+---
+
 ## Build posture
 **Production-grade** (locked, CLAUDE.md + PLAN.md §1). Finalize *and* gap-audit against this bar:
 testing, deploy/rollback, failure-mode coverage, observability, auth, and error paths are in-scope
