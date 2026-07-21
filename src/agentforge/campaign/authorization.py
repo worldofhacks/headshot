@@ -6,10 +6,10 @@ An authorization is NOT a config flag and NOT an environment: a configured, cred
 never on its own authorized to attack a live target. A run is authorized only by a minted
 :class:`RunAuthorization` that:
 
-* binds a canonical **operation hash** of the run's IDENTITY scope (target id + surface/host +
-  corpus id + caps + run nonce) — NOT the adapter transport (adapter kind + credential reference
-  are deliberately excluded; OpenEMR is merely the first adapter). A grant minted for one scope
-  can never authorize a *different* one (scope is content-addressed);
+* binds a canonical **operation hash** of the WHOLE immutable run identity (target id + exact host
+  + adapter kind + auth mode + credential-ref digest / explicit no-auth marker + corpus id +
+  computed corpus sha-256 + caps + run nonce), per D14 trust hardening. A grant minted for one run
+  can never authorize a materially different one (scope is content-addressed);
 * carries an absolute **expiry** on the injectable clock — a grant is a bounded window, never a
   standing permission; and
 * pins the **run nonce** — the grant rides exactly one run instance, so a stale/replayed auth
@@ -47,26 +47,44 @@ class AuthorizationError(Exception):
 def operation_hash(
     *,
     target_id: str,
-    surface: str,
+    host: str,
+    adapter_kind: str,
+    auth_mode: str,
+    credential_marker: str,
     corpus_id: str,
+    corpus_sha: str,
     caps: RunPolicy,
     run_nonce: str,
 ) -> str:
-    """Return the canonical 64-hex operation hash scoping the authorization to WHAT is attacked.
+    """Return the canonical 64-hex operation hash scoping the authorization to the WHOLE run.
 
-    The authorization is scoped to the **target / surface / corpus identity** plus the caps and the
-    run nonce — NOT to the adapter implementation. OpenEMR is merely the first adapter; the adapter
-    kind and credential reference are HOW the transport is made, not the authorization scope, so
-    they are deliberately EXCLUDED (a grant authorizes attacking a target's surface with a given
-    corpus under given ceilings, regardless of which adapter/credential wires the connection). A
-    pure function of the bound scope — sorted keys, explicit separators, order-independent and
-    byte-reproducible, then sha256-hexed — so a grant can be re-verified independently; changing the
-    target, surface, corpus, any cap, or the nonce changes the hash (and thus refuses the grant).
+    Trust hardening (D14): the grant is content-addressed over the FULL immutable run identity, so a
+    grant minted for one run can never authorize a materially different one. The bound scope is:
+
+    * ``target_id`` — the target identity attacked;
+    * ``host`` — the EXACT host (not a fuzzy "surface" — a different host is a different target);
+    * ``adapter_kind`` — the connector kind the run dispatches through;
+    * ``auth_mode`` + ``credential_marker`` — HOW the run authenticates: the declared mode plus an
+      explicit ``no-auth`` marker or a sha256 digest of the credential reference (never the raw
+      reference, never a secret VALUE), so swapping auth mode or credential rebinds the grant;
+    * ``corpus_id`` + ``corpus_sha`` — the authored-corpus IDENTITY *and* a sha256 over its actual
+      content, so a grant is bound to the exact corpus bytes (an edited corpus refuses the grant);
+    * ``caps`` — every ceiling (budget/attempts/rate/timeout); and
+    * ``run_nonce`` — the single run instance.
+
+    A pure function of that scope — sorted keys, explicit separators, order-independent and
+    byte-reproducible, then sha256-hexed — so the grant can be re-verified independently; changing
+    ANY bound field changes the hash (and thus refuses the grant). The full target/adapter/auth
+    REGISTRY stays in the separate Codex lane; this binds the minimal per-run fields only.
     """
     payload = {
         "target_id": target_id,
-        "surface": surface,
+        "host": host,
+        "adapter_kind": adapter_kind,
+        "auth_mode": auth_mode,
+        "credential_marker": credential_marker,
         "corpus_id": corpus_id,
+        "corpus_sha": corpus_sha,
         "caps": {
             "budget_usd": caps.budget_usd,
             "max_attempts_per_run": caps.max_attempts_per_run,

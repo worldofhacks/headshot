@@ -26,6 +26,8 @@ from typing import Any
 import pytest
 from sqlalchemy import Engine
 
+from agentforge.agents.red_team.seed_replay import corpus_sha256, load_seed_attempts
+from agentforge.campaign.binding import TargetBinding
 from agentforge.campaign.cli import main
 from agentforge.target.fake_adapter import FakeTargetAdapter
 from agentforge.target.openemr_adapter import OpenEmrAdapter
@@ -38,7 +40,11 @@ BOUND_HOST = "copilot.example-openemr.org"
 BOUND_BASE_URL = f"https://{BOUND_HOST}"
 BOUND_ADAPTER_KIND = "openemr"
 BOUND_CREDENTIAL_REF = "secretref://production/openemr"
+BOUND_AUTH_MODE = "bearer"  # a credentialed target — REQUIRES the credential reference
 BOUND_CORPUS_ID = "m11-seed-corpus-v1"  # the CLI --corpus-id default — the authorization's corpus
+# The authored seed corpus every `run` in this suite replays (the CLI computes the corpus content
+# sha over these and binds it into the operation hash — so the test grant must bind the same sha).
+SEEDS_DIR = "evals/seeds"
 RUN_NONCE = "run-nonce-cli-0001"
 
 SYNTHETIC_CANARY = "SYNTH_CANARY_SYSTEM_PROMPT_4D2B"
@@ -113,6 +119,7 @@ def _write_binding(dir_path: Path) -> Path:
                 "host": BOUND_HOST,
                 "adapter_kind": BOUND_ADAPTER_KIND,
                 "credential_ref": BOUND_CREDENTIAL_REF,
+                "auth_mode": BOUND_AUTH_MODE,
             }
         ),
         encoding="utf-8",
@@ -136,12 +143,18 @@ def _write_caps(dir_path: Path) -> Path:
     return path
 
 
-def _bound_operation_hash(*, run_nonce: str = RUN_NONCE, corpus_id: str = BOUND_CORPUS_ID) -> str:
-    """The operation hash the coordinator will recompute over THIS test's immutable run scope.
+def _corpus_sha() -> str:
+    """The corpus content sha the CLI computes over ``SEEDS_DIR`` (bound into the op hash)."""
+    return corpus_sha256(load_seed_attempts(SEEDS_DIR))
 
-    Scoped to target IDENTITY (target_id / surface / corpus) + caps + nonce — NOT the adapter
-    transport. corpus_id defaults to the CLI's ``--corpus-id`` default so the persisted grant
-    matches the coordinator's recomputed hash for a run that does not override --corpus-id."""
+
+def _bound_operation_hash(*, run_nonce: str = RUN_NONCE, corpus_id: str = BOUND_CORPUS_ID) -> str:
+    """The operation hash the coordinator will recompute over THIS test's immutable run identity.
+
+    Binds the WHOLE run identity (D14): target id + exact host + adapter kind + auth mode +
+    credential marker + corpus id + corpus content sha + caps + nonce. corpus_id defaults to the
+    CLI's ``--corpus-id`` default and the corpus sha is computed over ``SEEDS_DIR`` — exactly what
+    the CLI binds — so the persisted grant matches the coordinator's recomputed hash."""
     from agentforge.campaign.authorization import operation_hash
     from agentforge.campaign.caps import RunCaps
 
@@ -153,10 +166,21 @@ def _bound_operation_hash(*, run_nonce: str = RUN_NONCE, corpus_id: str = BOUND_
             "run_timeout_seconds": 3600.0,
         }
     )
-    return operation_hash(
+    binding = TargetBinding(
         target_id=BOUND_TARGET_ID,
-        surface=BOUND_HOST,
+        host=BOUND_HOST,
+        adapter_kind=BOUND_ADAPTER_KIND,
+        credential_ref=BOUND_CREDENTIAL_REF,
+        auth_mode=BOUND_AUTH_MODE,
+    )
+    return operation_hash(
+        target_id=binding.target_id,
+        host=binding.host,
+        adapter_kind=binding.adapter_kind,
+        auth_mode=binding.auth_mode,
+        credential_marker=binding.credential_marker(),
         corpus_id=corpus_id,
+        corpus_sha=_corpus_sha(),
         caps=policy,
         run_nonce=run_nonce,
     )

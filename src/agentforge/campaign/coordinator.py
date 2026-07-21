@@ -20,11 +20,18 @@ campaign, gated FAIL-CLOSED at every step BEFORE any dispatch reaches the target
   (7) platform-owned oracle/canary resolution: the :class:`CanaryOracle` (code) runs over the
       RE-READ transcript -> trusted signals; build the :class:`EvidenceEnvelope`;
       :meth:`Judge.evaluate` -> Verdict (integrity from step 6);
-  (8) write the immutable evidence / verdict manifests.
+  (8) write the immutable evidence / verdict / result manifests; a confirmed exploit is RECORDED
+      as awaiting human approval (an ``approval`` manifest) with publication/remediation/regression-
+      promotion BLOCKED — and the bounded campaign CONTINUES to the next case.
 
-DURABLE HARD ABORT: any violation triggers a durable abort — it writes the abort-state manifest
-and PREVENTS ANY FURTHER DISPATCH for the run, while PRESERVING already-recorded evidence. No
-publication, remediation, regression promotion, or social output is ever produced.
+HUMAN-APPROVAL GATE, NOT A STOP (D13 — "fail closed on the VERDICT, not the run"): a confirmed
+finding does NOT halt the campaign; it is recorded approval-required and the run proceeds through
+every case so coverage is complete. The run stops ONLY on an explicit HARD ABORT.
+
+DURABLE HARD ABORT: a fail-closed VIOLATION (a pre-dispatch gate failure, a gateway cap breach, or
+an operator abort) triggers a durable abort — it writes the abort-state manifest and PREVENTS ANY
+FURTHER DISPATCH for the run, while PRESERVING already-recorded evidence. No publication,
+remediation, regression promotion, or social output is ever produced.
 
 **No network is opened from this coordinator's own code.** The only outbound path is the injected
 adapter, whose HTTP client is injected/lazy. Hosted Red Team generation is skipped (seed replay).
@@ -92,10 +99,15 @@ class RunConfig:
     run_nonce: str
     canary_token: str
     environment: str = "production"
-    # The authored-corpus identity the authorization is scoped to (target / surface / corpus).
-    # A grant authorizes attacking a target's surface with THIS corpus under the given caps —
-    # changing the corpus id changes the operation hash and thus refuses a stale grant.
+    # The authored-corpus IDENTITY the authorization is scoped to. A grant authorizes attacking the
+    # bound target/host with THIS corpus under the given caps; changing the corpus id changes the
+    # operation hash and thus refuses a stale grant.
     corpus_id: str = "m11-seed-corpus-v1"
+    # A sha256 over the corpus CONTENT (the replayed attempts) — bound into the operation hash so a
+    # grant is tied to the exact corpus bytes it was minted for (D14). The CLI/composition root
+    # computes it from the loaded corpus; unit tests that drive a single case use the "" default and
+    # mint their grant over the same value.
+    corpus_sha: str = ""
 
 
 @dataclass(frozen=True)
@@ -143,6 +155,12 @@ class SecureCampaignCoordinator:
     _aborted: bool = field(default=False, init=False)
     _config_written: bool = field(default=False, init=False)
     _dispatched_any: bool = field(default=False, init=False)
+    # Confirmed exploits recorded as awaiting human approval (publication/remediation/regression-
+    # promotion BLOCKED). Appended per confirmed case; the campaign continues (D13).
+    _pending_approvals: list[dict[str, Any]] = field(default_factory=list, init=False)
+    # The run-scoped gateway — built ONCE, lazily, at the first post-gate dispatch and reused for
+    # every case, so budget/attempt/rate/timeout accumulate across the WHOLE run (not per case).
+    _gateway: PolicyGateway | None = field(default=None, init=False)
 
     def run_case(
         self,
@@ -182,10 +200,21 @@ class SecureCampaignCoordinator:
         """True once at least one attempt has been dispatched to the bound live adapter.
 
         The CLI uses this to distinguish a PRE-dispatch gate refusal (unauthorized / blocked
-        binding / unbounded caps — zero dispatch) from a POST-dispatch human-gate stop (a
-        confirmed finding halts the run for approval — a successful bounded run).
+        binding / unbounded caps — zero dispatch) from a run that reached the target and then
+        completed or hit a post-dispatch hard abort.
         """
         return self._dispatched_any
+
+    @property
+    def pending_approvals(self) -> list[dict[str, Any]]:
+        """The confirmed findings recorded as AWAITING human approval (a copy, not the live list).
+
+        Each entry is ``{campaign_run_id, attempt_id, verdict_state, requires_human_approval,
+        published, remediation_emitted, regression_promoted}`` — every gated side effect is False.
+        A non-empty list means the bounded run confirmed exploit(s) that are blocked pending human
+        approval; the campaign nonetheless ran every case (D13). The CLI reports the count.
+        """
+        return [dict(entry) for entry in self._pending_approvals]
 
     def abort(self, reason: str) -> None:
         """Trigger a durable HARD ABORT (a monitoring/integrity violation the run detected).
@@ -218,14 +247,17 @@ class SecureCampaignCoordinator:
                 code="caps-invalid",
             )
 
-        # The operation hash the authorization must be in scope for — over the target IDENTITY the
-        # run attacks (target / surface / corpus) plus the caps + nonce, NOT the adapter transport.
-        # The bound host is the attacked SURFACE; adapter kind + credential ref are HOW the wire is
-        # made, deliberately excluded so a grant stays adapter-generic (OpenEMR is the 1st adapter).
+        # The operation hash the authorization must be in scope for — over the WHOLE immutable run
+        # identity (D14): target id + exact host + adapter kind + auth mode + credential marker
+        # (no-auth marker or a ref digest) + corpus id + corpus content sha + caps + run nonce.
         op_hash = operation_hash(
             target_id=binding.target_id,
-            surface=binding.host,
+            host=binding.host,
+            adapter_kind=binding.adapter_kind,
+            auth_mode=binding.auth_mode,
+            credential_marker=binding.credential_marker(),
             corpus_id=self.config.corpus_id,
+            corpus_sha=self.config.corpus_sha,
             caps=policy,
             run_nonce=self.config.run_nonce,
         )
@@ -268,32 +300,38 @@ class SecureCampaignCoordinator:
             result, reread_transcript, run_oracle=run_oracle, integrity_ok=integrity_ok
         )
 
+        # A confirmed exploit is a critical finding that must be HUMAN-APPROVED before any
+        # publication / remediation / regression-promotion — but it does NOT stop the campaign.
+        requires_human_approval = verdict.get("state") == "EXPLOIT_CONFIRMED"
+
         # (8) IMMUTABLE evidence + verdict manifests (redacted; no raw secret/hostile content).
         self._write_evidence_manifest(
             result, integrity_ok=integrity_ok, oracle_hit=oracle_signal["hit"]
         )
         self._write_verdict_manifest(result, verdict)
-        self._write_result_manifest(result, verdict, integrity_ok=integrity_ok)
+        # HUMAN-APPROVAL GATE (D13 — "fail closed on the VERDICT, not the run"). A confirmed
+        # finding is RECORDED as approval-required and its publication / remediation / regression-
+        # promotion are BLOCKED (none is produced here); the bounded campaign CONTINUES through the
+        # remaining cases. The run stops ONLY on an explicit hard abort (a pre-dispatch gate
+        # violation, a gateway cap breach, or an operator abort) — never merely because a finding
+        # was confirmed. Halting on the first confirmation was a D13 regression: it under-covered
+        # the corpus and mislabeled a normal, expected finding as a campaign-ending stop.
+        if requires_human_approval:
+            self._record_human_approval(result, verdict)
+        self._write_result_manifest(
+            result,
+            verdict,
+            integrity_ok=integrity_ok,
+            requires_human_approval=requires_human_approval,
+        )
 
-        outcome = CampaignOutcome(
+        return CampaignOutcome(
             run_id=self.run_id,
             result=result,
             integrity_ok=integrity_ok,
             oracle_signal=oracle_signal,
             verdict=verdict,
         )
-
-        # HUMAN-GATE: a confirmed exploit is a critical finding — the run durably STOPS here
-        # (no further dispatch) pending human approval before any publication/remediation. The
-        # already-recorded evidence + manifests are preserved. This latches AFTER the outcome is
-        # built, so the confirming case's result is fully returned. (A live campaign never keeps
-        # attacking a target once a confirmed exploit is in hand — findings are human-gated.)
-        if verdict.get("state") == "EXPLOIT_CONFIRMED":
-            self._durable_abort(
-                reason="confirmed exploit — run halted for human approval (finding gate)",
-                code="human-gate-confirmed",
-            )
-        return outcome
 
     # ------------------------------------------------------------------ gate helpers
 
@@ -343,17 +381,7 @@ class SecureCampaignCoordinator:
         # None credential is an auth_mode=none dispatch — the adapter sends without injecting one.
         self.adapter.credential = credential
 
-        allowlist = Allowlist(
-            entries=[AllowlistEntry(target_id=binding.target_id, adapter_name=binding.adapter_kind)]
-        )
-        gateway = PolicyGateway(
-            allowlist=allowlist,
-            adapter=self.adapter,
-            settings=Settings(environment=self.config.environment),
-            clock=self.clock,
-            accounting=self.accounting,
-            recorder=self.recorder,
-        )
+        gateway = self._run_gateway(binding)
         try:
             result = gateway.execute(attack_attempt, policy, target_id=binding.target_id)
         except Exception as exc:  # a gateway abort / off-allowlist denial is a durable hard abort
@@ -363,6 +391,34 @@ class SecureCampaignCoordinator:
             ) from exc
         self._dispatched_any = True
         return result
+
+    def _run_gateway(self, binding: TargetBinding) -> PolicyGateway:
+        """Return the ONE run-scoped gateway, building it lazily on first dispatch (post-gate).
+
+        The gateway is built ONCE and reused for every case in the run, so its per-run accounting —
+        attempts used, the rate window, and the run-timeout anchor — accumulates across the WHOLE
+        campaign rather than resetting per case (a per-case gateway would silently reset the
+        attempt/rate/timeout caps between cases and thus NOT bound a multi-case run). The shared
+        ``accounting`` already accumulates spend run-wide; this makes every OTHER cap run-wide too.
+
+        It is constructed only here — reached solely AFTER a case has passed authorization + binding
+        + caps — so no live enforcement object is built for a run that never clears the gates.
+        """
+        if self._gateway is None:
+            allowlist = Allowlist(
+                entries=[
+                    AllowlistEntry(target_id=binding.target_id, adapter_name=binding.adapter_kind)
+                ]
+            )
+            self._gateway = PolicyGateway(
+                allowlist=allowlist,
+                adapter=self.adapter,
+                settings=Settings(environment=self.config.environment),
+                clock=self.clock,
+                accounting=self.accounting,
+                recorder=self.recorder,
+            )
+        return self._gateway
 
     # ------------------------------------------------------------------ recorder + reread
 
@@ -481,6 +537,12 @@ class SecureCampaignCoordinator:
                 "target_id": self.config.binding.target_id,
                 "host": self.config.binding.host,
                 "adapter_kind": self.config.binding.adapter_kind,
+                "auth_mode": self.config.binding.auth_mode,
+                # The credential MARKER (no-auth marker or a ref digest) — never the raw ref; it is
+                # the same content-addressed value bound into the operation hash (safe to record).
+                "credential_marker": self.config.binding.credential_marker(),
+                "corpus_id": self.config.corpus_id,
+                "corpus_sha": self.config.corpus_sha,
                 # credential_ref is intentionally NOT written raw — it is a redacted literal.
             },
             redactions=self._redactions(),
@@ -529,9 +591,18 @@ class SecureCampaignCoordinator:
         )
 
     def _write_result_manifest(
-        self, result: AttemptResult, verdict: dict[str, Any], *, integrity_ok: bool
+        self,
+        result: AttemptResult,
+        verdict: dict[str, Any],
+        *,
+        integrity_ok: bool,
+        requires_human_approval: bool,
     ) -> None:
-        """Write the immutable per-attempt result manifest (one per attempt within the run)."""
+        """Write the immutable per-attempt result manifest (one per attempt within the run).
+
+        ``requires_human_approval`` records whether this attempt confirmed an exploit that is now
+        blocked pending human approval — the durable, per-attempt disposition of the finding.
+        """
         self.manifests.write(
             run_id=self.run_id,
             kind="result",
@@ -542,7 +613,39 @@ class SecureCampaignCoordinator:
                 "attempt_id": result.attempt_id,
                 "verdict_state": verdict.get("state"),
                 "integrity_ok": integrity_ok,
+                "requires_human_approval": requires_human_approval,
+                # Every gated side effect is BLOCKED at MVP — the coordinator produces none.
+                "published": False,
+                "remediation_emitted": False,
+                "regression_promoted": False,
             },
+            redactions=self._redactions(),
+        )
+
+    def _record_human_approval(self, result: AttemptResult, verdict: dict[str, Any]) -> None:
+        """RECORD a confirmed finding as awaiting human approval; write the ``approval`` manifest.
+
+        The human-approval record is the durable proof that a confirmed exploit was NOT published,
+        remediated, or promoted to the regression corpus without human sign-off (D13). It appends to
+        :attr:`pending_approvals` and writes an immutable per-attempt ``approval`` manifest whose
+        gated side-effect flags are all False. It produces NO publication/remediation/social output
+        and does NOT stop the run — the campaign continues to the next case.
+        """
+        record = {
+            "campaign_run_id": result.campaign_run_id,
+            "attempt_id": result.attempt_id,
+            "verdict_state": verdict.get("state"),
+            "requires_human_approval": True,
+            "published": False,
+            "remediation_emitted": False,
+            "regression_promoted": False,
+        }
+        self._pending_approvals.append(record)
+        self.manifests.write(
+            run_id=self.run_id,
+            kind="approval",
+            attempt_id=result.attempt_id,
+            payload=dict(record),
             redactions=self._redactions(),
         )
 

@@ -11,10 +11,17 @@ authorization. The CLI LOADS the persisted, pre-minted grant's own bound operati
 loaded immutable binding + caps and fail-closed-BLOCKS a stale/expired/out-of-scope grant before any
 dispatch. A malformed caps file (unbounded ceiling) or a malformed grant is a fail-closed refusal.
 
-**No network is opened from the CLI's own code.** The bound live adapter is built by an injected
-``adapter_factory`` (a fake HTTP client under test); there is no fallback to the P9 fake. The
-``main(argv, ...)`` entry mirrors :mod:`agentforge.evals.__main__`: it returns an exit code
-(0 success / non-zero refusal), takes no subprocess and opens no socket.
+``main(argv, ...)`` is INJECTION-DRIVEN: the engine, the ``adapter_factory``, the clock, and the
+accounting are all passed in. The CLI's OWN code opens no socket — the only outbound path is the
+injected adapter, and only at the first POST-GATE dispatch inside ``run_case`` (never before
+authorization + binding + scope validation pass). Tests inject a fake adapter/client (fully
+network-free); the production composition root (:mod:`agentforge.campaign.__main__`) injects the
+real engine + a real ``OpenEmrAdapter`` whose HTTP client is lazy, so construction is inert and the
+socket opens only when an authorized, in-scope run actually dispatches. There is no fallback to the
+P9 fake. ``main`` returns an exit code (0 success / non-zero refusal) and takes no subprocess.
+
+A confirmed exploit does NOT stop the run (D13): every case is replayed; a confirmed finding is
+recorded approval-required with publication/remediation/regression-promotion BLOCKED.
 """
 
 from __future__ import annotations
@@ -27,7 +34,7 @@ from typing import Any
 
 from sqlalchemy import Engine
 
-from agentforge.agents.red_team.seed_replay import load_seed_attempts
+from agentforge.agents.red_team.seed_replay import corpus_sha256, load_seed_attempts
 from agentforge.campaign.authorization import AuthorizationError, RunAuthorization
 from agentforge.campaign.binding import BindingError, TargetBinding
 from agentforge.campaign.caps import CapError, RunCaps
@@ -112,8 +119,11 @@ def main(
             target_id=binding_config["target_id"],
             host=binding_config["host"],
             adapter_kind=binding_config["adapter_kind"],
-            # Optional: an auth_mode=none binding omits credential_ref (resolves to None).
+            # Optional: an auth_mode=none binding omits credential_ref (resolves to None). A
+            # credential auth mode (bearer/session/oauth) REQUIRES a matching reference — the
+            # binding fails closed if the two disagree.
             credential_ref=binding_config.get("credential_ref"),
+            auth_mode=binding_config.get("auth_mode", "none"),
         )
         policy = RunCaps.parse(caps_config)
     except (BindingError, CapError, KeyError, TypeError) as exc:
@@ -134,8 +144,20 @@ def main(
         )
         return _EXIT_REFUSED
 
-    # Build the bound live adapter via the injected factory (an injected fake client under test).
-    # There is NO fallback to the P9 fake — a blocked live path raises and refuses.
+    # Load + replay the authored seed corpus deterministically (hosted generation is skipped), and
+    # compute the corpus CONTENT sha the authorization is scoped to (D14) — BEFORE building the run,
+    # since the operation hash binds it. A corpus that cannot be read is an operational error.
+    try:
+        seeds = load_seed_attempts(args.seeds_dir)
+    except (OSError, ValueError):
+        print("operational-error: could not load the seed corpus", file=sys.stderr)
+        return _EXIT_OPERATIONAL
+    corpus_sha = corpus_sha256(seeds)
+
+    # Build the bound live adapter via the injected factory. In the production composition root the
+    # factory returns a real OpenEmrAdapter whose HTTP client is LAZY — constructing it opens NO
+    # socket; the connection is made only at the first POST-GATE dispatch (after authorization +
+    # binding + scope validation pass inside run_case). There is NO fallback to the P9 fake.
     adapter = adapter_factory(base_url=binding.host_base_url())
 
     coordinator = SecureCampaignCoordinator(
@@ -147,6 +169,7 @@ def main(
             canary_token=args.canary,
             environment=environment,
             corpus_id=args.corpus_id,
+            corpus_sha=corpus_sha,
         ),
         adapter=adapter,
         engine=engine,
@@ -156,28 +179,31 @@ def main(
         fallback_adapter=fallback_adapter,
     )
 
-    # Replay the authored seed corpus deterministically (hosted generation is skipped).
-    try:
-        seeds = load_seed_attempts(args.seeds_dir)
-    except (OSError, ValueError):
-        print("operational-error: could not load the seed corpus", file=sys.stderr)
-        return _EXIT_OPERATIONAL
-
+    # Replay EVERY case. A confirmed exploit does NOT stop the run (D13): it is recorded
+    # approval-required (publication/remediation/regression-promotion blocked) and the campaign
+    # continues, so coverage is complete. Only a fail-closed HARD ABORT halts the run.
     try:
         for attempt in seeds:
             coordinator.run_case(_attempt_to_seed_case(attempt))
     except (AuthorizationError, BindingError, CampaignAbort) as exc:
-        # Distinguish a PRE-dispatch gate refusal from a POST-dispatch human-gate stop. If NO
-        # dispatch has occurred, this is a fail-closed refusal (unauthorized / blocked binding /
-        # unbounded caps) -> non-zero exit. If a dispatch DID occur, the run halted durably on a
-        # confirmed finding (human approval gate) -> a SUCCESSFUL bounded run (exit 0); the
-        # evidence + manifests are preserved and no publication/remediation was produced.
+        # A PRE-dispatch gate refusal (unauthorized / blocked binding / unbounded caps — zero
+        # dispatch) is a fail-closed REFUSAL (exit 1). A POST-dispatch HARD ABORT (a gateway cap
+        # breach / operator abort after the target was reached) halted the bounded run safely — the
+        # recorded evidence + manifests are preserved and NO publication/remediation was produced
+        # (exit 0).
         if not coordinator.dispatched_any:
             print(f"refused: {type(exc).__name__}: {exc}", file=sys.stderr)
             return _EXIT_REFUSED
-        print(f"halted for human approval on a confirmed finding: {exc}", file=sys.stderr)
+        print(f"hard-aborted after dispatch (evidence preserved): {exc}", file=sys.stderr)
         return _EXIT_OK
 
+    pending = len(coordinator.pending_approvals)
+    if pending:
+        print(
+            f"bounded run complete: {pending} confirmed finding(s) recorded and BLOCKED pending "
+            "human approval — no publication / remediation / regression-promotion was produced",
+            file=sys.stderr,
+        )
     return _EXIT_OK
 
 
@@ -215,5 +241,7 @@ def _attempt_to_seed_case(attempt: dict[str, Any]) -> dict[str, Any]:
     return case
 
 
-if __name__ == "__main__":  # pragma: no cover - module entry is exercised via __main__.py
-    raise SystemExit(main(engine=None, adapter_factory=None, clock=None, accounting=None))  # type: ignore[arg-type]
+if __name__ == "__main__":  # pragma: no cover - the real entry is agentforge.campaign.__main__
+    from agentforge.campaign.__main__ import main as _composition_main
+
+    raise SystemExit(_composition_main())

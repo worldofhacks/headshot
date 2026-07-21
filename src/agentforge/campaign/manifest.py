@@ -7,6 +7,8 @@ of immutable manifests written to a run-scoped directory ``<root>/runs/<run_id>/
 * ``evidence`` — the per-attempt evidence pointer (ids + content_hash + integrity flag, never the
   raw hostile transcript);
 * ``verdict``  — the Judge's verdict for the attempt;
+* ``approval`` — the human-approval record for a confirmed finding (publication/remediation/
+  regression-promotion BLOCKED pending sign-off — the gate, never a publication);
 * ``abort``    — the abort-state manifest (why the run hard-aborted); and
 * ``result``   — the run's terminal result summary.
 
@@ -36,9 +38,13 @@ from agentforge.secrets import redact_mapping
 # redacted manifest reads consistently).
 _REDACTION_MARKER = "***REDACTED***"
 
-# The manifest kinds this store recognizes. A forbidden kind (publication/remediation/regression/
-# social) is simply never written by the coordinator — the store does not mint them.
-_KNOWN_KINDS: frozenset[str] = frozenset({"config", "evidence", "verdict", "abort", "result"})
+# The manifest kinds this store recognizes. ``approval`` is the human-approval record for a
+# confirmed finding (the gate that BLOCKS publication, not a publication itself). A forbidden kind
+# (publication/remediation/regression/social) is simply never written by the coordinator — the
+# store does not mint them.
+_KNOWN_KINDS: frozenset[str] = frozenset(
+    {"config", "evidence", "verdict", "abort", "result", "approval"}
+)
 
 
 class ManifestImmutableError(Exception):

@@ -52,8 +52,19 @@ BOUND_HOST = "copilot.example-openemr.org"
 BOUND_BASE_URL = f"https://{BOUND_HOST}"
 BOUND_ADAPTER_KIND = "openemr"
 BOUND_CREDENTIAL_REF = "secretref://production/openemr"
+BOUND_AUTH_MODE = "bearer"  # a credentialed target (bearer) — REQUIRES the credential reference
 BOUND_CORPUS_ID = "m11-seed-corpus-v1"
+BOUND_CORPUS_SHA = "a" * 64  # a fixed corpus-content digest the grant is scoped to (D14)
 RUN_NONCE = "run-nonce-0001"
+
+
+def _caps() -> RunPolicy:
+    return RunPolicy(
+        budget_usd=10.0,
+        max_attempts_per_run=9,
+        target_requests_per_second=1.0,
+        run_timeout_seconds=60.0,
+    )
 
 
 # --------------------------------------------------------------------------------------------
@@ -85,23 +96,22 @@ def _no_network(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def _op_hash() -> str:
-    """The canonical operation hash the auth is scoped to — target / surface / corpus + caps.
+    """The canonical operation hash the auth is scoped to — the WHOLE run identity (D14).
 
-    Scoped to the target IDENTITY the run attacks (target_id / surface / corpus), NOT the adapter
-    transport: the adapter kind + credential ref are deliberately EXCLUDED (OpenEMR is merely the
-    first adapter). See ``operation_hash`` — the same grant authorizes a target's surface regardless
-    of which adapter/credential wires the connection.
+    Binds target id + exact host + adapter kind + auth mode + credential marker + corpus id +
+    corpus content sha + caps + run nonce. The credential marker is derived from the bound
+    credential reference (a no-auth marker or a ref digest), computed via the binding so the test
+    and production agree on the marker shape.
     """
     return operation_hash(
         target_id=BOUND_TARGET_ID,
-        surface=BOUND_HOST,
+        host=BOUND_HOST,
+        adapter_kind=BOUND_ADAPTER_KIND,
+        auth_mode=BOUND_AUTH_MODE,
+        credential_marker=_binding().credential_marker(),
         corpus_id=BOUND_CORPUS_ID,
-        caps=RunPolicy(
-            budget_usd=10.0,
-            max_attempts_per_run=9,
-            target_requests_per_second=1.0,
-            run_timeout_seconds=60.0,
-        ),
+        corpus_sha=BOUND_CORPUS_SHA,
+        caps=_caps(),
         run_nonce=RUN_NONCE,
     )
 
@@ -121,6 +131,7 @@ def _binding() -> TargetBinding:
         host=BOUND_HOST,
         adapter_kind=BOUND_ADAPTER_KIND,
         credential_ref=BOUND_CREDENTIAL_REF,
+        auth_mode=BOUND_AUTH_MODE,
     )
 
 
@@ -137,60 +148,50 @@ def test_operation_hash_is_stable_and_hex() -> None:
     assert all(c in "0123456789abcdef" for c in h1)
 
 
-def test_operation_hash_changes_when_a_scope_field_changes() -> None:
-    """Changing a SCOPE field (surface or corpus) changes the operation hash — an auth minted for
-    one surface/corpus can never silently authorize a different one (scope is content-addressed)."""
-    caps = RunPolicy(
-        budget_usd=10.0,
-        max_attempts_per_run=9,
-        target_requests_per_second=1.0,
-        run_timeout_seconds=60.0,
-    )
-    base = operation_hash(
+def _op_hash_kwargs(**overrides: object) -> dict[str, object]:
+    """The full operation_hash kwargs (whole-run identity), with any field overridden."""
+    base: dict[str, object] = dict(
         target_id=BOUND_TARGET_ID,
-        surface=BOUND_HOST,
+        host=BOUND_HOST,
+        adapter_kind=BOUND_ADAPTER_KIND,
+        auth_mode=BOUND_AUTH_MODE,
+        credential_marker=_binding().credential_marker(),
         corpus_id=BOUND_CORPUS_ID,
-        caps=caps,
+        corpus_sha=BOUND_CORPUS_SHA,
+        caps=_caps(),
         run_nonce=RUN_NONCE,
     )
-    other_surface = operation_hash(
-        target_id=BOUND_TARGET_ID,
-        surface="evil-lookalike.example-openemr.org",
-        corpus_id=BOUND_CORPUS_ID,
-        caps=caps,
-        run_nonce=RUN_NONCE,
-    )
-    other_corpus = operation_hash(
-        target_id=BOUND_TARGET_ID,
-        surface=BOUND_HOST,
-        corpus_id="some-other-corpus",
-        caps=caps,
-        run_nonce=RUN_NONCE,
-    )
-    assert base != other_surface
-    assert base != other_corpus
+    base.update(overrides)
+    return base
 
 
-def test_operation_hash_ignores_adapter_transport() -> None:
-    """The operation hash is scoped to the target IDENTITY, not the adapter transport: it takes
-    NO adapter_kind / credential_ref argument, so a grant stays adapter-generic. Two runs against
-    the same target/surface/corpus/caps/nonce hash identically regardless of how the wire is made
-    (OpenEMR is merely the first adapter). This pins that the transport is out of authorization
-    scope — a regression folding adapter_kind back into the hash would raise a TypeError here."""
-    caps = RunPolicy(
-        budget_usd=10.0,
-        max_attempts_per_run=9,
-        target_requests_per_second=1.0,
-        run_timeout_seconds=60.0,
-    )
-    kwargs = dict(
-        target_id=BOUND_TARGET_ID,
-        surface=BOUND_HOST,
-        corpus_id=BOUND_CORPUS_ID,
-        caps=caps,
-        run_nonce=RUN_NONCE,
-    )
-    assert operation_hash(**kwargs) == operation_hash(**kwargs)
+def test_operation_hash_changes_when_an_identity_field_changes() -> None:
+    """Changing ANY bound identity field changes the operation hash — a grant minted for one run
+    can never silently authorize a materially different one (scope is content-addressed, D14).
+
+    Covers the WHOLE identity, including the transport + auth + corpus content the hardening added:
+    host, adapter kind, auth mode, credential marker, corpus id, and the corpus content sha."""
+    base = operation_hash(**_op_hash_kwargs())  # type: ignore[arg-type]
+    variants = {
+        "host": "evil-lookalike.example-openemr.org",
+        "adapter_kind": "some-other-adapter",
+        "auth_mode": "session",
+        "credential_marker": "no-auth",
+        "corpus_id": "some-other-corpus",
+        "corpus_sha": "b" * 64,
+    }
+    for field_name, value in variants.items():
+        other = operation_hash(**_op_hash_kwargs(**{field_name: value}))  # type: ignore[arg-type]
+        assert base != other, f"changing {field_name!r} must change the operation hash"
+
+
+def test_operation_hash_binds_corpus_content_not_just_id() -> None:
+    """Two runs with the SAME corpus_id but DIFFERENT corpus content (sha) hash differently — the
+    grant is tied to the exact corpus bytes, so an edited corpus refuses a grant minted for the
+    original (D14). This is the guard against re-scoping a grant onto a mutated corpus."""
+    same_id_edited = operation_hash(**_op_hash_kwargs(corpus_sha="c" * 64))  # type: ignore[arg-type]
+    original = operation_hash(**_op_hash_kwargs())  # type: ignore[arg-type]
+    assert same_id_edited != original
 
 
 # ============================================================================================
@@ -304,6 +305,7 @@ def test_binding_rejects_non_live_adapter_kind() -> None:
             host=BOUND_HOST,
             adapter_kind="fake",  # the P9 fake is NEVER a valid live binding
             credential_ref=BOUND_CREDENTIAL_REF,
+            auth_mode=BOUND_AUTH_MODE,
         )
 
 
@@ -316,7 +318,63 @@ def test_binding_rejects_malformed_credential_ref() -> None:
             host=BOUND_HOST,
             adapter_kind=BOUND_ADAPTER_KIND,
             credential_ref="not-a-secret-ref",  # missing the secretref:// scheme
+            auth_mode="bearer",  # a credential mode -> the ref shape IS validated
         )
+
+
+def test_binding_auth_mode_none_forbids_a_credential() -> None:
+    """``auth_mode=none`` FORBIDS a credential_ref — a no-auth target binds no credential, and a
+    stray reference on a run that claims to be unauthenticated is refused (fail closed)."""
+    with pytest.raises(BindingError):
+        TargetBinding(
+            target_id=BOUND_TARGET_ID,
+            host=BOUND_HOST,
+            adapter_kind=BOUND_ADAPTER_KIND,
+            credential_ref=BOUND_CREDENTIAL_REF,  # a credential with no declared auth mode
+            auth_mode="none",
+        )
+
+
+def test_binding_credential_mode_requires_a_reference() -> None:
+    """A credential auth mode (bearer/session/oauth) REQUIRES a matching reference — a MISSING
+    reference must never silently imply no-auth (the exact failure this guard prevents)."""
+    for mode in ("bearer", "session", "oauth"):
+        with pytest.raises(BindingError):
+            TargetBinding(
+                target_id=BOUND_TARGET_ID,
+                host=BOUND_HOST,
+                adapter_kind=BOUND_ADAPTER_KIND,
+                credential_ref=None,  # no reference under a credential mode -> refuse
+                auth_mode=mode,
+            )
+
+
+def test_binding_rejects_unknown_auth_mode() -> None:
+    """An unrecognized auth_mode is refused (fail closed) — only none/bearer/session/oauth."""
+    with pytest.raises(BindingError):
+        TargetBinding(
+            target_id=BOUND_TARGET_ID,
+            host=BOUND_HOST,
+            adapter_kind=BOUND_ADAPTER_KIND,
+            credential_ref=BOUND_CREDENTIAL_REF,
+            auth_mode="magic",  # not a known mode
+        )
+
+
+def test_credential_marker_is_no_auth_for_none_and_a_digest_for_credentialed() -> None:
+    """The op-hash credential marker is an EXPLICIT ``no-auth`` for a no-auth target and a
+    ``cred-sha256:<digest>`` for a credentialed one — content-addressed, never the raw reference,
+    and the raw reference never appears in the marker."""
+    no_auth = TargetBinding(
+        target_id="public-surface", host=BOUND_HOST, adapter_kind=BOUND_ADAPTER_KIND
+    )
+    assert no_auth.credential_marker() == "no-auth"
+
+    credentialed = _binding()
+    marker = credentialed.credential_marker()
+    assert marker.startswith("cred-sha256:")
+    assert BOUND_CREDENTIAL_REF not in marker  # the raw reference is never embedded
+    assert len(marker[len("cred-sha256:") :]) == 64  # a full sha256 hex digest
 
 
 def test_binding_does_not_resolve_a_credential_at_construction() -> None:

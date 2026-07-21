@@ -6,12 +6,13 @@ A :class:`TargetBinding` freezes the facts a live run must never drift on:
 ``{target_id, host, adapter_kind, credential_ref}``. It validates, at construction:
 
 * the **adapter kind** is a live adapter, NEVER the P9 ``fake`` — a live-path binding can never
-  resolve to the :class:`~agentforge.target.fake_adapter.FakeTargetAdapter`; and
-* the **credential_ref**, WHEN PRESENT, is a well-formed ``secretref://`` reference (a shape,
-  never an inline secret). ``credential_ref`` is OPTIONAL: an ``auth_mode=none`` target binds no
-  credential (``credential_ref=None``), and :meth:`resolve_credential` returns ``None`` for it —
-  the bound live adapter then dispatches without injecting a secret. A credential_ref that is
-  *present* is still validated as a ``secretref://`` shape (a supplied credential is never inline).
+  resolve to the :class:`~agentforge.target.fake_adapter.FakeTargetAdapter`;
+* the **auth_mode** and **credential_ref** AGREE: ``auth_mode=none`` FORBIDS a credential
+  (``credential_ref=None``), while ``bearer``/``session``/``oauth`` REQUIRE a well-formed
+  ``secretref://`` reference — a *missing* reference must never silently imply no-auth; and
+* the **credential_ref**, when present, is a well-formed ``secretref://`` reference (a shape,
+  never an inline secret). For an ``auth_mode=none`` target :meth:`resolve_credential` returns
+  ``None`` and the bound live adapter dispatches without injecting a secret.
 
 OpenEMR is merely the FIRST adapter this binding wires. The full target/adapter REGISTRY — many
 targets, each with its own adapter kind / auth mode / surface — is a POST-M11 integration; its
@@ -35,6 +36,7 @@ Framework-neutral core: stdlib + config/secrets/credentials only; no web framewo
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
 from urllib.parse import urlsplit
 
@@ -51,6 +53,20 @@ _FORBIDDEN_ADAPTER_KIND = "fake"
 
 # A well-formed credential reference is a secretref:// handle (never an inline secret value).
 _CREDENTIAL_REF_SCHEME = "secretref://"
+
+# The auth modes a binding may declare. ``none`` is a no-credential target; every other mode
+# REQUIRES a matching credential reference — a missing reference must never silently imply no-auth.
+_NO_AUTH_MODE = "none"
+_CREDENTIAL_AUTH_MODES = frozenset({"bearer", "session", "oauth"})
+_AUTH_MODES = frozenset({_NO_AUTH_MODE}) | _CREDENTIAL_AUTH_MODES
+
+# The operation-hash marker bound for a no-credential (auth_mode=none) target — an EXPLICIT
+# no-auth marker, so a no-credential run is content-addressed just as a credentialed one is.
+_NO_AUTH_MARKER = "no-auth"
+# The op-hash marker prefix for a credentialed target — a sha256 DIGEST of the credential
+# reference (the reference is not a secret, but a digest canonically binds the exact ref without
+# embedding it and keeps the marker fixed-width regardless of the ref's length).
+_CREDENTIAL_MARKER_PREFIX = "cred-sha256:"
 
 
 class BindingError(Exception):
@@ -78,6 +94,11 @@ class TargetBinding:
     # Optional: None binds an auth_mode=none target (no credential). A present ref is validated
     # as a secretref:// shape — a supplied credential is a reference, never an inline value.
     credential_ref: str | None = None
+    # How the target is authenticated: ``none`` (no credential) or a credential mode
+    # (bearer/session/oauth). The mode and the credential-reference presence must AGREE — see
+    # ``__post_init__``. Defaults to ``none`` so a credential is never admitted without an
+    # explicitly-declared auth mode (fail closed: a stray ref can't silently authenticate a run).
+    auth_mode: str = _NO_AUTH_MODE
 
     def __post_init__(self) -> None:
         if self.adapter_kind == _FORBIDDEN_ADAPTER_KIND:
@@ -90,9 +111,37 @@ class TargetBinding:
             raise BindingError(
                 f"adapter_kind {self.adapter_kind!r} is not a valid live adapter kind"
             )
-        # auth_mode=none binds no credential; validate the secretref shape only when one is present.
-        if self.credential_ref is not None:
-            self._validate_credential_ref(self.credential_ref)
+        self._validate_auth_mode_and_credential()
+
+    def _validate_auth_mode_and_credential(self) -> None:
+        """Enforce that ``auth_mode`` and ``credential_ref`` AGREE — the load-bearing invariant.
+
+        * ``auth_mode`` must be a known mode.
+        * ``none`` FORBIDS a credential_ref — a credential with no declared auth mode is a
+          contradiction (a stray reference must not ride a run that claims to be unauthenticated).
+        * ``bearer``/``session``/``oauth`` REQUIRE a well-formed ``secretref://`` credential_ref —
+          a *missing* reference must never silently imply no-auth (that is the exact failure this
+          guard exists to prevent). A present reference is validated for shape.
+        """
+        if self.auth_mode not in _AUTH_MODES:
+            raise BindingError(
+                f"auth_mode {self.auth_mode!r} is not a known auth mode "
+                f"(one of {sorted(_AUTH_MODES)!r}) — an unrecognized mode is refused (fail closed)"
+            )
+        if self.auth_mode == _NO_AUTH_MODE:
+            if self.credential_ref is not None:
+                raise BindingError(
+                    "auth_mode 'none' forbids a credential_ref — a no-auth target binds no "
+                    "credential; a stray reference on a no-auth run is refused (fail closed)"
+                )
+            return
+        # A credential auth mode REQUIRES a matching reference — never silently no-auth.
+        if self.credential_ref is None:
+            raise BindingError(
+                f"auth_mode {self.auth_mode!r} REQUIRES a credential_ref — a missing reference "
+                "must never silently imply no-auth (fail closed)"
+            )
+        self._validate_credential_ref(self.credential_ref)
 
     @staticmethod
     def _validate_credential_ref(credential_ref: str) -> None:
@@ -116,6 +165,21 @@ class TargetBinding:
                 f"credential_ref {credential_ref!r} has an empty reference path — a valid "
                 "reference names the secret it resolves"
             )
+
+    def credential_marker(self) -> str:
+        """The authorization-scope marker for this binding's credential (bound into the op-hash).
+
+        Returns an EXPLICIT ``no-auth`` marker for an ``auth_mode=none`` target, or a
+        ``cred-sha256:<digest>`` marker (a sha256 of the credential reference) for a credentialed
+        one. Either way the marker is content-addressed: two runs that differ in auth mode /
+        credential reference produce different markers, so a grant minted for one can never
+        authorize the other. The raw reference is never embedded — only its digest — and no secret
+        VALUE is ever involved (a ``secretref://`` reference is a handle, not a secret).
+        """
+        if self.credential_ref is None:
+            return _NO_AUTH_MARKER
+        digest = hashlib.sha256(self.credential_ref.encode("utf-8")).hexdigest()
+        return f"{_CREDENTIAL_MARKER_PREFIX}{digest}"
 
     def host_base_url(self) -> str:
         """The canonical ``https://<host>`` base URL the bound live adapter must be built at.

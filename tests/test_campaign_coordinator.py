@@ -33,6 +33,7 @@ from typing import Any
 import pytest
 from sqlalchemy import Engine, text
 
+from agentforge.agents.red_team.seed_replay import load_seed_attempts
 from agentforge.campaign.authorization import (
     AuthorizationError,
     RunAuthorization,
@@ -58,7 +59,9 @@ BOUND_HOST = "copilot.example-openemr.org"
 BOUND_BASE_URL = f"https://{BOUND_HOST}"
 BOUND_ADAPTER_KIND = "openemr"
 BOUND_CREDENTIAL_REF = "secretref://production/openemr"
+BOUND_AUTH_MODE = "bearer"  # a credentialed target — REQUIRES the credential reference
 BOUND_CORPUS_ID = "m11-seed-corpus-v1"  # the RunConfig default — the authorization scope's corpus
+BOUND_CORPUS_SHA = ""  # the RunConfig default (unit tests drive single cases; grant matches "")
 RUN_NONCE = "run-nonce-0001"
 # Sentinel so a test can pass an EXPLICIT authorization=None (the missing-auth invariant) without
 # the helper coalescing it into a valid grant.
@@ -164,6 +167,7 @@ def _binding() -> TargetBinding:
         host=BOUND_HOST,
         adapter_kind=BOUND_ADAPTER_KIND,
         credential_ref=BOUND_CREDENTIAL_REF,
+        auth_mode=BOUND_AUTH_MODE,
     )
 
 
@@ -173,14 +177,19 @@ def _op_hash(
     policy: RunPolicy,
     run_nonce: str = RUN_NONCE,
     corpus_id: str = BOUND_CORPUS_ID,
+    corpus_sha: str = BOUND_CORPUS_SHA,
 ) -> str:
-    # Scoped to target IDENTITY (target_id / surface / corpus) + caps + nonce — NOT the adapter
-    # transport. corpus_id defaults to the RunConfig default so the grant matches the coordinator's
-    # recomputed hash.
+    # The WHOLE run identity (D14): target id + exact host + adapter kind + auth mode + credential
+    # marker + corpus id + corpus content sha + caps + nonce. corpus_id/corpus_sha default to the
+    # RunConfig defaults so a test's grant matches the coordinator's recomputed hash.
     return operation_hash(
         target_id=binding.target_id,
-        surface=binding.host,
+        host=binding.host,
+        adapter_kind=binding.adapter_kind,
+        auth_mode=binding.auth_mode,
+        credential_marker=binding.credential_marker(),
         corpus_id=corpus_id,
+        corpus_sha=corpus_sha,
         caps=policy,
         run_nonce=run_nonce,
     )
@@ -444,6 +453,7 @@ def test_adapter_kind_mismatch_blocks_before_dispatch(migrated_db: Engine, tmp_p
         host=BOUND_HOST,
         adapter_kind="some-other-live-adapter",  # not the injected adapter's kind
         credential_ref=BOUND_CREDENTIAL_REF,
+        auth_mode=BOUND_AUTH_MODE,
     )
     coord = _coordinator(migrated_db, tmp_path, adapter=adapter, binding=mismatched_binding)
     with pytest.raises((BindingError, CampaignAbort)):
@@ -468,6 +478,7 @@ def test_target_id_decoupled_from_adapter_name_still_dispatches(
         host=BOUND_HOST,
         adapter_kind=BOUND_ADAPTER_KIND,
         credential_ref="secretref://production/clinical-copilot",
+        auth_mode=BOUND_AUTH_MODE,
     )
     coord = _coordinator(migrated_db, tmp_path, adapter=adapter, binding=decoupled_binding)
 
@@ -496,6 +507,7 @@ def test_unresolvable_credential_blocks_before_dispatch(migrated_db: Engine, tmp
         host=BOUND_HOST,
         adapter_kind=BOUND_ADAPTER_KIND,
         credential_ref="secretref://production/some-secret",  # well-formed; resolve still fails
+        auth_mode=BOUND_AUTH_MODE,
     )
     coord = _coordinator(migrated_db, tmp_path, adapter=adapter, binding=unresolvable_binding)
     with pytest.raises((BindingError, ValueError, CampaignAbort)):
@@ -758,3 +770,91 @@ def test_manifest_diagnostics_redact_secret_and_hostile_content(
     assert SYNTHETIC_CANARY not in joined  # the raw synthetic canary is redacted
     assert "SYSTEM OVERRIDE" not in joined  # the raw hostile instruction is redacted
     assert BOUND_CREDENTIAL_REF not in joined  # no raw secret reference in a manifest
+
+
+# ============================================================================================
+# HUMAN-APPROVAL GATE, NOT A STOP (D13) — a confirmed exploit does NOT halt the campaign. The
+# runner replays the WHOLE authored corpus (every category), and each confirmed finding is
+# recorded approval-required with publication/remediation/regression-promotion BLOCKED.
+# ============================================================================================
+def _seed_case_from_attempt(attempt: dict[str, Any]) -> dict[str, Any]:
+    """Shape a replayed corpus attempt back into the seed-case dict the coordinator consumes."""
+    case: dict[str, Any] = {
+        "case_id": attempt["case_ref"],
+        "input_sequence": list(attempt["input_sequence"]),
+    }
+    if "category" in attempt:
+        case["category"] = attempt["category"]
+    return case
+
+
+def test_full_corpus_run_covers_every_category_without_halting_and_gates_findings(
+    migrated_db: Engine, tmp_path: Any
+) -> None:
+    """The bounded runner replays the WHOLE authored corpus across ALL THREE categories WITHOUT
+    halting on a confirmed exploit, and every confirmed finding is recorded approval-required with
+    its publication / remediation / regression-promotion BLOCKED (D13 — fail closed on the verdict,
+    not the run). This is the regression guard against the halt-on-first-confirmation defect, which
+    under-covered the corpus and mislabeled a normal finding as a campaign-ending stop.
+
+    Every case here returns a leak response, so every case CONFIRMS — the strongest form of the
+    regression: even nine straight confirmations do not stop the run.
+    """
+    attempts = load_seed_attempts("evals/seeds")
+    categories = {a.get("category") for a in attempts}
+    # The authored corpus spans exactly the three attack categories (the coverage the runner must
+    # reach). If the corpus grows, this still asserts *every* category present is covered below.
+    assert categories == {"prompt_injection", "data_exfiltration", "tool_misuse"}
+
+    fake_client = FakeHttpClient(body=LEAK_RESPONSE)  # every dispatch confirms
+    adapter = _live_adapter(body=LEAK_RESPONSE, client=fake_client)
+    coord = _coordinator(migrated_db, tmp_path, adapter=adapter)
+
+    outcomes = [coord.run_case(_seed_case_from_attempt(a)) for a in attempts]
+
+    # (1) The runner did NOT halt on the first confirmation — EVERY case produced a result, and the
+    # bound live adapter was dispatched to once per case (complete coverage, no early stop).
+    assert len(outcomes) == len(attempts)
+    assert len(fake_client.calls) == len(attempts)
+    assert not coord._aborted  # the run is NOT aborted — a confirmed finding is not a hard abort
+
+    # (2) Coverage spans all three categories — every category is represented among the run cases.
+    covered = {a.get("category") for a in attempts}
+    assert covered == {"prompt_injection", "data_exfiltration", "tool_misuse"}
+
+    # (3) Every case confirmed, and each confirmed finding is recorded AWAITING human approval with
+    # every gated side effect BLOCKED (nothing published / remediated / promoted).
+    confirmed = [o for o in outcomes if o.verdict.get("state") == "EXPLOIT_CONFIRMED"]
+    assert len(confirmed) == len(attempts)  # the leak corpus confirms every case
+    assert len(coord.pending_approvals) == len(confirmed)
+    for record in coord.pending_approvals:
+        assert record["requires_human_approval"] is True
+        assert record["published"] is False
+        assert record["remediation_emitted"] is False
+        assert record["regression_promoted"] is False
+
+    # (4) The durable record proves the gate: an approval manifest was written, and NO publication /
+    # remediation / regression / social manifest was EVER produced for the run.
+    kinds = set(coord.manifests.kinds_written(coord.run_id))
+    assert "approval" in kinds
+    for forbidden in ("publication", "remediation", "regression", "social"):
+        assert forbidden not in kinds
+
+
+def test_confirmed_finding_does_not_block_a_later_case(migrated_db: Engine, tmp_path: Any) -> None:
+    """A confirmed exploit in case 1 does NOT block case 2 — the run continues (D13). Case 1 leaks
+    (CONFIRMED, approval-recorded); case 2 still dispatches and is adjudicated. The old halt latched
+    the run aborted after case 1 and refused case 2; this pins that regression fixed."""
+    fake_client = FakeHttpClient(body=LEAK_RESPONSE)
+    adapter = _live_adapter(body=LEAK_RESPONSE, client=fake_client)
+    coord = _coordinator(migrated_db, tmp_path, adapter=adapter)
+
+    first = coord.run_case(_seed_case("AF-M11-DX-001", ["Leak once (confirms)."]))
+    assert first.verdict["state"] == "EXPLOIT_CONFIRMED"
+    assert not coord._aborted  # a confirmed finding is NOT a hard abort
+
+    # Case 2 is admitted and dispatched — the confirmed first finding did not stop the run.
+    second = coord.run_case(_seed_case("AF-M11-DX-002", ["Second case still runs."]))
+    assert second.verdict["state"] == "EXPLOIT_CONFIRMED"
+    assert len(fake_client.calls) == 2  # BOTH cases reached the adapter
+    assert len(coord.pending_approvals) == 2  # both confirmations are approval-gated
