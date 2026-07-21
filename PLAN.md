@@ -2,7 +2,9 @@
 
 **Project:** AgentForge / Adversarial Machine — a multi-agent adversarial evaluation
 platform that continuously red-teams the OpenEMR Clinical Co-Pilot.
-**Status:** Greenfield. Skills wired; repo instruction files + planning artifacts committed on `main` (3 commits); GitHub remote + push still pending.
+**Status:** Implementation in progress. Full-platform Railway hosting and Clerk human
+authentication are locked selections; Clerk application integration and authenticated Railway
+deployment remain planned and must not be reported as deployed until verified.
 **Source of truth:** `Week_3_AgentForge.pdf`. **Operating rules:** `CLAUDE.md`.
 
 This document answers two questions: **what skills we need to create**, and **what
@@ -21,6 +23,9 @@ scaffolding we need to build** — sequenced against the real checkpoint deadlin
 | Skill shape | Skills **orchestrate deterministic validators** for mechanical checks, rather than using LLM judgment | One validator shared by the skill *and* CI, so guidance and enforcement can't drift. Build `validate-eval-case`, `detect-duplicate-sequence`, and contract-compatibility checks first — the PRD mandates these validators as product code regardless. Also a concrete answer to "where did you deliberately not use AI?" |
 | Diagrams | **Excalidraw** (locked) | `arch-draft`'s two Excalidraw helper skills aren't installed — apply its layout/contrast rules manually. Commit `.excalidraw` source **plus exported SVG/PNG**, since `.excalidraw` doesn't render on GitHub. |
 | Instruction files | Slim `AGENTS.md` (done, 563→32 lines); `CLAUDE.md` canonical | PRD no longer embedded in an instruction file; PDF is canonical. |
+| Platform hosting | **Full platform on Railway** | The console/API Web service is the only public service; runner, scheduler, and Postgres are private. Staging and production use isolated databases, variables, target authorization, and Clerk configuration. |
+| Human identity | **Clerk** with restricted/invitation-only signup, one required Headshot Organization, and mandatory MFA | Personal accounts and user-created organizations are disabled. Prefer TOTP plus backup codes; SMS is never the only factor. No custom password, OAuth, or session database. |
+| Human authorization | Backend-verified Clerk **custom organization permissions** + two-person identity separation | Frontend role text has no authority. A different Approver must authorize/approve an Operator's operation; authentication never replaces Policy Gateway campaign authorization. |
 
 **Elevated from the audit:** the PRD's "**Optional Engineering Deliverables**" section
 is **mandatory** — its own text says the items are graded and not optional. The roadmap
@@ -190,9 +195,9 @@ set we can't maintain. **A skill must recur, be schema-strict, need judgment, an
 
 ## 5. Scaffolding — target repo structure
 
-Not created yet (this session is setup + plan). `arch-draft` → `tasks-gen` → `tdd-swarm`
-will build most of it. The tree below is the target; the exact stack dir (`src/` vs a
-package) is gated on the build-vs-configure ADR (§8).
+The tree below is the target/current structure; task checkboxes in `IMPLEMENTATION_PLAN.md`, tests, and
+deployment evidence—not this sketch—are the source of implementation status. The Python package is
+`src/agentforge/`. A path appearing here does not mean its integration is deployed.
 
 ```
 Adversarial Machine/
@@ -207,7 +212,9 @@ Adversarial Machine/
 ├── contracts/v1/                JSON Schemas: orch→redteam, redteam→judge, judge→doc + error taxonomy  [required]
 ├── docs/
 │   ├── planning/                PRESEARCH · RESEARCH · DECISIONS(ADRs) · ARCH_DRAFT · HANDOFF  [← arch-draft]
-│   ├── adrs/                    ADRs incl. build-vs-configure (Burp/ZAP/Semgrep/Garak/frameworks)  [required @ Defense]
+│   ├── adrs/                    ADRs incl. build-vs-configure + identity/access decisions
+│   ├── security/AUTHENTICATION.md  Clerk config · claims · roles/permissions · Dashboard checklist
+│   ├── deployment/RAILWAY.md     staging/prod topology · private boundaries · rollback
 │   ├── diagrams/                system context · request lifecycle · trust boundaries · deploy (.excalidraw + SVG/PNG)
 │   ├── defense/DEFENSE_SCRIPT.md  architecture-defense walkthrough                        [DUE @ Defense ← arch-draft]
 │   ├── requirements/            REQUIREMENTS_MATRIX (every PRD item → artifact/test/checkpoint/evidence)
@@ -227,7 +234,8 @@ Adversarial Machine/
 │   ├── ground-truth/            judge calibration set                                     [← judge-calibration]
 │   ├── results/                 versioned run outputs (pass/fail/partial)
 │   └── EVAL_LOG.md              running log                                              [← eval-triage]
-├── src/  (stack TBD — see §8)
+├── src/agentforge/
+│   ├── auth/                    isolated Clerk session verification + authorization helpers
 │   ├── agents/{orchestrator,red_team,judge,documentation}/
 │   ├── domain/                  framework-neutral domain model (keep portable)
 │   ├── target/                  pluggable target adapters + allowlist (no target code here)
@@ -268,27 +276,33 @@ Every PRD requirement → where it's satisfied and by when. A machine-readable v
 | Cost analysis @ 100/1K/10K/100K runs | `docs/cost/COST_ANALYSIS.md` | cost-model | Final |
 | Observability layer | `src/observability/` + dashboards | tdd-swarm | MVP→Final |
 | Regression harness | `src/regression/` + `evals/regressions/` | tdd-swarm | MVP→Final |
+| **USR-01** full platform hosted on Railway | Railway Web + private runner/scheduler/Postgres topology | M1b/M1d | MVP |
+| **USR-02** mandatory Clerk authentication | `src/agentforge/auth/` + authenticated app/console integration | M1c/M1d | MVP |
+| **USR-03** backend custom-permission RBAC | Clerk custom permissions + authorization dependencies | M1c/M1d | MVP |
+| **USR-04** two-person approval | distinct launcher/Approver identity check + audit record | M1c/F3 | MVP→Final |
+| **USR-05** staging/production isolation | environment-specific Clerk org/origins + Railway services/DB | M1b/M1d | MVP |
+| **USR-06** only Web service public | Railway service networking + route default-deny | M1b/M1d | MVP |
+| **USR-07** authentication never replaces campaign authorization | Clerk dependency followed by Policy Gateway exact authorization | M1c/M4/M1d | MVP |
 | Demo video · social post | video · X/LinkedIn @GauntletAI | manual | Final |
 
 ---
 
 ## 7. Roadmap by checkpoint
 
-**Now — setup (this session).** ✅ skills → `.claude/skills/`; `CLAUDE.md`; slim
-`AGENTS.md`; `.gitignore`; this plan; git initialized + planning artifacts committed on `main`.
-⏳ add GitHub remote + push.
+**Repository foundation.** Planning, architecture, source, tests, and repository automation now exist;
+`IMPLEMENTATION_PLAN.md`, git history, and CI are the source of current completion state. Do not infer
+that Railway or Clerk is deployed from a checked-in design or local test.
 
-**→ Architecture Defense (~2.5h post-kickoff).** Run `arch-draft` →
-`docs/planning/*`, `USERS.md`, `docs/defense/DEFENSE_SCRIPT.md`, the **build-vs-configure
-ADR**, and a first-pass `THREAT_MODEL.md` summary. Optionally `grilling` to stress-test
-before you present. **Blocker:** target details (local path, deployed URL, auth, test
-creds, synthetic fixtures) — get these in the `arch-draft` interview.
+**Architecture Defense (~2.5h post-kickoff).** The architecture, planning artifacts, users,
+defense script, build-vs-configure ADR, and first-pass threat model are present. Their design claims do
+not prove a deployed target/platform; live URL, credential, synthetic-fixture, and deployment assertions
+still require direct evidence at the applicable checkpoint.
 
-**→ MVP (Tue Jul 21, 11:59 PM).** `arch-finalize` → `ARCHITECTURE.md`; `tasks-gen` →
-`IMPLEMENTATION_PLAN.md`; then `tdd-swarm`: Stage 1 target stood up + **deployed URL**;
-Stage 2 `THREAT_MODEL.md`; Stage 3 `evals/` across **≥3 categories** + **≥1 live agent**
-(Red Team or Judge) against the live target; `contracts/v1` + error taxonomy; requirements
-matrix. Define **v1 contracts + error taxonomy before** writing agents.
+**→ MVP (Tue Jul 21, 11:59 PM).** Complete the secure vertical slice against the live target,
+including the full Railway service topology and authenticated Web boundary. The isolated Clerk
+foundation precedes app/console wiring; authenticated staging precedes production. The existing PRD
+gates remain: deployed target URL, deepened threat model, `evals/` across **≥3 categories**, a live
+agent path, `contracts/v1` + error taxonomy, and the requirements matrix.
 
 **→ Final (Fri Jul 24, 12:00 PM).** Full four-agent platform + harness + observability;
 ≥3 vuln reports; cost analysis; triage report; ATO evidence packet; integration packet;
@@ -299,12 +313,27 @@ perf baselines + load test; demo video; social post. `devlog` throughout;
 every live run · `judge-calibration` before trusting Judge verdicts · deployed URL
 submitted at **every** checkpoint.
 
+**Locked Railway + Clerk implementation sequence:**
+
+1. Build the isolated, offline Clerk verifier and immutable human Principal with deterministic tests;
+   do not wire it into the application yet.
+2. Provision the full Railway staging/production topology: public Web, private runner/scheduler,
+   private Postgres, pre-deploy migrations, health/readiness gates, and environment-scoped variables.
+3. Configure separate Clerk staging/production boundaries: restricted invitations, exact Headshot
+   Organization, required MFA, custom permissions, explicit authorized parties, and distinct org IDs.
+4. Integrate Clerk into the Railway Web API and console with a default-deny route policy; protect APIs,
+   event streams, and mutations. Keep frontend checks non-authoritative.
+5. Prove permission denial, exact-organization enforcement, environment isolation, token redaction,
+   fail-closed behavior, and distinct-launcher/Approver authorization before declaring deployment live.
+
 ---
 
-## 8. Open decisions for `arch-draft` (don't pre-decide — gate on the ADR)
+## 8. Historical `arch-draft` decision inputs
 
-The build-vs-configure ADR is a required Defense deliverable; keep the domain model and
-JSON contracts **framework-neutral** so this choice never forces a rewrite.
+These inputs were evaluated by the architecture process; binding outcomes now live in
+`ARCHITECTURE.md`, `docs/planning/DECISIONS.md`, and the ADRs. They are retained for decision
+traceability, not as invitations to silently reopen locked choices. Keep the domain model and JSON
+contracts framework-neutral.
 
 - **Orchestration framework:** LangGraph / CrewAI / AutoGen / custom.
 - **Models per role:** frontier vs local/OSS — the Red Team especially, since frontier
@@ -315,22 +344,21 @@ JSON contracts **framework-neutral** so this choice never forces a rewrite.
 - **Exploit DB:** SQL (Postgres/SQLite, indexed by severity/category/version, migratable)
   vs document store.
 - **Language:** Python (LangGraph / Garak / PyRIT ecosystem) vs TypeScript.
-- **Target reach:** where the Co-Pilot is hosted and how the platform authenticates to it.
+- **Target reach:** where the Co-Pilot is hosted and how the platform authenticates to it. This is
+  the external **target credential** question; it is separate from the locked Clerk human-login design.
 
 ---
 
 ## 9. Immediate next actions
 
-1. **Add GitHub remote + push** — git is initialized and planning artifacts are committed
-   on `main`; the remote is not yet configured. Add a secret-scanning pre-commit (e.g.
-   gitleaks) before the first push. Push to **GitHub** (PRD asks for it; confirm with the
-   instructor if GitLab is your host).
-2. **Gather target details** — the #1 external blocker for Stage 1.
-3. **Run `arch-draft`** in a focused session → Defense packet (script + diagrams
-   + build-vs-configure ADR). This is the burning path given the ~2.5h defense window.
-4. **Build Wave-1 skills** (`threat-model`, `adversarial-eval-lifecycle`,
-   `judge-calibration`, `authorized-live-campaign`, `contract-steward`) via
-   `skill-creator` — `contract-steward` first, since agent work depends on its schemas.
+1. **Land the offline Clerk authentication foundation** with generated test keys/tokens and no
+   Clerk, Railway, target, model, or JWKS network dependency. This does not make the app authenticated.
+2. **Integrate after concurrent owners land** — wire authentication into the Web API and console in a
+   dedicated integration task; protect event streams and every data-bearing route by default.
+3. **Provision Clerk and Railway only with human authorization** — separate staging/production
+   configuration, full private-service topology, exact organization/origin constraints, and MFA.
+4. **Verify before claiming deployment** — exercise 401/403/503 behavior, permission boundaries,
+   two-person authorization, environment isolation, rollback, and health/readiness; then record URLs.
 
 ---
 

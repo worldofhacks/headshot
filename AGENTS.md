@@ -22,6 +22,14 @@ deployed URL. No target code here.
 - The Judge must never approve a confirmed exploit. Cost is never tokens × N.
 - "Optional Engineering Deliverables" are mandatory (the PRD grades them).
 - No real PHI — synthetic fixtures only.
+- The **full platform console and API are hosted on Railway**; only the Railway Web
+  service is public. Runners, schedulers, and Postgres remain private.
+- All meaningful human-facing access requires **Clerk** authentication, membership in
+  the exact **Headshot** Clerk Organization, and backend-verified custom permissions.
+  Only minimal liveness/readiness and Clerk authentication-shell routes may be public.
+- Human authentication never authorizes a live campaign by itself. Every live run still
+  requires the Policy Gateway's exact target authorization, allowlist, synthetic-data,
+  budget/rate, and abort checks.
 
 ## Dual-remote law (GitHub + GitLab)
 Every checkpoint and release must be pushed to both `origin` (GitHub) and `gitlab` (Gauntlet Labs).
