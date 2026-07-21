@@ -1,9 +1,10 @@
 """Deterministic validation for the offline M11 adversarial-evaluation corpus.
 
 AttackCase and ground-truth artifacts are eval authoring data, not inter-agent messages, so
-their schemas live under ``evals/schemas`` rather than ``contracts/v1``.  This module is
-framework- and database-neutral: M2 storage may call it later without owning or duplicating
-the rules.
+their schemas live under ``agentforge/evals/schemas`` rather than ``agentforge/contracts/v1``.
+Those schemas ship INSIDE the package and are resolved with :mod:`importlib.resources`, so a
+wheel installed outside any repo checkout still finds them.  This module is framework- and
+database-neutral: M2 storage may call it later without owning or duplicating the rules.
 
 Hostile fixture text is never interpreted.  Validation decisions come only from typed
 metadata, trusted EvidenceEnvelope fields, and fixed policy tables below.  Diagnostics never
@@ -21,12 +22,14 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from functools import cache
+from importlib.resources import files
 from pathlib import Path
 from typing import Any
 
 from jsonschema import Draft202012Validator
 
 from agentforge.contracts import validator_for as contract_validator_for
+from agentforge.contracts.registry import safe_schema_name
 from agentforge.secrets import looks_like_provider_key
 
 MAX_FILE_BYTES = 512 * 1024
@@ -36,9 +39,6 @@ MAX_JSON_DEPTH = 40
 MAX_JSON_NODES = 20_000
 MAX_TOTAL_SEQUENCE_CHARS = 200_000
 MAX_DIAGNOSTICS = 100
-
-_REPO_ROOT = Path(__file__).resolve().parents[3]
-_SCHEMA_DIR = _REPO_ROOT / "evals" / "schemas"
 
 
 class EvalValidationCode(StrEnum):
@@ -238,10 +238,12 @@ def _issue(
 
 @cache
 def _schema_validator(schema_name: str) -> Draft202012Validator:
-    path = _SCHEMA_DIR / schema_name
+    # Packaged resolution via importlib.resources: zip-safe, CWD-independent, no repo checkout.
+    # Guard the name so a component can never traverse out of the packaged schema directory.
+    resource = files("agentforge.evals").joinpath("schemas", safe_schema_name(schema_name))
     try:
-        schema = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:  # pragma: no cover - repository corruption
+        schema = json.loads(resource.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:  # pragma: no cover - package corruption
         raise RuntimeError(f"cannot load eval schema {schema_name}") from exc
     Draft202012Validator.check_schema(schema)
     return Draft202012Validator(schema)
