@@ -67,3 +67,39 @@ UPDATE/DELETE/TRUNCATE + redteam INSERT attempt_result + redteam read-back + jud
 recorder INSERT / judge SELECT → allowed. Migration 0001↔0002 lossless round-trip. Gates: 173 passed/3
 skipped, ruff clean, import-purity clean, docker build OK, gitleaks clean, git diff --check clean.
 NEXT: merge to swarm → CI green → launch M4 ∥ M6a against this landed schema.
+
+## 2026-07-21 — M4 ∥ M6a LAUNCHED (true parallel, worktree-isolated)
+Migration coupling (M6a adds 0003 → changes alembic head, races M4's shared migrated_db fixture) makes
+single-branch parallel unsafe. Resolved with WORKTREE isolation + PER-WORKTREE venvs (editable install →
+each imports its OWN src; verified). Separate src, migration chains, venvs, pid-based test DBs → truly parallel.
+- M4 (wd47gblls / wf_5f4b7f5a): ../wt-m4 → ticket/m4-policy-gateway. policy/{gateway,recorder,allowlist,
+  credentials}.py. Budget/rate/attempt/timeout caps enforced in the gateway BEFORE dispatch (F5, hard abort);
+  append-only hashed AttemptResult (S3); RT holds no creds; O1 cred refusal in local; vs P9 fake — NO live target.
+- M6a (we8n2542a / wf_a9b01528): ../wt-m6a → ticket/m6a-observability. observability/{tracing,reconcile,alerts}
+  + coverage_view.sql + migration 0003. STDLIB-only core (no opentelemetry, no langfuse, external-out). S6
+  coverage from hash-verified nonce-deduped verdicts only; S9 reconcile→degraded; O3 alerts; O7 fallback.
+ON COMPLETION (each): read full output → resolve Critical/Important test-first → re-run ALL gates in that
+worktree (focused, full suite, ruff, docker, gitleaks, diff --check) → merge ticket→swarm from main repo →
+re-verify on swarm → CI green. Clean up worktree+branch after merge.
+SEQUENCE: when M4 lands → launch M5 (no-network adapter/preflight) + M8 (fake/cassette). When BOTH M4+M6a
+integrated → launch M9. Codex owns codex/m11-eval-corpus (worktree present at ../Adversarial Machine-codex-m11)
+— HANDS OFF. No hosted-model/target calls. Report only at M9 or a red blocker.
+
+## 2026-07-21 — Worktree-parallel FAILED → reverted to reliable single-branch sequential
+Worktree isolation defeated by nondeterministic agent path-anchoring: M4's Test Agent wrote tests to the
+MAIN repo (not wt-m4), so M4's Impl (in wt-m4) found none. M6a's Test Agent DID use its worktree. Inconsistent
+→ unreliable. Salvaged both waves' frozen RED tests (+ M6a partial impl: tracing/reconcile/alerts) to
+.tdd-swarm/salvage/; tore down worktrees. LESSON: run waves single-branch IN THE MAIN REPO (Phase0/M2 did this
+flawlessly); sequential when a migration-chain coupling exists.
+
+## 2026-07-21 — M4 LANDED (ticket/m4-policy-gateway @ 82ba730)
+Re-ran M4 Impl+Review in the main repo against the salvaged frozen tests. Reviewer approved; Security
+changes_requested → 3 Important findings resolved test-first: (A) budget per_call_usd now a REQUIRED
+_Accounting Protocol member + fail-closed if missing (was getattr(...,0.0) silent-collapse); (B) backoff
+retries now cap-rechecked + charged per physical send (were un-metered/un-gated); (C) recorder replay catch
+narrowed to SQLSTATE 23505 (was mislabeling NOT-NULL/FK/CHECK as replay). Minor deferred→M5: synthetic-data
+guard keys off http(s):// prefix (mitigated: allowlist admits only fake). Gates: 210 passed/3 skipped, ruff
+clean, docker OK, gitleaks clean, diff --check clean.
+NEXT (sequential, main-repo): re-run M6a (reuse salvaged test + partial impl; finish coverage_view + 0003) →
+land → M9 (needs M4+M6a). M5 (no-network adapter/preflight) + M8 (fake/cassette) as follow-on. Codex m11 lane
+untouched. No hosted/target calls.
