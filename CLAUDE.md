@@ -98,6 +98,12 @@ Notes that override the stock skill text:
 `ARCHITECTURE.md` · `THREAT_MODEL.md` · `USERS.md` · `README.md` (with the deployed URL) ·
 `IMPLEMENTATION_PLAN.md`. Planning artifacts live in `docs/planning/`.
 
+## Dual-remote law (GitHub + GitLab)
+Every checkpoint and release must be pushed to both `origin` (GitHub) and `gitlab` (Gauntlet Labs).
+The two `main` refs must resolve to the same commit, and both CI systems must be green.
+(`main` tracks `origin`; push the same `main` commit to `gitlab` with `git push gitlab main` — never
+`-u`, never `--mirror`, never force-push.)
+
 ## Deadlines
 - **Architecture Defense** — ~2.5h after kickoff (needs `docs/defense/DEFENSE_SCRIPT.md`,
   diagrams, and the build-vs-configure ADR).
