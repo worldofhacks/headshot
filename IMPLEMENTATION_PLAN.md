@@ -107,13 +107,14 @@ before their consumers**, frontmatter + trigger boundaries validated against `CL
   - Verify: `pytest tests/contract` green producer **and** consumer of every boundary; `contract-steward` breaking-change detector fires on an unversioned edit
   - Test: **boundary** — oversized transcript truncated+recorded; **invariant** — a Verdict failing schema validation is a typed error, not a verdict · Skills: **contract-steward** (P1)
 
-- [ ] **P11 — Repository bootstrap  ⚠ HUMAN AUTH (GitHub) — NOT executed this pass**
-  - Files: NEW `.github/workflows/ci.yml`, branch-protection config, `.pre-commit-config.yaml` (gitleaks)
+- [ ] **P11 — Repository bootstrap (dual-remote)  ⚠ HUMAN AUTH — PARTIALLY COMPLETE / BLOCKED**
+  - Files: `.github/workflows/ci.yml`, `.gitlab-ci.yml`, `.pre-commit-config.yaml` (gitleaks)
   - Anchors: §12 · Map: enables GitHub-based CI (M1), Railway deploy-from-GitHub (M1), tdd-swarm · Deps: P8 · Est: M
-  - Accept: (a) **secret scanning (gitleaks) before the first push**; (b) GitHub repo created; (c) remote configured + initial push; (d) protected `main`; (e) required CI status checks; (f) **verify tdd-swarm prerequisites** (GitHub remote, protected main, CI checks, test runner all present); (g) **edge:** does **not** block independent target-readiness work (D1); (h) **error:** a secret detected pre-push blocks the push
-  - Verify: `gh repo view` succeeds; protected-main + required-checks confirmed; a planted test secret is caught by gitleaks
-  - Test: — (infra) · Skills: — · **Precedes:** M1 (GitHub-based CI), Railway deploy-from-GitHub, and any `tdd-swarm` run
-  - **⚠ HUMAN AUTHORIZATION REQUIRED — do not execute until the human authorizes remote creation + push.**
+  - **Repository URLs:** GitHub `https://github.com/worldofhacks/headshot` (**private**) · GitLab `<pending — Gauntlet Labs auth/project not yet available>`.
+  - **Status (2026-07-21):** ✅ gitleaks-before-push (proven on an ephemeral fixture, never committed) · ✅ GitHub repo created + `origin` + `main` pushed · ✅ GitHub CI green (checks `test`, `secret-scan`) · ✅ `.gitlab-ci.yml` parity authored · ✅ dual-remote law added to `CLAUDE.md`/`AGENTS.md` · ⛔ **GitHub `main` protection blocked** — HTTP 403 *"Upgrade to GitHub Pro or make this repository public"* (private repo on a free account; not weakened, repo stays private) · ⛔ **GitLab remote/push blocked** — no Gauntlet Labs auth (`glab` absent, no token, SSH publickey denied); project `headshot` (private) not yet created.
+  - Accept: (a) gitleaks before first push ✅; (b) GitHub repo + remote + push ✅; (c) protected `main` ⛔ (account capability); (d) required CI checks ✅ (exist+green, not enforceable-as-required without protection); (e) GitLab remote + push + green pipeline ⛔ (auth); (f) tdd-swarm prereqs — see §tdd-swarm; (g) does **not** block D1/target-readiness ✅; (h) secret pre-push blocks push ✅
+  - **Recorded honestly:** "GitHub remote + CI complete; GitLab remote pending Gauntlet Labs auth; GitHub branch protection blocked by private-repository account capability." **Not fully complete; tdd-swarm not ready.**
+  - **⚠ HUMAN AUTHORIZATION REQUIRED — remaining:** (1) GitHub Pro **or** make repo public → enables protection; (2) Gauntlet Labs GitLab auth + private project `headshot` → enables the GitLab remote/push.
 
 ---
 

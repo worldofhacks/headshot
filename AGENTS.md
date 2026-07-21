@@ -23,6 +23,11 @@ deployed URL. No target code here.
 - "Optional Engineering Deliverables" are mandatory (the PRD grades them).
 - No real PHI — synthetic fixtures only.
 
+## Dual-remote law (GitHub + GitLab)
+Every checkpoint and release must be pushed to both `origin` (GitHub) and `gitlab` (Gauntlet Labs).
+The two `main` refs must resolve to the same commit, and both CI systems must be green. `main` tracks
+`origin`; push the same commit to `gitlab` with `git push gitlab main` (never `-u`/`--mirror`/force).
+
 ## Skills
 Dev-workflow skills live in `.claude/skills/` (this repo is **Claude-Code-primary**).
 If you later drive with Codex, mirror them to `.agents/skills/`, add `agents/openai.yaml`,
