@@ -512,18 +512,15 @@ def test_outcome5_budget_cap_hard_aborts_no_evidence_no_verdict(
     assert "budget" in str(exc.value).lower()
     assert adapter.calls == []  # HARD ABORT: the P9 fake was never reached
 
-    # A refusal leaves NO evidence and NO verdict behind: the case_ref never appears in
-    # attempt_result, AND both authoritative tables are unchanged by the refused case.
+    # A refusal leaves NO evidence and NO verdict behind. The abort fires before any dispatch, so
+    # the authoritative tables are UNCHANGED by the refused case — a before/after count DELTA is
+    # the robust, non-brittle proof (an absolute case_ref count is order-dependent: other tests in
+    # the shared session DB legitimately record rows for the same seed corpus).
     with campaign.engine.connect() as conn:
-        case_result_rows = conn.execute(
-            text("SELECT count(*) FROM attempt_result WHERE attack_attempt->>'case_ref' = :ref"),
-            {"ref": "AF-M11-TM-001"},
-        ).scalar_one()
         attempts_after = conn.execute(text("SELECT count(*) FROM attempt_result")).scalar_one()
         verdicts_after = conn.execute(text("SELECT count(*) FROM verdict")).scalar_one()
-    assert case_result_rows == 0  # no AttemptResult for the refused case
-    assert attempts_after == attempts_before  # no evidence appended at all
-    assert verdicts_after == verdicts_before  # no verdict (count delta, not a vacuous LIKE)
+    assert attempts_after == attempts_before  # no evidence appended by the refused case
+    assert verdicts_after == verdicts_before  # and no verdict produced (count delta)
 
 
 # ============================================================================================
