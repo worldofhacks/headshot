@@ -28,11 +28,17 @@ dependencies = [
     # using the `postgresql+psycopg://` dialect.
     "sqlalchemy>=2.0",
     "alembic>=1.13",
+    # Runtime contract validation. The independent Judge (M9) is the first RUNTIME validator:
+    # it validates every Evidence Envelope it consumes and every Verdict it emits through the
+    # contract registry (agentforge.contracts), which is backed by jsonschema. That makes
+    # jsonschema a runtime dependency, not merely dev tooling. It stays a validation library —
+    # not an orchestration framework — so the framework-neutral posture (D10) holds.
+    "jsonschema>=4",
 ]
 
 [project.optional-dependencies]
 # Local dev tooling only. httpx backs fastapi's TestClient used by the health tests.
-dev = ["ruff>=0.6", "pytest>=8", "jsonschema>=4", "pre-commit>=3", "httpx>=0.27"]
+dev = ["ruff>=0.6", "pytest>=8", "pre-commit>=3", "httpx>=0.27"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
