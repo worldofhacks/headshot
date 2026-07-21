@@ -1,0 +1,30 @@
+# Local pre-commit validation gate (P8). All hooks are `language: system` so they run the
+# tools already in the active venv — no network, no external hook repos to fetch. This is the
+# gate the plan refers to; GitHub-Actions CI is wired later (M1, after the P11 bootstrap).
+repos:
+  - repo: local
+    hooks:
+      - id: ruff-lint
+        name: ruff (lint)
+        entry: ruff check
+        language: system
+        types: [python]
+        pass_filenames: false
+      - id: ruff-format
+        name: ruff (format --check)
+        entry: ruff format --check
+        language: system
+        types: [python]
+        pass_filenames: false
+      - id: pytest
+        name: pytest
+        entry: pytest
+        language: system
+        pass_filenames: false
+        always_run: true
+      - id: secret-scan
+        name: secret-pattern scan
+        entry: bash scripts/secret_scan.sh
+        language: system
+        pass_filenames: false
+        always_run: true

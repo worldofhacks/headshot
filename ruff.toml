@@ -1,0 +1,15 @@
+# Ruff configuration for the AgentForge platform code.
+# Kept strict-but-pragmatic; the domain/contract layers must stay framework-neutral.
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+
+[lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+ignore = []
+
+[lint.isort]
+known-first-party = ["agentforge"]
+
+[format]
+quote-style = "double"

@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agentforge"
+version = "0.1.0"
+description = "AgentForge / Adversarial Machine — a reusable multi-agent adversarial evaluation platform. This package holds the framework-neutral core (domain, target adapters, contracts); runtime agents land in later phases."
+requires-python = ">=3.12"
+license = { text = "UNLICENSED" }
+dependencies = []
+
+[project.optional-dependencies]
+# Local dev tooling only. Framework-neutral core has zero runtime deps by design (D10).
+dev = ["ruff>=0.6", "pytest>=8", "jsonschema>=4", "pre-commit>=3"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+# src-layout: make the package importable in tests without requiring an editable install.
+pythonpath = ["src"]
+testpaths = ["tests"]
+addopts = "-q"
