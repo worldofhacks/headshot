@@ -2,9 +2,10 @@ name: CI
 
 on:
   push:
-    # main + the swarm/* integration branches (so live-gate work is CI-verified on push, not
-    # only via a PR to main). All existing checks (test, secret-scan) run unchanged.
-    branches: [main, "swarm/**"]
+    # main + the swarm/* integration and run/* result branches (so live-gate + runner work is
+    # CI-verified on push, not only via a PR to main). All existing checks (test, secret-scan)
+    # run unchanged — this only widens WHICH branches trigger them.
+    branches: [main, "swarm/**", "run/**"]
   pull_request:
     branches: [main]
 

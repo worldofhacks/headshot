@@ -148,11 +148,11 @@ risks Tuesday.
 **Say.** "Frontier models refuse authorized offensive generation, so the Red Team is an **uncensored
 open-weights model** — `[selected]` **hosted-OSS by default** for the deployed/overnight path (so
 'continuous, unattended' is real on Railway), with a **local 24–33B on the dev Mac** as a config switch
-for development and the local cost-baseline. The **Judge is Claude Sonnet 4.6**, chosen on **measured
+for development and the local cost-baseline. The **Judge default is Claude Sonnet 5 (`claude-sonnet-5`)**, chosen on **measured
 calibration, false-negative rate, consistency, latency, and cost** — *not* because of refusal behavior:
 the 'never approve a confirmed exploit' invariant is enforced **deterministically** (oracle/canary
 precedence, fail-closed), and refusal is a model *characteristic and failure mode*, not a security
-control. Documentation is **GPT-5.4** — a *different vendor from the Judge*, so a single-vendor failure
+control. Documentation default is **GPT-5.4 (`gpt-5.4`)** — a *different vendor from the Judge*, so a single-vendor failure
 can't corrupt the trust chain (defense-in-depth, not the invariant)."
 
 **Why it holds.** Each role's model is chosen for the property that role must guarantee, and vendor
