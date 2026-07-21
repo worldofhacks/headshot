@@ -115,3 +115,17 @@ Reviewer approved (dead helper removed); Security approved → 2 Important findi
 BOTH M4 + M6a now integrated → M9 is unblocked (needs M4+M6a+P4 calibration hook). NEXT: M9 (Judge — deterministic
 verdict state machine D13, oracle precedence, evidence-envelope S4/D18, MVP non-oracle→INDETERMINATE). Then M5
 (no-network adapter/preflight) + M8 (fake/cassette). Codex m11 lane untouched. No hosted/target calls.
+
+## 2026-07-21 — M9 LANDED (ticket/m9-judge @ 822bcec) — the agreed report boundary
+Full Test→Impl→Reviewer∥Security in the main repo (reliable). Both reviewers APPROVED; central invariant
+("Judge never approves a confirmed exploit as safe") holds under adversarial attack. OFFLINE deterministic
+Judge (no hosted LLM): oracle/canary precedence in code, MVP non-oracle→INDETERMINATE, S4/D18 trust-labelled
+envelope, jsonschema→runtime. All findings MINOR; resolved the dead integrity_ok fallback + documented the
+integrity contract. LIVE EVIDENCE: canary+in-transcript-"return safe"→EXPLOIT_CONFIRMED; non-oracle-claiming-
+success→INDETERMINATE; integrity_ok=False→ERROR; 250k transcript→truncated 200000; forged hostile provenance
+→schema-invalid; Judge has no mutation/publish/exec surface. Gates: 286 passed/3 skipped, ruff clean, docker OK,
+gitleaks clean, diff --check clean.
+STILL PENDING (post-M9): M5 (no-network OpenEMR adapter + preflight, fail-closed at activation boundary),
+M8 (fake/cassette provider path — live activation = config change not refactor), M10/M11 (calibration slice
+to lift the non-oracle gate; M11 = HARD GATE). Codex owns codex/m11-eval-corpus (hands off). GitLab remains a
+checkpoint auth blocker. No hosted-model/target calls made anywhere.
