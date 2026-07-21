@@ -103,3 +103,15 @@ clean, docker OK, gitleaks clean, diff --check clean.
 NEXT (sequential, main-repo): re-run M6a (reuse salvaged test + partial impl; finish coverage_view + 0003) →
 land → M9 (needs M4+M6a). M5 (no-network adapter/preflight) + M8 (fake/cassette) as follow-on. Codex m11 lane
 untouched. No hosted/target calls.
+
+## 2026-07-21 — M6a LANDED (ticket/m6a-observability @ d625774)
+Finished the salvaged M6a in the main repo: coverage_metric view + migration 0003 + package-data; the O7
+fallback (derive_coverage_fallback) + tracing/reconcile/alerts were already green from the salvaged partial.
+Reviewer approved (dead helper removed); Security approved → 2 Important findings resolved test-first:
+(1) ConsoleExporter leaked a BARE provider-key under an innocuous key → provider-key backstop + regression test;
+(2) [§5] alert payloads stored UNREDACTED → redact_alert() (redact_mapping + backstop) on emit + test. Minor
+(S6 threshold dup) documented. Gates: 250 passed/3 skipped, ruff clean, docker OK, wheel ships coverage_view.sql
++ roles.sql, gitleaks clean, diff --check clean.
+BOTH M4 + M6a now integrated → M9 is unblocked (needs M4+M6a+P4 calibration hook). NEXT: M9 (Judge — deterministic
+verdict state machine D13, oracle precedence, evidence-envelope S4/D18, MVP non-oracle→INDETERMINATE). Then M5
+(no-network adapter/preflight) + M8 (fake/cassette). Codex m11 lane untouched. No hosted/target calls.
