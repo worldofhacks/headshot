@@ -460,14 +460,20 @@ const decodeTrace = (value: unknown): TraceReadModel => {
   const name = "trace";
   const result = record(value, name);
   exactKeys(result, [
+    "request_id",
     "trace_id",
     "campaign_id",
     "attempt_id",
     "operation",
     "provider",
+    "method",
+    "destination_host",
+    "relative_path",
     "status",
     "status_code",
+    "error_code",
     "started_at",
+    "finished_at",
     "duration_ms",
     "request_bytes",
     "response_bytes",
@@ -476,9 +482,10 @@ const decodeTrace = (value: unknown): TraceReadModel => {
     "langfuse_status",
   ], name);
   for (const key of ["trace_id", "campaign_id", "operation", "provider", "status", "currency", "langfuse_status"]) string(result, key, name);
-  nullableString(result, "attempt_id", name);
+  for (const key of ["request_id", "attempt_id", "method", "destination_host", "relative_path", "error_code"]) nullableString(result, key, name);
   nullableNumber(result, "status_code", name);
   timestamp(result, "started_at", name);
+  nullableTimestamp(result, "finished_at", name);
   number(result, "duration_ms", name, { minimum: 0 });
   number(result, "request_bytes", name, { integer: true, minimum: 0 });
   if (result.response_bytes !== null) number(result, "response_bytes", name, { integer: true, minimum: 0 });
@@ -499,9 +506,15 @@ const decodeCost = (value: unknown): CostReadModel => {
     "measured_cost",
     "currency",
     "request_count",
+    "attempt_count",
+    "confirmed_finding_count",
     "average_cost_per_request",
+    "budget_usd",
+    "budget_utilization",
     "duration_ms",
     "execution_profile",
+    "started_at",
+    "ended_at",
     "recorded_at",
   ], name);
   for (const key of ["accounting_id", "campaign_id", "provider", "currency"]) {
@@ -509,9 +522,15 @@ const decodeCost = (value: unknown): CostReadModel => {
   }
   number(result, "measured_cost", name, { minimum: 0 });
   number(result, "request_count", name, { integer: true, minimum: 0 });
+  number(result, "attempt_count", name, { integer: true, minimum: 0 });
+  number(result, "confirmed_finding_count", name, { integer: true, minimum: 0 });
   number(result, "average_cost_per_request", name, { minimum: 0 });
+  nullableNumber(result, "budget_usd", name);
+  nullableNumber(result, "budget_utilization", name);
   number(result, "duration_ms", name, { minimum: 0 });
   literal(result, "execution_profile", ["synthetic", "live"], name);
+  timestamp(result, "started_at", name);
+  timestamp(result, "ended_at", name);
   timestamp(result, "recorded_at", name);
   return result as CostReadModel;
 };

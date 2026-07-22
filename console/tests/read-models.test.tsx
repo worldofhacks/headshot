@@ -115,12 +115,12 @@ const validResources: Array<[string, (value: unknown) => unknown, unknown]> = [
   [
     "traces",
     decodeTraces,
-    [{ trace_id: "trace-1", campaign_id: "run-1", attempt_id: "attempt-1", operation: "target.http", provider: "openemr", status: "succeeded", status_code: 200, started_at: at, duration_ms: 12.5, request_bytes: 25, response_bytes: 50, measured_cost: 0.01, currency: "USD", langfuse_status: "exported" }],
+    [{ request_id: "request-1", trace_id: "trace-1", campaign_id: "run-1", attempt_id: "attempt-1", operation: "target.http", provider: "openemr", method: "POST", destination_host: "target.invalid", relative_path: "chat", status: "succeeded", status_code: 200, error_code: null, started_at: at, finished_at: "2026-07-21T00:00:00.012Z", duration_ms: 12.5, request_bytes: 25, response_bytes: 50, measured_cost: 0.01, currency: "USD", langfuse_status: "exported" }],
   ],
   [
     "costs",
     decodeCosts,
-    [{ accounting_id: "accounting-1", campaign_id: "run-1", provider: "provider", measured_cost: 0.25, currency: "USD", request_count: 5, average_cost_per_request: 0.05, duration_ms: 2500, execution_profile: "live", recorded_at: at }],
+    [{ accounting_id: "accounting-1", campaign_id: "run-1", provider: "provider", measured_cost: 0.25, currency: "USD", request_count: 5, attempt_count: 5, confirmed_finding_count: 1, average_cost_per_request: 0.05, budget_usd: 1, budget_utilization: 0.25, duration_ms: 2500, execution_profile: "live", started_at: at, ended_at: "2026-07-21T00:00:02.500Z", recorded_at: at }],
   ],
   [
     "targets and surfaces",

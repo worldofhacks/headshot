@@ -586,11 +586,21 @@ class PostgresApiBackend(ApiBackend):
                 elif resource == "costs":
                     source_rows = _rows(
                         connection,
-                        "SELECT run_id AS accounting_id, run_id AS campaign_id, "
-                        "provenance AS provider, measured_cost, currency, request_count, "
-                        "execution_profile, extract(epoch FROM (ended_at - started_at)) * 1000 "
-                        "AS duration_ms, created_at AS recorded_at FROM campaign_run_summaries "
-                        "WHERE organization_id = :org ORDER BY created_at DESC LIMIT 200",
+                        "SELECT s.run_id AS accounting_id, s.run_id AS campaign_id, "
+                        "s.provenance AS provider, s.measured_cost, s.currency, s.request_count, "
+                        "s.attempt_count, s.confirmed_finding_count, s.execution_profile, "
+                        "s.started_at, s.ended_at, "
+                        "extract(epoch FROM (s.ended_at - s.started_at)) * 1000 AS duration_ms, "
+                        "s.created_at AS recorded_at, "
+                        "CASE WHEN jsonb_typeof(q.scope_payload->'caps'->'budget_usd') = 'number' "
+                        "THEN (q.scope_payload->'caps'->>'budget_usd')::double precision "
+                        "ELSE NULL END AS budget_usd "
+                        "FROM campaign_run_summaries s LEFT JOIN campaign_runs r "
+                        "ON r.organization_id = s.organization_id AND r.run_id = s.run_id "
+                        "LEFT JOIN campaign_authorization_requests q "
+                        "ON q.organization_id = r.organization_id "
+                        "AND q.request_id = r.authorization_request_id "
+                        "WHERE s.organization_id = :org ORDER BY s.created_at DESC LIMIT 200",
                         {"org": principal.organization_id},
                     )
                     rows = []
@@ -607,22 +617,33 @@ class PostgresApiBackend(ApiBackend):
                                 "measured_cost": float(cost) if cost is not None else 0.0,
                                 "currency": source["currency"],
                                 "request_count": source["request_count"],
+                                "attempt_count": source["attempt_count"],
+                                "confirmed_finding_count": source["confirmed_finding_count"],
                                 "average_cost_per_request": (
                                     float(cost) / source["request_count"]
                                     if cost is not None and source["request_count"]
                                     else 0.0
                                 ),
+                                "budget_usd": source["budget_usd"],
+                                "budget_utilization": (
+                                    float(cost) / source["budget_usd"]
+                                    if cost is not None and source["budget_usd"]
+                                    else None
+                                ),
                                 "duration_ms": float(source["duration_ms"] or 0.0),
                                 "execution_profile": source["execution_profile"],
+                                "started_at": source["started_at"],
+                                "ended_at": source["ended_at"],
                                 "recorded_at": source["recorded_at"],
                             }
                         )
                 elif resource == "traces":
                     request_rows = _rows(
                         connection,
-                        "SELECT trace_id, campaign_run_id AS campaign_id, attempt_id, operation, "
-                        "provider, status, status_code, started_at, duration_ms, request_bytes, "
-                        "response_bytes, measured_cost, currency, langfuse_status "
+                        "SELECT request_id, trace_id, campaign_run_id AS campaign_id, attempt_id, "
+                        "operation, provider, method, destination_host, relative_path, status, "
+                        "status_code, error_code, started_at, finished_at, duration_ms, "
+                        "request_bytes, response_bytes, measured_cost, currency, langfuse_status "
                         "FROM outbound_http_requests WHERE organization_id = :org "
                         "AND finished_at IS NOT NULL ORDER BY started_at DESC LIMIT 200",
                         {"org": principal.organization_id},
@@ -656,6 +677,7 @@ class PostgresApiBackend(ApiBackend):
                         ended_at = source["verdict_created_at"] or started_at
                         rows.append(
                             {
+                                "request_id": None,
                                 "trace_id": source["trace_id"],
                                 "campaign_id": source["campaign_id"],
                                 "attempt_id": source["attempt_id"],
@@ -663,9 +685,14 @@ class PostgresApiBackend(ApiBackend):
                                     f"attempt:{source['target_id']}@{source['target_version']}"
                                 ),
                                 "provider": source["target_id"] or "target",
+                                "method": None,
+                                "destination_host": None,
+                                "relative_path": None,
                                 "status": source["verdict_state"] or "recorded",
                                 "status_code": None,
+                                "error_code": None,
                                 "started_at": started_at,
+                                "finished_at": ended_at,
                                 "duration_ms": max(
                                     0.0,
                                     (ended_at - started_at).total_seconds() * 1000.0,
@@ -688,6 +715,7 @@ class PostgresApiBackend(ApiBackend):
                     for source in summary_rows:
                         rows.append(
                             {
+                                "request_id": None,
                                 "trace_id": hashlib.sha256(
                                     f"campaign:{source['run_id']}".encode()
                                 ).hexdigest()[:32],
@@ -695,9 +723,14 @@ class PostgresApiBackend(ApiBackend):
                                 "attempt_id": None,
                                 "operation": "campaign.run",
                                 "provider": source["provenance"],
+                                "method": None,
+                                "destination_host": None,
+                                "relative_path": None,
                                 "status": "complete",
                                 "status_code": None,
+                                "error_code": None,
                                 "started_at": source["started_at"],
+                                "finished_at": source["ended_at"],
                                 "duration_ms": max(
                                     0.0,
                                     (source["ended_at"] - source["started_at"]).total_seconds()

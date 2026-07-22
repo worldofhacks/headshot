@@ -222,14 +222,20 @@ class ResilienceReadModel(_ReadModel):
 
 
 class TraceReadModel(_ReadModel):
+    request_id: str | None
     trace_id: str
     campaign_id: str
     attempt_id: str | None
     operation: str
     provider: str
+    method: str | None
+    destination_host: str | None
+    relative_path: str | None
     status: str
     status_code: int | None
+    error_code: str | None
     started_at: datetime.datetime
+    finished_at: datetime.datetime | None
     duration_ms: float = Field(ge=0)
     request_bytes: int = Field(ge=0)
     response_bytes: int | None = Field(default=None, ge=0)
@@ -245,9 +251,15 @@ class CostReadModel(_ReadModel):
     measured_cost: float = Field(ge=0)
     currency: str
     request_count: int = Field(ge=0)
+    attempt_count: int = Field(ge=0)
+    confirmed_finding_count: int = Field(ge=0)
     average_cost_per_request: float = Field(ge=0)
+    budget_usd: float | None = Field(default=None, ge=0)
+    budget_utilization: float | None = Field(default=None, ge=0)
     duration_ms: float = Field(ge=0)
     execution_profile: Literal["synthetic", "live"]
+    started_at: datetime.datetime
+    ended_at: datetime.datetime
     recorded_at: datetime.datetime
 
 

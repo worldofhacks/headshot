@@ -135,6 +135,11 @@ def test_physical_target_request_is_persisted_and_exported_without_credential(
     assert langfuse.flushed is True
     assert raw_session not in str(langfuse.started)
     assert raw_session not in str(langfuse.finished)
+    assert langfuse.started[0]["model"] == "openemr"
+    assert langfuse.started[0]["version"] == "unknown"
+    assert langfuse.started[0]["metadata"]["deployment.environment"] == "staging"
+    assert langfuse.started[0]["metadata"]["http.request.body.size"] == row["request_bytes"]
+    assert langfuse.finished[0]["metadata"]["http.response.body.size"] == row["response_bytes"]
 
 
 def test_runner_and_langfuse_connection_heartbeat_is_persisted(migrated_db: Engine) -> None:

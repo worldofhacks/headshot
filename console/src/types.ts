@@ -134,14 +134,20 @@ export interface ResilienceReadModel extends JsonRecord {
 }
 
 export interface TraceReadModel extends JsonRecord {
+  request_id: string | null;
   trace_id: string;
   campaign_id: string;
   attempt_id: string | null;
   operation: string;
   provider: string;
+  method: string | null;
+  destination_host: string | null;
+  relative_path: string | null;
   status: string;
   status_code: number | null;
+  error_code: string | null;
   started_at: string;
+  finished_at: string | null;
   duration_ms: number;
   request_bytes: number;
   response_bytes: number | null;
@@ -157,9 +163,15 @@ export interface CostReadModel extends JsonRecord {
   measured_cost: number;
   currency: string;
   request_count: number;
+  attempt_count: number;
+  confirmed_finding_count: number;
   average_cost_per_request: number;
+  budget_usd: number | null;
+  budget_utilization: number | null;
   duration_ms: number;
   execution_profile: "synthetic" | "live";
+  started_at: string;
+  ended_at: string;
   recorded_at: string;
 }
 

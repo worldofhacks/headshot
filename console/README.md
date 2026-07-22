@@ -4,9 +4,10 @@ Authenticated React/Vite console for the AgentForge control plane. It preserves 
 titanium-and-ceramic visual system while replacing all sample state with protected same-origin
 `/api/v1` reads, commands, and ordered events.
 
-Status: integration code is present, but external Clerk and Railway configuration is still
-required. A surface whose authoritative repository or service is absent renders a typed
-`unavailable` state. The console never substitutes sample records or local command success.
+Status: deployed in Railway staging and production with Clerk, PostgreSQL, the private Runner,
+and Langfuse configured. A surface whose authoritative repository or service is absent still
+renders a typed `unavailable` state. The console never substitutes sample records or local command
+success.
 
 ## Local checks
 
@@ -93,13 +94,24 @@ parameters. The client bounds retained events, detects gaps, and refreshes the r
 The server closes the stream at token expiry or after 30 seconds, whichever comes first, so reconnect
 must present a fresh request-time token and permission set.
 
+## Observability views
+
+`/traces` visualizes the durable per-request ledger correlated to Langfuse: campaign, attempt,
+request and trace IDs; transport status; HTTP endpoint metadata; average and p95 latency; request and
+response volume; measured cost; and export state. `/costs` visualizes campaign spend, approved budget
+utilization, cost per request, run duration and reconciliation between campaign summaries and the
+physical request ledger.
+
+PostgreSQL is authoritative and Langfuse is a fail-soft external projection. The console does not
+query Langfuse with browser credentials. Current black-box target responses do not contain provider
+token counters, so token usage is explicitly unavailable and monetary cost is never reconstructed as
+tokens × rate.
+
 ## Honest unavailable features
 
-The current backend explicitly reports missing repositories for findings/evidence joins,
-regression history, persisted traces, measured accounting, component heartbeats, and configuration
-snapshots. Related screens and controls remain visible as typed unavailable states until those
-dependencies exist. Target authoring and revision controls likewise require a trusted server-side
-catalog; the console does not accept arbitrary hosts, adapters, credentials, or endpoints.
+Target authoring and revision controls require a trusted server-side catalog; the console does not
+accept arbitrary hosts, adapters, credentials, or endpoints. Any repository or integration that is
+not composed remains visible as a typed unavailable state rather than falling back to sample data.
 
 ## Safety
 
