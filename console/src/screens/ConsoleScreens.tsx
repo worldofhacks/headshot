@@ -20,16 +20,27 @@ import {
   decodeFindings,
   decodeResilience,
   decodeTargets,
-  type ReadModelDecoder,
 } from "../api/read-models";
 import { AdversarialText } from "../components/AdversarialText";
+import {
+  count,
+  DistributionBars,
+  EvidenceGrid,
+  MetricStrip,
+  money,
+  Panel,
+  percent,
+  ScreenHeading,
+  shortId,
+  TagMatrix,
+  Timeline,
+} from "../components/Analytics";
 import { CommandButton } from "../components/CommandButton";
 import {
   RecordDetails,
   RecordTable,
   ResourceView,
   StateNotice,
-  type Column,
 } from "../components/ResourceView";
 import { useConsoleEvents } from "../hooks/useConsoleEvents";
 import { useResource } from "../hooks/useResource";
@@ -68,32 +79,33 @@ const identity = (record: JsonRecord, keys: string[]) => {
 const hasPermission = (principal: Principal, permission: string) =>
   principal.organization_permissions.includes(permission);
 
-function Panel({ title, meta, children }: { title: string; meta?: string; children: React.ReactNode }) {
-  return (
-    <section className="panel">
-      <header className="panel-header">
-        <div>
-          <p className="eyebrow">AUTHORITATIVE VIEW</p>
-          <h2>{title}</h2>
-        </div>
-        {meta && <span className="panel-meta mono">{meta}</span>}
-      </header>
-      <div className="panel-body">{children}</div>
-    </section>
-  );
-}
+const frequency = (values: string[]) => {
+  const result = new Map<string, number>();
+  for (const value of values) result.set(value, (result.get(value) ?? 0) + 1);
+  return [...result.entries()]
+    .map(([label, value]) => ({ label, value }))
+    .sort((left, right) => right.value - left.value || left.label.localeCompare(right.label));
+};
 
-function ScreenHeading({ title, detail }: { title: string; detail: string }) {
-  return (
-    <header className="screen-heading">
-      <div>
-        <p className="eyebrow">HEADSHOT CONTROL PLANE</p>
-        <h1>{title}</h1>
-      </div>
-      <p>{detail}</p>
-    </header>
-  );
-}
+const toneFor = (value: string): "success" | "queued" | "failure" | "brand" | undefined => {
+  const normalized = value.toLowerCase();
+  if (["complete", "approved", "covered", "operational and evidenced", "passed", "pass", "ready", "resolved", "published"].some((candidate) => normalized.includes(candidate))) return "success";
+  if (["failed", "failure", "rejected", "aborted", "critical", "high", "error", "blocked"].some((candidate) => normalized.includes(candidate))) return "failure";
+  if (["pending", "queued", "running", "deferred", "review"].some((candidate) => normalized.includes(candidate))) return "queued";
+  return "brand";
+};
+
+const distribution = (values: string[]) => frequency(values).map((row) => ({
+  ...row,
+  tone: toneFor(row.label),
+}));
+
+const timelineTone = (value: string): "success" | "queued" | "failure" | undefined => {
+  const tone = toneFor(value);
+  return tone === "brand" ? undefined : tone;
+};
+
+const unique = (values: string[]) => [...new Set(values)].sort();
 
 function MissingCommand({ label, dependency }: { label: string; dependency: string }) {
   return (
@@ -119,23 +131,38 @@ function CampaignAttempts({
   return (
     <Panel title="Attempts" meta={campaignId}>
       <ResourceView result={attempts.result} emptyLabel="No attempts are recorded for this campaign.">
-        {(data) => (
-          <RecordTable
-            data={data}
-            identityKeys={["attempt_id"]}
-            columns={[
-              { key: "attempt_id", label: "Attempt", mono: true },
-              { key: "ordinal", label: "Ordinal", mono: true },
-              { key: "case_id", label: "Case", mono: true },
-              { key: "verdict", label: "Server verdict" },
-              { key: "executed_at", label: "Executed", mono: true },
-            ]}
-            onSelect={(record) => {
-              const attemptId = identity(record, ["attempt_id"]);
-              if (attemptId) navigateTo({ screen: "live", entityId: attemptId });
-            }}
-          />
-        )}
+        {(data) => {
+          const withEvidence = data.filter((attempt) => attempt.content_hash !== null).length;
+          const live = data.filter((attempt) => attempt.evidence_provenance === "live_target").length;
+          return (
+            <div className="evidence-stack">
+              <EvidenceGrid values={[
+                { label: "Attempts", value: count(data.length) },
+                { label: "Evidence bound", value: `${withEvidence}/${data.length}`, tone: withEvidence === data.length ? "success" : "queued" },
+                { label: "Live provenance", value: `${live}/${data.length}`, tone: live === data.length ? "success" : undefined },
+                { label: "Verdicts", value: count(unique(data.flatMap((attempt) => attempt.verdict ? [attempt.verdict] : [])).length) },
+              ]} />
+              {data.some((attempt) => attempt.verdict) && (
+                <DistributionBars rows={distribution(data.flatMap((attempt) => attempt.verdict ? [attempt.verdict] : ["pending verdict"]))} />
+              )}
+              <RecordTable
+                data={data}
+                identityKeys={["attempt_id"]}
+                columns={[
+                  { key: "attempt_id", label: "Attempt", mono: true },
+                  { key: "ordinal", label: "Ordinal", mono: true },
+                  { key: "case_id", label: "Case", mono: true },
+                  { key: "verdict", label: "Server verdict" },
+                  { key: "executed_at", label: "Executed", mono: true },
+                ]}
+                onSelect={(record) => {
+                  const attemptId = identity(record, ["attempt_id"]);
+                  if (attemptId) navigateTo({ screen: "live", entityId: attemptId });
+                }}
+              />
+            </div>
+          );
+        }}
       </ResourceView>
     </Panel>
   );
@@ -223,9 +250,16 @@ export function LiveScreen({ client, principal, entityId, getToken }: ScreenProp
   const preparedScope = effectiveCampaign && isJsonRecord(effectiveCampaign.authorization_request_payload)
     ? effectiveCampaign.authorization_request_payload
     : null;
-  const operationalComponents = (components.result.data ?? []).filter(
+  const componentRecords = components.result.data ?? [];
+  const operationalComponents = componentRecords.filter(
     (component) => component.availability === "operational and evidenced",
   ).length;
+  const totalAttempts = campaignRecords.reduce(
+    (total, campaign) => total + (campaign.attempt_count ?? 0),
+    0,
+  );
+  const completedCampaigns = campaignRecords.filter((campaign) => campaign.state === "complete").length;
+  const activeCampaigns = campaignRecords.filter((campaign) => ["queued", "running"].includes(campaign.state)).length;
 
   return (
     <div className="screen-stack">
@@ -233,12 +267,25 @@ export function LiveScreen({ client, principal, entityId, getToken }: ScreenProp
         title="Live operations"
         detail="Campaign, queue, component and ordered event state comes from protected server projections."
       />
-      <section className="metric-strip" aria-label="Live platform summary">
-        <div><span>Campaigns</span><strong className="mono">{campaignRecords.length}</strong></div>
-        <div><span>Active run</span><strong className="mono">{effectiveCampaign?.run_id ?? "—"}</strong></div>
-        <div><span>Recorded attempts</span><strong className="mono">{effectiveCampaign?.attempt_count ?? "—"}</strong></div>
-        <div><span>Components evidenced</span><strong className="mono">{operationalComponents}/{components.result.data?.length ?? 0}</strong></div>
-      </section>
+      <MetricStrip label="Live platform summary" values={[
+        { label: "Campaigns", value: count(campaignRecords.length), note: `${completedCampaigns} complete · ${activeCampaigns} active` },
+        { label: "Selected run", value: shortId(selectedCampaignId), note: effectiveCampaign?.state ?? "No campaign selected" },
+        { label: "Recorded attempts", value: count(totalAttempts), note: `${count(campaignRecords.length)} durable campaign records` },
+        { label: "Components evidenced", value: `${operationalComponents}/${componentRecords.length}`, note: components.result.state },
+      ]} />
+      <div className="panel-grid analytical-grid">
+        <Panel title="Campaign state" meta="persisted runs" eyebrow="OPERATIONAL POSTURE">
+          {campaignRecords.length > 0
+            ? <DistributionBars rows={distribution(campaignRecords.map((campaign) => campaign.state))} />
+            : <StateNotice state="empty" detail="No campaign state is available." />}
+        </Panel>
+        <Panel title="Runtime posture" meta="component evidence" eyebrow="OPERATIONAL POSTURE">
+          {componentRecords.length > 0
+            ? <DistributionBars rows={distribution(componentRecords.map((component) => component.availability))} />
+            : <ResourceView result={components.result} emptyLabel="No components are registered.">{() => null}</ResourceView>}
+          <p className="data-note">Component posture is taken from the latest protected heartbeat projection.</p>
+        </Panel>
+      </div>
       <Panel title="Campaigns">
         <ResourceView result={campaigns.result} emptyLabel="No campaigns have been persisted.">
           {(data) => (
@@ -375,16 +422,25 @@ function FindingDetail({
               ]}
             />
             {data.history.length > 0 ? (
-              <RecordTable
-                data={data.history}
-                identityKeys={["created_at", "actor_user_id"]}
-                columns={[
-                  { key: "decision", label: "Decision" },
-                  { key: "actor_user_id", label: "Actor", mono: true },
-                  { key: "rationale", label: "Rationale" },
-                  { key: "created_at", label: "Occurred", mono: true },
-                ]}
-              />
+              <div className="evidence-stack">
+                <Timeline rows={[...data.history].reverse().map((entry, index) => ({
+                  id: `${entry.created_at}:${entry.actor_user_id}:${index}`,
+                  title: entry.decision,
+                  detail: `${shortId(entry.actor_user_id)} · ${entry.rationale}`,
+                  at: entry.created_at,
+                  tone: timelineTone(entry.decision),
+                }))} />
+                <RecordTable
+                  data={data.history}
+                  identityKeys={["created_at", "actor_user_id"]}
+                  columns={[
+                    { key: "decision", label: "Decision" },
+                    { key: "actor_user_id", label: "Actor", mono: true },
+                    { key: "rationale", label: "Rationale" },
+                    { key: "created_at", label: "Occurred", mono: true },
+                  ]}
+                />
+              </div>
             ) : (
               <StateNotice state="empty" detail="No finding history is recorded." />
             )}
@@ -445,27 +501,60 @@ export function FindingsScreen({ client, principal, entityId }: ScreenProps) {
         title="Findings"
         detail="Persisted findings remain bound to server verdict, evidence and publication history."
       />
-      <Panel title="Finding register">
-        <ResourceView result={findings.result} emptyLabel="No findings have been persisted.">
-          {(data) => (
-            <RecordTable
-              data={data}
-              identityKeys={["finding_id"]}
-              columns={[
-                { key: "finding_id", label: "Finding", mono: true },
-                { key: "category", label: "Category" },
-                { key: "severity", label: "Severity" },
-                { key: "state", label: "State" },
-                { key: "publication_status", label: "Publication" },
-              ]}
-              onSelect={(record) => {
-                const findingId = identity(record, ["finding_id"]);
-                if (findingId) navigateTo({ screen: "findings", entityId: findingId });
-              }}
-            />
-          )}
-        </ResourceView>
-      </Panel>
+      <ResourceView result={findings.result} emptyLabel="No findings have been persisted.">
+        {(data) => {
+          const elevated = data.filter((finding) => ["critical", "high"].includes(finding.severity.toLowerCase())).length;
+          const published = data.filter((finding) => finding.publication_status.toLowerCase().includes("publish")).length;
+          const integrityVerified = data.filter((finding) => ["verified", "valid", "bound"].some((value) => finding.evidence_integrity.toLowerCase().includes(value))).length;
+          return (
+            <>
+              <MetricStrip label="Finding summary" values={[
+                { label: "Persisted findings", value: count(data.length), note: `${unique(data.map((finding) => finding.category)).length} categories` },
+                { label: "Critical / high", value: count(elevated), note: `${percent(data.length ? elevated / data.length : 0)} of register` },
+                { label: "Published", value: count(published), note: `${data.length - published} gated or withheld` },
+                { label: "Evidence verified", value: `${integrityVerified}/${data.length}`, note: "server integrity state" },
+              ]} />
+              <div className="panel-grid analytical-grid">
+                <Panel title="Risk distribution" meta="server severity" eyebrow="FINDING POSTURE">
+                  <DistributionBars rows={distribution(data.map((finding) => finding.severity))} />
+                </Panel>
+                <Panel title="Lifecycle state" meta="decision + publication" eyebrow="FINDING POSTURE">
+                  <DistributionBars rows={distribution([
+                    ...data.map((finding) => `state · ${finding.state}`),
+                    ...data.map((finding) => `publication · ${finding.publication_status}`),
+                  ])} />
+                </Panel>
+              </div>
+              <Panel title="Taxonomy and provenance" meta="normalized evidence" eyebrow="FINDING POSTURE">
+                <TagMatrix groups={[
+                  { label: "Categories", values: unique(data.map((finding) => finding.category)) },
+                  { label: "Sources", values: unique(data.map((finding) => finding.source_kind)) },
+                  { label: "Provenance", values: unique(data.map((finding) => finding.evidence_provenance)) },
+                  { label: "Execution profiles", values: unique(data.map((finding) => finding.execution_profile)) },
+                ]} />
+              </Panel>
+              <Panel title="Finding register" meta="select for evidence and decision">
+                <RecordTable
+                  data={data}
+                  identityKeys={["finding_id"]}
+                  columns={[
+                    { key: "finding_id", label: "Finding", mono: true },
+                    { key: "category", label: "Category" },
+                    { key: "severity", label: "Severity" },
+                    { key: "state", label: "State" },
+                    { key: "evidence_integrity", label: "Evidence" },
+                    { key: "publication_status", label: "Publication" },
+                  ]}
+                  onSelect={(record) => {
+                    const findingId = identity(record, ["finding_id"]);
+                    if (findingId) navigateTo({ screen: "findings", entityId: findingId });
+                  }}
+                />
+              </Panel>
+            </>
+          );
+        }}
+      </ResourceView>
       {entityId && (
         <FindingDetail
           client={client}
@@ -504,32 +593,68 @@ export function ApprovalsScreen({ client, principal, entityId }: ScreenProps) {
         title="Approvals"
         detail="Decisions bind to an exact server operation hash. Queue completion is not displayed as human approval."
       />
-      <Panel title="Pending and historical decisions">
-        <ResourceView result={approvals.result} emptyLabel="No approval requests are pending or recorded.">
-          {(data) => (
-            <RecordTable
-              data={data}
-              identityKeys={["request_id", "approval_id"]}
-              columns={[
-                { key: "request_id", label: "Request", mono: true },
-                { key: "status", label: "Status" },
-                { key: "scope_hash", label: "Operation hash", mono: true },
-                { key: "launcher_user_id", label: "Launcher", mono: true },
-                { key: "expires_at", label: "Expires", mono: true },
-              ]}
-              onSelect={(record) => {
-                const id = identity(record, ["request_id", "approval_id"]);
-                if (id) navigateTo({ screen: "approvals", entityId: id });
-              }}
-            />
-          )}
-        </ResourceView>
-      </Panel>
+      <ResourceView result={approvals.result} emptyLabel="No approval requests are pending or recorded.">
+        {(data) => {
+          const pendingCount = data.filter((approval) => approval.status === "pending").length;
+          const approvedCount = data.filter((approval) => approval.status === "approved").length;
+          const decidedCount = data.length - pendingCount;
+          const totalBudget = data.reduce((total, approval) => total + approval.caps.budget_usd, 0);
+          const totalAttempts = data.reduce((total, approval) => total + approval.caps.max_attempts_per_run, 0);
+          return (
+            <>
+              <MetricStrip label="Approval summary" values={[
+                { label: "Authorization scopes", value: count(data.length), note: `${unique(data.map((approval) => approval.target_id)).length} targets` },
+                { label: "Pending review", value: count(pendingCount), note: `${decidedCount} decided` },
+                { label: "Approval rate", value: decidedCount ? percent(approvedCount / decidedCount) : "—", note: `${approvedCount} approved` },
+                { label: "Budget authorized", value: money(totalBudget), note: `${count(totalAttempts)} maximum attempts` },
+              ]} />
+              <div className="panel-grid analytical-grid">
+                <Panel title="Decision state" meta="human gate" eyebrow="AUTHORIZATION POSTURE">
+                  <DistributionBars rows={distribution(data.map((approval) => approval.status))} />
+                </Panel>
+                <Panel title="Bound safety caps" meta="all returned scopes" eyebrow="AUTHORIZATION POSTURE">
+                  <EvidenceGrid values={[
+                    { label: "Budget", value: money(totalBudget) },
+                    { label: "Maximum attempts", value: count(totalAttempts) },
+                    { label: "Peak request rate", value: `${Math.max(...data.map((approval) => approval.caps.target_requests_per_second))}/s` },
+                    { label: "Longest timeout", value: `${Math.max(...data.map((approval) => approval.caps.run_timeout_seconds))}s` },
+                  ]} />
+                  <p className="data-note">These are signed scope limits, not measured spend or execution counts.</p>
+                </Panel>
+              </div>
+              <Panel title="Pending and historical decisions" meta="select exact scope">
+                <RecordTable
+                  data={data}
+                  identityKeys={["request_id", "approval_id"]}
+                  columns={[
+                    { key: "request_id", label: "Request", mono: true },
+                    { key: "status", label: "Status" },
+                    { key: "target_id", label: "Target", mono: true },
+                    { key: "scope_hash", label: "Operation hash", mono: true },
+                    { key: "launcher_user_id", label: "Launcher", mono: true },
+                    { key: "expires_at", label: "Expires", mono: true },
+                  ]}
+                  onSelect={(record) => {
+                    const id = identity(record, ["request_id", "approval_id"]);
+                    if (id) navigateTo({ screen: "approvals", entityId: id });
+                  }}
+                />
+              </Panel>
+            </>
+          );
+        }}
+      </ResourceView>
       {entityId && !selected && approvals.result.state !== "loading" && (
         <Panel title="Approval detail"><StateNotice state="empty" detail="That approval is not in the organization-scoped response." /></Panel>
       )}
       {selected && requestId && (
         <Panel title="Exact authorization scope" meta={requestId}>
+          <EvidenceGrid values={[
+            { label: "Budget cap", value: money(selected.caps.budget_usd) },
+            { label: "Attempt cap", value: count(selected.caps.max_attempts_per_run) },
+            { label: "Request rate", value: `${selected.caps.target_requests_per_second}/s` },
+            { label: "Run timeout", value: `${selected.caps.run_timeout_seconds}s` },
+          ]} />
           <RecordDetails
             data={selected}
             preferredKeys={[
@@ -604,64 +729,129 @@ export function ApprovalsScreen({ client, principal, entityId }: ScreenProps) {
 type SimpleResourceName = "coverage" | "resilience";
 type ResourceScreenName = SimpleResourceName | "traces" | "costs";
 
-const simpleScreens: Record<SimpleResourceName, {
-  title: string;
-  detail: string;
-  empty: string;
-  columns: Column[];
-  identityKeys: string[];
-}> = {
-  coverage: {
-    title: "Coverage",
-    detail: "Only server-derived, hash-verified and nonce-deduplicated coverage is shown.",
-    empty: "No verified coverage records are available.",
-    identityKeys: ["target_version"],
-    columns: [
-      { key: "target_version", label: "Target version", mono: true },
-      { key: "verified_attempt_count", label: "Verified attempts", mono: true },
-      { key: "covered", label: "Server coverage decision" },
-      { key: "as_of", label: "As of", mono: true },
-    ],
-  },
-  resilience: {
-    title: "Resilience",
-    detail: "Version and regression history is read from the authoritative projection.",
-    empty: "No resilience or regression history is recorded.",
-    identityKeys: ["regression_id", "version"],
-    columns: [
-      { key: "version", label: "Version", mono: true },
-      { key: "regression_id", label: "Regression", mono: true },
-      { key: "status", label: "Status" },
-      { key: "recorded_at", label: "Recorded", mono: true },
-    ],
-  },
-};
-
-function TypedSimpleResourceScreen<T extends JsonRecord>({
-  client,
-  resource,
-  decode,
-}: {
-  client: ApiClient;
-  resource: SimpleResourceName;
-  decode: ReadModelDecoder<T[]>;
-}) {
-  const config = simpleScreens[resource];
-  const controller = useResource<T[]>(client, RESOURCE_PATHS[resource], decode);
+function CoverageScreen({ client }: { client: ApiClient }) {
+  const controller = useResource<CoverageReadModel[]>(client, RESOURCE_PATHS.coverage, decodeCoverage);
   return (
     <div className="screen-stack">
-      <ScreenHeading title={config.title} detail={config.detail} />
-      <Panel title={config.title}>
-        <ResourceView result={controller.result} emptyLabel={config.empty}>
-          {(data) => (
-            <RecordTable
-              data={data}
-              identityKeys={config.identityKeys}
-              columns={config.columns}
-            />
-          )}
-        </ResourceView>
-      </Panel>
+      <ScreenHeading title="Coverage" detail="Only server-derived, hash-verified and nonce-deduplicated coverage is shown." />
+      <ResourceView result={controller.result} emptyLabel="No verified coverage records are available.">
+        {(data) => {
+          const verified = data.reduce((total, record) => total + record.verified_attempt_count, 0);
+          const cases = data.reduce((total, record) => total + record.total_case_count, 0);
+          const covered = data.filter((record) => record.covered).length;
+          const verdicts = new Map<string, number>();
+          for (const record of data) {
+            for (const [verdict, rawCount] of Object.entries(record.verdict_counts)) {
+              if (typeof rawCount === "number") verdicts.set(verdict, (verdicts.get(verdict) ?? 0) + rawCount);
+            }
+          }
+          return (
+            <>
+              <MetricStrip label="Coverage summary" values={[
+                { label: "Verified attempts", value: count(verified), note: `${count(cases)} total cases` },
+                { label: "Case execution", value: cases ? percent(verified / cases) : "—", note: "verified / total" },
+                { label: "Covered versions", value: `${covered}/${data.length}`, note: "server coverage decision" },
+                { label: "Mapped controls", value: count(unique(data.flatMap((record) => [...record.owasp_web, ...record.owasp_llm])).length), note: "OWASP Web + LLM" },
+              ]} />
+              <div className="panel-grid analytical-grid">
+                <Panel title="Execution by target version" meta="verified / total" eyebrow="COVERAGE POSTURE">
+                  <DistributionBars rows={data.map((record) => ({
+                    label: record.target_version,
+                    value: record.verified_attempt_count,
+                    display: `${record.verified_attempt_count} / ${record.total_case_count}`,
+                    tone: record.covered ? "success" as const : "queued" as const,
+                  }))} />
+                </Panel>
+                <Panel title="Verdict distribution" meta="verified attempts" eyebrow="COVERAGE POSTURE">
+                  {verdicts.size > 0
+                    ? <DistributionBars rows={[...verdicts.entries()].map(([label, value]) => ({ label, value, tone: toneFor(label) }))} />
+                    : <StateNotice state="empty" detail="No verdict counts are present in the coverage projection." />}
+                </Panel>
+              </div>
+              <Panel title="Taxonomy coverage" meta="deduplicated mappings" eyebrow="COVERAGE POSTURE">
+                <TagMatrix groups={[
+                  { label: "Classifications", values: unique(data.flatMap((record) => record.classifications)) },
+                  { label: "OWASP Web Top 10", values: unique(data.flatMap((record) => record.owasp_web)) },
+                  { label: "OWASP LLM Top 10", values: unique(data.flatMap((record) => record.owasp_llm)) },
+                  { label: "Evidence provenance", values: unique(data.map((record) => record.evidence_provenance)) },
+                ]} />
+              </Panel>
+              <Panel title="Coverage ledger" meta="authoritative snapshots">
+                <RecordTable
+                  data={data}
+                  identityKeys={["target_version"]}
+                  columns={[
+                    { key: "target_version", label: "Target version", mono: true },
+                    { key: "verified_attempt_count", label: "Verified", mono: true },
+                    { key: "total_case_count", label: "Cases", mono: true },
+                    { key: "category_count", label: "Categories", mono: true },
+                    { key: "execution_profile", label: "Profile" },
+                    { key: "covered", label: "Coverage decision" },
+                    { key: "as_of", label: "As of", mono: true },
+                  ]}
+                />
+              </Panel>
+            </>
+          );
+        }}
+      </ResourceView>
+    </div>
+  );
+}
+
+function ResilienceScreen({ client }: { client: ApiClient }) {
+  const controller = useResource<ResilienceReadModel[]>(client, RESOURCE_PATHS.resilience, decodeResilience);
+  return (
+    <div className="screen-stack">
+      <ScreenHeading title="Resilience" detail="Version and regression history is read from the authoritative projection." />
+      <ResourceView result={controller.result} emptyLabel="No resilience or regression history is recorded.">
+        {(data) => {
+          const passing = data.filter((record) => timelineTone(record.status) === "success").length;
+          const failing = data.filter((record) => timelineTone(record.status) === "failure").length;
+          const latest = [...data].sort((left, right) => Date.parse(right.recorded_at) - Date.parse(left.recorded_at))[0];
+          return (
+            <>
+              <MetricStrip label="Resilience summary" values={[
+                { label: "Regression checks", value: count(data.length), note: `${unique(data.map((record) => record.version)).length} target versions` },
+                { label: "Passing", value: count(passing), note: `${percent(data.length ? passing / data.length : 0)} of history` },
+                { label: "Regressions", value: count(failing), note: "failed or degraded states" },
+                { label: "Latest version", value: latest?.version ?? "—", note: latest?.status ?? "No status" },
+              ]} />
+              <div className="panel-grid analytical-grid">
+                <Panel title="Regression posture" meta="all recorded checks" eyebrow="RESILIENCE POSTURE">
+                  <DistributionBars rows={distribution(data.map((record) => record.status))} />
+                </Panel>
+                <Panel title="Version activity" meta="checks per version" eyebrow="RESILIENCE POSTURE">
+                  <DistributionBars rows={distribution(data.map((record) => record.version))} />
+                </Panel>
+              </div>
+              <Panel title="Regression timeline" meta="newest first" eyebrow="RESILIENCE POSTURE">
+                <Timeline rows={[...data]
+                  .sort((left, right) => Date.parse(right.recorded_at) - Date.parse(left.recorded_at))
+                  .map((record) => ({
+                    id: `${record.regression_id}:${record.version}:${record.recorded_at}`,
+                    title: `${record.version} · ${record.status}`,
+                    detail: record.regression_id,
+                    at: record.recorded_at,
+                    tone: timelineTone(record.status),
+                  }))} />
+              </Panel>
+              <Panel title="Resilience ledger" meta="authoritative history">
+                <RecordTable
+                  data={data}
+                  identityKeys={["regression_id", "version"]}
+                  columns={[
+                    { key: "version", label: "Version", mono: true },
+                    { key: "regression_id", label: "Regression", mono: true },
+                    { key: "status", label: "Status" },
+                    { key: "recorded_at", label: "Recorded", mono: true },
+                  ]}
+                />
+              </Panel>
+            </>
+          );
+        }}
+      </ResourceView>
     </div>
   );
 }
@@ -669,9 +859,9 @@ function TypedSimpleResourceScreen<T extends JsonRecord>({
 export function SimpleResourceScreen({ client, resource }: { client: ApiClient; resource: ResourceScreenName }) {
   switch (resource) {
     case "coverage":
-      return <TypedSimpleResourceScreen<CoverageReadModel> client={client} resource={resource} decode={decodeCoverage} />;
+      return <CoverageScreen client={client} />;
     case "resilience":
-      return <TypedSimpleResourceScreen<ResilienceReadModel> client={client} resource={resource} decode={decodeResilience} />;
+      return <ResilienceScreen client={client} />;
     case "traces":
       return <TracesScreen client={client} />;
     case "costs":
@@ -747,6 +937,23 @@ function TargetManagement({
           "synthetic_data_only",
         ]}
       />
+      <div className="panel-grid analytical-grid target-detail-grid">
+        <div>
+          <p className="field-label">Maximum safety envelope</p>
+          <EvidenceGrid values={[
+            { label: "Budget", value: money(selected.safety_caps.budget_usd) },
+            { label: "Attempts", value: count(selected.safety_caps.max_attempts_per_run) },
+            { label: "Request rate", value: `${selected.safety_caps.target_requests_per_second}/s` },
+            { label: "Timeout", value: `${selected.safety_caps.run_timeout_seconds}s` },
+          ]} />
+        </div>
+        <div>
+          <p className="field-label">Attack surface posture</p>
+          {surfaces.length > 0
+            ? <DistributionBars rows={distribution(surfaces.map((surface) => surface.enabled ? `enabled · ${surface.risk}` : `disabled · ${surface.risk}`))} />
+            : <StateNotice state="empty" detail="No versioned surfaces are attached." />}
+        </div>
+      </div>
       <div className="command-row">
         {targetId && version && transitions[0] ? (
           <CommandButton
@@ -872,12 +1079,45 @@ export function TargetsScreen({ client, principal }: ScreenProps) {
     decodeTargets,
   );
   const [selected, setSelected] = useState<TargetReadModel | null>(null);
+  const records = targets.result.data ?? [];
+  const surfaces = records.flatMap((target) => target.surfaces);
+  const enabledSurfaces = surfaces.filter((surface) => surface.enabled).length;
+  const readyTargets = records.filter((target) => target.lifecycle.toLowerCase().includes("ready")).length;
+  const credentialedTargets = records.filter((target) => target.credential_configured).length;
   return (
     <div className="screen-stack">
       <ScreenHeading
         title="Targets"
         detail="Only persisted immutable target and attack-surface versions may be selected for dispatch."
       />
+      {records.length > 0 && (
+        <>
+          <MetricStrip label="Target summary" values={[
+            { label: "Target versions", value: count(records.length), note: `${unique(records.map((target) => target.target_id)).length} logical targets` },
+            { label: "Dispatch ready", value: `${readyTargets}/${records.length}`, note: "persisted lifecycle state" },
+            { label: "Enabled surfaces", value: `${enabledSurfaces}/${surfaces.length}`, note: `${unique(surfaces.map((surface) => surface.kind)).length} surface kinds` },
+            { label: "Credentials bound", value: `${credentialedTargets}/${records.length}`, note: "configuration presence only" },
+          ]} />
+          <div className="panel-grid analytical-grid">
+            <Panel title="Target lifecycle" meta="immutable versions" eyebrow="TARGET POSTURE">
+              <DistributionBars rows={distribution(records.map((target) => target.lifecycle))} />
+            </Panel>
+            <Panel title="Surface risk" meta="registered attack surfaces" eyebrow="TARGET POSTURE">
+              {surfaces.length > 0
+                ? <DistributionBars rows={distribution(surfaces.map((surface) => surface.risk))} />
+                : <StateNotice state="empty" detail="No attack surfaces are registered." />}
+            </Panel>
+          </div>
+          <Panel title="Dispatch topology" meta="registered capabilities" eyebrow="TARGET POSTURE">
+            <TagMatrix groups={[
+              { label: "Environments", values: unique(records.map((target) => target.environment)) },
+              { label: "Adapters", values: unique(records.map((target) => target.adapter_kind)) },
+              { label: "Protocols", values: unique(surfaces.map((surface) => surface.protocol)) },
+              { label: "Trust boundaries", values: unique(surfaces.map((surface) => surface.trust_boundary)) },
+            ]} />
+          </Panel>
+        </>
+      )}
       <Panel title="Target registry">
         <ResourceView result={targets.result} emptyLabel="No target definitions are registered.">
           {(data) => (
@@ -919,19 +1159,40 @@ function AuditHistory({ client }: { client: ApiClient }) {
   );
   return (
     <ResourceView result={audit.result} emptyLabel="No audit events are recorded.">
-      {(data) => (
-        <RecordTable
-          data={data}
-          identityKeys={["cursor"]}
-          columns={[
-            { key: "cursor", label: "Cursor", mono: true },
-            { key: "event_type", label: "Event" },
-            { key: "actor_user_id", label: "Actor", mono: true },
-            { key: "aggregate_id", label: "Resource", mono: true },
-            { key: "created_at", label: "Occurred", mono: true },
-          ]}
-        />
-      )}
+      {(data) => {
+        const ordered = [...data].sort((left, right) => right.cursor - left.cursor);
+        return (
+          <div className="evidence-stack">
+            <EvidenceGrid values={[
+              { label: "Events", value: count(data.length) },
+              { label: "Latest cursor", value: String(ordered[0]?.cursor ?? "—") },
+              { label: "Event types", value: count(unique(data.map((event) => event.event_type)).length) },
+              { label: "Human actors", value: count(unique(data.flatMap((event) => event.actor_user_id ? [event.actor_user_id] : [])).length) },
+            ]} />
+            <div className="panel-grid analytical-grid audit-grid">
+              <DistributionBars rows={distribution(data.map((event) => event.event_type))} />
+              <Timeline rows={ordered.slice(0, 8).map((event) => ({
+                id: String(event.cursor),
+                title: event.event_type,
+                detail: `${event.aggregate_type} · ${shortId(event.aggregate_id)}`,
+                at: event.created_at,
+                tone: timelineTone(event.event_type),
+              }))} />
+            </div>
+            <RecordTable
+              data={ordered}
+              identityKeys={["cursor"]}
+              columns={[
+                { key: "cursor", label: "Cursor", mono: true },
+                { key: "event_type", label: "Event" },
+                { key: "actor_user_id", label: "Actor", mono: true },
+                { key: "aggregate_id", label: "Resource", mono: true },
+                { key: "created_at", label: "Occurred", mono: true },
+              ]}
+            />
+          </div>
+        );
+      }}
     </ResourceView>
   );
 }
@@ -941,6 +1202,11 @@ export function ConfigurationScreen({ client, principal }: ScreenProps) {
     client,
     RESOURCE_PATHS.configuration,
     decodeConfiguration,
+  );
+  const components = useResource<ComponentReadModel[]>(
+    client,
+    RESOURCE_PATHS.components,
+    decodeComponents,
   );
   const configRecord = configuration.result.data;
   const candidate = configRecord && isJsonRecord(configRecord.candidate_configuration)
@@ -963,12 +1229,43 @@ export function ConfigurationScreen({ client, principal }: ScreenProps) {
     : null;
   const [rationale, setRationale] = useState("");
   const allowed = hasPermission(principal, PERMISSIONS.configManage);
+  const componentRecords = components.result.data ?? [];
+  const operationalComponents = componentRecords.filter((component) => component.availability === "operational and evidenced").length;
+  const configurationKeys = configRecord ? Object.keys(configRecord.configuration) : [];
   return (
     <div className="screen-stack">
       <ScreenHeading
         title="Configuration"
         detail="Immutable effective configuration, validation and publication acknowledgements remain server-owned."
       />
+      {configRecord && (
+        <MetricStrip label="Configuration summary" values={[
+          { label: "Snapshot", value: shortId(configRecord.snapshot_id), note: `version ${configRecord.version}` },
+          { label: "Publication state", value: configRecord.status, note: configRecord.published_at },
+          { label: "Configuration areas", value: count(configurationKeys.length), note: configurationKeys.slice(0, 3).join(" · ") || "No top-level keys" },
+          { label: "Components evidenced", value: `${operationalComponents}/${componentRecords.length}`, note: components.result.state },
+        ]} />
+      )}
+      <div className="panel-grid analytical-grid">
+        <Panel title="Configuration topology" meta={configRecord ? `v${configRecord.version}` : configuration.result.state} eyebrow="RUNTIME POSTURE">
+          {configRecord ? (
+            <TagMatrix groups={[
+              { label: "Effective areas", values: configurationKeys },
+              { label: "Publication status", values: [configRecord.status] },
+              { label: "Publisher", values: [shortId(configRecord.published_by)] },
+              { label: "Snapshot", values: [shortId(configRecord.snapshot_id)] },
+            ]} />
+          ) : (
+            <ResourceView result={configuration.result} emptyLabel="No configuration snapshot is published.">{() => null}</ResourceView>
+          )}
+        </Panel>
+        <Panel title="Component readiness" meta="latest heartbeats" eyebrow="RUNTIME POSTURE">
+          {componentRecords.length > 0
+            ? <DistributionBars rows={distribution(componentRecords.map((component) => component.availability))} />
+            : <ResourceView result={components.result} emptyLabel="No runtime components are registered.">{() => null}</ResourceView>}
+          {componentRecords.length > 0 && <p className="data-note">{unique(componentRecords.map((component) => component.environment)).join(" · ")}</p>}
+        </Panel>
+      </div>
       <Panel title="Effective configuration">
         <ResourceView result={configuration.result} emptyLabel="No configuration snapshot is published.">
           {(data) => (
