@@ -66,6 +66,9 @@ def test_gitlab_ci_keeps_material_gates_on_the_unprivileged_runner() -> None:
     assert "buildah" not in workflow.lower()
     assert "--no-push" in workflow
     assert "--tar-path" in workflow
+    assert "image: python:3.12.11-bookworm" in workflow
+    assert "node-v24.4.1-linux-x64.tar.xz" in workflow
+    assert "7e067b13cd0dc7ee8b239f4ebe1ae54f3bba3a6e904553fcb5f581530eb8306d" in workflow
     assert 'install -d -m 0777 "$ZAP_WORK" /zap/wrk' in workflow
     assert 'cp /zap/wrk/zap.json "$ZAP_WORK/zap.json"' in workflow
     assert (
