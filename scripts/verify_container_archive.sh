@@ -1,5 +1,5 @@
 #!/usr/bin/env sh
-# Verify a daemonless Docker archive produced by the GitLab rootless BuildKit gate.
+# Verify a daemonless Docker archive produced by the GitLab Buildah gate.
 set -eu
 
 archive=${1:?usage: verify_container_archive.sh IMAGE_ARCHIVE}

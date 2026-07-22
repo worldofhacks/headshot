@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 # GitLab's protected shared runner is intentionally unprivileged. Its console job builds and
-# tests the SPA first; this rootless packaging gate then assembles the same final Python
+# tests the SPA first; this daemonless chroot/VFS gate then assembles the same final Python
 # runtime boundary without attempting Docker-in-Docker or rebuilding the large Node layer.
 
 FROM python:3.12.11-slim-bookworm AS wheel-build
