@@ -14,14 +14,12 @@ import {
   decodeCampaigns,
   decodeComponents,
   decodeConfiguration,
-  decodeCosts,
   decodeCoverage,
   decodeEvidence,
   decodeFinding,
   decodeFindings,
   decodeResilience,
   decodeTargets,
-  decodeTraces,
   type ReadModelDecoder,
 } from "../api/read-models";
 import { AdversarialText } from "../components/AdversarialText";
@@ -44,15 +42,14 @@ import {
   type CampaignReadModel,
   type ComponentReadModel,
   type ConfigurationReadModel,
-  type CostReadModel,
   type CoverageReadModel,
   type EvidenceReadModel,
   type FindingDetailReadModel,
   type FindingReadModel,
   type ResilienceReadModel,
   type TargetReadModel,
-  type TraceReadModel,
 } from "../types";
+import { CostsScreen, TracesScreen } from "./ObservabilityScreens";
 
 interface ScreenProps {
   client: ApiClient;
@@ -604,7 +601,8 @@ export function ApprovalsScreen({ client, principal, entityId }: ScreenProps) {
   );
 }
 
-type SimpleResourceName = "coverage" | "resilience" | "traces" | "costs";
+type SimpleResourceName = "coverage" | "resilience";
+type ResourceScreenName = SimpleResourceName | "traces" | "costs";
 
 const simpleScreens: Record<SimpleResourceName, {
   title: string;
@@ -634,38 +632,6 @@ const simpleScreens: Record<SimpleResourceName, {
       { key: "version", label: "Version", mono: true },
       { key: "regression_id", label: "Regression", mono: true },
       { key: "status", label: "Status" },
-      { key: "recorded_at", label: "Recorded", mono: true },
-    ],
-  },
-  traces: {
-    title: "Traces",
-    detail: "Each physical target request is correlated, timed and exported from the private Runner.",
-    empty: "No trace records are persisted.",
-    identityKeys: ["trace_id"],
-    columns: [
-      { key: "trace_id", label: "Trace", mono: true },
-      { key: "campaign_id", label: "Campaign", mono: true },
-      { key: "attempt_id", label: "Attempt", mono: true },
-      { key: "operation", label: "Operation" },
-      { key: "status", label: "Status" },
-      { key: "duration_ms", label: "Latency ms", mono: true },
-      { key: "measured_cost", label: "Cost USD", mono: true },
-      { key: "langfuse_status", label: "Langfuse" },
-    ],
-  },
-  costs: {
-    title: "Measured costs",
-    detail: "Accounting values are displayed exactly as recorded by the backend.",
-    empty: "No measured accounting records are available.",
-    identityKeys: ["accounting_id"],
-    columns: [
-      { key: "accounting_id", label: "Record", mono: true },
-      { key: "campaign_id", label: "Campaign", mono: true },
-      { key: "provider", label: "Provider" },
-      { key: "measured_cost", label: "Measured cost", mono: true },
-      { key: "request_count", label: "Requests", mono: true },
-      { key: "average_cost_per_request", label: "Cost / request", mono: true },
-      { key: "duration_ms", label: "Run latency ms", mono: true },
       { key: "recorded_at", label: "Recorded", mono: true },
     ],
   },
@@ -700,16 +666,16 @@ function TypedSimpleResourceScreen<T extends JsonRecord>({
   );
 }
 
-export function SimpleResourceScreen({ client, resource }: { client: ApiClient; resource: SimpleResourceName }) {
+export function SimpleResourceScreen({ client, resource }: { client: ApiClient; resource: ResourceScreenName }) {
   switch (resource) {
     case "coverage":
       return <TypedSimpleResourceScreen<CoverageReadModel> client={client} resource={resource} decode={decodeCoverage} />;
     case "resilience":
       return <TypedSimpleResourceScreen<ResilienceReadModel> client={client} resource={resource} decode={decodeResilience} />;
     case "traces":
-      return <TypedSimpleResourceScreen<TraceReadModel> client={client} resource={resource} decode={decodeTraces} />;
+      return <TracesScreen client={client} />;
     case "costs":
-      return <TypedSimpleResourceScreen<CostReadModel> client={client} resource={resource} decode={decodeCosts} />;
+      return <CostsScreen client={client} />;
   }
 }
 

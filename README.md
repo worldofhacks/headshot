@@ -5,17 +5,16 @@ red-teaming AI applications. Its first target is the externally deployed OpenEMR
 Co-Pilot. The target is reached over an authorized live URL; its code does not live in this
 repository.
 
-> **Delivery status — 2026-07-21:** this integration branch composes the Clerk-backed React console,
-> protected FastAPI `/api/v1`, organization-scoped PostgreSQL control plane, and Railway-oriented
-> Web/runner/scheduler image locally. It is **not deployed**, has not been verified with real Clerk
-> users, and is not a fully live campaign system. Runner execution and several authoritative
-> repositories remain fail-closed unavailable; no live target, model, or provider traffic is claimed.
+> **Delivery status — 2026-07-22:** the Clerk-backed React console, protected FastAPI `/api/v1`,
+> organization-scoped PostgreSQL control plane, private Runner, live target adapter, and Langfuse
+> telemetry projection are deployed on Railway. Live campaigns remain bounded by persisted exact-
+> scope authorization, synthetic-only evidence, rate/budget/timeout caps, and abort controls.
 
 | Endpoint | Status |
 |---|---|
-| Staging platform URL | **PENDING — not deployed or verified** |
-| Production platform URL | **PENDING — not deployed or verified** |
-| Authorized live target URL | **PENDING — record only after the live-target gate passes** |
+| Staging platform URL | `https://web-staging-8e30.up.railway.app` |
+| Production platform URL | `https://web-production-44528.up.railway.app` |
+| Authorized live target URL | `https://agent-production-9f62.up.railway.app` |
 
 The requirements source of truth is [Week_3_AgentForge.pdf](Week_3_AgentForge.pdf). See
 [PLAN.md](PLAN.md), [ARCHITECTURE.md](ARCHITECTURE.md), and

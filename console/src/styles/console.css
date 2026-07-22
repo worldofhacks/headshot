@@ -154,6 +154,79 @@
 .event-record > header span { color: var(--tx3); font-size: var(--fs-2xs); }
 .event-record .adversarial-text { max-height: 180px; border: 0; border-radius: 0; }
 
+.observability-metrics { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.observability-metrics > div { min-height: 94px; }
+.observability-metrics strong { margin-top: 7px; font-size: var(--fs-2xl); }
+.observability-metrics small { margin-top: 4px; overflow: hidden; color: var(--tx3); font-size: var(--fs-2xs); text-overflow: ellipsis; white-space: nowrap; }
+.observability-grid { align-items: stretch; }
+.observability-grid > .panel { min-height: 300px; }
+
+.chart-wrap { min-width: 0; }
+.telemetry-chart { width: 100%; height: 210px; display: block; overflow: visible; }
+.chart-grid { stroke: var(--sep); stroke-width: 1; }
+.chart-label { fill: var(--tx3); font: 10px "Geist Mono", monospace; }
+.chart-line { fill: none; stroke: var(--brand); stroke-linecap: round; stroke-linejoin: round; stroke-width: 2; vector-effect: non-scaling-stroke; }
+.chart-point { stroke: var(--bg-panel); stroke-width: 2; vector-effect: non-scaling-stroke; }
+.chart-point.success { fill: var(--phos); }
+.chart-point.failure { fill: var(--v-conf); }
+.chart-axis { display: flex; justify-content: space-between; margin-top: -9px; padding: 0 17px; color: var(--tx3); font-size: var(--fs-2xs); }
+
+.distribution-list { display: flex; flex-direction: column; gap: 18px; }
+.distribution-row > div:first-child { display: flex; justify-content: space-between; gap: 16px; margin-bottom: 7px; color: var(--tx2); font-size: var(--fs-xs); }
+.distribution-row strong { color: var(--tx); font-weight: 600; }
+.distribution-track { height: 7px; overflow: hidden; border: 1px solid var(--bd); border-radius: var(--r-xs); background: var(--bg-inset); }
+.distribution-track > span { height: 100%; display: block; background: var(--tx3); transition: width 150ms var(--ease-out); }
+.distribution-track > span.success { background: var(--phos); }
+.distribution-track > span.queued { background: var(--warn); }
+.distribution-track > span.failure { background: var(--v-conf); }
+.data-note { margin: 18px 0 0; padding-top: 12px; border-top: 1px solid var(--sep); color: var(--tx3); font-size: var(--fs-2xs); line-height: 1.5; }
+
+.trace-explorer-grid { grid-template-columns: minmax(380px, 0.85fr) minmax(480px, 1.15fr); }
+.trace-list { max-height: 520px; display: flex; flex-direction: column; overflow: auto; border: 1px solid var(--sep); border-radius: var(--r-sm); background: var(--bg-inset); }
+.trace-list-row { width: 100%; min-height: 55px; display: grid; grid-template-columns: 8px minmax(180px, 1fr) 80px 64px; align-items: center; gap: 10px; padding: 8px 10px; border-bottom: 1px solid var(--sep); color: var(--tx2); text-align: left; transition: background 150ms var(--ease-out), color 150ms var(--ease-out); }
+.trace-list-row:last-child { border-bottom: 0; }
+.trace-list-row:hover, .trace-list-row.active { background: var(--sel); color: var(--tx); }
+.trace-list-row.active { box-shadow: inset 2px 0 0 var(--brand); }
+.trace-list-row > span:nth-child(2) { min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.trace-list-row strong, .trace-list-row small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.trace-list-row strong { color: inherit; font-size: var(--fs-xs); font-weight: 600; }
+.trace-list-row small { color: var(--tx3); font-size: var(--fs-2xs); }
+.trace-list-row > span:nth-last-child(-n+2) { color: var(--tx2); font-size: var(--fs-2xs); text-align: right; }
+
+.trace-detail-stack { display: flex; flex-direction: column; gap: 14px; }
+.trace-detail-hero { display: flex; justify-content: space-between; align-items: flex-start; gap: 18px; }
+.trace-detail-hero > div { min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.trace-detail-hero strong, .trace-detail-hero small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.trace-detail-hero strong { font-size: var(--fs-sm); font-weight: 600; }
+.trace-detail-hero small { color: var(--tx3); font-size: var(--fs-2xs); }
+.telemetry-status { flex: 0 0 auto; padding: 5px 8px; border: 1px solid var(--bd); border-radius: var(--r-sm); color: var(--tx3); font: 600 var(--fs-2xs) "Geist Mono", monospace; text-transform: uppercase; }
+.telemetry-status.success { border-color: var(--phos-line); background: var(--phos-tint); color: var(--phos); }
+.telemetry-status.failure { border-color: var(--v-conf); background: var(--v-conf-t); color: var(--v-conf); }
+.trace-detail-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.correlation-chain { min-width: 0; display: grid; grid-template-columns: repeat(7, auto); align-items: center; justify-content: start; gap: 8px; overflow: auto; padding: 10px 11px; border: 1px solid var(--sep); border-radius: var(--r-sm); background: var(--bg-inset); color: var(--tx2); font-size: var(--fs-2xs); white-space: nowrap; }
+.correlation-chain span { padding: 4px 7px; border: 1px solid var(--bd); border-radius: var(--r-xs); background: var(--bg-panel); }
+.correlation-chain i { color: var(--tx3); font-style: normal; }
+
+.cost-bars { display: flex; flex-direction: column; gap: 17px; }
+.cost-bar-row { display: flex; flex-direction: column; gap: 7px; }
+.cost-bar-label { display: flex; justify-content: space-between; gap: 14px; color: var(--tx2); font-size: var(--fs-xs); }
+.cost-bar-label strong { color: var(--tx); }
+.cost-bar-track { position: relative; height: 12px; overflow: hidden; border: 1px solid var(--bd); border-radius: var(--r-xs); background: var(--bg-inset); }
+.cost-bar-track > span { position: absolute; inset: 0 auto 0 0; display: block; transition: width 150ms var(--ease-out); }
+.cost-budget { background: var(--brand-tint); border-right: 1px solid var(--brand-line); }
+.cost-spend { height: 4px !important; top: 3px !important; background: var(--phos); }
+.cost-bar-row small { color: var(--tx3); font-size: var(--fs-2xs); }
+.chart-legend { display: flex; gap: 16px; margin-top: 18px; padding-top: 12px; border-top: 1px solid var(--sep); color: var(--tx3); font-size: var(--fs-2xs); }
+.chart-legend span { display: flex; align-items: center; gap: 6px; }
+.chart-legend i { width: 12px; height: 6px; border-radius: 2px; }
+.chart-legend i.budget { border: 1px solid var(--brand-line); background: var(--brand-tint); }
+.chart-legend i.spend { background: var(--phos); }
+.reconciliation-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1px; border: 1px solid var(--sep); border-radius: var(--r-sm); overflow: hidden; background: var(--sep); }
+.reconciliation-grid > div { min-width: 0; min-height: 85px; display: flex; flex-direction: column; justify-content: space-between; padding: 12px; background: var(--bg-inset); }
+.reconciliation-grid span { color: var(--tx3); font-size: var(--fs-2xs); text-transform: uppercase; }
+.reconciliation-grid strong { overflow: hidden; font-size: var(--fs-lg); font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.cost-table td:nth-last-child(-n+3) { color: var(--tx); }
+
 .evidence-stack { display: flex; flex-direction: column; gap: 14px; }
 .field-label { margin: 0 0 5px; color: var(--tx3); font-size: var(--fs-2xs); font-weight: 650; letter-spacing: 0.04em; text-transform: uppercase; }
 .adversarial-text { max-height: 360px; margin: 0; overflow: auto; padding: 14px; border: 1px solid var(--warn-line); border-radius: var(--r-sm); background: var(--bg-inset); color: var(--tx2); font: var(--fs-xs)/1.55 "Geist Mono", monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
@@ -168,6 +241,7 @@
   .metric-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .metric-strip > div:nth-child(2) { border-right: 0; }
   .metric-strip > div:nth-child(-n+2) { border-bottom: 1px solid var(--sep); }
+  .trace-explorer-grid { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 767px) {
@@ -185,6 +259,12 @@
   .panel-header { padding: 9px 11px; }
   .detail-grid { grid-template-columns: 1fr; }
   .metric-strip { grid-template-columns: 1fr 1fr; }
+  .observability-metrics > div { min-height: 82px; }
+  .telemetry-chart { height: 170px; }
+  .trace-list-row { grid-template-columns: 8px minmax(150px, 1fr) 70px; }
+  .trace-list-row > span:last-child { display: none; }
+  .trace-detail-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .reconciliation-grid { grid-template-columns: 1fr; }
   .connection-chip { display: none; }
   .record-table { min-width: 620px; }
   .command-row { display: grid; grid-template-columns: 1fr; }

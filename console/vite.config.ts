@@ -62,6 +62,78 @@ const browserFixture = (): Plugin => ({
         response.end('{"state":"empty","data":[]}');
         return;
       }
+      if (path === "/api/v1/traces") {
+        response.end(JSON.stringify({
+          state: "ready",
+          data: Array.from({ length: 9 }, (_, index) => ({
+            request_id: `browser-request-${index}`,
+            trace_id: `${String(index + 1).padStart(32, "0")}`,
+            campaign_id: index < 5 ? "browser-campaign-alpha" : "browser-campaign-beta",
+            attempt_id: `browser-attempt-${index}`,
+            operation: "target.http",
+            provider: "openemr",
+            method: "POST",
+            destination_host: "agent-production-9f62.up.railway.app",
+            relative_path: "chat",
+            status: index === 7 ? "failed" : "succeeded",
+            status_code: index === 7 ? 503 : 200,
+            error_code: index === 7 ? "upstream_unavailable" : null,
+            started_at: `2026-07-22T00:0${index}:00Z`,
+            finished_at: `2026-07-22T00:0${index}:01Z`,
+            duration_ms: [820, 1110, 940, 1480, 1210, 1750, 1320, 2400, 990][index],
+            request_bytes: 320 + index * 17,
+            response_bytes: index === 7 ? 64 : 1100 + index * 90,
+            measured_cost: 0.01,
+            currency: "USD",
+            langfuse_status: index === 7 ? "error" : "exported",
+          })),
+        }));
+        return;
+      }
+      if (path === "/api/v1/costs") {
+        response.end(JSON.stringify({
+          state: "ready",
+          data: [
+            {
+              accounting_id: "browser-campaign-alpha",
+              campaign_id: "browser-campaign-alpha",
+              provider: "live_target",
+              measured_cost: 0.05,
+              currency: "USD",
+              request_count: 5,
+              attempt_count: 5,
+              confirmed_finding_count: 0,
+              average_cost_per_request: 0.01,
+              budget_usd: 1,
+              budget_utilization: 0.05,
+              duration_ms: 385000,
+              execution_profile: "live",
+              started_at: "2026-07-22T00:00:00Z",
+              ended_at: "2026-07-22T00:06:25Z",
+              recorded_at: "2026-07-22T00:06:25Z",
+            },
+            {
+              accounting_id: "browser-campaign-beta",
+              campaign_id: "browser-campaign-beta",
+              provider: "live_target",
+              measured_cost: 0.04,
+              currency: "USD",
+              request_count: 4,
+              attempt_count: 4,
+              confirmed_finding_count: 1,
+              average_cost_per_request: 0.01,
+              budget_usd: 1,
+              budget_utilization: 0.04,
+              duration_ms: 260000,
+              execution_profile: "live",
+              started_at: "2026-07-22T00:07:00Z",
+              ended_at: "2026-07-22T00:11:20Z",
+              recorded_at: "2026-07-22T00:11:20Z",
+            },
+          ],
+        }));
+        return;
+      }
       if (path === "/api/v1/targets") {
         response.end(JSON.stringify({
           state: "ready",

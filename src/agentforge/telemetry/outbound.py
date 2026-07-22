@@ -102,6 +102,8 @@ class _LangfuseBridge:
         self,
         *,
         trace_id: str,
+        model: str,
+        version: str,
         request_payload: dict[str, Any],
         metadata: dict[str, Any],
         measured_cost: float,
@@ -112,10 +114,10 @@ class _LangfuseBridge:
             trace_context={"trace_id": trace_id},
             as_type="generation",
             name="target-http-request",
-            model="openemr-clinical-copilot",
+            model=model,
             input=request_payload,
             metadata=metadata,
-            version="1",
+            version=version,
             cost_details={"total": measured_cost},
         )
         observation = manager.__enter__()
@@ -215,6 +217,8 @@ class _RequestHandle:
 
         metadata = {
             "http.status_code": status_code,
+            "http.response.body.size": response_bytes,
+            "transport.status": terminal_status,
             "duration_ms": duration_ms,
             "request_id": self.request_id,
             "error_code": error_code,
@@ -313,12 +317,18 @@ class OutboundHttpTelemetry:
             try:
                 langfuse_state = self.langfuse.start(
                     trace_id=trace_id,
+                    model=provider,
+                    version=metadata.get("target_version", "unknown"),
                     request_payload=payload,
                     metadata={
                         **metadata,
+                        "deployment.environment": self.environment,
+                        "target.provider": provider,
                         "http.method": method,
+                        "http.request.body.size": len(encoded),
                         "server.address": parsed.hostname,
                         "url.path": parsed.path,
+                        "cost.usd": self.per_request_cost_usd,
                     },
                     measured_cost=self.per_request_cost_usd,
                 )

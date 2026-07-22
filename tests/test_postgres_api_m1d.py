@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from typing import Any
 
 from fastapi.testclient import TestClient
@@ -458,6 +459,22 @@ def _seed_run_summary(engine: Engine, org_id: str, run_id: str) -> None:
         connection.execute(text("SET LOCAL session_replication_role = replica"))
         connection.execute(
             text(
+                "INSERT INTO campaign_authorization_requests (request_id, organization_id, "
+                "scope_hash, scope_payload, launcher_user_id, launcher_session_id, expires_at) "
+                "VALUES (:request, :org, :hash, CAST(:payload AS JSONB), :launcher, :session, "
+                "TIMESTAMPTZ '2026-07-21 11:00:00+00')"
+            ),
+            {
+                "request": f"req-{run_id}",
+                "org": org_id,
+                "hash": "b" * 64,
+                "payload": json.dumps({"caps": {"budget_usd": 2}}),
+                "launcher": LAUNCHER_ID,
+                "session": "sess_M1dApiLauncher",
+            },
+        )
+        connection.execute(
+            text(
                 "INSERT INTO campaign_runs (run_id, organization_id, authorization_request_id, "
                 "scope_hash, launcher_user_id, launcher_session_id) "
                 "VALUES (:run, :org, :req, :hash, :launcher, :session)"
@@ -535,9 +552,15 @@ def test_costs_projection_is_ready_from_persisted_run_summary(migrated_db: Engin
         "measured_cost",
         "currency",
         "request_count",
+        "attempt_count",
+        "confirmed_finding_count",
         "average_cost_per_request",
+        "budget_usd",
+        "budget_utilization",
         "duration_ms",
         "execution_profile",
+        "started_at",
+        "ended_at",
         "recorded_at",
     }
     assert row["accounting_id"] == "run-cost-projection-0001"
@@ -548,9 +571,13 @@ def test_costs_projection_is_ready_from_persisted_run_summary(migrated_db: Engin
     assert row["measured_cost"] == 1.234567
     assert row["currency"] == "USD"
     assert row["request_count"] == 9
+    assert row["attempt_count"] == 9
+    assert row["confirmed_finding_count"] == 0
     assert abs(row["average_cost_per_request"] - (1.234567 / 9)) < 1e-12
     assert row["duration_ms"] == 300000.0
     assert row["execution_profile"] == "synthetic"
+    assert row["budget_usd"] == 2.0
+    assert abs(row["budget_utilization"] - (1.234567 / 2)) < 1e-12
 
 
 def test_traces_projection_is_empty_for_org_without_persisted_results(
@@ -584,14 +611,20 @@ def test_traces_projection_is_ready_from_persisted_attempt_and_verdict(
     assert len(body["data"]) == 1
     row = body["data"][0]
     assert set(row) == {
+        "request_id",
         "trace_id",
         "campaign_id",
         "attempt_id",
         "operation",
         "provider",
+        "method",
+        "destination_host",
+        "relative_path",
         "status",
         "status_code",
+        "error_code",
         "started_at",
+        "finished_at",
         "duration_ms",
         "request_bytes",
         "response_bytes",
@@ -608,3 +641,53 @@ def test_traces_projection_is_ready_from_persisted_attempt_and_verdict(
     assert row["campaign_id"] == "run-trace-projection-0001"
     assert row["attempt_id"] == "attempt-trace-0001"
     assert row["langfuse_status"] == "historical_not_instrumented"
+    assert row["request_id"] is None
+    assert row["finished_at"].startswith("2026-07-21T10:00:02.500")
+
+
+def test_traces_projection_exposes_safe_physical_request_metadata(migrated_db: Engine) -> None:
+    org_id = "org_M1dPhysicalTrace"
+    run_id = "run-physical-trace-0001"
+    with migrated_db.begin() as connection:
+        connection.execute(text("SET LOCAL session_replication_role = replica"))
+        connection.execute(
+            text(
+                "INSERT INTO campaign_runs (run_id, organization_id, authorization_request_id, "
+                "scope_hash, launcher_user_id, launcher_session_id) VALUES "
+                "(:run, :org, 'request-physical-trace', :hash, :launcher, :session)"
+            ),
+            {
+                "run": run_id,
+                "org": org_id,
+                "hash": "e" * 64,
+                "launcher": LAUNCHER_ID,
+                "session": "sess_M1dApiLauncher",
+            },
+        )
+        connection.execute(
+            text(
+                "INSERT INTO outbound_http_requests (request_id, organization_id, "
+                "campaign_run_id, attempt_id, trace_id, operation, provider, method, "
+                "destination_host, relative_path, request_payload, response_payload, status, "
+                "status_code, request_bytes, response_bytes, duration_ms, measured_cost, "
+                "currency, langfuse_status, started_at, finished_at) VALUES "
+                "('request-physical-0001', :org, :run, 'attempt-physical-0001', :trace, "
+                "'target.http', 'openemr', 'POST', 'target.example.test', 'chat', "
+                'CAST(\'{"turns":["synthetic"]}\' AS JSONB), \'{"answer":"safe"}\', '
+                "'succeeded', 200, 24, 17, 125.5, 0.01, 'USD', 'exported', "
+                "TIMESTAMPTZ '2026-07-21 10:00:00+00', "
+                "TIMESTAMPTZ '2026-07-21 10:00:00.1255+00')"
+            ),
+            {"org": org_id, "run": run_id, "trace": "f" * 32},
+        )
+
+    response = TestClient(_app_for(migrated_db, _reader(org_id))).get("/api/v1/traces")
+
+    assert response.status_code == 200
+    row = response.json()["data"][0]
+    assert row["request_id"] == "request-physical-0001"
+    assert row["method"] == "POST"
+    assert row["destination_host"] == "target.example.test"
+    assert row["relative_path"] == "chat"
+    assert row["finished_at"].startswith("2026-07-21T10:00:00.125500")
+    assert row["langfuse_status"] == "exported"
