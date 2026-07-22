@@ -3,6 +3,93 @@ import { fileURLToPath } from "node:url";
 import { defineConfig, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
 
+const browserScope = {
+  target_id: "browser-target",
+  target_version: "v1",
+  surface_id: "chat",
+  surface_version: "v1",
+  adapter_kind: "bruno",
+  environment: "test",
+  exact_host: "browser-target.example.test",
+  auth_mode: "header",
+  explicit_no_auth: false,
+  auth_posture: "configured",
+  protocol: "https",
+  method: "POST",
+  relative_path: "/chat",
+  endpoint: "https://browser-target.example.test/chat",
+  corpus_id: "browser-corpus",
+  corpus_hash: "sha256:browser-corpus",
+  caps: {
+    budget_usd: 1,
+    max_attempts_per_run: 9,
+    target_requests_per_second: 1,
+    run_timeout_seconds: 900,
+  },
+  execution_profile: "live",
+} as const;
+
+const browserFindings = [
+  {
+    finding_id: "finding-prompt-injection",
+    state: "confirmed",
+    severity: "critical",
+    category: "prompt injection",
+    target_version: "v1",
+    publication_status: "gated",
+    evidence_integrity: "verified",
+    source_kind: "agent",
+    execution_profile: "live",
+    evidence_provenance: "live_target",
+    campaign_run_id: "browser-campaign-alpha",
+    attempt_id: "browser-attempt-1",
+    evidence_content_hash: "sha256:finding-one",
+    history: [{
+      decision: "confirmed",
+      actor_user_id: "user_independent_judge",
+      rationale: "Independent replay reproduced the boundary violation.",
+      created_at: "2026-07-22T00:05:10Z",
+    }],
+  },
+  {
+    finding_id: "finding-missing-hsts",
+    state: "triaged",
+    severity: "low",
+    category: "security misconfiguration",
+    target_version: "v1",
+    publication_status: "withheld",
+    evidence_integrity: "verified",
+    source_kind: "security_tool",
+    execution_profile: "live",
+    evidence_provenance: "scan_only",
+    campaign_run_id: null,
+    attempt_id: null,
+    evidence_content_hash: "sha256:finding-two",
+    history: [],
+  },
+  {
+    finding_id: "finding-cache-review",
+    state: "resolved",
+    severity: "informational",
+    category: "response caching",
+    target_version: "v1",
+    publication_status: "published",
+    evidence_integrity: "bound",
+    source_kind: "security_tool",
+    execution_profile: "live",
+    evidence_provenance: "scan_only",
+    campaign_run_id: null,
+    attempt_id: null,
+    evidence_content_hash: "sha256:finding-three",
+    history: [{
+      decision: "resolved",
+      actor_user_id: "user_security_reviewer",
+      rationale: "Reviewed against the non-sensitive public response contract.",
+      created_at: "2026-07-22T00:12:20Z",
+    }],
+  },
+];
+
 const browserFixture = (): Plugin => ({
   name: "headshot-browser-fixture",
   configureServer(server) {
@@ -20,10 +107,12 @@ const browserFixture = (): Plugin => ({
         response.statusCode = 200;
         response.setHeader("Content-Type", "text/event-stream");
         if (!request.headers["last-event-id"] || request.headers["last-event-id"] === "0") {
-          response.end('event: snapshot\ndata: {"action":"reconcile","state":"empty"}\n\n');
+          response.write('event: snapshot\ndata: {"action":"reconcile","state":"empty"}\n\n');
         } else {
-          response.end(": heartbeat\n\n");
+          response.write(": heartbeat\n\n");
         }
+        const heartbeat = setInterval(() => response.write(": heartbeat\n\n"), 5_000);
+        request.on("close", () => clearInterval(heartbeat));
         return;
       }
       response.setHeader("Content-Type", "application/json");
@@ -59,7 +148,33 @@ const browserFixture = (): Plugin => ({
         return;
       }
       if (path === "/api/v1/campaigns") {
-        response.end('{"state":"empty","data":[]}');
+        response.end(JSON.stringify({
+          state: "ready",
+          data: [
+            { ...browserScope, run_nonce: "browser-run-alpha-0001", run_id: "browser-campaign-alpha", authorization_request_id: "browser-approval-alpha", scope_hash: "sha256:scope-alpha", launcher_user_id: "user_operator", state: "complete", attempt_count: 9, created_at: "2026-07-22T00:00:00Z" },
+            { ...browserScope, run_nonce: "browser-run-beta-0002", run_id: "browser-campaign-beta", authorization_request_id: "browser-approval-beta", scope_hash: "sha256:scope-beta", launcher_user_id: "user_operator", state: "aborted", attempt_count: 4, created_at: "2026-07-22T00:07:00Z" },
+            { ...browserScope, run_nonce: "browser-run-gamma-0003", run_id: "browser-campaign-gamma", authorization_request_id: "browser-approval-gamma", scope_hash: "sha256:scope-gamma", launcher_user_id: "user_operator", state: "running", attempt_count: 6, created_at: "2026-07-22T00:14:00Z" },
+          ],
+        }));
+        return;
+      }
+      if (/^\/api\/v1\/campaigns\/[^/]+\/attempts$/.test(path)) {
+        response.end(JSON.stringify({
+          state: "ready",
+          data: Array.from({ length: 6 }, (_, index) => ({
+            attempt_id: `browser-attempt-${index}`,
+            ordinal: index + 1,
+            case_id: `case-${index + 1}`,
+            content_hash: `sha256:attempt-${index}`,
+            executed_at: `2026-07-22T00:${String(15 + index).padStart(2, "0")}:00Z`,
+            trace_id: `${String(index + 1).padStart(32, "0")}`,
+            verdict: ["blocked", "blocked", "safe", "partial", "safe", "blocked"][index],
+            confidence: 0.91,
+            execution_profile: "live",
+            evidence_provenance: "live_target",
+            created_at: `2026-07-22T00:${String(15 + index).padStart(2, "0")}:00Z`,
+          })),
+        }));
         return;
       }
       if (path === "/api/v1/traces") {
@@ -130,6 +245,121 @@ const browserFixture = (): Plugin => ({
               ended_at: "2026-07-22T00:11:20Z",
               recorded_at: "2026-07-22T00:11:20Z",
             },
+          ],
+        }));
+        return;
+      }
+      if (path === "/api/v1/findings") {
+        response.end(JSON.stringify({ state: "ready", data: browserFindings }));
+        return;
+      }
+      if (path.startsWith("/api/v1/findings/")) {
+        const findingId = path.split("/").at(-1);
+        const finding = browserFindings.find((record) => record.finding_id === findingId);
+        response.end(JSON.stringify(finding
+          ? { state: "ready", data: finding }
+          : { state: "empty", data: null }));
+        return;
+      }
+      if (path === "/api/v1/approvals") {
+        response.end(JSON.stringify({
+          state: "ready",
+          data: [
+            { ...browserScope, run_nonce: "browser-run-alpha-0001", request_id: "browser-approval-alpha", scope_hash: "sha256:scope-alpha", launcher_user_id: "user_operator", expires_at: "2026-07-22T00:15:00Z", created_at: "2026-07-22T00:00:00Z", status: "approved", decision: "approved", approver_user_id: "user_approver", decided_at: "2026-07-22T00:01:00Z" },
+            { ...browserScope, run_nonce: "browser-run-beta-0002", request_id: "browser-approval-beta", scope_hash: "sha256:scope-beta", launcher_user_id: "user_operator", expires_at: "2026-07-22T00:22:00Z", created_at: "2026-07-22T00:07:00Z", status: "rejected", decision: "rejected", approver_user_id: "user_approver", decided_at: "2026-07-22T00:08:00Z" },
+            { ...browserScope, run_nonce: "browser-run-gamma-0003", request_id: "browser-approval-gamma", scope_hash: "sha256:scope-gamma", launcher_user_id: "user_operator", expires_at: "2026-07-22T00:29:00Z", created_at: "2026-07-22T00:14:00Z", status: "pending", decision: null, approver_user_id: null, decided_at: null },
+          ],
+        }));
+        return;
+      }
+      if (path === "/api/v1/coverage") {
+        response.end(JSON.stringify({
+          state: "ready",
+          data: [
+            {
+              target_version: "v1.0.0",
+              verified_attempt_count: 9,
+              total_case_count: 9,
+              category_count: 3,
+              execution_profile: "live",
+              evidence_provenance: "live_target",
+              classifications: ["boundary", "invariant", "regression"],
+              owasp_web: ["A01:2021", "A05:2021"],
+              owasp_llm: ["LLM01:2025", "LLM06:2025"],
+              verdict_counts: { blocked: 6, safe: 2, partial: 1 },
+              covered: true,
+              as_of: "2026-07-22T00:20:00Z",
+            },
+            {
+              target_version: "v1.1.0",
+              verified_attempt_count: 6,
+              total_case_count: 9,
+              category_count: 3,
+              execution_profile: "live",
+              evidence_provenance: "live_target",
+              classifications: ["boundary", "invariant", "regression"],
+              owasp_web: ["A01:2021", "A05:2021", "A07:2021"],
+              owasp_llm: ["LLM01:2025", "LLM02:2025", "LLM06:2025"],
+              verdict_counts: { blocked: 4, safe: 1, partial: 1 },
+              covered: false,
+              as_of: "2026-07-22T00:24:00Z",
+            },
+          ],
+        }));
+        return;
+      }
+      if (path === "/api/v1/resilience") {
+        response.end(JSON.stringify({
+          state: "ready",
+          data: [
+            { regression_id: "reg-prompt-injection", version: "v1.0.0", status: "passed", recorded_at: "2026-07-22T00:05:00Z" },
+            { regression_id: "reg-tool-boundary", version: "v1.0.0", status: "passed", recorded_at: "2026-07-22T00:06:00Z" },
+            { regression_id: "reg-data-exfiltration", version: "v1.0.0", status: "failed", recorded_at: "2026-07-22T00:07:00Z" },
+            { regression_id: "reg-prompt-injection", version: "v1.1.0", status: "passed", recorded_at: "2026-07-22T00:22:00Z" },
+            { regression_id: "reg-data-exfiltration", version: "v1.1.0", status: "review pending", recorded_at: "2026-07-22T00:23:00Z" },
+          ],
+        }));
+        return;
+      }
+      if (path === "/api/v1/configuration") {
+        response.end(JSON.stringify({
+          state: "ready",
+          data: {
+            snapshot_id: "configuration-snapshot-0042",
+            version: 42,
+            status: "published",
+            configuration: {
+              orchestration: { concurrency: 3, strategy: "coverage_gap" },
+              observability: { langfuse: true, durable_request_ledger: true },
+              safety: { synthetic_data_only: true, publication_gate: true },
+              judge: { independent: true, calibration_set: "week3-v2" },
+            },
+            published_at: "2026-07-22T00:10:00Z",
+            published_by: "user_configuration_admin",
+          },
+        }));
+        return;
+      }
+      if (path === "/api/v1/components") {
+        response.end(JSON.stringify({
+          state: "ready",
+          data: [
+            { component_id: "orchestrator", name: "Orchestrator", kind: "agent", availability: "operational and evidenced", environment: "staging", detail: "Coverage-gap scheduling and bounded dispatch are active.", heartbeat_at: "2026-07-22T00:24:00Z" },
+            { component_id: "red-team", name: "Red Team", kind: "agent", availability: "operational and evidenced", environment: "staging", detail: "Live mutation worker is consuming authorized work.", heartbeat_at: "2026-07-22T00:24:02Z" },
+            { component_id: "judge", name: "Independent Judge", kind: "agent", availability: "operational and evidenced", environment: "staging", detail: "Independent verdict projection is current.", heartbeat_at: "2026-07-22T00:24:03Z" },
+            { component_id: "zap", name: "OWASP ZAP", kind: "security_tool", availability: "adapter integrated, execution deferred", environment: "staging", detail: "Adapter ready; execution requires exact authorization.", heartbeat_at: "2026-07-22T00:23:59Z" },
+          ],
+        }));
+        return;
+      }
+      if (path === "/api/v1/audit") {
+        response.end(JSON.stringify({
+          state: "ready",
+          data: [
+            { cursor: 65, event_type: "campaign.completed", aggregate_type: "campaign", aggregate_id: "browser-campaign-alpha", actor_user_id: null, payload: { attempts: 9 }, created_at: "2026-07-22T00:06:25Z" },
+            { cursor: 66, event_type: "finding.confirmed", aggregate_type: "finding", aggregate_id: "finding-prompt-injection", actor_user_id: "user_independent_judge", payload: { severity: "critical" }, created_at: "2026-07-22T00:07:10Z" },
+            { cursor: 67, event_type: "configuration.published", aggregate_type: "configuration", aggregate_id: "configuration-snapshot-0042", actor_user_id: "user_configuration_admin", payload: { version: 42 }, created_at: "2026-07-22T00:10:00Z" },
+            { cursor: 68, event_type: "campaign.authorization_requested", aggregate_type: "approval", aggregate_id: "browser-approval-gamma", actor_user_id: "user_operator", payload: { target_id: "browser-target" }, created_at: "2026-07-22T00:14:00Z" },
           ],
         }));
         return;
