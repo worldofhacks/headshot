@@ -13,7 +13,6 @@ env
 .claude
 docs
 tests
-evals
 tmp
 .playwright-cli
 **/node_modules

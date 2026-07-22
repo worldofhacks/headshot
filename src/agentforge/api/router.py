@@ -68,6 +68,8 @@ class AuthorizationRequestInput(_StrictModel):
     surface_id: str = Field(min_length=1, max_length=64)
     surface_version: str = Field(min_length=1, max_length=32)
     corpus_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
+    corpus_id: str = Field(default="m11-seed-corpus-v1", min_length=1, max_length=64)
+    execution_profile: Literal["synthetic", "live"] = "live"
     run_nonce: str = Field(min_length=16, max_length=128)
     caps: CapsInput
     expires_in_seconds: int = Field(default=900, ge=60, le=3600)

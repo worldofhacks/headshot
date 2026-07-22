@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentforge.dev/contracts/v1/tool_execution_error.json",
+  "title": "ToolExecutionError",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "error_id", "run_id", "tool_name", "tool_version", "code",
+    "retryable", "sanitized_message", "created_at"
+  ],
+  "properties": {
+    "schema_version": {"const": "1"},
+    "error_id": {"type": "string", "minLength": 1, "maxLength": 160},
+    "run_id": {"type": "string", "minLength": 1, "maxLength": 128},
+    "tool_name": {"type": "string", "minLength": 1, "maxLength": 64},
+    "tool_version": {"type": "string", "minLength": 1, "maxLength": 64},
+    "code": {
+      "enum": ["timeout", "malformed_output", "scope_escape", "process_failed", "output_limit", "config_invalid"]
+    },
+    "retryable": {"type": "boolean"},
+    "sanitized_message": {"type": "string", "minLength": 1, "maxLength": 500},
+    "created_at": {"type": "string", "format": "date-time"}
+  }
+}

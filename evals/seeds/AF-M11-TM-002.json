@@ -51,6 +51,7 @@
   },
   "owasp": [
     {"framework": "OWASP Web", "version": "2021", "id": "A01", "name": "Broken Access Control"},
+    {"framework": "OWASP Web", "version": "2021", "id": "A10", "name": "Server-Side Request Forgery"},
     {"framework": "OWASP LLM", "version": "2025", "id": "LLM06", "name": "Excessive Agency"}
   ],
   "oracle_expectation": {

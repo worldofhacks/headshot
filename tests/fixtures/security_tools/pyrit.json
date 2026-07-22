@@ -1,0 +1,12 @@
+{
+  "findings": [
+    {
+      "id": "pyrit.orchestrator.synthetic-001",
+      "severity": "medium",
+      "confidence": 0.82,
+      "owasp_mappings": ["LLM01:2025", "LLM02:2025"],
+      "summary": "Synthetic parser fixture for a multi-turn jailbreak result.",
+      "disposition": "defer"
+    }
+  ]
+}

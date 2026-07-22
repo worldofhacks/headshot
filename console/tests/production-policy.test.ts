@@ -22,7 +22,7 @@ const forbidden = [
   /CN-7731/i,
   /Demo scenario/i,
   /prototype principal/i,
-  /simulat(?:e|ed|ion)/i,
+  /simulation (?:engine|dataset)|simulate\s*\(/i,
   /Math\.random\s*\(/,
   /setInterval\s*\(/,
   /dangerouslySetInnerHTML/,

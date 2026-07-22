@@ -43,9 +43,11 @@ const scope = {
   method: "POST",
   relative_path: "api",
   endpoint: "https://target.invalid/api",
+  corpus_id: "m11-seed-corpus-v1",
   corpus_hash: "corpus-1",
   caps,
   run_nonce: "nonce-1",
+  execution_profile: "live",
 };
 const finding = {
   finding_id: "finding-1",
@@ -55,6 +57,12 @@ const finding = {
   target_version: "1.0.0",
   publication_status: "pending",
   evidence_integrity: "verified",
+  source_kind: "campaign",
+  execution_profile: "synthetic",
+  evidence_provenance: "synthetic_offline",
+  campaign_run_id: "run-1",
+  attempt_id: "attempt-1",
+  evidence_content_hash: "content-1",
   history: [{ decision: "confirmed", actor_user_id: "user-1", rationale: "evidence", created_at: at }],
 };
 
@@ -72,12 +80,12 @@ const validResources: Array<[string, (value: unknown) => unknown, unknown]> = [
   [
     "attempts",
     decodeAttempts,
-    [{ attempt_id: "attempt-1", ordinal: 0, case_id: "case-1", content_hash: null, executed_at: null, trace_id: null, verdict: null, confidence: null, created_at: at }],
+    [{ attempt_id: "attempt-1", ordinal: 0, case_id: "case-1", content_hash: null, executed_at: null, trace_id: null, verdict: null, confidence: null, execution_profile: null, evidence_provenance: null, created_at: at }],
   ],
   [
     "evidence",
     decodeEvidence,
-    { attempt_id: "attempt-1", campaign_run_id: "run-1", target_id: "target-1", target_version: "1.0.0", surface_id: "surface-1", surface_version: "1.0.0", attack_attempt: {}, request_transcript: {}, response_transcript: "response", policy_decision_id: "policy-1", executed_at: at, trace_id: null, content_hash: "content-1", verdict: null, confidence: null },
+    { attempt_id: "attempt-1", campaign_run_id: "run-1", target_id: "target-1", target_version: "1.0.0", surface_id: "surface-1", surface_version: "1.0.0", attack_attempt: {}, request_transcript: {}, response_transcript: "response", policy_decision_id: "policy-1", executed_at: at, trace_id: null, content_hash: "content-1", verdict: null, confidence: null, execution_profile: null, evidence_provenance: null },
   ],
   [
     "findings",
@@ -97,7 +105,7 @@ const validResources: Array<[string, (value: unknown) => unknown, unknown]> = [
   [
     "coverage",
     decodeCoverage,
-    [{ target_version: "1.0.0", verified_attempt_count: 1, covered: true, as_of: at }],
+    [{ target_version: "target-1@1.0.0", verified_attempt_count: 9, total_case_count: 9, category_count: 3, execution_profile: "synthetic", evidence_provenance: "synthetic_offline", classifications: ["boundary", "invariant"], owasp_web: ["A01"], owasp_llm: ["LLM01"], verdict_counts: { INDETERMINATE: 9 }, covered: true, as_of: at }],
   ],
   [
     "resilience",
@@ -117,7 +125,7 @@ const validResources: Array<[string, (value: unknown) => unknown, unknown]> = [
   [
     "targets and surfaces",
     decodeTargets,
-    [{ target_id: "target-1", name: "Registered target", version: "1.0.0", content_hash: "target-hash", lifecycle: "ready", environment: "staging", adapter_kind: "openemr", base_url: "https://target.invalid", auth_mode: "bearer", credential_configured: true, synthetic_data_only: true, safety_caps: caps, allowed_lifecycle_transitions: ["disabled"], created_at: at, surfaces: [{ surface_id: "surface-1", version: "1.0.0", target_version: "1.0.0", content_hash: "surface-hash", kind: "chat", protocol: "https", method: "POST", relative_path: "api", trust_boundary: "external-target", authentication_required: true, risk: "high", owasp_mappings: [], oracle_refs: [], enabled: true, created_at: at }] }],
+    [{ target_id: "target-1", name: "Registered target", version: "1.0.0", content_hash: "target-hash", lifecycle: "ready", environment: "staging", adapter_kind: "openemr", base_url: "https://target.invalid", auth_mode: "bearer", credential_configured: true, synthetic_data_only: true, safety_caps: caps, allowed_lifecycle_transitions: ["disabled"], campaign_template: null, created_at: at, surfaces: [{ surface_id: "surface-1", version: "1.0.0", target_version: "1.0.0", content_hash: "surface-hash", kind: "chat", protocol: "https", method: "POST", relative_path: "api", trust_boundary: "external-target", authentication_required: true, risk: "high", owasp_mappings: [], oracle_refs: [], enabled: true, created_at: at }] }],
   ],
   [
     "configuration",

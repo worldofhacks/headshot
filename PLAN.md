@@ -351,14 +351,21 @@ contracts framework-neutral.
 
 ## 9. Immediate next actions
 
-1. **Land the offline Clerk authentication foundation** with generated test keys/tokens and no
-   Clerk, Railway, target, model, or JWKS network dependency. This does not make the app authenticated.
-2. **Integrate after concurrent owners land** — wire authentication into the Web API and console in a
-   dedicated integration task; protect event streams and every data-bearing route by default.
-3. **Provision Clerk and Railway only with human authorization** — separate staging/production
-   configuration, full private-service topology, exact organization/origin constraints, and MFA.
-4. **Verify before claiming deployment** — exercise 401/403/503 behavior, permission boundaries,
-   two-person authorization, environment isolation, rollback, and health/readiness; then record URLs.
+1. **Publish the reviewed integration branch** and require the complete GitHub test, console,
+   container, secret-scan, and security-tools jobs before Railway promotion.
+2. **Deploy only the existing Railway staging project** — public Web, private Postgres and private
+   Runner; no Scheduler and no production deployment in this timebox.
+3. **Complete the human Clerk Dashboard checks** — exact staging Organization/origin, restricted
+   enrollment, MFA, custom Operator/Approver permissions, and two distinct real users. Do not use the
+   Clerk management API or secret key.
+4. **Run the deployed synthetic rehearsal** through normal two-person authorization, then verify all
+   nine persisted attempts, events, findings, accounting, and hash-derived Coverage after refresh.
+5. **Keep live execution blocked until its separate exact authorization exists** — use only the
+   persisted target URL, surface, credential reference, synthetic fixture/canary, caps, nonce, and
+   distinct approval. If any preflight item is absent, send zero requests and report the blocker.
+6. **Verify before claiming deployment or live execution** — exercise 401/403/503 behavior,
+   permission boundaries, two-person authorization, environment isolation, rollback, and
+   health/readiness; then record exact URLs and identifiers.
 
 ---
 

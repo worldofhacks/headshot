@@ -65,8 +65,14 @@ fails the assignment, the budget, and the governance model.
 Any commercial LLM red-team platform — **Lakera Red, HiddenLayer, Robust Intelligence / Cisco AI
 Defense**. Excluded on three independent grounds: **budget** (sales-only, $10k–$200k+ vs $50–200);
 **architecture** (closed, non-composable, un-governable under our own allowlist/cost caps); **thesis**
-(adopting one *is* the reusable platform we're told to build). Burp Suite Pro ($499/yr) is deferred to
-*optional-at-Final* for manual web pentest; never Burp DAST/Enterprise.
+(adopting one *is* the reusable platform we're told to build).
+
+Burp Suite Pro/DAST/Enterprise and the commercial AI-security platforms are **evaluated and
+rejected** for this MVP. The reasons are cumulative: licensing and purchase cost exceed the approved
+OSS path; closed execution and reporting limit contract-level provenance; vendor governance cannot
+enforce our two-person approval and exact-origin policy; and Burp duplicates the bounded passive ZAP
+integration plus the platform's custom multi-agent evaluator. A future separately authorized manual
+assessment may revisit Burp, but it is not installed or purchased here.
 
 ## Consequences
 - **Positive:** near-zero integration cost; OWASP **LLM** mapping (`owasp:llm`) + multi-turn scaffolding +

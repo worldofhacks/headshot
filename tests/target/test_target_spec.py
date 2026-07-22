@@ -269,7 +269,9 @@ def test_authorization_scope_is_canonical_and_credential_free_for_no_auth() -> N
         "protocol": "https",
         "method": "POST",
         "relative_path": "v1/chat",
+        "corpus_id": "m11-seed-corpus-v1",
         "corpus_hash": "a" * 64,
+        "execution_profile": "live",
         "caps": {
             "budget_usd": 10.0,
             "max_attempts_per_run": 20,

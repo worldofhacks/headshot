@@ -49,9 +49,11 @@ class SafeAuthorizationScopeReadModel(_ReadModel):
     method: str
     relative_path: str
     endpoint: str
+    corpus_id: str
     corpus_hash: str
     caps: SafetyCapsReadModel
     run_nonce: str
+    execution_profile: Literal["synthetic", "live"]
 
 
 class CampaignReadModel(SafeAuthorizationScopeReadModel):
@@ -73,6 +75,10 @@ class AttemptReadModel(_ReadModel):
     trace_id: str | None = None
     verdict: str | None = None
     confidence: float | None = None
+    execution_profile: Literal["synthetic", "live"] | None = None
+    evidence_provenance: (
+        Literal["synthetic_offline", "live_target", "scan_only", "simulated"] | None
+    ) = None
     created_at: datetime.datetime
 
 
@@ -92,6 +98,10 @@ class EvidenceReadModel(_ReadModel):
     content_hash: str
     verdict: str | None = None
     confidence: float | None = None
+    execution_profile: Literal["synthetic", "live"] | None = None
+    evidence_provenance: (
+        Literal["synthetic_offline", "live_target", "scan_only", "simulated"] | None
+    ) = None
 
 
 class ApprovalReadModel(SafeAuthorizationScopeReadModel):
@@ -124,6 +134,17 @@ class SurfaceReadModel(_ReadModel):
     created_at: datetime.datetime
 
 
+class CampaignTemplateReadModel(_ReadModel):
+    target_id: str
+    target_version: str
+    surface_id: str
+    surface_version: str
+    corpus_id: str
+    corpus_hash: str
+    execution_profile: Literal["synthetic", "live"]
+    maximum_caps: SafetyCapsReadModel
+
+
 class TargetReadModel(_ReadModel):
     target_id: str
     version: str
@@ -139,6 +160,7 @@ class TargetReadModel(_ReadModel):
     lifecycle: str
     allowed_lifecycle_transitions: list[str]
     surfaces: list[SurfaceReadModel]
+    campaign_template: CampaignTemplateReadModel | None = None
     created_at: datetime.datetime
 
 
@@ -168,12 +190,26 @@ class FindingReadModel(_ReadModel):
     target_version: str
     publication_status: str
     evidence_integrity: str
+    source_kind: str
+    execution_profile: Literal["synthetic", "live"]
+    evidence_provenance: str
+    campaign_run_id: str
+    attempt_id: str
+    evidence_content_hash: str
     history: tuple[FindingHistoryReadModel, ...]
 
 
 class CoverageReadModel(_ReadModel):
     target_version: str
     verified_attempt_count: int = Field(ge=0)
+    total_case_count: int = Field(ge=0)
+    category_count: int = Field(ge=0)
+    execution_profile: Literal["synthetic", "live"]
+    evidence_provenance: str
+    classifications: tuple[str, ...]
+    owasp_web: tuple[str, ...]
+    owasp_llm: tuple[str, ...]
+    verdict_counts: dict[str, int]
     covered: bool
     as_of: datetime.datetime
 
@@ -225,12 +261,15 @@ _LIST_ADAPTERS = {
     "approvals": TypeAdapter(list[ApprovalReadModel]),
     "targets": TypeAdapter(list[TargetReadModel]),
     "audit": TypeAdapter(list[AuditReadModel]),
+    "findings": TypeAdapter(list[FindingReadModel]),
+    "coverage": TypeAdapter(list[CoverageReadModel]),
 }
 _SINGLE_ADAPTERS = {
     "principal": TypeAdapter(PrincipalReadModel),
     "campaign": TypeAdapter(CampaignReadModel),
     "evidence": TypeAdapter(EvidenceReadModel),
     "target": TypeAdapter(TargetReadModel),
+    "finding": TypeAdapter(FindingReadModel),
 }
 
 
@@ -248,6 +287,7 @@ __all__ = [
     "AttemptReadModel",
     "AuditReadModel",
     "CampaignReadModel",
+    "CampaignTemplateReadModel",
     "ComponentReadModel",
     "ConfigurationReadModel",
     "CostReadModel",

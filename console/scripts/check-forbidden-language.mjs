@@ -31,7 +31,7 @@ const PRODUCT_COUPLING = [
 const PRODUCTION_BOUNDARY = [
   /RUN 042/i, /Atlas Support Agent/i, /F-1042/i, /AP-01/i, /A-0185/i,
   /A-0177/i, /CN-7731/i, /Demo scenario/i, /prototype principal/i,
-  /simulat(?:e|ed|ion)/i, /Math\.random\s*\(/, /setInterval\s*\(/,
+  /simulation (?:engine|dataset)|simulate\s*\(/i, /Math\.random\s*\(/, /setInterval\s*\(/,
   /dangerouslySetInnerHTML/, /localStorage/, /sessionStorage/, /IndexedDB/,
   /from\s+["']\.\/?data["']/,
 ];

@@ -27,6 +27,7 @@ def test_runtime_contains_only_built_console_assets_and_deploy_artifacts() -> No
     assert re.search(r"COPY --from=console-build .*?/dist /app/console", runtime)
     assert "COPY alembic.ini /app/alembic.ini" in runtime
     assert "COPY migrations /app/migrations" in runtime
+    assert "COPY evals /app/evals" in runtime
     assert "COPY console" not in runtime
     assert "node_modules" not in runtime
     assert "CLERK_SECRET_KEY" not in dockerfile
@@ -56,6 +57,7 @@ def test_docker_context_excludes_node_outputs_maps_and_local_render_artifacts() 
     assert "**/dist" in patterns
     assert "**/*.map" in patterns
     assert "tmp" in patterns
+    assert "evals" not in patterns
 
 
 def test_local_compose_requires_the_public_clerk_build_identifier() -> None:

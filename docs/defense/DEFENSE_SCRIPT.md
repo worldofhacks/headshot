@@ -13,7 +13,7 @@
 > (a real number from a real trace), or `[planned]` (designed, scheduled). Local foundations now exist,
 > but every claim still needs its own evidence. Railway provisioning, Clerk Dashboard configuration,
 > real-user verification, and authenticated deployment remain `[selected]`/`[planned]`. The same-origin
-> FastAPI/console bearer wiring, revision `0005` control plane, and image/process packaging are
+> FastAPI/console bearer wiring, revision `0006` control/results plane, durable Runner, and image/process packaging are
 > `[implemented locally]`; that label is not a deployment claim. Do not infer a deployed/green state
 > from local tests.
 
@@ -120,10 +120,9 @@ spec's regen note.)*
 reads coverage gaps and open findings from that same store. The loop closes through data, not a
 hand-off."
 
-**Concede.** The learning signal is only as good as the coverage metric behind it — that metric must be
-per-target and computed against declared capabilities. The current console returns coverage as
-unavailable because its projection does not yet prove both content-hash reconciliation and nonce
-deduplication.
+**Concede.** The learning signal is only as good as the coverage metric behind it. The local projection
+now requires hash-verified evidence, persisted verdicts, valid taxonomy, synthetic fixture provenance,
+and nonce deduplication; its deployed and live-target operation remain unverified.
 
 ---
 
@@ -144,9 +143,9 @@ it. What it doesn't do is orchestrate by coverage gap, judge independently, docu
 maintain a regression corpus across target versions. We configured the attack primitives and built the
 system around them."
 
-**Concede.** Wrapping PyRIT/Garak/Giskard is deferred to post-MVP (D12, the only `proposed` decision).
-MVP ships a hand-authored corpus plus our mutation loop, because the wrap is real engineering that
-risks Tuesday.
+**Concede.** PyRIT/Garak/Giskard have versioned parser/normalization seams and fixture contract tests,
+but pinned offline executions remain deferred. The MVP campaign uses the hand-authored nine-case corpus;
+none of these tools is claimed as executed or as verdict authority.
 
 ---
 
@@ -230,7 +229,8 @@ oracle the ownership boundary denies; the ground-truth calibration set is the co
 **Say.** "`[selected]` Railway hosts the **full platform**, not only a worker: one public Web service for
 the console/API and only the minimal health/authentication shell; private runner, scheduler, and Postgres
 services behind it. `[implemented locally]` One multi-stage image carries only the Python runtime, built
-console, and complete Alembic apply path; separate no-listener runner/scheduler entrypoints are packaged.
+console, corpus, and complete Alembic apply path; the no-listener private Runner is composed and the
+Scheduler remains explicitly deferred.
 `[planned]` Staging and production have different databases, variables, target authorization, Clerk
 applications, exact Organization IDs, and origins. No Railway URL is claimed until it is provisioned and
 verified."
@@ -243,7 +243,7 @@ DB/schema/local-auth-config readiness, and deployment-history rollback is paired
 rolling back a container does not roll back data.
 
 **If pushed — "what is actually live?"** "Nothing in this beat is presented as deployed or live. The
-container/process topology and migration head `0005` are local artifacts. Project creation, domains,
+container/process topology and migration head `0006` are local artifacts. Domains,
 sealed variables, private-service inspection, smoke tests, rollback exercise, and URLs remain a
 human-authorized integration task. README says `PENDING`."
 
@@ -275,7 +275,7 @@ Gateway. Approval also proves a second identity — role or permission never ove
 `approver.user_id != launcher_user_id`."
 
 **Concede.** `[implemented locally]` The React console obtains a session token at request time, the
-FastAPI `/api/v1` boundary requires it as Bearer authentication, and revision `0005` persists the exact
+FastAPI `/api/v1` boundary requires it as Bearer authentication, and revision `0006` persists the exact
 authorization scope and immutable launcher. Application and database controls reject self-approval;
 queue completion cannot approve. `[planned]` Clerk Dashboard resources, two real users, and Railway auth
 smoke remain unverified. Networkless JWT verification also means permission revocation freshness is
@@ -315,7 +315,7 @@ with the reason — the eval suite draws its ≥3 categories from the live-testa
 | Who can access the console/API? | `[implemented locally; deployment unverified]` The API accepts only an active Bearer `session_token` from an exact authorized party and Headshot Organization. Backend custom permissions authorize actions; frontend labels and Clerk system permissions do not. Public responses are limited to `/health`, `/ready`, built assets, and the non-data SPA/Clerk shell. |
 | What happens if Clerk or auth config fails? | Issued sessions verify networklessly from the pinned PEM key, so JWKS is not a hot-path dependency. Missing/invalid auth is `401`, valid identity without org/permission/distinct approver is `403`, and SDK/verifier/security-config failure is fail-closed `503`. Never log the token or authorization header. |
 | Can the launcher approve their own campaign? | No. The authenticated launcher is persisted with the exact authorization scope; approval reloads it server-side, and both application logic and a database trigger compare immutable verified user IDs. The browser cannot provide launcher identity. Queue completion is not approval. There is no solo or emergency bypass. |
-| Is campaign launch operational? | No. Authorization-request and approval persistence exist locally, but launch reports a typed unavailable result until the private runner has a reviewed target-bound credential resolver and surface-bound executor. Authentication or an approval never bypasses that refusal. |
+| Is campaign launch operational? | Locally, yes: an exact approved request creates a real queue job and the private Runner completes the nine-case synthetic profile. Deployment and a live-target campaign remain unverified and blocked until their exact Clerk/target authorization and preflight evidence exist. Authentication or approval alone never bypasses those gates. |
 | What backs the queue, and what happens when it backs up? | One Postgres (`SKIP LOCKED`); jobs accumulate *durably* — nothing dropped — depth is visible, and the cost governor throttles new campaigns. Graceful, observable degradation. |
 | One honest weakness? | LangGraph checkpoints are crash-persistence, not exactly-once durable execution — mitigated with an app-level lock; DBOS-on-Postgres is the path if unattended multi-hour campaigns come into scope. |
 

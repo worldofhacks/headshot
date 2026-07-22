@@ -117,9 +117,8 @@ app = create_web_app(
     backend=build_postgres_backend(
         _database_url,
         environment=_settings.environment,
-        # Live execution remains unavailable until the private runner has a reviewed
-        # credential-value resolver and surface-bound adapter composition.  Keeping
-        # this false prevents Web from acknowledging launches it cannot execute.
-        runner_available=False,
+        # Launch only appends exact approved work to the durable queue. The private Runner
+        # independently reconstructs and revalidates every dispatch fact from Postgres.
+        runner_available=True,
     ),
 )

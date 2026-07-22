@@ -100,9 +100,11 @@ class RunAccounting:
     def __init__(self, per_call_usd: float | None = None) -> None:
         self.per_call_usd = _DEFAULT_PER_CALL_USD if per_call_usd is None else float(per_call_usd)
         self.spent_usd = 0.0
+        self.request_count = 0
 
     def charge(self) -> None:
         self.spent_usd += self.per_call_usd
+        self.request_count += 1
 
 
 def accounting_from_environment() -> RunAccounting:

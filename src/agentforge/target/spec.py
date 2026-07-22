@@ -37,6 +37,13 @@ class TargetEnvironment(StrEnum):
     PRODUCTION = "production"
 
 
+class ExecutionProfile(StrEnum):
+    """Closed execution modes bound into every campaign authorization hash."""
+
+    SYNTHETIC = "synthetic"
+    LIVE = "live"
+
+
 class AuthMode(StrEnum):
     NONE = "none"
     BEARER = "bearer"
@@ -488,6 +495,8 @@ class AuthorizationScope:
     corpus_hash: str
     caps: SafetyCaps
     run_nonce: str
+    corpus_id: str = "m11-seed-corpus-v1"
+    execution_profile: ExecutionProfile = ExecutionProfile.LIVE
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "target_id", _require_identifier(self.target_id, "target_id"))
@@ -529,6 +538,12 @@ class AuthorizationScope:
             raise DefinitionError("caps must be a validated SafetyCaps value")
         if not isinstance(self.run_nonce, str) or _RUN_NONCE_RE.fullmatch(self.run_nonce) is None:
             raise DefinitionError("run_nonce must be a stable bounded nonce")
+        object.__setattr__(self, "corpus_id", _require_identifier(self.corpus_id, "corpus_id"))
+        object.__setattr__(
+            self,
+            "execution_profile",
+            _coerce_enum(self.execution_profile, ExecutionProfile, "execution_profile"),
+        )
 
     @classmethod
     def for_definitions(
@@ -539,6 +554,8 @@ class AuthorizationScope:
         corpus_hash: str,
         caps: SafetyCaps,
         run_nonce: str,
+        corpus_id: str = "m11-seed-corpus-v1",
+        execution_profile: ExecutionProfile = ExecutionProfile.LIVE,
     ) -> AuthorizationScope:
         if surface.target_id != target.target_id or surface.target_version != target.version:
             raise DefinitionError("surface reference does not match the target definition")
@@ -559,6 +576,8 @@ class AuthorizationScope:
             corpus_hash=corpus_hash,
             caps=caps,
             run_nonce=run_nonce,
+            corpus_id=corpus_id,
+            execution_profile=execution_profile,
         )
 
     def canonical_payload(self) -> dict[str, object]:
@@ -576,9 +595,11 @@ class AuthorizationScope:
             "protocol": self.protocol,
             "method": self.method,
             "relative_path": self.relative_path,
+            "corpus_id": self.corpus_id,
             "corpus_hash": self.corpus_hash,
             "caps": self.caps.canonical_payload(),
             "run_nonce": self.run_nonce,
+            "execution_profile": self.execution_profile.value,
         }
 
     def canonical_bytes(self) -> bytes:
@@ -598,6 +619,7 @@ __all__ = [
     "AuthMode",
     "AuthorizationScope",
     "DefinitionError",
+    "ExecutionProfile",
     "OwaspMapping",
     "RiskLevel",
     "SafetyCaps",

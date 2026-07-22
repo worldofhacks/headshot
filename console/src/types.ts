@@ -24,9 +24,11 @@ export interface AuthorizationScopeReadModel extends JsonRecord {
   method: string;
   relative_path: string;
   endpoint: string;
+  corpus_id: string;
   corpus_hash: string;
   caps: SafetyCapsReadModel;
   run_nonce: string;
+  execution_profile: "synthetic" | "live";
 }
 
 export interface CampaignReadModel extends AuthorizationScopeReadModel {
@@ -48,6 +50,8 @@ export interface AttemptReadModel extends JsonRecord {
   trace_id: string | null;
   verdict: string | null;
   confidence: number | null;
+  execution_profile: "synthetic" | "live" | null;
+  evidence_provenance: "synthetic_offline" | "live_target" | "scan_only" | "simulated" | null;
   created_at: string;
 }
 
@@ -84,6 +88,12 @@ export interface FindingReadModel extends JsonRecord {
   target_version: string;
   publication_status: string;
   evidence_integrity: string;
+  source_kind: string;
+  execution_profile: "synthetic" | "live";
+  evidence_provenance: string;
+  campaign_run_id: string;
+  attempt_id: string;
+  evidence_content_hash: string;
   history: FindingHistoryReadModel[];
 }
 
@@ -104,6 +114,14 @@ export interface ApprovalReadModel extends AuthorizationScopeReadModel {
 export interface CoverageReadModel extends JsonRecord {
   target_version: string;
   verified_attempt_count: number;
+  total_case_count: number;
+  category_count: number;
+  execution_profile: "synthetic" | "live";
+  evidence_provenance: string;
+  classifications: string[];
+  owasp_web: string[];
+  owasp_llm: string[];
+  verdict_counts: JsonRecord;
   covered: boolean;
   as_of: string;
 }
@@ -150,6 +168,17 @@ export interface AttackSurfaceReadModel extends JsonRecord {
   created_at: string;
 }
 
+export interface CampaignTemplateReadModel extends JsonRecord {
+  target_id: string;
+  target_version: string;
+  surface_id: string;
+  surface_version: string;
+  corpus_id: string;
+  corpus_hash: string;
+  execution_profile: "synthetic" | "live";
+  maximum_caps: SafetyCapsReadModel;
+}
+
 export interface TargetReadModel extends JsonRecord {
   target_id: string;
   version: string;
@@ -165,6 +194,7 @@ export interface TargetReadModel extends JsonRecord {
   lifecycle: string;
   allowed_lifecycle_transitions: string[];
   surfaces: AttackSurfaceReadModel[];
+  campaign_template: CampaignTemplateReadModel | null;
   created_at: string;
 }
 

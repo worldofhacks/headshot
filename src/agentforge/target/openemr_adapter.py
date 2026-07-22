@@ -29,6 +29,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
+from urllib.parse import urlsplit
 
 from agentforge.secrets import Secret
 from agentforge.target.base import (
@@ -48,7 +49,7 @@ _DEFAULT_BACKOFF_SECONDS = 1.0
 
 # The single API path the adapter POSTs an attack turn-sequence to. API-primary: the adapter
 # talks to the target over its HTTP API, not a scraped UI.
-_API_PATH = "/apis/default/api/copilot/message"
+_API_PATH = "apis/default/api/copilot/message"
 
 
 class _BearerAuth:
@@ -84,7 +85,12 @@ def _default_client_factory(timeout: float) -> Any:
     """
     import httpx  # lazy: never at module import time (D10) — no connection on import/preflight
 
-    return httpx.Client(timeout=timeout)
+    return httpx.Client(
+        timeout=timeout,
+        follow_redirects=False,
+        verify=True,
+        trust_env=False,
+    )
 
 
 @dataclass
@@ -107,7 +113,30 @@ class OpenEmrAdapter(TargetAdapter):
     credential: Secret | None = None
     timeout_seconds: float = _DEFAULT_TIMEOUT_SECONDS
     backoff_seconds: float = _DEFAULT_BACKOFF_SECONDS
+    method: str = "POST"
+    relative_path: str = _API_PATH
+    redirect_policy: str = "deny"
+    response_size_limit_bytes: int = 1_048_576
+    allowed_content_types: tuple[str, ...] = ()
+    destination_validator: Callable[[str], None] | None = field(default=None, repr=False)
     name: str = "openemr"
+
+    def __post_init__(self) -> None:
+        parts = urlsplit(self.base_url)
+        if parts.scheme != "https" or not parts.hostname or parts.query or parts.fragment:
+            raise ValueError("OpenEMR adapter requires an exact HTTPS base URL")
+        if self.method not in {"GET", "POST"}:
+            raise ValueError("OpenEMR adapter method is not allowed")
+        if (
+            not self.relative_path
+            or self.relative_path.startswith("/")
+            or any(value in self.relative_path for value in ("..", "?", "#", "%", "\\"))
+        ):
+            raise ValueError("OpenEMR adapter relative path is invalid")
+        if self.redirect_policy != "deny":
+            raise ValueError("OpenEMR adapter redirects must be denied")
+        if not 1 <= self.response_size_limit_bytes <= 10_485_760:
+            raise ValueError("OpenEMR adapter response limit is invalid")
 
     def send(self, request: TargetRequest) -> TargetResponse:
         """Deliver ``request`` to the live target over HTTPS and return its response.
@@ -129,7 +158,9 @@ class OpenEmrAdapter(TargetAdapter):
         auth = self._auth()
 
         try:
-            response = client.request("POST", url, headers=headers, json=body, auth=auth)
+            if self.destination_validator is not None:
+                self.destination_validator(self.base_url)
+            response = client.request(self.method, url, headers=headers, json=body, auth=auth)
         except (TimeoutError, ConnectionError, OSError) as exc:
             # Transport-layer failure: the target could not be reached. Redact by construction —
             # the message names only the URL, never the credential.
@@ -145,16 +176,28 @@ class OpenEmrAdapter(TargetAdapter):
             ) from exc
 
         status = int(response.status_code)
+        if 300 <= status < 400:
+            raise AdapterError("OpenEMR target redirect refused by exact-scope policy")
         if status == 429:
             # Rate-limited: map to the typed error carrying retry_after (never a synthetic 200).
             raise RateLimitedError(
                 "OpenEMR target rate-limited (HTTP 429)",
                 retry_after=self._parse_retry_after(response.headers),
             )
+        output = response.text
+        if len(output.encode("utf-8")) > self.response_size_limit_bytes:
+            raise AdapterError("OpenEMR target response exceeded the configured byte limit")
+        if self.allowed_content_types:
+            try:
+                content_type = response.headers.get("Content-Type", "").split(";", 1)[0].strip()
+            except AttributeError as exc:
+                raise AdapterError("OpenEMR target response content type is unavailable") from exc
+            if content_type not in self.allowed_content_types:
+                raise AdapterError("OpenEMR target response content type is outside policy")
         # Any other status — including a non-200 target answer — is surfaced verbatim. The
         # adapter NEVER fabricates a 200.
         return TargetResponse(
-            output=response.text,
+            output=output,
             status=status,
             metadata={"adapter": self.name, "url": url},
         )
@@ -169,7 +212,7 @@ class OpenEmrAdapter(TargetAdapter):
 
     def _build_url(self) -> str:
         """Join the configured base URL with the API path (no double slash)."""
-        return f"{self.base_url.rstrip('/')}{_API_PATH}"
+        return f"{self.base_url.rstrip('/')}/{self.relative_path}"
 
     def _build_headers(self) -> dict[str, str]:
         """Build the non-credential request headers.

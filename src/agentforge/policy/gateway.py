@@ -133,6 +133,8 @@ class PolicyGateway:
         *,
         target_id: str = "fake",
         trigger: str = "direct",
+        campaign_run_id: str | None = None,
+        attempt_id: str | None = None,
     ) -> AttemptResult:
         """Enforce the gate, then dispatch exactly one logical attempt through the adapter.
 
@@ -177,7 +179,15 @@ class PolicyGateway:
         # (6) Count the logical attempt after a real dispatch, then build hashed evidence.
         # (charge + _last_dispatch_at are committed per physical send in _dispatch_with_backoff.)
         self._attempts_used += 1
-        return self._build_result(attack_attempt, target_id, request, response, credential)
+        return self._build_result(
+            attack_attempt,
+            target_id,
+            request,
+            response,
+            credential,
+            campaign_run_id=campaign_run_id,
+            attempt_id=attempt_id,
+        )
 
     # ------------------------------------------------------------------ gate steps
 
@@ -326,10 +336,13 @@ class PolicyGateway:
         request: TargetRequest,
         response,
         credential: Secret | None,
+        *,
+        campaign_run_id: str | None = None,
+        attempt_id: str | None = None,
     ) -> AttemptResult:
         """Mint a fresh run-nonce (S3) + policy_decision_id and build hashed D14 evidence."""
-        campaign_run_id = uuid.uuid4().hex  # FRESH per-dispatch nonce (S3 replay detection)
-        attempt_id = uuid.uuid4().hex
+        campaign_run_id = campaign_run_id or uuid.uuid4().hex
+        attempt_id = attempt_id or uuid.uuid4().hex
         policy_decision_id = f"pd-{uuid.uuid4().hex}"
         fields: dict[str, Any] = {
             "schema_version": "1",

@@ -295,7 +295,7 @@ def test_recursive_output_redaction_covers_headers_cookies_tokens_and_credential
     assert "secretref://" not in rendered
 
 
-def test_coverage_fails_closed_without_recomputed_evidence_integrity(
+def test_authoritative_coverage_is_empty_without_verified_persisted_evidence(
     migrated_db: Engine,
 ) -> None:
     viewer = _principal(
@@ -307,8 +307,4 @@ def test_coverage_fails_closed_without_recomputed_evidence_integrity(
     response = TestClient(_app(migrated_db, viewer)).get("/api/v1/coverage")
 
     assert response.status_code == 200
-    assert response.json() == {
-        "state": "unavailable",
-        "data": None,
-        "reason_code": "verified_coverage_projection_missing",
-    }
+    assert response.json() == {"state": "empty", "data": []}

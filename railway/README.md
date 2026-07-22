@@ -20,6 +20,6 @@ consume or enqueue work until their database is already at the integrated head. 
 `docs/deployment/RAILWAY.md` for sequencing, environment isolation, variables, rollback, and required
 deployment evidence.
 
-The private commands currently fail closed because the trusted Runner adapter/executor composition
-and authoritative Scheduler repository/queue composition are not implemented. Do not activate or
-expose those services merely because their process commands are packaged.
+The private Runner is composed over the durable queue and remains fail-closed until its database,
+catalog, corpus, exact authorization, caps, and sealed credential reference all pass preflight.
+The Scheduler remains unavailable because no authoritative schedule repository is implemented.

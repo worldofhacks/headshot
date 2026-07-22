@@ -94,6 +94,10 @@ def surface_from_payload(payload: dict[str, Any]) -> AttackSurfaceDefinition:
 
 def scope_from_payload(payload: dict[str, Any]) -> AuthorizationScope:
     values = dict(payload)
+    # Pre-0006 requests intentionally decode as the legacy live profile. Their recomputed
+    # canonical hash includes the new fields and therefore cannot pass an old stored hash.
+    values.setdefault("corpus_id", "m11-seed-corpus-v1")
+    values.setdefault("execution_profile", "live")
     values["caps"] = SafetyCaps(**values["caps"])
     return AuthorizationScope(**values)
 

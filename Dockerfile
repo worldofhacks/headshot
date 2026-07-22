@@ -59,6 +59,7 @@ RUN python -m pip install --no-index --find-links=/wheels agentforge==0.1.0 \
 # final image, not merely in the Git checkout used by CI.
 COPY alembic.ini /app/alembic.ini
 COPY migrations /app/migrations
+COPY evals /app/evals
 
 # Only compiled, production console assets cross the Node/runtime boundary.
 COPY --from=console-build --chown=app:app /build/console/dist /app/console

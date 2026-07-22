@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime
+import os
 import re
 from collections.abc import Mapping
 from dataclasses import asdict, is_dataclass
@@ -16,6 +17,7 @@ from agentforge.api.backend import ApiBackend, ApiBackendUnavailable, ApiConflic
 from agentforge.api.read_models import validate_ready_data
 from agentforge.api.schemas import CommandResult, EventBatch, ResourceResult
 from agentforge.auth.errors import AuthorizationError
+from agentforge.campaign.corpus import AuthoredCorpus, load_mvp_corpus
 from agentforge.control_plane import ControlPlaneStore
 from agentforge.control_plane.errors import (
     AuthorizationDeniedError,
@@ -26,7 +28,13 @@ from agentforge.control_plane.errors import (
     RecordNotFoundError,
 )
 from agentforge.migration_config import normalize_psycopg_url
+from agentforge.policy.recorder import (
+    PERSISTED_EVIDENCE_COLUMNS,
+    EvidenceIntegrityError,
+    ExecutionRecorder,
+)
 from agentforge.secrets import redact_mapping
+from agentforge.target.catalog import SYNTHETIC_TARGET_ID, TrustedTargetCatalog
 from agentforge.target.spec import (
     AttackSurfaceDefinition,
     OwaspMapping,
@@ -55,6 +63,9 @@ _ALLOWED_LIFECYCLE_TRANSITIONS = {
     "disabled": ["archived"],
     "archived": [],
 }
+_REQUIRED_WEB = frozenset({"A01", "A03", "A04", "A06", "A07", "A09", "A10"})
+_REQUIRED_LLM = frozenset({"LLM01", "LLM02", "LLM03", "LLM05", "LLM06"})
+_REQUIRED_CATEGORIES = frozenset({"prompt_injection", "data_exfiltration", "tool_misuse"})
 
 
 def _safe(value: Any) -> Any:
@@ -97,6 +108,21 @@ def _rows(connection, statement: str, parameters: Mapping[str, Any]) -> list[dic
     return [dict(row) for row in connection.execute(text(statement), parameters).mappings().all()]
 
 
+def _evidence_verified(row: Mapping[str, Any]) -> bool:
+    fields: dict[str, Any] = {}
+    for column in PERSISTED_EVIDENCE_COLUMNS:
+        value = row.get(column)
+        if isinstance(value, datetime.datetime):
+            value = value.astimezone(datetime.UTC).isoformat()
+        fields[column] = value
+    fields["content_hash"] = row.get("content_hash")
+    try:
+        ExecutionRecorder().verify(fields)
+    except (EvidenceIntegrityError, TypeError, ValueError):
+        return False
+    return True
+
+
 def _scope_projection(value: Any, *, target_base_url: Any = None) -> dict[str, Any]:
     """Return the reviewable authorization scope without its credential reference."""
 
@@ -117,9 +143,11 @@ def _scope_projection(value: Any, *, target_base_url: Any = None) -> dict[str, A
             "protocol",
             "method",
             "relative_path",
+            "corpus_id",
             "corpus_hash",
             "caps",
             "run_nonce",
+            "execution_profile",
         )
     }
     protocol = projected.get("protocol")
@@ -146,11 +174,13 @@ class PostgresApiBackend(ApiBackend):
         *,
         environment: str,
         runner_available: bool = False,
+        corpus: AuthoredCorpus | None = None,
     ) -> None:
         self._engine = engine
         self._store = ControlPlaneStore(engine, environment=environment)
         self._environment = environment
         self._runner_available = runner_available
+        self._corpus = corpus
 
     def read(self, resource, principal, *, identifiers=None):
         identifiers = dict(identifiers or {})
@@ -168,9 +198,6 @@ class PostgresApiBackend(ApiBackend):
                 )
             )
         unavailable = {
-            "findings": "finding_evidence_relation_missing",
-            "finding": "finding_evidence_relation_missing",
-            "coverage": "verified_coverage_projection_missing",
             "resilience": "regression_history_repository_missing",
             "traces": "persisted_trace_repository_missing",
             "costs": "measured_accounting_repository_missing",
@@ -230,7 +257,8 @@ class PostgresApiBackend(ApiBackend):
                         connection,
                         "SELECT a.attempt_id, a.ordinal, a.case_id, a.created_at, "
                         "ar.content_hash, ar.executed_at, ar.trace_id, v.state AS verdict, "
-                        "v.confidence FROM campaign_attempts a "
+                        "v.confidence, ar.execution_profile, ar.evidence_provenance "
+                        "FROM campaign_attempts a "
                         "LEFT JOIN attempt_result ar ON ar.organization_id = a.organization_id "
                         "AND ar.campaign_run_id = a.run_id AND ar.attempt_id = a.attempt_id "
                         "LEFT JOIN verdict v ON v.organization_id = a.organization_id "
@@ -249,7 +277,8 @@ class PostgresApiBackend(ApiBackend):
                         "ar.target_version, ar.surface_id, ar.surface_version, "
                         "ar.attack_attempt, ar.request_transcript, ar.response_transcript, "
                         "ar.policy_decision_id, ar.executed_at, ar.trace_id, ar.content_hash, "
-                        "v.state AS verdict, v.confidence FROM attempt_result ar "
+                        "v.state AS verdict, v.confidence, ar.execution_profile, "
+                        "ar.evidence_provenance FROM attempt_result ar "
                         "LEFT JOIN verdict v ON v.organization_id = ar.organization_id "
                         "AND v.campaign_run_id = ar.campaign_run_id "
                         "AND v.attempt_id = ar.attempt_id "
@@ -259,6 +288,172 @@ class PostgresApiBackend(ApiBackend):
                             "attempt_id": identifiers.get("attempt_id"),
                         },
                     )
+                elif resource in {"findings", "finding"}:
+                    where = "f.organization_id = :org"
+                    parameters = {"org": principal.organization_id}
+                    if resource == "finding":
+                        where += " AND f.finding_id = :finding_id"
+                        parameters["finding_id"] = identifiers.get("finding_id")
+                    source_rows = _rows(
+                        connection,
+                        "SELECT ar.*, f.finding_id AS linked_finding_id, f.state AS finding_state, "
+                        "f.severity AS finding_severity, f.category AS finding_category, "
+                        "f.target_version AS finding_target_version, f.source_kind, "
+                        "f.execution_profile AS finding_execution_profile, f.published, "
+                        "l.evidence_content_hash, l.provenance AS linked_provenance "
+                        "FROM finding f JOIN finding_evidence_links l "
+                        "ON l.organization_id = f.organization_id AND l.finding_id = f.finding_id "
+                        "JOIN attempt_result ar ON ar.organization_id = l.organization_id "
+                        "AND ar.campaign_run_id = l.campaign_run_id "
+                        "AND ar.attempt_id = l.attempt_id WHERE "
+                        + where
+                        + " ORDER BY f.created_at DESC",
+                        parameters,
+                    )
+                    rows = []
+                    for source in source_rows:
+                        if source["content_hash"] != source[
+                            "evidence_content_hash"
+                        ] or not _evidence_verified(source):
+                            return ResourceResult.unavailable("finding_evidence_integrity_failed")
+                        history = _rows(
+                            connection,
+                            "SELECT decision, actor_user_id, rationale, created_at "
+                            "FROM finding_decision_events WHERE organization_id = :org "
+                            "AND finding_id = :finding ORDER BY created_at ASC",
+                            {
+                                "org": principal.organization_id,
+                                "finding": source["linked_finding_id"],
+                            },
+                        )
+                        latest = history[-1]["decision"] if history else None
+                        publication_status = "blocked_pending_human_approval"
+                        if source["published"]:
+                            publication_status = "published"
+                        elif latest == "approved":
+                            publication_status = "approved_unpublished"
+                        elif latest == "rejected":
+                            publication_status = "rejected_unpublished"
+                        elif latest == "resolved":
+                            publication_status = "resolved_unpublished"
+                        rows.append(
+                            {
+                                "finding_id": source["linked_finding_id"],
+                                "state": "resolved"
+                                if latest == "resolved"
+                                else source["finding_state"],
+                                "severity": source["finding_severity"],
+                                "category": source["finding_category"],
+                                "target_version": source["finding_target_version"],
+                                "publication_status": publication_status,
+                                "evidence_integrity": "verified",
+                                "source_kind": source["source_kind"],
+                                "execution_profile": source["finding_execution_profile"],
+                                "evidence_provenance": source["linked_provenance"],
+                                "campaign_run_id": source["campaign_run_id"],
+                                "attempt_id": source["attempt_id"],
+                                "evidence_content_hash": source["evidence_content_hash"],
+                                "history": history,
+                            }
+                        )
+                elif resource == "coverage":
+                    source_rows = _rows(
+                        connection,
+                        "SELECT ar.*, a.case_id, a.category, a.attack_class, a.owasp_mappings, "
+                        "a.fixture_provenance, v.state AS verdict_state, "
+                        "v.created_at AS verdict_created_at FROM campaign_attempts a "
+                        "JOIN attempt_result ar ON ar.organization_id = a.organization_id "
+                        "AND ar.campaign_run_id = a.run_id AND ar.attempt_id = a.attempt_id "
+                        "JOIN verdict v ON v.organization_id = ar.organization_id "
+                        "AND v.campaign_run_id = ar.campaign_run_id "
+                        "AND v.attempt_id = ar.attempt_id "
+                        "WHERE ar.organization_id = :org ORDER BY v.created_at ASC",
+                        {"org": principal.organization_id},
+                    )
+                    groups: dict[tuple[str, str, str, str], dict[str, Any]] = {}
+                    seen: set[tuple[str, str]] = set()
+                    for source in source_rows:
+                        identity = (source["campaign_run_id"], source["attempt_id"])
+                        fixture = source.get("fixture_provenance")
+                        mappings = source.get("owasp_mappings")
+                        if (
+                            identity in seen
+                            or not _evidence_verified(source)
+                            or source.get("category") not in _REQUIRED_CATEGORIES
+                            or source.get("attack_class")
+                            not in {"boundary", "invariant", "regression"}
+                            or not isinstance(fixture, dict)
+                            or fixture.get("classification") != "synthetic"
+                            or fixture.get("contains_real_phi") is not False
+                            or not isinstance(mappings, list)
+                        ):
+                            continue
+                        seen.add(identity)
+                        key = (
+                            str(source["target_id"]),
+                            str(source["target_version"]),
+                            str(source["execution_profile"]),
+                            str(source["evidence_provenance"]),
+                        )
+                        group = groups.setdefault(
+                            key,
+                            {
+                                "attempts": set(),
+                                "cases": set(),
+                                "categories": set(),
+                                "classifications": set(),
+                                "web": set(),
+                                "llm": set(),
+                                "verdicts": {},
+                                "as_of": source["verdict_created_at"],
+                            },
+                        )
+                        group["attempts"].add(identity)
+                        group["cases"].add(source["case_id"])
+                        group["categories"].add(source["category"])
+                        group["classifications"].add(source["attack_class"])
+                        for mapping in mappings:
+                            if not isinstance(mapping, dict):
+                                continue
+                            identifier = mapping.get("id")
+                            if mapping.get("framework") == "OWASP Web" and isinstance(
+                                identifier, str
+                            ):
+                                group["web"].add(identifier)
+                            if mapping.get("framework") == "OWASP LLM" and isinstance(
+                                identifier, str
+                            ):
+                                group["llm"].add(identifier)
+                        verdict_state = str(source["verdict_state"])
+                        group["verdicts"][verdict_state] = (
+                            group["verdicts"].get(verdict_state, 0) + 1
+                        )
+                        group["as_of"] = max(group["as_of"], source["verdict_created_at"])
+                    rows = []
+                    for (target_id, target_version, profile, provenance), group in sorted(
+                        groups.items()
+                    ):
+                        rows.append(
+                            {
+                                "target_version": f"{target_id}@{target_version}",
+                                "verified_attempt_count": len(group["attempts"]),
+                                "total_case_count": len(group["cases"]),
+                                "category_count": len(group["categories"]),
+                                "execution_profile": profile,
+                                "evidence_provenance": provenance,
+                                "classifications": sorted(group["classifications"]),
+                                "owasp_web": sorted(group["web"]),
+                                "owasp_llm": sorted(group["llm"]),
+                                "verdict_counts": group["verdicts"],
+                                "covered": (
+                                    len(group["cases"]) == 9
+                                    and group["categories"] == _REQUIRED_CATEGORIES
+                                    and _REQUIRED_WEB.issubset(group["web"])
+                                    and _REQUIRED_LLM.issubset(group["llm"])
+                                ),
+                                "as_of": group["as_of"],
+                            }
+                        )
                 elif resource == "approvals":
                     rows = _rows(
                         connection,
@@ -334,6 +529,21 @@ class PostgresApiBackend(ApiBackend):
                             # SurfaceReadModel.
                             surface_payload.pop("target_id", None)
                             surface.update(surface_payload)
+                        row["campaign_template"] = None
+                        if self._corpus is not None and row["surfaces"]:
+                            surface = row["surfaces"][0]
+                            row["campaign_template"] = {
+                                "target_id": row["target_id"],
+                                "target_version": row["version"],
+                                "surface_id": surface["surface_id"],
+                                "surface_version": surface["version"],
+                                "corpus_id": self._corpus.corpus_id,
+                                "corpus_hash": self._corpus.content_hash,
+                                "execution_profile": "synthetic"
+                                if row["target_id"] == SYNTHETIC_TARGET_ID
+                                else "live",
+                                "maximum_caps": row["safety_caps"],
+                            }
                 elif resource == "audit":
                     rows = _rows(
                         connection,
@@ -359,7 +569,7 @@ class PostgresApiBackend(ApiBackend):
                     row["status"] = row.get("decision") or "pending"
 
         sanitized = _safe(rows)
-        if resource in {"campaign", "evidence", "target"}:
+        if resource in {"campaign", "evidence", "target", "finding"}:
             if not sanitized:
                 return ResourceResult.empty()
             try:
@@ -404,6 +614,17 @@ class PostgresApiBackend(ApiBackend):
                 )
                 return CommandResult.completed(surface.version, resource_id=surface.surface_id)
             if command == "request_campaign_authorization":
+                if self._corpus is not None:
+                    if (
+                        payload.get("corpus_id") != self._corpus.corpus_id
+                        or payload.get("corpus_hash") != self._corpus.content_hash
+                    ):
+                        raise ApiConflict("campaign corpus differs from trusted content")
+                    expected_profile = (
+                        "synthetic" if payload.get("target_id") == SYNTHETIC_TARGET_ID else "live"
+                    )
+                    if payload.get("execution_profile") != expected_profile:
+                        raise ApiConflict("campaign execution profile differs from trusted target")
                 caps = SafetyCaps(**dict(payload["caps"]))
                 scope = self._store.build_scope(
                     principal=principal,
@@ -414,6 +635,8 @@ class PostgresApiBackend(ApiBackend):
                     corpus_hash=str(payload["corpus_hash"]),
                     caps=caps,
                     run_nonce=str(payload["run_nonce"]),
+                    corpus_id=str(payload["corpus_id"]),
+                    execution_profile=str(payload["execution_profile"]),
                 )
                 expiry = datetime.datetime.now(datetime.UTC) + datetime.timedelta(
                     seconds=int(payload["expires_in_seconds"])
@@ -452,12 +675,15 @@ class PostgresApiBackend(ApiBackend):
                 )
                 return CommandResult.completed(record.run_id, resource_id=record.run_id)
             if command in {"decide_finding", "resolve_finding"}:
-                # The integrated evidence schema has no authoritative finding-to-evidence
-                # relation yet.  Persisting a human publication/resolution decision without
-                # proving the reviewed evidence would manufacture authority, so this path
-                # remains explicitly unavailable even though the append-only event primitive
-                # is ready for the later relation-aware service.
-                return CommandResult.unavailable("finding_evidence_relation_missing")
+                decision = str(payload["decision"]) if command == "decide_finding" else "resolved"
+                record = self._store.record_finding_decision(
+                    principal=principal,
+                    finding_id=identifiers.get("finding_id", ""),
+                    decision=decision,
+                    rationale=str(payload["rationale"]),
+                    idempotency_key=idempotency_key,
+                )
+                return CommandResult.completed(record.decision_id, resource_id=record.finding_id)
             if command == "request_live_probe_authorization":
                 return CommandResult.unavailable("distinct_live_probe_workflow_missing")
             if command in {"validate_configuration", "publish_configuration"}:
@@ -556,10 +782,19 @@ def build_postgres_backend(
 
         return UnavailableApiBackend()
     engine = create_engine(normalize_psycopg_url(database_url), pool_pre_ping=True, future=True)
+    corpus = load_mvp_corpus()
+    required_org = os.environ.get("CLERK_REQUIRED_ORG_ID")
+    if required_org:
+        catalog = TrustedTargetCatalog.from_environment(environment)
+        catalog.synchronize(
+            ControlPlaneStore(engine, environment=environment),
+            organization_id=required_org,
+        )
     return PostgresApiBackend(
         engine,
         environment=environment,
         runner_available=runner_available,
+        corpus=corpus,
     )
 
 

@@ -23,6 +23,7 @@ from agentforge.control_plane import (
     IdempotencyConflictError,
     RecordNotFoundError,
 )
+from agentforge.policy.recorder import ExecutionRecorder
 from agentforge.target.spec import (
     AttackSurfaceDefinition,
     AuthMode,
@@ -459,14 +460,70 @@ def test_finding_decision_persists_bounded_redacted_plain_text(
     migrated_db: Engine,
 ) -> None:
     finding_id = f"finding-{uuid.uuid4().hex}"
+    campaign_run_id = uuid.uuid4().hex
+    attempt_id = uuid.uuid4().hex
+    evidence_fields = {
+        "schema_version": "1",
+        "campaign_run_id": campaign_run_id,
+        "attempt_id": attempt_id,
+        "campaign_id": "synthetic-fixture",
+        "target_id": "synthetic-target",
+        "target_version": "1.0.0",
+        "attack_attempt": {"case_ref": "synthetic-case"},
+        "request_transcript": {"request": ["synthetic input"]},
+        "response_transcript": "synthetic canary response",
+        "policy_decision_id": "fixture-policy-decision",
+        "executed_at": "2026-07-21T12:00:00+00:00",
+        "trace_id": None,
+        "correlation_id": campaign_run_id,
+        "recorder_identity": "recorder@1",
+        "recorder_version": "1",
+        "organization_id": ORG_ID,
+        "surface_id": "synthetic-surface",
+        "surface_version": "1.0.0",
+        "authorization_scope_hash": "a" * 64,
+        "execution_profile": "synthetic",
+        "evidence_provenance": "synthetic_offline",
+    }
+    recorder = ExecutionRecorder()
     with migrated_db.begin() as connection:
+        stored = recorder.record(evidence_fields, connection)
+        verdict_id = connection.execute(
+            text(
+                "INSERT INTO verdict "
+                "(state, confidence, campaign_run_id, attempt_id, organization_id, "
+                "reason_codes, confirmation_source) VALUES "
+                "('EXPLOIT_CONFIRMED', 1.0, :run, :attempt, :org, "
+                "CAST('[\"trusted_canary_hit\"]' AS jsonb), 'trusted_canary') RETURNING id"
+            ),
+            {"run": campaign_run_id, "attempt": attempt_id, "org": ORG_ID},
+        ).scalar_one()
         connection.execute(
             text(
                 "INSERT INTO finding "
-                "(finding_id, organization_id, state, severity, category, target_version) "
-                "VALUES (:finding, :org, 'candidate', 'high', 'access-control', '1.0.0')"
+                "(finding_id, organization_id, state, severity, category, target_version, "
+                "source_kind, execution_profile) VALUES "
+                "(:finding, :org, 'candidate', 'high', 'access-control', '1.0.0', "
+                "'campaign', 'synthetic')"
             ),
             {"finding": finding_id, "org": ORG_ID},
+        )
+        connection.execute(
+            text(
+                "INSERT INTO finding_evidence_links "
+                "(organization_id, finding_id, campaign_run_id, attempt_id, "
+                "evidence_content_hash, verdict_id, provenance) VALUES "
+                "(:org, :finding, :run, :attempt, :evidence_hash, :verdict_id, "
+                "'synthetic_offline')"
+            ),
+            {
+                "org": ORG_ID,
+                "finding": finding_id,
+                "run": campaign_run_id,
+                "attempt": attempt_id,
+                "evidence_hash": stored.content_hash,
+                "verdict_id": verdict_id,
+            },
         )
     approver = _principal(APPROVER_ID, permissions=(FINDINGS_APPROVE,))
     raw_secret = "Bearer this-must-never-be-persisted"

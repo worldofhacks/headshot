@@ -41,9 +41,10 @@ Framework-neutral where the core is; SQLAlchemy is used only for the recorder re
 
 from __future__ import annotations
 
+import datetime
 import uuid
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from sqlalchemy import Engine, text
@@ -62,7 +63,11 @@ from agentforge.campaign.manifest import ManifestStore
 from agentforge.config import Settings
 from agentforge.policy.allowlist import Allowlist, AllowlistEntry
 from agentforge.policy.gateway import AttemptResult, PolicyGateway, RunPolicy
-from agentforge.policy.recorder import EvidenceIntegrityError, ExecutionRecorder
+from agentforge.policy.recorder import (
+    PERSISTED_EVIDENCE_COLUMNS,
+    EvidenceIntegrityError,
+    ExecutionRecorder,
+)
 
 # The gateway's own credential resolution is bypassed here: the coordinator resolves the scoped
 # credential at THIS dispatch boundary (step 5) and injects it into the bound adapter, so the
@@ -166,6 +171,13 @@ class RunConfig:
     # computes it from the loaded corpus; unit tests that drive a single case use the "" default and
     # mint their grant over the same value.
     corpus_sha: str = ""
+    # The PostgreSQL control plane binds a broader exact scope than the legacy CLI grant.
+    # A durable Runner supplies that persisted hash and a per-dispatch database verifier.
+    authorization_operation_hash: str | None = None
+    campaign_run_id: str | None = None
+    pre_dispatch_gate: Callable[[str], None] | None = field(default=None, repr=False)
+    credential_resolver: Callable[[str | None], Any] | None = field(default=None, repr=False)
+    result_context: Mapping[str, Any] = field(default_factory=dict, repr=False)
 
 
 @dataclass(frozen=True)
@@ -220,12 +232,17 @@ class SecureCampaignCoordinator:
     # every case, so budget/attempt/rate/timeout accumulate across the WHOLE run (not per case).
     _gateway: PolicyGateway | None = field(default=None, init=False)
 
+    def __post_init__(self) -> None:
+        if self.config.campaign_run_id:
+            self.run_id = self.config.campaign_run_id
+
     def run_case(
         self,
         seed_case: Mapping[str, Any],
         *,
         run_oracle: bool = True,
         tamper_after_persist: Callable[[Engine, str, str], None] | None = None,
+        attempt_id: str | None = None,
     ) -> CampaignOutcome:
         """Run ONE selected seed case through the fail-closed chain, or BLOCK before dispatch.
 
@@ -244,7 +261,10 @@ class SecureCampaignCoordinator:
 
         try:
             return self._run_case_gated(
-                seed_case, run_oracle=run_oracle, tamper_after_persist=tamper_after_persist
+                seed_case,
+                run_oracle=run_oracle,
+                tamper_after_persist=tamper_after_persist,
+                attempt_id=attempt_id,
             )
         except (AuthorizationError, BindingError, CampaignAbort) as exc:
             # Any fail-closed gate violation durably aborts the run: write the abort-state
@@ -291,6 +311,7 @@ class SecureCampaignCoordinator:
         *,
         run_oracle: bool,
         tamper_after_persist: Callable[[Engine, str, str], None] | None,
+        attempt_id: str | None,
     ) -> CampaignOutcome:
         binding = self.config.binding
         policy = self.config.policy
@@ -309,15 +330,23 @@ class SecureCampaignCoordinator:
         # (D14) and verify the grant (missing / expired / nonce / scope) BLOCKS before dispatch.
         # This RE-VERIFIES the SAME gate the `run` command already ran BEFORE building the adapter,
         # via the shared verify_authorization_gate — defense in depth that cannot drift.
-        verify_authorization_gate(
-            binding,
-            policy=policy,
-            corpus_id=self.config.corpus_id,
-            corpus_sha=self.config.corpus_sha,
-            run_nonce=self.config.run_nonce,
-            authorization=self.config.authorization,
-            now=self.clock.now(),
-        )
+        if self.config.authorization_operation_hash is None:
+            verify_authorization_gate(
+                binding,
+                policy=policy,
+                corpus_id=self.config.corpus_id,
+                corpus_sha=self.config.corpus_sha,
+                run_nonce=self.config.run_nonce,
+                authorization=self.config.authorization,
+                now=self.clock.now(),
+            )
+        else:
+            RunAuthorization.verify_optional(
+                self.config.authorization,
+                operation_hash=self.config.authorization_operation_hash,
+                run_nonce=self.config.run_nonce,
+                now=self.clock.now(),
+            )
 
         # (2) BINDING — verify the SELECTED live adapter matches the bound target exactly. NO
         # fallback to the P9 fake ever: a mismatch raises, it never substitutes an adapter.
@@ -332,10 +361,26 @@ class SecureCampaignCoordinator:
         # Team produces no evidence). Hosted generation is skipped (deterministic replay).
         attack_attempt = seed_to_attempt(dict(seed_case))
 
+        # Re-read persisted approval, abort, scope, and lease ownership immediately before the
+        # dispatch boundary. The callback is trusted Runner composition, never browser state.
+        if self.config.pre_dispatch_gate is not None:
+            if not attempt_id:
+                raise CampaignAbort("persisted attempt identity is missing", code="attempt-invalid")
+            self.config.pre_dispatch_gate(attempt_id)
+
         # (5) SCOPED CREDENTIAL at THIS verified dispatch boundary + dispatch through the BOUND
         # live connector. The credential resolves to a Secret only here (O1), never at construction.
-        credential = binding.resolve_credential(Settings(environment=self.config.environment))
-        result = self._dispatch(attack_attempt, binding, policy, credential)
+        if self.config.credential_resolver is None:
+            credential = binding.resolve_credential(Settings(environment=self.config.environment))
+        else:
+            credential = self.config.credential_resolver(binding.credential_ref)
+        result = self._dispatch(
+            attack_attempt,
+            binding,
+            policy,
+            credential,
+            attempt_id=attempt_id,
+        )
 
         # (6) RECORD -> PERSIST -> RE-READ -> RE-VERIFY the content_hash from Postgres.
         self._persist(result)
@@ -345,8 +390,18 @@ class SecureCampaignCoordinator:
 
         # (7) PLATFORM-OWNED oracle/canary over the RE-READ transcript -> envelope -> Judge.
         reread_transcript = self._reread_transcript(result)
+        oracle_expectation = seed_case.get("oracle_expectation")
+        canary_token: str | None = self.config.canary_token
+        if isinstance(oracle_expectation, Mapping):
+            candidate = oracle_expectation.get("canary_ref")
+            canary_token = candidate if isinstance(candidate, str) and candidate else None
+            run_oracle = run_oracle and canary_token is not None
         oracle_signal, verdict = self._adjudicate(
-            result, reread_transcript, run_oracle=run_oracle, integrity_ok=integrity_ok
+            result,
+            reread_transcript,
+            run_oracle=run_oracle,
+            integrity_ok=integrity_ok,
+            canary_token=canary_token,
         )
 
         # A confirmed exploit is a critical finding that must be HUMAN-APPROVED before any
@@ -416,6 +471,8 @@ class SecureCampaignCoordinator:
         binding: TargetBinding,
         policy: RunPolicy,
         credential: Any,
+        *,
+        attempt_id: str | None,
     ) -> AttemptResult:
         """Dispatch exactly one attempt through the gateway to the BOUND live adapter.
 
@@ -432,14 +489,30 @@ class SecureCampaignCoordinator:
 
         gateway = self._run_gateway(binding)
         try:
-            result = gateway.execute(attack_attempt, policy, target_id=binding.target_id)
+            result = gateway.execute(
+                attack_attempt,
+                policy,
+                target_id=binding.target_id,
+                campaign_run_id=self.config.campaign_run_id,
+                attempt_id=attempt_id,
+            )
         except Exception as exc:  # a gateway abort / off-allowlist denial is a durable hard abort
             raise CampaignAbort(
                 f"gateway refused dispatch: {type(exc).__name__}: {exc}",
                 code=getattr(exc, "code", "gateway-refused"),
             ) from exc
         self._dispatched_any = True
-        return result
+        if not self.config.result_context:
+            return result
+        fields = dict(result.fields)
+        fields.update(dict(self.config.result_context))
+        for column in PERSISTED_EVIDENCE_COLUMNS:
+            fields.setdefault(column, None)
+        fields["executed_at"] = datetime.datetime.fromtimestamp(
+            self.clock.now(), tz=datetime.UTC
+        ).isoformat()
+        content_hash = self.recorder.canonical_hash(fields)
+        return replace(result, fields=fields, content_hash=content_hash)
 
     def _run_gateway(self, binding: TargetBinding) -> PolicyGateway:
         """Return the ONE run-scoped gateway, building it lazily on first dispatch (post-gate).
@@ -524,6 +597,9 @@ class SecureCampaignCoordinator:
         # native dict/list). The key set is structural (the platform's field set); every VALUE is
         # taken from the DB read, so a tamper of any hashed column diverges the recompute.
         candidate: dict[str, Any] = {k: row[k] for k in result.fields if k != "content_hash"}
+        for key, value in tuple(candidate.items()):
+            if isinstance(value, datetime.datetime):
+                candidate[key] = value.isoformat()
         candidate["content_hash"] = result.content_hash  # the ORIGINAL, authoritative digest
         try:
             self.recorder.verify(candidate)
@@ -540,6 +616,7 @@ class SecureCampaignCoordinator:
         *,
         run_oracle: bool,
         integrity_ok: bool,
+        canary_token: str | None,
     ) -> tuple[dict[str, Any], dict[str, Any]]:
         """Run the platform-owned code oracle over the RE-READ transcript -> envelope -> Judge.
 
@@ -548,7 +625,9 @@ class SecureCampaignCoordinator:
         signal (the non-oracle path), so a run with no trusted hit is forced INDETERMINATE at MVP.
         """
         if run_oracle:
-            oracle = CanaryOracle(self.config.canary_token, id="canary-token")
+            if not canary_token:
+                raise CampaignAbort("oracle canary is missing", code="oracle-config-invalid")
+            oracle = CanaryOracle(canary_token, id="canary-token")
             oracle_signal = oracle.evaluate(reread_transcript)
             oracle_results = [oracle_signal]
         else:

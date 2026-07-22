@@ -715,6 +715,34 @@ function TargetManagement({
   const surfaces = selected.surfaces;
   const allowed = hasPermission(principal, PERMISSIONS.targetsManage);
   const canAuthorizeProbe = hasPermission(principal, PERMISSIONS.campaignAuthorize);
+  const template = selected.campaign_template;
+  const [runNonce, setRunNonce] = useState("");
+  const [budgetUsd, setBudgetUsd] = useState("");
+  const [maxAttempts, setMaxAttempts] = useState("");
+  const [requestsPerSecond, setRequestsPerSecond] = useState("");
+  const [timeoutSeconds, setTimeoutSeconds] = useState("");
+  const parsedCaps = {
+    budget_usd: Number(budgetUsd),
+    max_attempts_per_run: Number(maxAttempts),
+    target_requests_per_second: Number(requestsPerSecond),
+    run_timeout_seconds: Number(timeoutSeconds),
+  };
+  const capsValid = Object.values(parsedCaps).every((value) => Number.isFinite(value) && value > 0)
+    && Number.isSafeInteger(parsedCaps.max_attempts_per_run);
+  const requestPayload = template && capsValid && runNonce.trim().length >= 16
+    ? {
+        target_id: template.target_id,
+        target_version: template.target_version,
+        surface_id: template.surface_id,
+        surface_version: template.surface_version,
+        corpus_id: template.corpus_id,
+        corpus_hash: template.corpus_hash,
+        execution_profile: template.execution_profile,
+        caps: parsedCaps,
+        run_nonce: runNonce.trim(),
+        expires_in_seconds: 900,
+      }
+    : null;
   return (
     <Panel title="Target administration" meta={targetId ?? undefined}>
       <RecordDetails
@@ -761,6 +789,55 @@ function TargetManagement({
         <MissingCommand label="Create attack surface" dependency="a trusted surface authoring catalog" />
         <MissingCommand label="Revise attack surface" dependency="a trusted surface revision contract" />
       </div>
+      {template && (
+        <div className="evidence-stack">
+          <p className="field-label">Exact campaign authorization request</p>
+          <RecordDetails
+            data={template}
+            preferredKeys={[
+              "execution_profile",
+              "target_id",
+              "target_version",
+              "surface_id",
+              "surface_version",
+              "corpus_id",
+              "corpus_hash",
+              "maximum_caps",
+            ]}
+          />
+          <div className="panel-grid">
+            <label className="form-field">
+              <span>Run nonce (16+ characters)</span>
+              <input value={runNonce} onChange={(event) => setRunNonce(event.currentTarget.value)} />
+            </label>
+            <label className="form-field">
+              <span>Budget USD</span>
+              <input type="number" min="0" step="0.01" value={budgetUsd} onChange={(event) => setBudgetUsd(event.currentTarget.value)} />
+            </label>
+            <label className="form-field">
+              <span>Maximum attempts</span>
+              <input type="number" min="1" step="1" value={maxAttempts} onChange={(event) => setMaxAttempts(event.currentTarget.value)} />
+            </label>
+            <label className="form-field">
+              <span>Target requests / second</span>
+              <input type="number" min="0" step="0.1" value={requestsPerSecond} onChange={(event) => setRequestsPerSecond(event.currentTarget.value)} />
+            </label>
+            <label className="form-field">
+              <span>Run timeout seconds</span>
+              <input type="number" min="1" step="1" value={timeoutSeconds} onChange={(event) => setTimeoutSeconds(event.currentTarget.value)} />
+            </label>
+          </div>
+          <CommandButton
+            client={client}
+            path={COMMAND_PATHS.createCampaignAuthorizationRequest}
+            payload={requestPayload ?? {}}
+            label="Request exact campaign authorization"
+            allowed={Boolean(requestPayload) && hasPermission(principal, PERMISSIONS.campaignLaunch)}
+            unavailableReason={requestPayload ? PERMISSIONS.campaignLaunch : "valid operator-provided caps and nonce"}
+            onAcknowledged={refresh}
+          />
+        </div>
+      )}
       {surfaces.length > 0 ? (
         <div className="surface-stack">
           {surfaces.map((surface, index) => {

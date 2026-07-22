@@ -177,25 +177,28 @@ agent, runner, scheduler, model-provider, or target credentials.
 
 ## Current local availability
 
-Revision `0005` provides organization-scoped immutable target/surface versions, persisted campaign
-authorization requests and exact-scope decisions, run/abort state, idempotency records, and append-only
-audit history. The launcher comes only from authenticated persisted workflow state; application and
-database controls reject self-approval, and queue completion is never approval.
+Revision `0006` adds authoritative attempt taxonomy/provenance, verdict reasons, append-only
+finding-to-evidence links, run accounting, and append-only security-tool evidence repositories to the
+`0005` exact-scope control plane. A trusted server catalog prepares immutable campaign scopes; a private
+durable Runner claims the existing PostgreSQL queue, revalidates authorization immediately before every
+dispatch, resolves scoped credentials only at that boundary, and persists evidence before atomic job
+completion. Application and database controls reject self-approval, and queue completion is never
+approval.
 
-The console displays typed unavailable states for dependencies that do not yet exist. New campaign
-requests await a server-prepared composition scope; campaign launch and execution await the trusted
-private-runner credential resolver/executor; scheduling awaits an authoritative schedule repository;
-target and surface authoring await a trusted server-side catalog so browser-provided hosts, adapters,
-credential references, and endpoints cannot become authority;
-finding actions await a finding-to-evidence relation; coverage awaits
-a hash-reconciled, nonce-deduplicated projection; and traces, measured accounting, immutable
-configuration snapshots, component heartbeats, resilience history, and live-probe authorization await
-their corresponding repositories/workflows. None is replaced by demo data or simulated success. See the
-[M1d integration handoff](docs/planning/M1D_INTEGRATION_HANDOFF.md) for the exact matrix.
+The deterministic synthetic profile runs the real nine-case corpus through the queue, Runner,
+coordinator, recorder, independent Judge, findings, API, Coverage, and event repositories without a
+target/model socket. Local integration evidence proves all nine attempts and hash-verified Coverage;
+this is not a deployed or live-target claim. A live run remains blocked until the exact deployed target,
+ownership authorization, synthetic fixture/canary, surface, credential reference, caps, nonce, and a
+distinct Clerk Approver are persisted and every network-free preflight gate passes. Scheduling, traces,
+immutable configuration snapshots, component heartbeats, resilience history, and live-probe
+authorization remain typed unavailable rather than being replaced by dummy data.
 
 ## Further documentation
 
 - [M1d integration handoff](docs/planning/M1D_INTEGRATION_HANDOFF.md)
+- [Security-tool integration plan](docs/planning/SECURITY_TOOL_INTEGRATION_PLAN.md)
+- [Security-tool ATO evidence](docs/evidence/ato/SECURITY_TOOL_EVIDENCE.md)
 - [Identity and access ADR](docs/adrs/0002-identity-and-access.md)
 - [Authentication security contract](docs/security/AUTHENTICATION.md)
 - [Railway deployment runbook](docs/deployment/RAILWAY.md)

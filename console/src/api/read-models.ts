@@ -149,9 +149,11 @@ const scopeKeys = [
   "method",
   "relative_path",
   "endpoint",
+  "corpus_id",
   "corpus_hash",
   "caps",
   "run_nonce",
+  "execution_profile",
 ] as const;
 
 const decodeCaps = (value: unknown): SafetyCapsReadModel => {
@@ -186,12 +188,14 @@ const validateScope = (result: JsonRecord, name: string, extraKeys: readonly str
     "method",
     "relative_path",
     "endpoint",
+    "corpus_id",
     "corpus_hash",
     "run_nonce",
   ]) {
     string(result, key, name);
   }
   boolean(result, "explicit_no_auth", name);
+  literal(result, "execution_profile", ["synthetic", "live"], name);
   result.caps = decodeCaps(result.caps);
 };
 
@@ -255,6 +259,8 @@ const decodeAttempt = (value: unknown): AttemptReadModel => {
     "trace_id",
     "verdict",
     "confidence",
+    "execution_profile",
+    "evidence_provenance",
     "created_at",
   ], name);
   string(result, "attempt_id", name);
@@ -265,6 +271,10 @@ const decodeAttempt = (value: unknown): AttemptReadModel => {
   nullableString(result, "trace_id", name);
   nullableString(result, "verdict", name);
   nullableNumber(result, "confidence", name);
+  nullableLiteral(result, "execution_profile", ["synthetic", "live"], name);
+  nullableLiteral(result, "evidence_provenance", [
+    "synthetic_offline", "live_target", "scan_only", "simulated",
+  ], name);
   timestamp(result, "created_at", name);
   return result as AttemptReadModel;
 };
@@ -291,6 +301,8 @@ export const decodeEvidence: ReadModelDecoder<EvidenceReadModel> = (value) => {
     "content_hash",
     "verdict",
     "confidence",
+    "execution_profile",
+    "evidence_provenance",
   ], name);
   for (const key of ["campaign_run_id", "attempt_id", "content_hash"]) string(result, key, name);
   for (const key of [
@@ -309,6 +321,10 @@ export const decodeEvidence: ReadModelDecoder<EvidenceReadModel> = (value) => {
   nullableObject(result, "request_transcript", name);
   nullableTimestamp(result, "executed_at", name);
   nullableNumber(result, "confidence", name);
+  nullableLiteral(result, "execution_profile", ["synthetic", "live"], name);
+  nullableLiteral(result, "evidence_provenance", [
+    "synthetic_offline", "live_target", "scan_only", "simulated",
+  ], name);
   return result as EvidenceReadModel;
 };
 
@@ -332,6 +348,12 @@ const decodeFindingRecord = (value: unknown): FindingReadModel => {
     "target_version",
     "publication_status",
     "evidence_integrity",
+    "source_kind",
+    "execution_profile",
+    "evidence_provenance",
+    "campaign_run_id",
+    "attempt_id",
+    "evidence_content_hash",
     "history",
   ], name);
   for (const key of [
@@ -342,9 +364,15 @@ const decodeFindingRecord = (value: unknown): FindingReadModel => {
     "target_version",
     "publication_status",
     "evidence_integrity",
+    "source_kind",
+    "evidence_provenance",
+    "campaign_run_id",
+    "attempt_id",
+    "evidence_content_hash",
   ]) {
     string(result, key, name);
   }
+  literal(result, "execution_profile", ["synthetic", "live"], name);
   result.history = records(result.history, "finding history", decodeFindingHistory);
   return result as FindingReadModel;
 };
@@ -384,9 +412,30 @@ export const decodeApprovals: ReadModelDecoder<ApprovalReadModel[]> = (value) =>
 const decodeCoverageRecord = (value: unknown): CoverageReadModel => {
   const name = "coverage";
   const result = record(value, name);
-  exactKeys(result, ["target_version", "verified_attempt_count", "covered", "as_of"], name);
+  exactKeys(result, [
+    "target_version",
+    "verified_attempt_count",
+    "total_case_count",
+    "category_count",
+    "execution_profile",
+    "evidence_provenance",
+    "classifications",
+    "owasp_web",
+    "owasp_llm",
+    "verdict_counts",
+    "covered",
+    "as_of",
+  ], name);
   string(result, "target_version", name);
   number(result, "verified_attempt_count", name, { integer: true, minimum: 0 });
+  number(result, "total_case_count", name, { integer: true, minimum: 0 });
+  number(result, "category_count", name, { integer: true, minimum: 0 });
+  literal(result, "execution_profile", ["synthetic", "live"], name);
+  string(result, "evidence_provenance", name);
+  stringArray(result, "classifications", name);
+  stringArray(result, "owasp_web", name);
+  stringArray(result, "owasp_llm", name);
+  object(result, "verdict_counts", name);
   boolean(result, "covered", name);
   timestamp(result, "as_of", name);
   return result as CoverageReadModel;
@@ -502,6 +551,7 @@ const decodeTarget = (value: unknown): TargetReadModel => {
     "lifecycle",
     "allowed_lifecycle_transitions",
     "surfaces",
+    "campaign_template",
     "created_at",
   ], name);
   for (const key of [
@@ -522,6 +572,29 @@ const decodeTarget = (value: unknown): TargetReadModel => {
   result.safety_caps = decodeCaps(result.safety_caps);
   stringArray(result, "allowed_lifecycle_transitions", name);
   result.surfaces = records(result.surfaces, "attack surfaces", decodeSurface);
+  if (result.campaign_template !== null) {
+    const template = object(result, "campaign_template", name);
+    exactKeys(template, [
+      "target_id",
+      "target_version",
+      "surface_id",
+      "surface_version",
+      "corpus_id",
+      "corpus_hash",
+      "execution_profile",
+      "maximum_caps",
+    ], "campaign template");
+    for (const key of [
+      "target_id",
+      "target_version",
+      "surface_id",
+      "surface_version",
+      "corpus_id",
+      "corpus_hash",
+    ]) string(template, key, "campaign template");
+    literal(template, "execution_profile", ["synthetic", "live"], "campaign template");
+    template.maximum_caps = decodeCaps(template.maximum_caps);
+  }
   timestamp(result, "created_at", name);
   return result as TargetReadModel;
 };

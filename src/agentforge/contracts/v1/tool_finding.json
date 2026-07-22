@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentforge.dev/contracts/v1/tool_finding.json",
+  "title": "ToolFinding",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "finding_id", "tool_name", "tool_version", "configuration_sha256",
+    "run_id", "run_nonce", "target_id", "surface_id", "scan_provenance", "observed_at",
+    "raw_artifact_sha256", "owasp_mappings", "severity", "confidence",
+    "reproduction_evidence", "validation_state", "disposition", "human_publication_state", "source_kind",
+    "evidence_provenance"
+  ],
+  "properties": {
+    "schema_version": {"const": "1"},
+    "finding_id": {"type": "string", "minLength": 1, "maxLength": 160},
+    "tool_name": {"type": "string", "minLength": 1, "maxLength": 64},
+    "tool_version": {"type": "string", "minLength": 1, "maxLength": 64},
+    "configuration_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "run_id": {"type": "string", "minLength": 1, "maxLength": 128},
+    "run_nonce": {"type": "string", "minLength": 16, "maxLength": 128},
+    "target_id": {"type": "string", "minLength": 1, "maxLength": 128},
+    "surface_id": {"type": "string", "minLength": 1, "maxLength": 128},
+    "scan_provenance": {
+      "enum": ["platform_source", "local_fake", "platform_staging", "live_target"]
+    },
+    "observed_at": {"type": "string", "format": "date-time"},
+    "raw_artifact_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "owasp_mappings": {
+      "type": "array", "minItems": 1, "uniqueItems": true,
+      "items": {"type": "string", "pattern": "^(A(0[1-9]|10)|LLM(0[1-9]|10))(:2021|:2025)?$"}
+    },
+    "severity": {"enum": ["info", "low", "medium", "high", "critical"]},
+    "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+    "reproduction_evidence": {
+      "type": "object", "additionalProperties": false,
+      "required": ["summary", "artifact_locator"],
+      "properties": {
+        "summary": {"type": "string", "minLength": 1, "maxLength": 1000},
+        "artifact_locator": {"type": "string", "minLength": 1, "maxLength": 500}
+      }
+    },
+    "validation_state": {"enum": ["unvalidated", "validated", "rejected", "remediated", "deferred", "documented"]},
+    "disposition": {"enum": ["validate", "remediate", "defer", "document", "false_positive"]},
+    "human_publication_state": {"const": "blocked_pending_human_approval"},
+    "source_kind": {"const": "security_tool"},
+    "evidence_provenance": {"enum": ["scan_only", "simulated"]}
+  }
+}

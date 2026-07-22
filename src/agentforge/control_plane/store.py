@@ -7,6 +7,7 @@ import hashlib
 import json
 import re
 import uuid
+from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from typing import Any
 
@@ -49,10 +50,16 @@ from agentforge.control_plane.serialization import (
     target_from_payload,
     target_payload,
 )
+from agentforge.policy.recorder import (
+    PERSISTED_EVIDENCE_COLUMNS,
+    EvidenceIntegrityError,
+    ExecutionRecorder,
+)
 from agentforge.target.registry import TargetRegistry, TargetRegistryError
 from agentforge.target.spec import (
     AttackSurfaceDefinition,
     AuthorizationScope,
+    ExecutionProfile,
     SafetyCaps,
     TargetDefinition,
     TargetEnvironment,
@@ -76,6 +83,10 @@ _MAX_AUTHORIZATION_LIFETIME = datetime.timedelta(hours=24)
 _CAMPAIGN_JOB_ATTEMPT_ID = "campaign"
 _CAMPAIGN_PAYLOAD_SCHEMA = "campaign.execute"
 _CAMPAIGN_PAYLOAD_VERSION = 1
+_SHA256 = re.compile(r"\A[a-f0-9]{64}\Z")
+_CASE_CATEGORIES = frozenset({"prompt_injection", "data_exfiltration", "tool_misuse"})
+_ATTACK_CLASSES = frozenset({"boundary", "invariant", "regression"})
+_SEVERITIES = frozenset({"low", "medium", "high", "critical"})
 
 
 class ControlPlaneStore:
@@ -539,6 +550,8 @@ class ControlPlaneStore:
         corpus_hash: str,
         caps: SafetyCaps,
         run_nonce: str,
+        corpus_id: str = "m11-seed-corpus-v1",
+        execution_profile: ExecutionProfile = ExecutionProfile.LIVE,
     ) -> AuthorizationScope:
         self._require_permission(principal, CAMPAIGN_LAUNCH)
         with self._engine.connect() as connection:
@@ -552,6 +565,8 @@ class ControlPlaneStore:
                 corpus_hash,
                 caps,
                 run_nonce,
+                corpus_id,
+                execution_profile,
             )
 
     def request_campaign_authorization(
@@ -1058,12 +1073,64 @@ class ControlPlaneStore:
             return replace(current, state=state)
 
     def ensure_campaign_attempt(
-        self, *, run_id: str, ordinal: int, case_id: str
+        self,
+        *,
+        run_id: str,
+        ordinal: int,
+        case_id: str,
+        case_content_hash: str | None = None,
+        category: str | None = None,
+        severity: str | None = None,
+        attack_class: str | None = None,
+        owasp_mappings: Sequence[Mapping[str, Any]] | None = None,
+        fixture_provenance: Mapping[str, Any] | None = None,
     ) -> CampaignAttemptRecord:
         if isinstance(ordinal, bool) or not isinstance(ordinal, int) or ordinal < 0:
             raise InvalidControlPlaneInput("attempt ordinal must be non-negative")
         if not isinstance(case_id, str) or not case_id or len(case_id) > 128:
             raise InvalidControlPlaneInput("case identity is invalid")
+        metadata_supplied = any(
+            value is not None
+            for value in (
+                case_content_hash,
+                category,
+                severity,
+                attack_class,
+                owasp_mappings,
+                fixture_provenance,
+            )
+        )
+        if metadata_supplied:
+            if (
+                not isinstance(case_content_hash, str)
+                or _SHA256.fullmatch(case_content_hash) is None
+            ):
+                raise InvalidControlPlaneInput("case content hash is invalid")
+            if category not in _CASE_CATEGORIES:
+                raise InvalidControlPlaneInput("case category is invalid")
+            if severity not in _SEVERITIES:
+                raise InvalidControlPlaneInput("case severity is invalid")
+            if attack_class not in _ATTACK_CLASSES:
+                raise InvalidControlPlaneInput("case attack classification is invalid")
+            if not isinstance(owasp_mappings, Sequence) or not owasp_mappings:
+                raise InvalidControlPlaneInput("case OWASP mappings are required")
+            normalized_mappings = [dict(mapping) for mapping in owasp_mappings]
+            for mapping in normalized_mappings:
+                if set(mapping) != {"framework", "version", "id", "name"}:
+                    raise InvalidControlPlaneInput("case OWASP mapping is invalid")
+                if mapping["framework"] not in {"OWASP Web", "OWASP LLM"}:
+                    raise InvalidControlPlaneInput("case OWASP framework is invalid")
+            if not isinstance(fixture_provenance, Mapping):
+                raise InvalidControlPlaneInput("case fixture provenance is required")
+            normalized_fixture = dict(fixture_provenance)
+            if (
+                normalized_fixture.get("classification") != "synthetic"
+                or normalized_fixture.get("contains_real_phi") is not False
+            ):
+                raise AuthorizationDeniedError("only synthetic no-PHI case fixtures may execute")
+        else:
+            normalized_mappings = None
+            normalized_fixture = None
         identity = f"m1d-attempt:v1\0{run_id}\0{ordinal}\0{case_id}"
         attempt_id = hashlib.sha256(identity.encode("utf-8")).hexdigest()
         with self._engine.begin() as connection:
@@ -1094,13 +1161,26 @@ class ControlPlaneStore:
                     raise RecordConflictError(
                         "attempt ordinal already names different immutable work"
                     )
+                if metadata_supplied and (
+                    existing["case_content_hash"] != case_content_hash
+                    or existing["category"] != category
+                    or existing["severity"] != severity
+                    or existing["attack_class"] != attack_class
+                    or existing["owasp_mappings"] != normalized_mappings
+                    or existing["fixture_provenance"] != normalized_fixture
+                ):
+                    raise RecordConflictError("attempt metadata differs from immutable case")
                 return self._campaign_attempt_from_row(existing)
             row = (
                 connection.execute(
                     text(
                         "INSERT INTO campaign_attempts "
-                        "(organization_id, run_id, attempt_id, ordinal, case_id) VALUES "
-                        "(:org, :run_id, :attempt_id, :ordinal, :case_id) RETURNING *"
+                        "(organization_id, run_id, attempt_id, ordinal, case_id, "
+                        "case_content_hash, category, severity, attack_class, owasp_mappings, "
+                        "fixture_provenance) VALUES "
+                        "(:org, :run_id, :attempt_id, :ordinal, :case_id, :case_hash, :category, "
+                        ":severity, :attack_class, CAST(:owasp AS jsonb), CAST(:fixture AS jsonb)) "
+                        "RETURNING *"
                     ),
                     {
                         "org": run["organization_id"],
@@ -1108,12 +1188,390 @@ class ControlPlaneStore:
                         "attempt_id": attempt_id,
                         "ordinal": ordinal,
                         "case_id": case_id,
+                        "case_hash": case_content_hash,
+                        "category": category,
+                        "severity": severity,
+                        "attack_class": attack_class,
+                        "owasp": canonical_json(normalized_mappings)
+                        if normalized_mappings is not None
+                        else None,
+                        "fixture": canonical_json(normalized_fixture)
+                        if normalized_fixture is not None
+                        else None,
                     },
                 )
                 .mappings()
                 .one()
             )
             return self._campaign_attempt_from_row(row)
+
+    def resolve_dispatch(self, run_id: str, attempt_id: str) -> AuthorizedRunRecord:
+        """Reconstruct exact authority from persisted state immediately before dispatch."""
+
+        authorized = self.load_run_for_execution(run_id)
+        with self._engine.connect() as connection:
+            attempt = connection.execute(
+                text(
+                    "SELECT 1 FROM campaign_attempts WHERE organization_id = :org "
+                    "AND run_id = :run_id AND attempt_id = :attempt_id"
+                ),
+                {
+                    "org": authorized.run.organization_id,
+                    "run_id": run_id,
+                    "attempt_id": attempt_id,
+                },
+            ).scalar_one_or_none()
+            if attempt is None:
+                raise AuthorizationDeniedError("persisted campaign attempt is unavailable")
+            prior = connection.execute(
+                text(
+                    "SELECT 1 FROM attempt_result WHERE organization_id = :org "
+                    "AND campaign_run_id = :run_id AND attempt_id = :attempt_id"
+                ),
+                {
+                    "org": authorized.run.organization_id,
+                    "run_id": run_id,
+                    "attempt_id": attempt_id,
+                },
+            ).scalar_one_or_none()
+            if prior is not None:
+                raise AuthorizationDeniedError("campaign attempt evidence already exists")
+        return authorized
+
+    def assert_job_lease(self, job: Any) -> None:
+        """Reject stale or mismatched Runner ownership using database time."""
+
+        with self._engine.connect() as connection:
+            owned = connection.execute(
+                text(
+                    "SELECT 1 FROM jobs WHERE job_id = :job_id "
+                    "AND status = 'leased'::job_status AND worker_id = :worker "
+                    "AND lease_token = :token AND lease_expires_at > clock_timestamp()"
+                ),
+                {
+                    "job_id": getattr(job, "job_id", None),
+                    "worker": getattr(job, "worker_id", None),
+                    "token": getattr(job, "lease_token", None),
+                },
+            ).scalar_one_or_none()
+        if owned is None:
+            raise AuthorizationDeniedError("runner lease ownership is stale")
+
+    def record_attempt_outcome(
+        self,
+        *,
+        run_id: str,
+        attempt_id: str,
+        verdict: Mapping[str, Any],
+        evidence_content_hash: str,
+    ) -> str | None:
+        """Persist a Judge verdict and its human-gated finding/evidence link atomically."""
+
+        with self._engine.begin() as connection:
+            self._aggregate_lock(connection, f"campaign-outcome:{run_id}:{attempt_id}")
+            row = (
+                connection.execute(
+                    text(
+                        "SELECT a.category, a.severity, ar.* "
+                        "FROM campaign_attempts a JOIN attempt_result ar "
+                        "ON ar.organization_id = a.organization_id "
+                        "AND ar.campaign_run_id = a.run_id AND ar.attempt_id = a.attempt_id "
+                        "WHERE a.run_id = :run_id AND a.attempt_id = :attempt_id"
+                    ),
+                    {"run_id": run_id, "attempt_id": attempt_id},
+                )
+                .mappings()
+                .one_or_none()
+            )
+            if row is None or row["content_hash"] != evidence_content_hash:
+                raise AuthorizationDeniedError("outcome evidence integrity is unavailable")
+            candidate: dict[str, Any] = {}
+            for column in PERSISTED_EVIDENCE_COLUMNS:
+                value = row[column]
+                if isinstance(value, datetime.datetime):
+                    value = value.astimezone(datetime.UTC).isoformat()
+                candidate[column] = value
+            candidate["content_hash"] = row["content_hash"]
+            try:
+                ExecutionRecorder().verify(candidate)
+            except (EvidenceIntegrityError, TypeError, ValueError) as exc:
+                raise AuthorizationDeniedError("outcome evidence integrity is unavailable") from exc
+            if (
+                row["category"] not in _CASE_CATEGORIES
+                or row["severity"] not in _SEVERITIES
+                or row["execution_profile"] not in {"synthetic", "live"}
+                or row["evidence_provenance"] not in {"synthetic_offline", "live_target"}
+            ):
+                raise AuthorizationDeniedError("outcome provenance or taxonomy is invalid")
+
+            existing = (
+                connection.execute(
+                    text(
+                        "SELECT id, state, confidence FROM verdict WHERE organization_id = :org "
+                        "AND campaign_run_id = :run_id AND attempt_id = :attempt_id"
+                    ),
+                    {"org": row["organization_id"], "run_id": run_id, "attempt_id": attempt_id},
+                )
+                .mappings()
+                .one_or_none()
+            )
+            state = str(verdict.get("state", ""))
+            confidence = verdict.get("confidence")
+            if existing is None:
+                verdict_row = (
+                    connection.execute(
+                        text(
+                            "INSERT INTO verdict (state, confidence, campaign_run_id, attempt_id, "
+                            "organization_id, reason_codes, confirmation_source, error_code) "
+                            "VALUES "
+                            "(CAST(:state AS verdict_state), :confidence, :run_id, :attempt_id, "
+                            ":org, CAST(:reasons AS jsonb), :source, :error) RETURNING id"
+                        ),
+                        {
+                            "state": state,
+                            "confidence": confidence,
+                            "run_id": run_id,
+                            "attempt_id": attempt_id,
+                            "org": row["organization_id"],
+                            "reasons": canonical_json(list(verdict.get("reason_codes", []))),
+                            "source": verdict.get("confirmation_source"),
+                            "error": verdict.get("error_code"),
+                        },
+                    )
+                    .mappings()
+                    .one()
+                )
+                verdict_id = verdict_row["id"]
+            else:
+                if existing["state"] != state or float(existing["confidence"] or 0.0) != float(
+                    confidence or 0.0
+                ):
+                    raise RecordConflictError("attempt verdict is immutable")
+                verdict_id = existing["id"]
+
+            finding_id: str | None = None
+            if state == "EXPLOIT_CONFIRMED":
+                finding_id = hashlib.sha256(
+                    f"finding:v1\0{row['organization_id']}\0{run_id}\0{attempt_id}".encode()
+                ).hexdigest()
+                connection.execute(
+                    text(
+                        "INSERT INTO finding "
+                        "(finding_id, state, severity, category, target_version, "
+                        "organization_id, source_kind, execution_profile, published) VALUES "
+                        "(:finding, 'judged'::finding_state, CAST(:severity AS finding_severity), "
+                        ":category, :target_version, :org, 'campaign', :profile, false) "
+                        "ON CONFLICT (finding_id) DO NOTHING"
+                    ),
+                    {
+                        "finding": finding_id,
+                        "severity": row["severity"],
+                        "category": row["category"],
+                        "target_version": row["target_version"],
+                        "org": row["organization_id"],
+                        "profile": row["execution_profile"],
+                    },
+                )
+                connection.execute(
+                    text(
+                        "INSERT INTO finding_evidence_links "
+                        "(organization_id, finding_id, campaign_run_id, attempt_id, "
+                        "evidence_content_hash, verdict_id, provenance) VALUES "
+                        "(:org, :finding, :run_id, :attempt_id, :hash, :verdict, :provenance) "
+                        "ON CONFLICT DO NOTHING"
+                    ),
+                    {
+                        "org": row["organization_id"],
+                        "finding": finding_id,
+                        "run_id": run_id,
+                        "attempt_id": attempt_id,
+                        "hash": evidence_content_hash,
+                        "verdict": verdict_id,
+                        "provenance": row["evidence_provenance"],
+                    },
+                )
+            self._audit(
+                connection,
+                row["organization_id"],
+                "attempt.adjudicated",
+                "campaign_attempt",
+                attempt_id,
+                None,
+                {
+                    "run_id": run_id,
+                    "verdict": state,
+                    "evidence_content_hash": evidence_content_hash,
+                    "finding_id": finding_id,
+                    "publication_state": "unpublished",
+                },
+            )
+            return finding_id
+
+    def complete_campaign_job(
+        self,
+        *,
+        job: Any,
+        request_count: int,
+        measured_cost: float,
+    ) -> CampaignRunRecord:
+        """Atomically persist the run summary, terminal state, audit event, and queue completion."""
+
+        if (
+            isinstance(request_count, bool)
+            or not isinstance(request_count, int)
+            or request_count < 0
+            or not isinstance(measured_cost, (int, float))
+            or measured_cost < 0
+        ):
+            raise InvalidControlPlaneInput("campaign accounting is invalid")
+        run_id = str(getattr(job, "campaign_run_id", ""))
+        with self._engine.begin() as connection:
+            self._aggregate_lock(connection, f"campaign-run:{run_id}")
+            owned = (
+                connection.execute(
+                    text(
+                        "SELECT status, completion_worker_id, completion_lease_token FROM jobs "
+                        "WHERE job_id = :job_id FOR UPDATE"
+                    ),
+                    {"job_id": getattr(job, "job_id", None)},
+                )
+                .mappings()
+                .one_or_none()
+            )
+            worker = getattr(job, "worker_id", None)
+            token = getattr(job, "lease_token", None)
+            if owned is None:
+                raise AuthorizationDeniedError("campaign queue job is unavailable")
+            if owned["status"] == "completed":
+                if (
+                    owned["completion_worker_id"] == worker
+                    and owned["completion_lease_token"] == token
+                ):
+                    org = connection.execute(
+                        text("SELECT organization_id FROM campaign_runs WHERE run_id = :run_id"),
+                        {"run_id": run_id},
+                    ).scalar_one()
+                    return self._campaign_run(connection, org, run_id)
+                raise AuthorizationDeniedError("campaign queue completion ownership differs")
+            live_lease = connection.execute(
+                text(
+                    "SELECT 1 FROM jobs WHERE job_id = :job_id AND status = 'leased'::job_status "
+                    "AND worker_id = :worker AND lease_token = :token "
+                    "AND lease_expires_at > clock_timestamp()"
+                ),
+                {"job_id": getattr(job, "job_id", None), "worker": worker, "token": token},
+            ).scalar_one_or_none()
+            if live_lease is None:
+                raise AuthorizationDeniedError("runner lease ownership is stale")
+
+            run_row = (
+                connection.execute(
+                    text(
+                        "SELECT r.*, q.scope_payload, "
+                        "(SELECT state FROM campaign_run_events e "
+                        "WHERE e.organization_id = r.organization_id AND e.run_id = r.run_id "
+                        "ORDER BY e.id DESC LIMIT 1) AS state FROM campaign_runs r "
+                        "JOIN campaign_authorization_requests q "
+                        "ON q.organization_id = r.organization_id "
+                        "AND q.request_id = r.authorization_request_id "
+                        "WHERE r.run_id = :run_id FOR UPDATE OF r"
+                    ),
+                    {"run_id": run_id},
+                )
+                .mappings()
+                .one_or_none()
+            )
+            if run_row is None or run_row["state"] != "running":
+                raise AuthorizationDeniedError("campaign run is no longer completable")
+            scope = scope_from_payload(dict(run_row["scope_payload"]))
+            if scope.scope_hash() != run_row["scope_hash"]:
+                raise AuthorizationDeniedError("campaign completion scope integrity failed")
+            self._validate_scope(connection, run_row["organization_id"], scope)
+            current = self._campaign_run_from_row(run_row)
+            org = current.organization_id
+            attempt_count = connection.execute(
+                text(
+                    "SELECT count(*) FROM verdict WHERE organization_id = :org "
+                    "AND campaign_run_id = :run_id"
+                ),
+                {"org": org, "run_id": run_id},
+            ).scalar_one()
+            confirmed_count = connection.execute(
+                text(
+                    "SELECT count(*) FROM finding_evidence_links WHERE organization_id = :org "
+                    "AND campaign_run_id = :run_id"
+                ),
+                {"org": org, "run_id": run_id},
+            ).scalar_one()
+            started_at = connection.execute(
+                text(
+                    "SELECT min(created_at) FROM campaign_run_events "
+                    "WHERE organization_id = :org AND run_id = :run_id"
+                ),
+                {"org": org, "run_id": run_id},
+            ).scalar_one()
+            provenance = (
+                "synthetic_offline"
+                if scope.execution_profile.value == "synthetic"
+                else "live_target"
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO campaign_run_summaries "
+                    "(organization_id, run_id, execution_profile, provenance, attempt_count, "
+                    "request_count, confirmed_finding_count, measured_cost, started_at, ended_at) "
+                    "VALUES (:org, :run_id, :profile, :provenance, :attempts, :requests, "
+                    ":findings, :cost, :started, clock_timestamp())"
+                ),
+                {
+                    "org": org,
+                    "run_id": run_id,
+                    "profile": scope.execution_profile.value,
+                    "provenance": provenance,
+                    "attempts": attempt_count,
+                    "requests": request_count,
+                    "findings": confirmed_count,
+                    "cost": measured_cost,
+                    "started": started_at,
+                },
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO campaign_run_events (organization_id, run_id, state) "
+                    "VALUES (:org, :run_id, 'complete')"
+                ),
+                {"org": org, "run_id": run_id},
+            )
+            self._audit(
+                connection,
+                org,
+                "campaign.complete",
+                "campaign_run",
+                run_id,
+                None,
+                {
+                    "attempt_count": attempt_count,
+                    "request_count": request_count,
+                    "confirmed_finding_count": confirmed_count,
+                    "execution_profile": scope.execution_profile.value,
+                    "provenance": provenance,
+                },
+            )
+            completed = connection.execute(
+                text(
+                    "UPDATE jobs SET status = 'completed'::job_status, "
+                    "completion_worker_id = worker_id, completion_lease_token = lease_token, "
+                    "completed_at = clock_timestamp(), worker_id = NULL, lease_token = NULL, "
+                    "leased_at = NULL, lease_expires_at = NULL, last_heartbeat_at = NULL, "
+                    "updated_at = clock_timestamp() WHERE job_id = :job_id "
+                    "AND status = 'leased'::job_status AND worker_id = :worker "
+                    "AND lease_token = :token RETURNING completed_at"
+                ),
+                {"job_id": getattr(job, "job_id", None), "worker": worker, "token": token},
+            ).scalar_one_or_none()
+            if completed is None:
+                raise AuthorizationDeniedError("campaign queue completion lost ownership")
+            return replace(current, state="complete")
 
     def record_finding_decision(
         self,
@@ -1148,14 +1606,37 @@ class ControlPlaneStore:
                 return self._finding_decision(
                     connection, principal.organization_id, existing["decision_id"]
                 )
-            found = connection.execute(
-                text(
-                    "SELECT 1 FROM finding WHERE organization_id = :org AND finding_id = :finding"
-                ),
-                {"org": principal.organization_id, "finding": finding_id},
-            ).scalar_one_or_none()
-            if found is None:
+            evidence = (
+                connection.execute(
+                    text(
+                        "SELECT ar.*, l.evidence_content_hash FROM finding f "
+                        "JOIN finding_evidence_links l ON l.organization_id = f.organization_id "
+                        "AND l.finding_id = f.finding_id JOIN attempt_result ar "
+                        "ON ar.organization_id = l.organization_id "
+                        "AND ar.campaign_run_id = l.campaign_run_id "
+                        "AND ar.attempt_id = l.attempt_id WHERE f.organization_id = :org "
+                        "AND f.finding_id = :finding"
+                    ),
+                    {"org": principal.organization_id, "finding": finding_id},
+                )
+                .mappings()
+                .one_or_none()
+            )
+            if evidence is None:
                 raise RecordNotFoundError("finding does not exist")
+            candidate: dict[str, Any] = {}
+            for column in PERSISTED_EVIDENCE_COLUMNS:
+                value = evidence[column]
+                if isinstance(value, datetime.datetime):
+                    value = value.astimezone(datetime.UTC).isoformat()
+                candidate[column] = value
+            candidate["content_hash"] = evidence["content_hash"]
+            try:
+                ExecutionRecorder().verify(candidate)
+            except (EvidenceIntegrityError, TypeError, ValueError) as exc:
+                raise AuthorizationDeniedError("finding evidence integrity is unavailable") from exc
+            if evidence["content_hash"] != evidence["evidence_content_hash"]:
+                raise AuthorizationDeniedError("finding evidence link integrity failed")
             decision_id = uuid.uuid4().hex
             row = (
                 connection.execute(
@@ -1525,6 +2006,8 @@ class ControlPlaneStore:
         corpus_hash: str,
         caps: SafetyCaps,
         run_nonce: str,
+        corpus_id: str = "m11-seed-corpus-v1",
+        execution_profile: ExecutionProfile = ExecutionProfile.LIVE,
     ) -> AuthorizationScope:
         base, target, events = self._load_target(
             connection, organization_id, target_id, target_version
@@ -1548,6 +2031,8 @@ class ControlPlaneStore:
                 corpus_hash=corpus_hash,
                 caps=caps,
                 run_nonce=run_nonce,
+                corpus_id=corpus_id,
+                execution_profile=execution_profile,
             )
             registry.resolve(scope)
             return scope
@@ -1567,6 +2052,8 @@ class ControlPlaneStore:
             scope.corpus_hash,
             scope.caps,
             scope.run_nonce,
+            scope.corpus_id,
+            scope.execution_profile,
         )
         if expected.canonical_bytes() != scope.canonical_bytes():
             raise AuthorizationDeniedError("authorization scope differs from registry state")
