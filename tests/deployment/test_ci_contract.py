@@ -54,7 +54,7 @@ def test_gitlab_ci_keeps_material_gates_on_the_unprivileged_runner() -> None:
         "npm ci --ignore-scripts",
         "npm audit --audit-level=high",
         "npm run test:browser",
-        "buildah bud",
+        "/kaniko/executor",
         "Dockerfile.gitlab",
         "scripts/verify_container_archive.sh",
         "gitleaks git . --redact --verbose",
@@ -63,8 +63,13 @@ def test_gitlab_ci_keeps_material_gates_on_the_unprivileged_runner() -> None:
         assert command in workflow
     assert "docker:27.5.1-dind" not in workflow
     assert "DOCKER_HOST" not in workflow
-    assert "BUILDAH_ISOLATION: chroot" in workflow
-    assert "STORAGE_DRIVER: vfs" in workflow
+    assert "buildah" not in workflow.lower()
+    assert "--no-push" in workflow
+    assert "--tar-path" in workflow
+    assert (
+        "gcr.io/kaniko-project/executor@sha256:"
+        "c3109d5926a997b100c4343944e06c6b30a6804b2f9abe0994d3de6ef92b028e" in workflow
+    )
 
 
 def test_gitlab_daemonless_dockerfile_preserves_the_runtime_boundary() -> None:
