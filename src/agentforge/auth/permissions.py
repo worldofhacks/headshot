@@ -14,8 +14,11 @@ ROLE_OBSERVER: Final = "org:observer"
 ROLE_OPERATOR: Final = "org:operator"
 ROLE_APPROVER: Final = "org:approver"
 ROLE_AUDITOR: Final = "org:auditor"
+ROLE_GODMODE: Final = "org:godmode"
 
-ORGANIZATION_ROLES: Final = frozenset({ROLE_OBSERVER, ROLE_OPERATOR, ROLE_APPROVER, ROLE_AUDITOR})
+ORGANIZATION_ROLES: Final = frozenset(
+    {ROLE_OBSERVER, ROLE_OPERATOR, ROLE_APPROVER, ROLE_AUDITOR, ROLE_GODMODE}
+)
 
 CONSOLE_READ: Final = "org:console:read"
 FINDINGS_READ: Final = "org:findings:read"
@@ -62,5 +65,8 @@ ROLE_PERMISSION_MATRIX: Final = MappingProxyType(
         ROLE_APPROVER: _READ_PERMISSIONS
         | frozenset({CAMPAIGN_AUTHORIZE, FINDINGS_APPROVE, FINDINGS_RESOLVE}),
         ROLE_AUDITOR: _READ_PERMISSIONS | frozenset({AUDIT_READ}),
+        # Demo/grader role. Runtime authority still comes only from verified Clerk
+        # custom-permission claims, and distinct-human approval remains enforced.
+        ROLE_GODMODE: ORGANIZATION_CUSTOM_PERMISSIONS,
     }
 )

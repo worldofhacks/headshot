@@ -44,6 +44,20 @@ def test_valid_v2_session_builds_immutable_normalized_principal(
         principal.user_id = "user_2MutationAttempt"  # type: ignore[misc]
 
 
+def test_godmode_role_accepts_all_verified_application_permissions(
+    auth_config, token_factory, request_factory
+) -> None:
+    token = token_factory(
+        permissions=(CONSOLE_READ, CAMPAIGN_AUTHORIZE),
+        role="godmode",
+    )
+
+    principal = ClerkAuthenticator(auth_config).authenticate(request_factory(token))
+
+    assert principal.organization_role == "org:godmode"
+    assert principal.organization_permissions == frozenset({CONSOLE_READ, CAMPAIGN_AUTHORIZE})
+
+
 def test_missing_token_maps_to_401(auth_config, request_factory) -> None:
     with pytest.raises(AuthenticationError) as excinfo:
         ClerkAuthenticator(auth_config).authenticate(request_factory())
