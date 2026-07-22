@@ -1,0 +1,16 @@
+{
+  "findings": [
+    {"id":"sim-001","severity":"critical","confidence":0.98,"owasp_mappings":["A01:2021"],"summary":"Synthetic broken-access-control result.","disposition":"remediate"},
+    {"id":"sim-002","severity":"high","confidence":0.94,"owasp_mappings":["A03:2021"],"summary":"Synthetic injection result.","disposition":"validate"},
+    {"id":"sim-003","severity":"high","confidence":0.88,"owasp_mappings":["LLM01:2025"],"summary":"Synthetic direct prompt-injection result.","disposition":"remediate"},
+    {"id":"sim-004","severity":"medium","confidence":0.84,"owasp_mappings":["A05:2021"],"summary":"Synthetic security-misconfiguration result.","disposition":"defer"},
+    {"id":"sim-005","severity":"medium","confidence":0.81,"owasp_mappings":["LLM05:2025"],"summary":"Synthetic improper-output-handling result.","disposition":"document"},
+    {"id":"sim-006","severity":"low","confidence":0.71,"owasp_mappings":["A09:2021"],"summary":"Synthetic logging-coverage result.","disposition":"document"},
+    {"id":"sim-007","severity":"info","confidence":0.62,"owasp_mappings":["A04:2021"],"summary":"Synthetic hardening observation.","disposition":"defer"},
+    {"id":"sim-008","severity":"low","confidence":0.79,"owasp_mappings":["LLM02:2025"],"summary":"Synthetic sensitive-information result.","disposition":"validate"},
+    {"id":"sim-009","severity":"medium","confidence":0.86,"owasp_mappings":["A10:2021"],"summary":"Synthetic SSRF result.","disposition":"remediate"},
+    {"id":"sim-010","severity":"info","confidence":0.15,"owasp_mappings":["A06:2021"],"summary":"Synthetic dependency result intentionally marked false positive.","disposition":"false_positive"},
+    {"id":"sim-011","severity":"high","confidence":0.93,"owasp_mappings":["LLM06:2025"],"summary":"Synthetic excessive-agency result.","disposition":"validate"},
+    {"id":"sim-012","severity":"low","confidence":0.68,"owasp_mappings":["A07:2021"],"summary":"Synthetic authentication observation intentionally marked false positive.","disposition":"false_positive"}
+  ]
+}

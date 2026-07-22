@@ -17,6 +17,7 @@ drift).
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from typing import Any
@@ -67,3 +68,21 @@ def load_seed_attempts(seeds_dir: str | Path) -> list[dict[str, Any]]:
         case = json.loads(path.read_text(encoding="utf-8"))
         attempts.append(seed_to_attempt(case))
     return attempts
+
+
+def corpus_sha256(attempts: list[dict[str, Any]]) -> str:
+    """Return a canonical sha256 over an ordered list of replayed attempts (the corpus content).
+
+    Deterministic and content-addressed: the attempts are serialized with sorted keys + explicit
+    separators in their given (sorted-by-case) order, so the SAME corpus always hashes to the SAME
+    digest and ANY content edit (a changed turn, an added/removed case, a reordered sequence)
+    changes it. This digest is bound into the run authorization's operation hash (D14) so a grant
+    is tied to the EXACT corpus bytes it was minted for — an edited corpus refuses the grant.
+
+    Computed over the mapped attempts (not the raw files) so it is stable across incidental file
+    formatting and reflects exactly what the coordinator will replay.
+    """
+    canonical = json.dumps(
+        attempts, sort_keys=True, ensure_ascii=False, separators=(",", ":")
+    ).encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest()

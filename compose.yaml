@@ -6,6 +6,9 @@
 # database. Production credentials are NEVER inline: they are resolved as secret
 # references by agentforge.config in the production environment only (O1 invariant), and
 # this compose file is pinned to environment=local so it cannot reach them.
+# Load the developer-owned values explicitly with:
+#   docker compose --env-file .env.local up --build
+# Only the variables enumerated below enter Web; provider/target values in that file do not.
 
 services:
   postgres:
@@ -32,15 +35,30 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        # Public frontend identifier, supplied explicitly by the developer. There is no
+        # committed fallback: a missing Clerk build binding must fail instead of producing
+        # a console that cannot authenticate.
+        VITE_CLERK_PUBLISHABLE_KEY: ${VITE_CLERK_PUBLISHABLE_KEY:?required}
     environment:
       # local environment pins the isolation boundary: this app CANNOT resolve production
       # target credentials (agentforge.config, O1).
       AGENTFORGE_ENVIRONMENT: local
       DATABASE_URL: postgresql://agentforge:local_dev_only@postgres:5432/agentforge
+      PORT: ${PORT:?required}
+      AGENTFORGE_CONSOLE_DIR: /app/console
+      AGENTFORGE_MAX_REQUEST_BYTES: ${AGENTFORGE_MAX_REQUEST_BYTES:?required}
+      # Request authentication is fail-closed. Compose supplies no fixture or fallback value;
+      # all five bindings must come from the explicitly selected local environment file.
+      CLERK_PUBLISHABLE_KEY: ${CLERK_PUBLISHABLE_KEY:?required}
+      CLERK_JWT_KEY: ${CLERK_JWT_KEY:?required}
+      CLERK_AUTHORIZED_PARTIES: ${CLERK_AUTHORIZED_PARTIES:?required}
+      CLERK_REQUIRED_ORG_ID: ${CLERK_REQUIRED_ORG_ID:?required}
+      CLERK_FRONTEND_API_ORIGIN: ${CLERK_FRONTEND_API_ORIGIN:?required}
     ports:
       # Loopback-only publish: dev-convenience access to the health surface, never exposed
       # off-box.
-      - "127.0.0.1:8000:8000"
+      - "127.0.0.1:${PORT:?required}:${PORT:?required}"
     depends_on:
       postgres:
         condition: service_healthy

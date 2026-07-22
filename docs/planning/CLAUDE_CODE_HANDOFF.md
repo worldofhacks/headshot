@@ -28,22 +28,21 @@ with **no invented numbers**.
 `docs/adrs/0001-build-vs-configure.md` (F12 Promptfoo), `docs/diagrams/D2-D4-…spec.md` (F2 zones/edges —
 **render flagged for regeneration**), `docs/defense/DEFENSE_SCRIPT.md` (F11 status labels + F1/F2/F5 content).
 
-### Diagram materials are STALE and NON-BINDING
+### Diagram exports are STALE and NON-BINDING
 
 **`ARCHITECTURE.md` and `docs/planning/DECISIONS.md` are the authoritative trust-boundary sources.** The
-diagram set — `docs/diagrams/D2-D4-agent-interaction-trust.{excalidraw,svg,png}` and the legend text in
-`docs/planning/DIAGRAM_PLAN.md` — still shows the **pre-F2** "Target adapter" red-quarantine framing and is
-**stale and non-binding** until regenerated. The diagram **spec** (`…spec.md`) has been corrected and carries
-a visible regen banner; the rendered artifacts have **not** been touched in this pass (deliberately deferred).
-Do not treat the diagram, its SVG/PNG, or `DIAGRAM_PLAN.md`'s legend as current until the deferred task below
-completes.
+rendered set — `docs/diagrams/D2-D4-agent-interaction-trust.{excalidraw,svg,png}` — still shows the
+**pre-F2** "Target adapter" red-quarantine framing and predates the Clerk/Railway identity overlay. It is
+**stale and non-binding** until regenerated. The diagram **spec** (`…spec.md`) and
+`docs/planning/DIAGRAM_PLAN.md` are now corrected and carry the required Browser → Clerk → public Railway
+Web → private services/Policy Gateway topology; the rendered artifacts remain deliberately untouched.
+Do not treat the Excalidraw/SVG/PNG as current until the deferred task below completes.
 
 ### Deferred `/tasks-gen` task — D2/D4 diagram regeneration (do BEFORE any Defense/presentation use)
 
 `/tasks-gen` must emit an explicit task covering, in order:
-1. Correct the stale "Target adapter" trust language in `DIAGRAM_PLAN.md` (content-only; keep the six-colour
-   legend format).
-2. Regenerate `.excalidraw` + SVG + PNG from the corrected **F2 trust boundary** in the spec.
+1. Use the corrected spec and `DIAGRAM_PLAN.md` as the source of truth; preserve the six-colour legend.
+2. Regenerate `.excalidraw` + SVG + PNG from the corrected **F2 + Clerk/Railway trust boundaries**.
 3. Verify the render shows the **Red Team Generator as untrusted, exiting only through the trusted Policy
    Gateway + Execution Recorder**.
 4. Verify the render shows the **attacker holds no credentials and never produces the Judge's authoritative

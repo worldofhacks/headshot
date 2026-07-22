@@ -1,0 +1,86 @@
+[
+  {
+    "schema_version": "1",
+    "finding_id": "zap:4feaa072beb9d37811c20315",
+    "tool_name": "zap",
+    "tool_version": "2.17.0",
+    "configuration_sha256": "5baf4831fa9be8c5db5366af12bb908c13b094d1e9ffcf17923c7db59941c87f",
+    "run_id": "zap-openemr-copilot-passive-1",
+    "run_nonce": "zaptarget-passive-baseline-0001",
+    "target_id": "openemr-copilot",
+    "surface_id": "copilot-site",
+    "scan_provenance": "live_target",
+    "observed_at": "2026-07-22T03:34:56.539844+00:00",
+    "raw_artifact_sha256": "89f10c9445a98a324d80d38f5ed12db4e6e05885441b0da00598a8634b88edac",
+    "owasp_mappings": [
+      "A04:2021"
+    ],
+    "severity": "low",
+    "confidence": 0.95,
+    "reproduction_evidence": {
+      "summary": "ZAP plugin 10035: Strict-Transport-Security Header Not Set",
+      "artifact_locator": "tmp/sec/zaptarget/zap-target.json#finding=0"
+    },
+    "validation_state": "unvalidated",
+    "disposition": "validate",
+    "human_publication_state": "blocked_pending_human_approval",
+    "source_kind": "security_tool",
+    "evidence_provenance": "scan_only"
+  },
+  {
+    "schema_version": "1",
+    "finding_id": "zap:22af39efeb5136a15af349ac",
+    "tool_name": "zap",
+    "tool_version": "2.17.0",
+    "configuration_sha256": "5baf4831fa9be8c5db5366af12bb908c13b094d1e9ffcf17923c7db59941c87f",
+    "run_id": "zap-openemr-copilot-passive-1",
+    "run_nonce": "zaptarget-passive-baseline-0001",
+    "target_id": "openemr-copilot",
+    "surface_id": "copilot-site",
+    "scan_provenance": "live_target",
+    "observed_at": "2026-07-22T03:34:56.539844+00:00",
+    "raw_artifact_sha256": "89f10c9445a98a324d80d38f5ed12db4e6e05885441b0da00598a8634b88edac",
+    "owasp_mappings": [
+      "A05:2021"
+    ],
+    "severity": "low",
+    "confidence": 0.75,
+    "reproduction_evidence": {
+      "summary": "ZAP plugin 10021: X-Content-Type-Options Header Missing",
+      "artifact_locator": "tmp/sec/zaptarget/zap-target.json#finding=1"
+    },
+    "validation_state": "unvalidated",
+    "disposition": "validate",
+    "human_publication_state": "blocked_pending_human_approval",
+    "source_kind": "security_tool",
+    "evidence_provenance": "scan_only"
+  },
+  {
+    "schema_version": "1",
+    "finding_id": "zap:227febe96ac06a6840bd6d95",
+    "tool_name": "zap",
+    "tool_version": "2.17.0",
+    "configuration_sha256": "5baf4831fa9be8c5db5366af12bb908c13b094d1e9ffcf17923c7db59941c87f",
+    "run_id": "zap-openemr-copilot-passive-1",
+    "run_nonce": "zaptarget-passive-baseline-0001",
+    "target_id": "openemr-copilot",
+    "surface_id": "copilot-site",
+    "scan_provenance": "live_target",
+    "observed_at": "2026-07-22T03:34:56.539844+00:00",
+    "raw_artifact_sha256": "89f10c9445a98a324d80d38f5ed12db4e6e05885441b0da00598a8634b88edac",
+    "owasp_mappings": [
+      "A04:2021"
+    ],
+    "severity": "info",
+    "confidence": 0.5,
+    "reproduction_evidence": {
+      "summary": "ZAP plugin 10015: Re-examine Cache-control Directives",
+      "artifact_locator": "tmp/sec/zaptarget/zap-target.json#finding=2"
+    },
+    "validation_state": "unvalidated",
+    "disposition": "validate",
+    "human_publication_state": "blocked_pending_human_approval",
+    "source_kind": "security_tool",
+    "evidence_provenance": "scan_only"
+  }
+]

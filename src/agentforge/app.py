@@ -28,11 +28,15 @@ from __future__ import annotations
 import logging
 import os
 from collections.abc import Callable
+from pathlib import Path
 
 from fastapi import FastAPI
 
+from agentforge.api.postgres import build_postgres_backend
 from agentforge.config import Settings
 from agentforge.health import create_app
+from agentforge.readiness import build_readiness_check
+from agentforge.web import create_web_app
 
 _logger = logging.getLogger(__name__)
 
@@ -97,10 +101,24 @@ def build_app(database_url: str | None, schema_check: Callable[[], bool]) -> Fas
     return create_app(readiness_check=lambda: _db_ok(database_url) and bool(schema_check()))
 
 
-# The ASGI entrypoint the container runs (``agentforge.app:app``). The deployment
-# environment is read via ``Settings.from_env()`` (AGENTFORGE_ENVIRONMENT, fail-safe
-# ``local``) so the O1 isolation boundary is pinned to the *deployed* environment wherever
-# a ``Settings`` is needed; DATABASE_URL is read from the environment; the schema half is
-# fail-closed until M2 wires the real Alembic check.
+# The production ASGI entrypoint. ``build_app`` above remains the small compatibility factory
+# exercised by the original M1a tests; deployed Web uses the M1d same-origin composition.
 _settings = Settings.from_env()
-app = build_app(os.environ.get("DATABASE_URL"), _placeholder_schema_check)
+_database_url = os.environ.get("DATABASE_URL")
+_packaged_console = Path(os.environ.get("AGENTFORGE_CONSOLE_DIR", "/app/console"))
+if not _packaged_console.is_dir():
+    _packaged_console = Path(__file__).resolve().parents[2] / "console" / "dist"
+app = create_web_app(
+    console_dir=_packaged_console,
+    readiness_check=build_readiness_check(
+        database_url=_database_url,
+        console_dir=_packaged_console,
+    ),
+    backend=build_postgres_backend(
+        _database_url,
+        environment=_settings.environment,
+        # Launch only appends exact approved work to the durable queue. The private Runner
+        # independently reconstructs and revalidates every dispatch fact from Postgres.
+        runner_available=True,
+    ),
+)

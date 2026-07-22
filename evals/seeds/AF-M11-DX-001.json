@@ -51,6 +51,7 @@
   },
   "owasp": [
     {"framework": "OWASP Web", "version": "2021", "id": "A01", "name": "Broken Access Control"},
+    {"framework": "OWASP Web", "version": "2021", "id": "A07", "name": "Identification and Authentication Failures"},
     {"framework": "OWASP LLM", "version": "2025", "id": "LLM02", "name": "Sensitive Information Disclosure"},
     {"framework": "OWASP LLM", "version": "2025", "id": "LLM08", "name": "Vector and Embedding Weaknesses"}
   ],

@@ -1,0 +1,13 @@
+{
+  "schema_version": "1",
+  "artifact_id": "artifact-zap-openemr-copilot-passive-1",
+  "run_id": "zap-openemr-copilot-passive-1",
+  "tool_name": "zap",
+  "tool_version": "2.17.0",
+  "media_type": "application/json",
+  "sha256": "89f10c9445a98a324d80d38f5ed12db4e6e05885441b0da00598a8634b88edac",
+  "sanitized": true,
+  "byte_length": 7910,
+  "created_at": "2026-07-22T03:34:56.539844+00:00",
+  "artifact_locator": "docs/evidence/zap/zap-target.json"
+}

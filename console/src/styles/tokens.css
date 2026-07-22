@@ -1,0 +1,61 @@
+/*
+ * Headshot Operator Console — canonical design tokens (titanium & ceramic, FROZEN).
+ * Preserves the reviewed :root / [data-theme="light"] custom properties.
+ * This is the canonical token layer — do not
+ * hand-edit values; the visual system is frozen. Assign colors by ROLE (§3.3), never per-component.
+ */
+:root {
+  /* ===== surfaces — cool graphite-ink ladder: app → head → panel → raise; inset = wells ===== */
+  --bg-app: #0b0d10; --bg-head: #0e1115; --bg-panel: #12161b; --bg-raise: #171c22; --bg-inset: #090b0e;
+  --hover: rgba(255, 255, 255, 0.035); --sel: rgba(255, 255, 255, 0.05); --sel-line: #6e86c8;
+  --bd: #252b33; --bd-2: #363e49; --sep: #191d24;
+  --tx: #f1f3f5; --tx2: #a5adb8; --tx3: #737c89; --tx-inv: #0b0d10;
+  /* ===== near-monochrome: neutrals dominate; faint functional hue only ===== */
+  --brand: #6e86c8; --brand-2: #8194cf; --brand-tint: rgba(110, 134, 200, 0.1); --brand-line: #5a71b8;
+  --phos: #78a995; --phos-tint: rgba(120, 169, 149, 0.08); --phos-line: #4f7d6c;
+  --v-conf: #d06a60; --v-conf-t: rgba(208, 106, 96, 0.07);
+  --v-likely: #d0a15c; --v-likely-t: rgba(208, 161, 92, 0.07);
+  --v-clear: #7ba593; --v-clear-t: rgba(123, 165, 147, 0.07);
+  --v-indet: #9991a9; --v-indet-t: rgba(153, 145, 169, 0.08);
+  --v-err: #c77b72; --v-err-t: rgba(199, 123, 114, 0.07);
+  --sv-crit: #d06a60; --sv-high: #d0a15c; --sv-med: #8e97a6; --sv-low: #737c89;
+  --tz-trust: #7d91ad; --tz-gov: #78a995; --tz-quar: #d0a15c; --tz-ext: #8a929f; --tz-data: #7d91ad; --tz-human: #9991a9;
+  --warn: #d0a15c; --warn-t: rgba(208, 161, 92, 0.07); --warn-line: #8a6d38;
+  /* ===== semantic role aliases — assign by role, not per component ===== */
+  --live: var(--phos); --verified: var(--phos); --healthy: var(--phos); --info: #7d91ad;
+  --attention: var(--warn); --critical: var(--v-conf); --destructive: var(--v-conf);
+  --indeterminate: var(--v-indet); --stale: #a98f5e; --offline: var(--tx3); --disabled: var(--tx3); --focus: #6e86c8;
+  --shadow: 0 18px 50px -14px rgba(0, 0, 0, 0.7), 0 2px 8px -2px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(0, 0, 0, 0.4);
+  /* type scale — intentional, 10px legibility floor */
+  --fs-2xs: 10px; --fs-xs: 11px; --fs-sm: 12px; --fs-base: 13px; --fs-md: 14px; --fs-lg: 15px; --fs-xl: 16px; --fs-2xl: 18px; --fs-3xl: 20px; --fs-4xl: 24px;
+  /* radius scale — one tier per component class */
+  --r-xs: 4px; --r-sm: 6px; --r-md: 8px; --r-lg: 10px; --r-xl: 10px; --r-pill: 999px;
+  /* control-height tiers */
+  --h-compact: 32px; --h-std: 36px; --h-touch: 44px;
+  /* motion — strong curves */
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1); --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1); --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
+  /* materials — floating layers only */
+  --scrim: rgba(8, 9, 12, 0.56); --mat-over: rgba(23, 26, 33, 0.78); --mat-over-sm: rgba(25, 28, 35, 0.84); --mat-edge: inset 0 1px 0 rgba(255, 255, 255, 0.07);
+  --row-h: 30px; --pad: 16px; --pad-sm: 9px; --gap: 8px; --fs-row: 12px;
+}
+[data-theme="light"] {
+  /* cool porcelain / fog — deliberately designed, not a warm invert */
+  --bg-app: #ecedea; --bg-head: #f3f3f0; --bg-panel: #fafaf7; --bg-raise: #ffffff; --bg-inset: #e7e8e5;
+  --hover: rgba(24, 28, 40, 0.04); --sel: rgba(24, 28, 40, 0.045); --sel-line: #365ca8;
+  --bd: #d5d8d6; --bd-2: #bbc0c4; --sep: #e4e5e2;
+  --tx: #181a1d; --tx2: #626872; --tx3: #8a9098; --tx-inv: #ffffff;
+  --brand: #365ca8; --brand-2: #2b4c91; --brand-tint: rgba(54, 92, 168, 0.08); --brand-line: #365ca8;
+  --phos: #34775f; --phos-tint: rgba(52, 119, 95, 0.08); --phos-line: #34775f;
+  --v-conf: #a9473f; --v-conf-t: rgba(169, 71, 63, 0.07);
+  --v-likely: #916521; --v-likely-t: rgba(145, 101, 33, 0.08);
+  --v-clear: #34775f; --v-clear-t: rgba(52, 119, 95, 0.08);
+  --v-indet: #70677e; --v-indet-t: rgba(112, 103, 126, 0.08);
+  --v-err: #a9473f; --v-err-t: rgba(169, 71, 63, 0.07);
+  --sv-crit: #a9473f; --sv-high: #916521; --sv-med: #6f6a5e; --sv-low: #8a9098;
+  --tz-trust: #536c8a; --tz-gov: #34775f; --tz-quar: #916521; --tz-ext: #5f6878; --tz-data: #536c8a; --tz-human: #70677e;
+  --warn: #916521; --warn-t: rgba(145, 101, 33, 0.08); --warn-line: #7a5418;
+  --info: #536c8a; --stale: #8a6d38; --focus: #365ca8;
+  --shadow: 0 18px 50px -14px rgba(40, 48, 70, 0.2), 0 2px 8px -2px rgba(40, 48, 70, 0.1), 0 0 0 1px rgba(30, 40, 70, 0.05);
+  --scrim: rgba(30, 36, 54, 0.3); --mat-over: rgba(250, 251, 253, 0.82); --mat-over-sm: rgba(252, 253, 255, 0.86); --mat-edge: inset 0 1px 0 rgba(255, 255, 255, 0.8);
+}
+[data-density="comfortable"] { --row-h: 40px; --pad: 20px; --pad-sm: 12px; --gap: 12px; --fs-row: 13px; }

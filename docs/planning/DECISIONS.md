@@ -9,7 +9,7 @@
 |---|---|---|
 | D1 | Planning mode = Standard; posture = production-grade | locked |
 | D2 | Language = Python 3.12+ | locked |
-| D3 | Platform host = Railway (Docker/GitHub, managed Postgres, cron, deployment-history rollback; no GPU) | locked |
+| D3 | Full-platform host = Railway; public Web only, private runner/scheduler/Postgres (Docker/GitHub, managed Postgres, deployment-history rollback; no GPU) | locked |
 | D4 | Orchestration = LangGraph (OSS engine only, self-hosted) + PostgresSaver | locked |
 | D5 | Observability = **Langfuse Cloud for MVP** (OTEL SDK v4), self-host post-MVP; exploit DB = system-of-record for finding status | locked (rev. 2026-07-20, F3) |
 | D6 | State + queue = one Postgres; `SKIP LOCKED` jobs table + **full delivery semantics**; cron enqueues; no Redis; **per-agent DB roles** | locked (rev. 2026-07-20, F6/S2) |
@@ -25,6 +25,13 @@
 | D16 | Deploy = **≥2 Railway environments** (prod-only live creds; env-scoped allowlist); expand/contract migrations; drain-before-deploy; PITR as true rollback | locked (2026-07-20, O1/O2) |
 | D17 | Cost = **two independent line families** (measured hosted-token cost w/ cache+batch · amortized local capacity · hosting/storage/egress); the `list_price/throughput` division is removed as dimensionally invalid | locked (2026-07-20, F4) |
 | D18 | Evaluator-injection containment: Judge/Documentation consume a **typed, trust-labelled, size-bounded evidence envelope**; oracle results are code-applied typed fields (injection cannot downgrade `EXPLOIT_CONFIRMED`); Judge is a pure evaluator (no creds/mutation/publish/execute); Documentation gets sanitized evidence by default; raw evidence quarantined | locked (2026-07-20, S4) |
+| D19 | Human IdP = Clerk; no custom passwords, OAuth flow, or session database | locked (2026-07-21) |
+| D20 | Human session verification = networkless Clerk `session_token` verification with PEM JWT key + explicit exact `authorizedParties` | locked (2026-07-21) |
+| D21 | Enrollment = restricted/invitation-only; exact Headshot Organization required; Personal Accounts and user-created Organizations disabled | locked (2026-07-21) |
+| D22 | MFA = required for all users; TOTP + backup codes, never SMS-only | locked (2026-07-21) |
+| D23 | RBAC = four Organization roles assigned exact backend-authoritative custom permissions; system/client role text has no authority | locked (2026-07-21) |
+| D24 | Two-person identity separation = launcher cannot approve/authorize self; no emergency bypass | locked (2026-07-21) |
+| D25 | Human authentication never replaces exact live-campaign Policy Gateway authorization | locked (2026-07-21) |
 
 ---
 
@@ -233,3 +240,93 @@ that flips a real success to "fail" or launders attacker content into a human-fa
 resolution), §15 (Documentation disclosure), §18 (platform-injection tests); registered in §20.
 **Fallback.** None — a trust control. **Invalidate if.** The evaluators are moved to a fully-structured,
 non-generative scoring path that never ingests free text (then several mitigations collapse into that design).
+
+### D19 — Clerk is the managed human IdP `locked`
+**Why.** The seven-hour MVP cannot responsibly absorb password enrollment/recovery, password hashing,
+MFA, OAuth callback security, session rotation/revocation, or a new credential database. Clerk supplies
+managed sign-in and Organization membership while the application retains server-side authorization.
+The platform builds none of those commodity credential features. `VITE_CLERK_PUBLISHABLE_KEY` and
+`CLERK_PUBLISHABLE_KEY` are public identifiers. `CLERK_SECRET_KEY` is not required for request
+authentication and is reserved for future Backend API user/invitation administration after a separate
+review.
+**Fallback.** Auth0 is a credible managed alternative but would require a different integration and is
+not the MVP selection. A custom password/session system is not a fallback.
+**Invalidate if.** Clerk cannot satisfy the locked Organization, MFA, custom-permission, or session
+verification controls in the provisioned environments; then pause deployment and select another managed
+IdP rather than weakening a gate.
+
+### D20 — Networkless Clerk session verification `locked`
+**Why.** Human endpoints accept only `session_token`. The backend validates the environment's public
+Clerk publishable identifier, then supplies the PEM `CLERK_JWT_KEY` and an explicit list of exact
+non-wildcard `CLERK_AUTHORIZED_PARTIES` to the official request verifier. The current Python verifier
+has no publishable-key option. Local-key verification removes request-time JWKS availability from the
+hot path and must validate signature, supported algorithm, expiry,
+not-before time, token type, and authorized party. Pending sessions are denied. The verified result is
+reduced to a frozen Principal; the token, authorization/cookie headers, raw request state, SDK message,
+and client fields are discarded and never logged.
+**Failure contract.** Invalid/missing authentication → `401`; active identity without the exact
+Organization/permission/distinct approver → `403`; verifier/SDK/security-config failure → fail-closed
+`503`. There is no online-JWKS fallback after local verification fails.
+**Residual.** Networkless verification sees a signed permission snapshot, not a live membership lookup;
+revocation/role-change freshness is bounded by token refresh/expiry. Critical-action step-up or an
+online freshness check is a post-MVP hardening option and must itself fail closed.
+
+### D21 — Restricted Headshot Organization enrollment `locked`
+**Why.** Enable Clerk Restricted mode and use administrator-issued invitations. Every active user must
+belong to the one required Organization named **Headshot**, compared by exact environment-specific
+Organization ID. Personal Accounts and user-created Organizations are disabled. Staging and production
+have separate Clerk configuration, IDs, origins, keys, invitations, and memberships; staging may not
+accept the production Railway origin or production Organization ID. Display names, slugs, email domains,
+and frontend organization state are not authority.
+**Fallback.** None for meaningful access. A user unable to complete the required Organization task stays
+pending/signed out.
+**Invalidate if.** The business intentionally becomes multi-tenant; that requires a new isolation ADR,
+resource-ownership model, and IDOR test plan before another Organization is accepted.
+
+### D22 — Required MFA `locked`
+**Why.** Clerk's required MFA session task prevents a partially configured account from becoming an
+active session. Authenticator-app TOTP is the preferred factor and backup codes are enabled for recovery.
+SMS can be an additional method but cannot be the sole factor. Incomplete MFA/Organization tasks remain
+pending and cannot access protected content.
+**Fallback.** Account recovery is an administrator/Clerk workflow, never a backend MFA bypass.
+**Invalidate if.** A stronger phishing-resistant factor becomes mandatory; add it without removing the
+current fail-closed session-task behavior.
+
+### D23 — Custom-permission RBAC `locked`
+**Why.** Clerk system permissions are not included in session claims and cannot be the server-side
+authorization source. The backend checks only the immutable custom Organization permission set from the
+verified session. Client-supplied role/permission text is ignored, and a verified role label is never
+expanded into permissions in application code.
+
+| Role | Exact custom permission assignment |
+|---|---|
+| `org:observer` | `org:console:read`, `org:findings:read`, `org:evidence:read` |
+| `org:operator` | `org:console:read`, `org:findings:read`, `org:evidence:read`, `org:campaign:launch`, `org:campaign:abort`, `org:targets:manage`, `org:config:manage` |
+| `org:approver` | `org:console:read`, `org:findings:read`, `org:evidence:read`, `org:campaign:authorize`, `org:findings:approve`, `org:findings:resolve` |
+| `org:auditor` | `org:console:read`, `org:findings:read`, `org:evidence:read`, `org:audit:read` |
+
+Current Clerk documentation includes only the first two custom production roles without the
+**Enhanced B2B Authentication** add-on. That add-on is therefore a provisioning prerequisite for this
+locked four-role design; missing it blocks production rather than collapsing roles.
+**Fallback.** None that changes authority semantics. A temporarily absent role/permission denies the
+operation.
+
+### D24 — Two-person identity separation `locked`
+**Why.** Approval is a custom permission **and** an identity comparison. The approver must be an active,
+authenticated Headshot Principal carrying the operation's permission, and
+`approver.user_id != launcher_user_id`. Role or permission alone cannot prove separation. Both immutable
+IDs are audit fields. There is no solo-user or emergency self-approval path; if no second authorized human
+is available, the operation remains pending.
+**Fallback.** Abort or wait for a distinct approver.
+**Invalidate if.** Never by convenience. Any emergency process would require an independently reviewed
+break-glass design with stronger controls and a new ADR.
+
+### D25 — Authentication is not campaign authorization `locked`
+**Why.** Clerk answers who the human is and which application permissions are present. It does not
+authorize an external target. After human gates pass, the trusted Policy Gateway still enforces exact
+target authorization, the environment-scoped allowlist, target-bound credentials, synthetic-data-only,
+budget, rate, timeout, monitoring, and hard abort. Direct API, scheduled, and agent-triggered paths all
+cross the same gateway.
+**Fallback.** None. Any missing Policy Gateway input denies execution.
+**Invalidate if.** Never; combining human identity with target authorization would collapse two separate
+trust boundaries.

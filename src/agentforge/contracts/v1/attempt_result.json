@@ -41,7 +41,17 @@
     "started_at": { "type": "string" },
     "finished_at": { "type": "string" },
     "trace_id": { "type": "string" },
+    "correlation_id": { "type": "string" },
+    "organization_id": { "type": "string", "minLength": 1 },
+    "surface_id": { "type": "string", "minLength": 1 },
+    "surface_version": { "type": "string", "minLength": 1 },
+    "authorization_scope_hash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "execution_profile": { "enum": ["synthetic", "live"] },
+    "evidence_provenance": {
+      "enum": ["synthetic_offline", "live_target", "scan_only", "simulated"]
+    },
     "recorder_identity": { "type": "string" },
+    "recorder_version": { "type": "string" },
     "content_hash": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
   }
 }

@@ -11,11 +11,10 @@ modes. ARCHITECTURE.md §6/§7/§12.
 
 from __future__ import annotations
 
-import os
-
 from alembic import context
 from sqlalchemy import engine_from_config, pool
 
+from agentforge.migration_config import resolve_database_url
 from agentforge.storage.models import Base
 
 # Alembic Config object — provides access to values in alembic.ini.
@@ -24,33 +23,10 @@ config = context.config
 # The models' MetaData is the autogenerate/target schema source.
 target_metadata = Base.metadata
 
-# Local admin/superuser fallback DSN. 'local_dev_only' is a throwaway local-dev password
-# already committed in compose.yaml — not a secret.
-_ADMIN_DSN_FALLBACK = "postgresql+psycopg://agentforge:local_dev_only@localhost:5432/agentforge"
-
-
-def _to_psycopg_dialect(url: str) -> str:
-    """Normalize a DSN to the ``postgresql+psycopg://`` SQLAlchemy dialect (psycopg3).
-
-    CI hands a bare ``postgresql://`` (or ``postgres://``) scheme; SQLAlchemy 2.x would
-    otherwise select the default psycopg2 driver. An explicit ``+psycopg`` dialect is
-    left untouched.
-    """
-    if url.startswith("postgresql+psycopg://"):
-        return url
-    if url.startswith("postgresql://"):
-        return "postgresql+psycopg://" + url[len("postgresql://") :]
-    if url.startswith("postgres://"):
-        return "postgresql+psycopg://" + url[len("postgres://") :]
-    return url
-
 
 def _resolve_url() -> str:
     """Pick the DB URL: a Config ``sqlalchemy.url`` (tests) wins; else env; else fallback."""
-    configured = config.get_main_option("sqlalchemy.url")
-    if configured:
-        return _to_psycopg_dialect(configured)
-    return _to_psycopg_dialect(os.environ.get("DATABASE_URL", _ADMIN_DSN_FALLBACK))
+    return resolve_database_url(configured_url=config.get_main_option("sqlalchemy.url"))
 
 
 def run_migrations_offline() -> None:

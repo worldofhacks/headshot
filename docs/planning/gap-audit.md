@@ -118,7 +118,11 @@
 - **S4 (critical)** — Prompt injection against the **Judge and Documentation agents themselves** (attacker payload echoed in the transcript is a live injection aimed at the next LLM). Fix: treat transcript as untrusted **data** — fenced delimiters, rubric-as-system + transcript-as-user-data, structured extraction; add platform-injection cases to the Judge calibration set; Documentation renders from structured fields + escaped evidence. → §5, §15, §18.
 - **S5 (important)** — Judge fallback to GPT-5.4 collapses cross-vendor chain (Documentation is GPT-5.4). Fix: Judge fallback **vendor-disjoint** from Documentation; runtime invariant `Judge.vendor != Documentation.vendor` fail-closes the run. → §8, D8.
 - **S6 (important)** — Coverage-map poisoning: Orchestrator steers on metrics the untrusted agents write. Fix: compute coverage/resilience only from hash-verified, nonce-deduped verdicts (never raw spans); sanity invariants (no "covered" without N distinct verified attempts + ≥1 oracle/human-checked case; unexplained resilience jump flagged). → §9, §13.
-- **S7 (important)** — Separation of duties: launcher may == approver. Fix: two-person rule on critical-publish + remediation (`approver_id != launcher_id`, runtime-enforced, both in audit log); if single-operator is unavoidable in Week 3, stated as an explicit limitation. → §14, §15.
+- **S7 (important)** — Separation of duties: launcher must never equal approver. Fix: Clerk-verified
+  immutable identities + exact custom permission + runtime two-person rule on campaign authorization,
+  critical publish, and remediation (`approver_user_id != launcher_user_id`, both in the audit log).
+  There is no single-operator exception; without a distinct authorized Approver, the action stays blocked.
+  → §5, §14, §15, D24.
 - **S8 (important)** — Canary determinism assumes canaries in the **external** target's data. Fix: make canary provisioning an explicit owned step in `authorized-live-campaign` where the platform has write access; **where it does not, state PHI-exfil detection is Judge-judgment + human-escalation, not deterministic** — honestly. → §5, §10, §15.
 - **S9 (nice-to-have)** — Two evidence records (hashed transcript vs Langfuse span) with no reconciliation. Fix: the hashed `AttemptResult` is the **authoritative** evidence object; the span carries the same `transcript_hash`; a reconciliation check marks a divergent run degraded. → §6, §9.
 

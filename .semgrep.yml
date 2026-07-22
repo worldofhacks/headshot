@@ -1,0 +1,44 @@
+rules:
+  - id: agentforge.python.subprocess-shell-true
+    languages: [python]
+    message: Never invoke a security tool through a shell.
+    severity: ERROR
+    metadata:
+      owasp: ["A03:2021"]
+      confidence_score: "0.99"
+    patterns:
+      - pattern: subprocess.$FUNC(..., shell=True, ...)
+
+  - id: agentforge.python.http-client-follows-redirects
+    languages: [python]
+    message: Target clients must reject redirects at the transport boundary.
+    severity: ERROR
+    metadata:
+      owasp: ["A10:2021"]
+      confidence_score: "0.90"
+    patterns:
+      - pattern: httpx.$CLIENT(..., follow_redirects=True, ...)
+
+  - id: agentforge.typescript.dangerously-set-inner-html
+    languages: [typescript]
+    message: Untrusted evidence must not be inserted as raw HTML.
+    severity: ERROR
+    metadata:
+      owasp: ["A03:2021"]
+      confidence_score: "0.95"
+    pattern: <$ELEMENT ... dangerouslySetInnerHTML={...} ... />
+
+  - id: agentforge.python.unbounded-http-timeout
+    languages: [python]
+    message: Outbound HTTP calls require an explicit timeout.
+    severity: WARNING
+    metadata:
+      owasp: ["A04:2021"]
+      confidence_score: "0.85"
+    patterns:
+      - pattern-either:
+          - pattern: httpx.get(...)
+          - pattern: httpx.post(...)
+          - pattern: requests.get(...)
+          - pattern: requests.post(...)
+      - pattern-not: $CLIENT(..., timeout=$TIMEOUT, ...)
