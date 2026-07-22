@@ -115,7 +115,7 @@ const validResources: Array<[string, (value: unknown) => unknown, unknown]> = [
   [
     "traces",
     decodeTraces,
-    [{ request_id: "request-1", trace_id: "trace-1", campaign_id: "run-1", attempt_id: "attempt-1", operation: "target.http", provider: "openemr", method: "POST", destination_host: "target.invalid", relative_path: "chat", status: "succeeded", status_code: 200, error_code: null, started_at: at, finished_at: "2026-07-21T00:00:00.012Z", duration_ms: 12.5, request_bytes: 25, response_bytes: 50, measured_cost: 0.01, currency: "USD", langfuse_status: "exported" }],
+    [{ request_id: "request-1", trace_id: "trace-1", campaign_id: "run-1", attempt_id: "attempt-1", operation: "target.http", provider: "openemr", method: "POST", destination_host: "target.invalid", relative_path: "chat", status: "succeeded", status_code: 200, error_code: null, started_at: at, finished_at: "2026-07-21T00:00:00.012Z", duration_ms: 12.5, request_bytes: 25, response_bytes: 50, measured_cost: 0.01, currency: "USD", langfuse_status: "exported", request_preview: '{"turns":["synthetic"]}', response_preview: '{"answer":"safe"}', request_sha256: "a".repeat(64), response_sha256: "b".repeat(64), inspection_flags: [], inspection_owasp_mappings: [] }],
   ],
   [
     "costs",

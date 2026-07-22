@@ -4,6 +4,7 @@ import type { ApiClient } from "../api/client";
 import type { ResourceResult } from "../api/contracts";
 import { RESOURCE_PATHS } from "../api/paths";
 import { decodeCosts, decodeTraces } from "../api/read-models";
+import { AdversarialText } from "../components/AdversarialText";
 import {
   count,
   DistributionBars,
@@ -13,6 +14,7 @@ import {
   percent,
   ScreenHeading,
   shortId,
+  TagMatrix,
   time,
 } from "../components/Analytics";
 import { ResourceView, StateNotice } from "../components/ResourceView";
@@ -142,6 +144,25 @@ function TraceDetails({ trace }: { trace: TraceReadModel }) {
       <div className="correlation-chain" aria-label="Request correlation chain">
         <span>Campaign</span><i>→</i><span>Attempt</span><i>→</i><span>Request</span><i>→</i><span>Langfuse trace</span>
       </div>
+      {(trace.inspection_flags.length > 0 || trace.inspection_owasp_mappings.length > 0) && (
+        <TagMatrix groups={[
+          { label: "Passive signals", values: trace.inspection_flags },
+          { label: "Candidate mappings", values: trace.inspection_owasp_mappings },
+        ]} />
+      )}
+      {(trace.request_preview !== null || trace.response_preview !== null) && (
+        <div className="traffic-inspector">
+          <div>
+            <p className="field-label">Sanitized request · {shortId(trace.request_sha256)}</p>
+            <AdversarialText>{trace.request_preview ?? "Request body unavailable"}</AdversarialText>
+          </div>
+          <div>
+            <p className="field-label">Sanitized response · {shortId(trace.response_sha256)}</p>
+            <AdversarialText>{trace.response_preview ?? "Response body unavailable"}</AdversarialText>
+          </div>
+          <p className="data-note">Inspector signals are advisory. They cannot create a finding or replace the independent Judge.</p>
+        </div>
+      )}
       {trace.error_code && <StateNotice state="error" detail={`Transport error: ${trace.error_code}`} />}
     </div>
   );
@@ -307,7 +328,7 @@ export function TracesScreen({ client }: { client: ApiClient }) {
   const traces = useResource<TraceReadModel[]>(client, RESOURCE_PATHS.traces, decodeTraces);
   return (
     <div className="screen-stack">
-      <ScreenHeading title="Traces" detail="Every physical target request is correlated across campaign, attempt, durable request ledger and Langfuse export." eyebrow="HEADSHOT OBSERVABILITY" />
+      <ScreenHeading title="Traces" detail="Every physical target request is captured for sanitized Proxy-style inspection and correlated across campaign, attempt, durable ledger and Langfuse." eyebrow="HEADSHOT OBSERVABILITY" />
       <ResourceView result={traces.result} emptyLabel="No physical request telemetry has been recorded yet.">
         {(data) => <TraceDashboard traces={data} />}
       </ResourceView>

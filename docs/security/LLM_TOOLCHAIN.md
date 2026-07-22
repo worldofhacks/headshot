@@ -32,7 +32,9 @@ explicit interaction if a later authorized, offline scenario resolution supplies
 Promptfoo runs with `PROMPTFOO_DISABLE_REMOTE_GENERATION=true`,
 `PROMPTFOO_DISABLE_REDTEAM_REMOTE_GENERATION=true`, and telemetry disabled. ZAP 2.17.0 and Semgrep
 1.170.0 remain the web and source scanners described in the main security-tool evidence record.
-Burp remains evaluated and rejected.
+The operational Headshot LLM Security Workbench composes their governed capabilities into a
+Burp-style intercept, inspect, replay, fuzz, scan, compare, decode and sequence workflow. The
+commercial Burp product itself is not installed or claimed; see `LLM_SECURITY_WORKBENCH.md`.
 
 ## Reproduction and artifacts
 

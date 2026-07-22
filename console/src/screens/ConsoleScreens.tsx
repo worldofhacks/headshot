@@ -1232,6 +1232,12 @@ export function ConfigurationScreen({ client, principal }: ScreenProps) {
   const componentRecords = components.result.data ?? [];
   const operationalComponents = componentRecords.filter((component) => component.availability === "operational and evidenced").length;
   const configurationKeys = configRecord ? Object.keys(configRecord.configuration) : [];
+  const workbench = configRecord && isJsonRecord(configRecord.configuration.security_workbench)
+    ? configRecord.configuration.security_workbench
+    : null;
+  const workbenchCapabilities = workbench && Array.isArray(workbench.capabilities)
+    ? workbench.capabilities.filter(isJsonRecord)
+    : [];
   return (
     <div className="screen-stack">
       <ScreenHeading
@@ -1266,7 +1272,26 @@ export function ConfigurationScreen({ client, principal }: ScreenProps) {
           {componentRecords.length > 0 && <p className="data-note">{unique(componentRecords.map((component) => component.environment)).join(" · ")}</p>}
         </Panel>
       </div>
-      <Panel title="LLM security toolchain" meta="isolated CI execution" eyebrow="NATIVE ARTIFACTS">
+      <Panel title="LLM security workbench" meta="Burp-style workflow · Headshot controls" eyebrow="GOVERNED TESTING">
+        {workbenchCapabilities.length > 0 ? (
+          <RecordTable
+            data={workbenchCapabilities}
+            identityKeys={["workflow"]}
+            columns={[
+              { key: "workflow", label: "Workflow" },
+              { key: "headshot_control", label: "Headshot control" },
+              { key: "state", label: "State" },
+              { key: "llm_focus", label: "LLM focus" },
+              { key: "safeguard", label: "Safety boundary" },
+              { key: "evidence", label: "Evidence" },
+            ]}
+          />
+        ) : (
+          <StateNotice state="empty" detail="No security-workbench capability map is published." />
+        )}
+        <p className="data-note">This is a governed LLM security workbench, not a claim that the commercial PortSwigger Burp Suite product is installed.</p>
+      </Panel>
+      <Panel title="Security engines" meta="native artifacts + runtime controls" eyebrow="EVIDENCED TOOLING">
         {componentRecords.filter((component) => component.kind.startsWith("security-tool:")).length > 0 ? (
           <RecordTable
             data={componentRecords.filter((component) => component.kind.startsWith("security-tool:"))}

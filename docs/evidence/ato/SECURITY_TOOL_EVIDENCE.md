@@ -50,6 +50,7 @@ authorization`.
 | NVIDIA Garak 0.15.1 | Breadth candidate source | operational and evidenced (bounded slice) | native `garak.report.jsonl` + adapter summary from `scripts/run_offline_llm_tools.sh`; CI `security-tools` job |
 | Microsoft PyRIT 0.14.0 | Converter/multi-turn candidate source (never verdict authority) | operational and evidenced (bounded slice) | native converter + undetermined `AttackResult` JSON; CI `security-tools` job |
 | Giskard Scan 1.0.0b3 | Agent/RAG scenario source | operational and evidenced (packaged-scenario slice) | native packaged LLM01 scenario export; CI `security-tools` job |
+| Headshot LLM Security Workbench 1.0.0 | Burp-style LLM intercept/replay/fuzz/scan/compare workflow | operational and evidenced | `outbound_http_requests`; Langfuse trace IDs; `tests/security_tools/test_workbench.py` |
 | Burp Suite Pro / DAST / Enterprise | Commercial web DAST | evaluated and rejected | ADR-0001 §D (`docs/adrs/0001-build-vs-configure.md:70`) |
 | Lakera Red / HiddenLayer / Robust Intelligence (Cisco AI Defense) | Commercial LLM red-team platforms | evaluated and rejected | ADR-0001 §D (`docs/adrs/0001-build-vs-configure.md:64`) |
 | ZAP Railway staging / live-target self-scan | Deployed-origin DAST | blocked pending authorization | requires separately persisted exact ZAP authorization; campaign approval is insufficient |
@@ -63,12 +64,15 @@ target URL or credential. Giskard's packaged generator template resolves no atta
 therefore truthfully yields zero candidates. Framework orchestrators and target execution are not
 claimed.
 
-**Burp / commercial — why rejected.** ADR-0001 §D records the exclusion on cumulative grounds:
+**Burp product / Headshot workbench.** ADR-0001 §D records why the commercial product is not
+installed, while `docs/security/LLM_SECURITY_WORKBENCH.md` records the operational Headshot
+alternative. The commercial exclusion rests on cumulative grounds:
 (1) licensing/purchase cost exceeds the approved $50–200 OSS path (commercial LLM red-team
 platforms are sales-only, $10k–$200k+); (2) closed execution and reporting limit contract-level
 provenance and cannot be governed under the platform's own allowlist / cost caps; (3) vendor
 governance cannot enforce the two-person approval and exact-origin policy; and (4) Burp
-duplicates the bounded passive ZAP integration plus the platform's custom multi-agent evaluator.
+duplicates capabilities now composed in the LLM Security Workbench from the bounded passive ZAP
+integration, request ledger, governed replay/mutation, and custom multi-agent evaluator.
 Adopting a commercial "adversarial testing platform" *is* the reusable platform the assignment
 asks us to build. A future separately authorized manual assessment may revisit Burp; it is not
 installed or purchased here (`docs/adrs/0001-build-vs-configure.md:64-75`).

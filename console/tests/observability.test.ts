@@ -24,6 +24,12 @@ const trace = (overrides: Partial<TraceReadModel> = {}): TraceReadModel => ({
   measured_cost: 0.01,
   currency: "USD",
   langfuse_status: "exported",
+  request_preview: '{"turns":["synthetic"]}',
+  response_preview: '{"answer":"safe"}',
+  request_sha256: "a".repeat(64),
+  response_sha256: "b".repeat(64),
+  inspection_flags: [],
+  inspection_owasp_mappings: [],
   ...overrides,
 });
 

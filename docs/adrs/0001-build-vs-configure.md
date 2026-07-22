@@ -67,12 +67,14 @@ Defense**. Excluded on three independent grounds: **budget** (sales-only, $10kâ€
 **architecture** (closed, non-composable, un-governable under our own allowlist/cost caps); **thesis**
 (adopting one *is* the reusable platform we're told to build).
 
-Burp Suite Pro/DAST/Enterprise and the commercial AI-security platforms are **evaluated and
-rejected** for this MVP. The reasons are cumulative: licensing and purchase cost exceed the approved
-OSS path; closed execution and reporting limit contract-level provenance; vendor governance cannot
-enforce our two-person approval and exact-origin policy; and Burp duplicates the bounded passive ZAP
-integration plus the platform's custom multi-agent evaluator. A future separately authorized manual
-assessment may revisit Burp, but it is not installed or purchased here.
+Burp Suite Pro/DAST/Enterprise was evaluated as the reference manual web-testing workflow but the
+commercial product is not installed or purchased for this MVP. Headshot instead implements the
+relevant workflow as an LLM-focused Security Workbench: the outbound ledger and Traces provide
+Proxy/Logger/Inspector, regression provides governed Repeater, Garak/PyRIT/Giskard/Promptfoo provide
+bounded Intruder inputs, ZAP provides passive Scanner, and the independent Judge/evidence system
+provides Comparer. Licensing, closed execution, and vendor governance still preclude presenting
+Burp itself as integrated. Active DAST, public out-of-band callbacks, DOM testing, and
+instrumented-runtime testing remain explicitly unclaimed.
 
 ## Consequences
 - **Positive:** near-zero integration cost; OWASP **LLM** mapping (`owasp:llm`) + multi-turn scaffolding +
