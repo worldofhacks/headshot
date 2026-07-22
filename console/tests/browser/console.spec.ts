@@ -3,7 +3,7 @@ import { expect, test } from "@playwright/test";
 test("direct routes and browser history restore authoritative screens", async ({ page }) => {
   await page.goto("/coverage");
   await expect(page.getByRole("heading", { name: "Coverage", exact: true, level: 1 })).toBeVisible();
-  await expect(page.getByText("browser_fixture_dependency").first()).toBeVisible();
+  await expect(page.getByText("Verified attempts", { exact: true }).first()).toBeVisible();
 
   await page.getByRole("button", { name: "Targets", exact: true }).click();
   await expect(page).toHaveURL(/\/targets$/);
@@ -15,7 +15,7 @@ test("direct routes and browser history restore authoritative screens", async ({
 
   await page.goto("/findings/server-record");
   await expect(page.getByRole("heading", { name: "Findings", exact: true })).toBeVisible();
-  await expect(page.getByText("browser_fixture_dependency").first()).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Risk distribution", exact: true })).toBeVisible();
 });
 
 test("390px navigation exposes every screen without application overflow", async ({ page }) => {

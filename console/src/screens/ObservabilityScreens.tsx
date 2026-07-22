@@ -4,6 +4,17 @@ import type { ApiClient } from "../api/client";
 import type { ResourceResult } from "../api/contracts";
 import { RESOURCE_PATHS } from "../api/paths";
 import { decodeCosts, decodeTraces } from "../api/read-models";
+import {
+  count,
+  DistributionBars,
+  MetricStrip,
+  money,
+  Panel,
+  percent,
+  ScreenHeading,
+  shortId,
+  time,
+} from "../components/Analytics";
 import { ResourceView, StateNotice } from "../components/ResourceView";
 import { useResource } from "../hooks/useResource";
 import type { CostReadModel, TraceReadModel } from "../types";
@@ -17,10 +28,7 @@ export const percentile = (values: number[], quantile: number): number => {
   return ordered[index];
 };
 
-const money = (value: number) => `${value < 0 ? "−" : ""}$${Math.abs(value).toFixed(Math.abs(value) >= 1 ? 2 : 4)}`;
 const compactMoney = (value: number) => `${value < 0 ? "−" : ""}$${Math.abs(value).toFixed(Math.abs(value) >= 0.1 ? 2 : 3)}`;
-const percent = (value: number) => `${Math.round(value * 100)}%`;
-const count = (value: number) => new Intl.NumberFormat("en-US").format(value);
 
 export const duration = (milliseconds: number) => {
   if (milliseconds < 1_000) return `${Math.round(milliseconds)} ms`;
@@ -33,15 +41,6 @@ const bytes = (value: number) => {
   if (value < 1_048_576) return `${(value / 1_024).toFixed(1)} KB`;
   return `${(value / 1_048_576).toFixed(1)} MB`;
 };
-
-const shortId = (value: string | null) => value ? `${value.slice(0, 8)}…${value.slice(-4)}` : "—";
-const time = (value: string) => new Intl.DateTimeFormat("en-US", {
-  month: "short",
-  day: "numeric",
-  hour: "numeric",
-  minute: "2-digit",
-  second: "2-digit",
-}).format(new Date(value));
 
 const physicalRequests = (traces: TraceReadModel[]) => {
   const durable = traces.filter((trace) => trace.request_id !== null);
@@ -74,47 +73,6 @@ export const summarizeTraces = (traces: TraceReadModel[]): TraceSummary => {
     langfuseCoverage: requests.length ? exported / requests.length : 0,
   };
 };
-
-function ScreenHeading({ title, detail }: { title: string; detail: string }) {
-  return (
-    <header className="screen-heading">
-      <div>
-        <p className="eyebrow">HEADSHOT OBSERVABILITY</p>
-        <h1>{title}</h1>
-      </div>
-      <p>{detail}</p>
-    </header>
-  );
-}
-
-function Panel({ title, meta, children }: { title: string; meta?: string; children: React.ReactNode }) {
-  return (
-    <section className="panel">
-      <header className="panel-header">
-        <div>
-          <p className="eyebrow">MEASURED TELEMETRY</p>
-          <h2>{title}</h2>
-        </div>
-        {meta && <span className="panel-meta mono">{meta}</span>}
-      </header>
-      <div className="panel-body">{children}</div>
-    </section>
-  );
-}
-
-function MetricStrip({ values }: { values: Array<{ label: string; value: string; note: string }> }) {
-  return (
-    <section className="metric-strip observability-metrics" aria-label="Observability summary">
-      {values.map((metric) => (
-        <div key={metric.label}>
-          <span>{metric.label}</span>
-          <strong className="mono">{metric.value}</strong>
-          <small>{metric.note}</small>
-        </div>
-      ))}
-    </section>
-  );
-}
 
 function LatencyChart({ traces }: { traces: TraceReadModel[] }) {
   const points = physicalRequests(traces).slice(0, 40).reverse();
@@ -152,22 +110,6 @@ function LatencyChart({ traces }: { traces: TraceReadModel[] }) {
         ))}
       </svg>
       <div className="chart-axis"><span>Older</span><span>Latest</span></div>
-    </div>
-  );
-}
-
-function DistributionBars({ rows }: { rows: Array<{ label: string; value: number; display: string; tone?: string }> }) {
-  const maximum = Math.max(...rows.map((row) => row.value), 1);
-  return (
-    <div className="distribution-list">
-      {rows.map((row) => (
-        <div className="distribution-row" key={row.label}>
-          <div><span>{row.label}</span><strong className="mono">{row.display}</strong></div>
-          <div className="distribution-track" aria-hidden="true">
-            <span className={row.tone ?? ""} style={{ width: row.value === 0 ? "0" : `${Math.max(2, (row.value / maximum) * 100)}%` }} />
-          </div>
-        </div>
-      ))}
     </div>
   );
 }
@@ -217,17 +159,17 @@ function TraceDashboard({ traces }: { traces: TraceReadModel[] }) {
 
   return (
     <>
-      <MetricStrip values={[
+      <MetricStrip label="Observability summary" values={[
         { label: "Physical requests", value: count(summary.requestCount), note: `${percent(summary.successRate)} transport success` },
         { label: "Average latency", value: duration(summary.averageLatencyMs), note: `p95 ${duration(summary.p95LatencyMs)}` },
         { label: "Measured request cost", value: money(summary.totalCost), note: `${bytes(summary.totalBytes)} transferred` },
         { label: "Langfuse export", value: percent(summary.langfuseCoverage), note: `${count(exported)} observations exported` },
       ]} />
       <div className="panel-grid observability-grid">
-        <Panel title="Latency timeline" meta={`${count(requests.length)} target requests`}>
+        <Panel title="Latency timeline" meta={`${count(requests.length)} target requests`} eyebrow="MEASURED TELEMETRY">
           <LatencyChart traces={requests} />
         </Panel>
-        <Panel title="Langfuse delivery" meta="durable ledger reconciliation">
+        <Panel title="Langfuse delivery" meta="durable ledger reconciliation" eyebrow="MEASURED TELEMETRY">
           <DistributionBars rows={[
             { label: "Exported", value: exported, display: count(exported), tone: "success" },
             { label: "Queued", value: queued, display: count(queued), tone: "queued" },
@@ -238,7 +180,7 @@ function TraceDashboard({ traces }: { traces: TraceReadModel[] }) {
         </Panel>
       </div>
       <div className="panel-grid trace-explorer-grid">
-        <Panel title="Request ledger" meta="newest first">
+        <Panel title="Request ledger" meta="newest first" eyebrow="MEASURED TELEMETRY">
           <div className="trace-list" role="list" aria-label="Correlated target requests">
             {requests.map((trace) => (
               <button
@@ -256,7 +198,7 @@ function TraceDashboard({ traces }: { traces: TraceReadModel[] }) {
             ))}
           </div>
         </Panel>
-        <Panel title="Request detail" meta={selected ? time(selected.started_at) : undefined}>
+        <Panel title="Request detail" meta={selected ? time(selected.started_at) : undefined} eyebrow="MEASURED TELEMETRY">
           {selected ? <TraceDetails trace={selected} /> : <StateNotice state="empty" detail="No physical request trace is available." />}
         </Panel>
       </div>
@@ -329,18 +271,18 @@ function CostDashboard({ costs, traces, traceState }: { costs: CostReadModel[]; 
 
   return (
     <>
-      <MetricStrip values={[
+      <MetricStrip label="Cost summary" values={[
         { label: "Campaign spend", value: money(totalCost), note: `${count(costs.length)} recorded runs` },
         { label: "Requests accounted", value: count(totalRequests), note: `${money(totalRequests ? totalCost / totalRequests : 0)} average` },
         { label: "Approved budget used", value: totalBudget ? percent(budgetedSpend / totalBudget) : "—", note: totalBudget ? `${money(budgetedSpend)} of ${money(totalBudget)}` : "No budget projection available" },
         { label: "Request ledger cost", value: money(requestCost), note: `${count(requestLedger.length)} physical requests` },
       ]} />
       <div className="panel-grid observability-grid">
-        <Panel title="Spend by campaign" meta="measured vs approved cap">
+        <Panel title="Spend by campaign" meta="measured vs approved cap" eyebrow="MEASURED TELEMETRY">
           <CostBars costs={costs} />
           <div className="chart-legend"><span><i className="budget" />Approved cap</span><span><i className="spend" />Measured spend</span></div>
         </Panel>
-        <Panel title="Ledger reconciliation" meta="campaign summary ↔ request ledger">
+        <Panel title="Ledger reconciliation" meta="campaign summary ↔ request ledger" eyebrow="MEASURED TELEMETRY">
           <div className="reconciliation-grid">
             <div><span>Campaign summaries</span><strong className="mono">{money(totalCost)}</strong></div>
             <div><span>Physical request ledger</span><strong className="mono">{money(requestCost)}</strong></div>
@@ -350,7 +292,7 @@ function CostDashboard({ costs, traces, traceState }: { costs: CostReadModel[]; 
           <p className="data-note">A variance is expected when campaign accounting includes historical or non-HTTP work. Values are reconciled, never force-balanced.</p>
         </Panel>
       </div>
-      <Panel title="Campaign accounting" meta="authoritative PostgreSQL summaries">
+      <Panel title="Campaign accounting" meta="authoritative PostgreSQL summaries" eyebrow="MEASURED TELEMETRY">
         <CostTable costs={costs} />
       </Panel>
       <StateNotice
@@ -365,7 +307,7 @@ export function TracesScreen({ client }: { client: ApiClient }) {
   const traces = useResource<TraceReadModel[]>(client, RESOURCE_PATHS.traces, decodeTraces);
   return (
     <div className="screen-stack">
-      <ScreenHeading title="Traces" detail="Every physical target request is correlated across campaign, attempt, durable request ledger and Langfuse export." />
+      <ScreenHeading title="Traces" detail="Every physical target request is correlated across campaign, attempt, durable request ledger and Langfuse export." eyebrow="HEADSHOT OBSERVABILITY" />
       <ResourceView result={traces.result} emptyLabel="No physical request telemetry has been recorded yet.">
         {(data) => <TraceDashboard traces={data} />}
       </ResourceView>
@@ -378,7 +320,7 @@ export function CostsScreen({ client }: { client: ApiClient }) {
   const traces = useResource<TraceReadModel[]>(client, RESOURCE_PATHS.traces, decodeTraces);
   return (
     <div className="screen-stack">
-      <ScreenHeading title="Costs" detail="Measured campaign spend, approved budget utilization, request economics and ledger reconciliation—without token-cost estimates." />
+      <ScreenHeading title="Costs" detail="Measured campaign spend, approved budget utilization, request economics and ledger reconciliation—without token-cost estimates." eyebrow="HEADSHOT OBSERVABILITY" />
       <ResourceView result={costs.result} emptyLabel="No measured campaign accounting records are available.">
         {(data) => <CostDashboard costs={data} traces={traceData(traces.result)} traceState={traces.result.state} />}
       </ResourceView>
