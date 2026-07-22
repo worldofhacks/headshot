@@ -36,7 +36,7 @@ import pytest
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _CORPUS_ROOT = _REPO_ROOT / "evals"
 
-# The eleven versioned inter-agent/security-tool contracts (contracts/v1/*.json) and the three
+# The versioned inter-agent/security-tool contracts (contracts/v1/*.json) and the three
 # eval-authoring schemas (evals/schemas/*.json) — the two sets that must live under a package and
 # ship in the wheel.
 _CONTRACT_SCHEMAS = (
@@ -46,6 +46,11 @@ _CONTRACT_SCHEMAS = (
     "evidence_envelope",
     "verdict",
     "regression_admission",
+    "security_tool_run",
+    "tool_finding",
+    "scan_artifact",
+    "tool_execution_error",
+    "tool_attack_bundle",
     "errors",
 )
 _EVAL_SCHEMAS = (

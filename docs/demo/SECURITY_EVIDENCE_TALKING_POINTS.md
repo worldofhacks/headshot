@@ -77,8 +77,9 @@ is stamped `human_publication_state = "blocked_pending_human_approval"`
 with `evidence_provenance="scan_only"` (or `"simulated"`). The Postgres layer re-stamps that block
 on insert (`src/agentforge/api/postgres.py:330`), and simulated / scan-only rows are excluded from
 campaign coverage. The independent Judge — not the scanner — issues verdicts, and findings stay
-**human-gated** before publication. Garak, PyRIT, and Giskard are **adapter integrated, execution
-deferred** — real fixture-contract-tested adapters, honestly labeled, not claimed as live runs.
+**human-gated** before publication. Garak, PyRIT, and Giskard have bounded native offline slices
+**operational and evidenced**. Multi-turn orchestrators and every tool-to-target path remain
+adapter-only and are not claimed as live runs.
 Commercial platforms (Burp, Lakera, HiddenLayer, Robust Intelligence) are **evaluated and
 rejected** in ADR-0001."
 

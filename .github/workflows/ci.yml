@@ -212,6 +212,10 @@ jobs:
             -c security-tools/promptfoo/promptfooconfig.yaml \
             | tee promptfoo-validate.txt
           test "$(wc -c < promptfoo-validate.txt)" -le 1048576
+      - name: Execute pinned LLM-security tools against offline generators and fixtures
+        env:
+          LLM_TOOL_ARTIFACT_DIR: ${{ runner.temp }}/llm-security-tools
+        run: bash scripts/run_offline_llm_tools.sh
       - name: Passive ZAP baseline in an internal fake-target network only
         run: |
           install -d -m 0777 "$RUNNER_TEMP/zap"
@@ -252,6 +256,7 @@ jobs:
             semgrep.sarif
             pip-audit.json
             promptfoo-validate.txt
+            ${{ runner.temp }}/llm-security-tools/*
             ${{ runner.temp }}/zap/zap.json
           if-no-files-found: error
           retention-days: 14

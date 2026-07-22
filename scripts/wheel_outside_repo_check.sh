@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Packaging gate: prove the built wheel resolves its schemas WITHOUT a repo checkout.
 #
-# The seven inter-agent contract schemas (agentforge/contracts/v1/*.json) and the three
+# The twelve inter-agent/security-tool contract schemas and the three
 # eval-authoring schemas (agentforge/evals/schemas/*.json) now ship INSIDE the package and are
 # resolved via importlib.resources. A wheel installed outside any repo checkout must therefore be
 # able to validate a corpus using only the schemas it carries. This script builds the wheel,
@@ -34,6 +34,11 @@ required=(
   "agentforge/contracts/v1/evidence_envelope.json"
   "agentforge/contracts/v1/verdict.json"
   "agentforge/contracts/v1/regression_admission.json"
+  "agentforge/contracts/v1/security_tool_run.json"
+  "agentforge/contracts/v1/tool_finding.json"
+  "agentforge/contracts/v1/scan_artifact.json"
+  "agentforge/contracts/v1/tool_execution_error.json"
+  "agentforge/contracts/v1/tool_attack_bundle.json"
   "agentforge/contracts/v1/errors.json"
   "agentforge/evals/schemas/attack-case.v1.json"
   "agentforge/evals/schemas/ground-truth-slice.v1.json"
@@ -45,7 +50,7 @@ for entry in "${required[@]}"; do
     exit 1
   fi
 done
-echo "all 10 schemas present in the wheel"
+echo "all 15 schemas present in the wheel"
 
 echo "== fresh venv OUTSIDE the repo, install ONLY the wheel + jsonschema =="
 python -m venv "$work/venv"

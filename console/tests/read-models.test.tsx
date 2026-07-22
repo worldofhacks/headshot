@@ -135,7 +135,7 @@ const validResources: Array<[string, (value: unknown) => unknown, unknown]> = [
   [
     "components",
     decodeComponents,
-    [{ component_id: "runner-1", name: "runner", kind: "runner", availability: "operational and evidenced", environment: "staging", detail: "private worker heartbeat", heartbeat_at: at }],
+    [{ component_id: "runner-1", name: "runner", kind: "runner", availability: "operational and evidenced", environment: "staging", detail: "private worker heartbeat", version: "1", target_access: "none", capabilities: [], owasp_llm: [], owasp_web: [], operational_scope: [], adapter_only_scope: [], execution_evidence: [], heartbeat_at: at }],
   ],
   [
     "audit history",

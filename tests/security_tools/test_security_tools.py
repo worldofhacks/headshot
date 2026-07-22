@@ -10,10 +10,10 @@ import pytest
 from sqlalchemy import Engine, text
 
 from agentforge.security_tools import (
-    ADAPTER_INTEGRATION_STATUS,
     GarakAdapter,
     GiskardAdapter,
     NormalizationContext,
+    PromptfooAdapter,
     PyritAdapter,
     normalize_fixture_findings,
 )
@@ -49,22 +49,129 @@ def context(tool_name: str, *, evidence_provenance: str = "scan_only") -> Normal
 
 
 @pytest.mark.parametrize(
-    ("adapter", "fixture_name"),
-    [(GarakAdapter(), "garak"), (PyritAdapter(), "pyrit"), (GiskardAdapter(), "giskard")],
+    ("adapter", "tool", "payload"),
+    [
+        (
+            GarakAdapter(),
+            "garak",
+            json.dumps(
+                {
+                    "entry_type": "attempt",
+                    "status": 2,
+                    "uuid": "a1",
+                    "probe_classname": "dan.Dan_11_0",
+                    "prompt": {"turns": [{"content": {"text": "synthetic garak candidate"}}]},
+                }
+            ).encode()
+            + b"\n"
+            + json.dumps(
+                {
+                    "entry_type": "eval",
+                    "probe": "dan.Dan_11_0",
+                    "detector": "dan.DAN",
+                    "passed": 0,
+                    "total_evaluated": 1,
+                }
+            ).encode()
+            + b"\n",
+        ),
+        (
+            PyritAdapter(),
+            "pyrit",
+            json.dumps(
+                {
+                    "converters": [
+                        {
+                            "name": "Base64Converter",
+                            "result": {"output_text": "c3ludGhldGlj", "output_type": "text"},
+                        }
+                    ],
+                    "attack_result": {"outcome": "undetermined"},
+                }
+            ).encode(),
+        ),
+        (
+            GiskardAdapter(),
+            "giskard",
+            json.dumps(
+                {
+                    "scenarios": [
+                        {
+                            "name": "LLM01 prompt injection",
+                            "tags": ["owasp:llm-top-10-2025:LLM01"],
+                            "steps": [{"interacts": [{"inputs": "synthetic scenario"}]}],
+                        }
+                    ],
+                    "scan_results": [],
+                }
+            ).encode(),
+        ),
+        (
+            PromptfooAdapter(),
+            "promptfoo",
+            json.dumps(
+                {
+                    "results": {
+                        "results": [
+                            {
+                                "success": True,
+                                "testCase": {
+                                    "vars": {"prompt": "synthetic promptfoo candidate"},
+                                    "metadata": {
+                                        "category": "prompt_injection",
+                                        "technique": "direct override",
+                                        "owasp_mappings": ["LLM01:2025"],
+                                    },
+                                },
+                            }
+                        ]
+                    }
+                }
+            ).encode(),
+        ),
+    ],
 )
-def test_deferred_adapter_fixture_normalizes_with_blocked_publication(
-    adapter, fixture_name
-) -> None:
-    raw = (FIXTURES / f"{fixture_name}.json").read_bytes()
-    findings = adapter.parse(raw, context(fixture_name))
+def test_native_adapter_extracts_bounded_candidates(adapter, tool, payload) -> None:
+    imported = adapter.import_artifact(payload, context(tool))
 
-    assert ADAPTER_INTEGRATION_STATUS == "adapter integrated, execution deferred"
-    assert adapter.interface_version == "1"
-    assert len(findings) == 1
-    assert findings[0]["raw_artifact_sha256"] == hashlib.sha256(raw).hexdigest()
-    assert findings[0]["human_publication_state"] == "blocked_pending_human_approval"
-    assert findings[0]["source_kind"] == "security_tool"
-    assert findings[0]["evidence_provenance"] == "scan_only"
+    assert adapter.interface_version == "2"
+    assert len(imported.candidates) == 1
+    assert imported.artifact_sha256 == hashlib.sha256(payload).hexdigest()
+    assert imported.candidates[0].source_artifact_sha256 == imported.artifact_sha256
+    assert len(imported.candidates[0].provenance_sha256) == 64
+    assert all(
+        finding["human_publication_state"] == "blocked_pending_human_approval"
+        for finding in imported.findings
+    )
+
+
+def test_native_adapter_rejects_malformed_and_oversized_artifacts() -> None:
+    with pytest.raises(ValueError, match="malformed"):
+        GarakAdapter().import_artifact(b"{not-json}\n", context("garak"))
+    with pytest.raises(ValueError, match="byte cap"):
+        PyritAdapter().import_artifact(b"x" * (10 * 1024 * 1024 + 1), context("pyrit"))
+
+
+def test_garak_deduplicates_candidate_content_and_never_imports_target_output() -> None:
+    attempts = []
+    for uuid in ("first", "second"):
+        attempts.append(
+            json.dumps(
+                {
+                    "entry_type": "attempt",
+                    "status": 2,
+                    "uuid": uuid,
+                    "probe_classname": "dan.Dan_11_0",
+                    "prompt": {"turns": [{"content": {"text": "reviewed synthetic input"}}]},
+                    "outputs": ["HOSTILE_TARGET_OUTPUT_MUST_NOT_BECOME_INPUT"],
+                }
+            )
+        )
+    imported = GarakAdapter().import_artifact(
+        ("\n".join(attempts) + "\n").encode(), context("garak")
+    )
+    assert len(imported.candidates) == 1
+    assert imported.candidates[0].input_sequence == ("reviewed synthetic input",)
 
 
 def test_simulated_artifact_covers_severities_false_positives_and_dispositions() -> None:

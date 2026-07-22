@@ -66,7 +66,7 @@ where = ["src"]
 # lookup resolves under a non-editable install and `alembic upgrade` creates the view in a
 # deployed container.
 "agentforge.observability" = ["*.sql"]
-# The eleven versioned inter-agent/security-tool contract schemas. They live INSIDE the package and are
+# The twelve versioned inter-agent/security-tool contract schemas. They live INSIDE the package and are
 # resolved via importlib.resources (registry.py), so they must ship in the wheel — otherwise a
 # non-editable/wheel install outside a repo checkout cannot validate any inter-agent message.
 "agentforge.contracts" = ["v1/*.json"]

@@ -69,13 +69,17 @@ def mutate(
 
     variants: list[dict[str, Any]] = []
     for index, gen in enumerate(generated):
+        child_lineage = list(lineage)
+        provenance_ref = gen.get("mutation_lineage_ref")
+        if isinstance(provenance_ref, str) and provenance_ref not in child_lineage:
+            child_lineage.append(provenance_ref)
         variant: dict[str, Any] = {
             "schema_version": _SCHEMA_VERSION,
             # A deterministic child ref, distinct from the parent so lineage chains are legible.
             "case_ref": f"{parent_ref}~m{index}",
             "input_sequence": list(gen["input_sequence"]),
             "category": target_category,
-            "mutation_lineage": list(lineage),
+            "mutation_lineage": child_lineage,
         }
         variants.append(variant)
     return variants

@@ -239,6 +239,14 @@ export interface ComponentReadModel extends JsonRecord {
   availability: "operational and evidenced" | "adapter integrated, execution deferred" | "evaluated and rejected" | "blocked pending authorization";
   environment: string;
   detail: string;
+  version: string;
+  target_access: string;
+  capabilities: string[];
+  owasp_llm: string[];
+  owasp_web: string[];
+  operational_scope: string[];
+  adapter_only_scope: string[];
+  execution_evidence: string[];
   heartbeat_at: string;
 }
 
