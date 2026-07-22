@@ -45,56 +45,30 @@ console:
     - npx playwright install --with-deps chromium
     - npm run test:browser
     - test -z "$(find dist -type f -name '*.map' -print -quit)"
+  artifacts:
+    name: tested-console-dist
+    expire_in: 1 hour
+    paths:
+      - console/dist/
 
 container:
   stage: package
-  image: docker:27.5.1-cli
-  services:
-    - name: docker:27.5.1-dind
-      alias: docker
+  image:
+    name: moby/buildkit@sha256:995077ff90af1afff56ff23018699d7511d122b2b111041f2011bd12afd5c0fe
+    entrypoint: [""]
   variables:
-    DOCKER_HOST: tcp://docker:2375
-    DOCKER_TLS_CERTDIR: ""
-    DOCKER_NETWORK_MODE: agentforge-ci
-    AGENTFORGE_SMOKE_HOST: docker
-    CLEAN_DATABASE_URL: postgresql://agentforge:local_dev_only@postgres:5432/agentforge_clean
-    UPGRADE_DATABASE_URL: postgresql://agentforge:local_dev_only@postgres:5432/agentforge_upgrade
-    READY_DATABASE_URL: postgresql://agentforge:local_dev_only@postgres:5432/agentforge_clean
-  before_script:
-    - apk add --no-cache bash curl
-    - export VITE_CLERK_PUBLISHABLE_KEY="pk_test_$(printf 'clerk.example.com$' | base64 | tr -d '\n')"
+    BUILDKITD_FLAGS: --oci-worker-no-process-sandbox
+  dependencies:
+    - console
   script:
-    - docker network create agentforge-ci
     - >-
-      docker run -d --name postgres --network agentforge-ci
-      -e POSTGRES_USER="$POSTGRES_USER"
-      -e POSTGRES_PASSWORD="$POSTGRES_PASSWORD"
-      -e POSTGRES_DB="$POSTGRES_DB"
-      postgres:16
-    - >-
-      for i in $(seq 1 30); do
-        if docker exec postgres pg_isready -U agentforge -d agentforge; then break; fi;
-        if [ "$i" = 30 ]; then docker logs postgres; exit 1; fi;
-        sleep 1;
-      done
-    - docker exec postgres createdb -U agentforge agentforge_clean
-    - docker exec postgres createdb -U agentforge agentforge_upgrade
-    - >-
-      docker build
-      --build-arg VITE_CLERK_PUBLISHABLE_KEY="$VITE_CLERK_PUBLISHABLE_KEY"
-      -t agentforge:ci .
-    - bash scripts/verify_runtime_image.sh agentforge:ci
-    - bash scripts/verify_container_migrations.sh agentforge:ci
-    - bash scripts/smoke_ready_container.sh agentforge:ci
-    - bash scripts/smoke_runtime_container.sh agentforge:ci
-    - >-
-      docker run --rm --entrypoint python
-      -v "$CI_PROJECT_DIR/evals:/corpus:ro" agentforge:ci
-      -m agentforge.evals validate-corpus /corpus
-    - >-
-      docker run --rm --entrypoint python
-      -v "$CI_PROJECT_DIR/evals:/corpus:ro" agentforge:ci
-      -m agentforge.evals detect-duplicate-sequence /corpus/seeds
+      buildctl-daemonless.sh build
+      --frontend dockerfile.v0
+      --local context="$CI_PROJECT_DIR"
+      --local dockerfile="$CI_PROJECT_DIR"
+      --opt filename=Dockerfile.gitlab
+      --output type=docker,name=agentforge:ci,dest="$CI_PROJECT_DIR/agentforge-ci.tar"
+    - /bin/sh scripts/verify_container_archive.sh "$CI_PROJECT_DIR/agentforge-ci.tar"
 
 secret-scan:
   stage: security
@@ -116,31 +90,26 @@ secret-scan:
 
 security-tools:
   stage: security
-  image: docker:27.5.1-cli
-  services:
-    - name: docker:27.5.1-dind
-      alias: docker
+  image: node:24-bookworm
   variables:
-    DOCKER_HOST: tcp://docker:2375
-    DOCKER_TLS_CERTDIR: ""
-    ZAP_WORK: "$CI_PROJECT_DIR/.zap"
     LLM_TOOL_ARTIFACT_DIR: "$CI_PROJECT_DIR/.llm-security-tools"
   before_script:
-    - apk add --no-cache bash curl nodejs npm python3 py3-pip py3-virtualenv coreutils
+    - apt-get update && apt-get install -y --no-install-recommends python3 python3-pip python3-venv
+    - python3 -m venv .scanner-venv
+    - .scanner-venv/bin/python -m pip install semgrep==1.170.0 pip-audit==2.10.1
   script:
-    - python3 -m pip install --break-system-packages semgrep==1.170.0 pip-audit==2.10.1
     - >-
-      timeout 180s semgrep scan --config .semgrep.yml --error --metrics=off
+      timeout 180s .scanner-venv/bin/semgrep scan --config .semgrep.yml --error --metrics=off
       --timeout 30 --max-target-bytes 1000000
       --json --output semgrep.json src console/src migrations scripts
     - >-
-      timeout 180s semgrep scan --config .semgrep.yml --error --metrics=off
+      timeout 180s .scanner-venv/bin/semgrep scan --config .semgrep.yml --error --metrics=off
       --timeout 30 --max-target-bytes 1000000
       --sarif --output semgrep.sarif src console/src migrations scripts
     - test "$(wc -c < semgrep.json)" -le 10485760
     - test "$(wc -c < semgrep.sarif)" -le 10485760
     - >-
-      pip-audit . --strict --progress-spinner=off
+      .scanner-venv/bin/pip-audit . --strict --progress-spinner=off
       --format=json --output pip-audit.json
     - >-
       timeout 120s npx --yes promptfoo@0.121.19 validate
@@ -148,33 +117,6 @@ security-tools:
       | tee promptfoo-validate.txt
     - test "$(wc -c < promptfoo-validate.txt)" -le 1048576
     - bash scripts/run_offline_llm_tools.sh
-    - install -d -m 0777 "$ZAP_WORK"
-    - docker network create --internal agentforge-zap-isolated
-    - >-
-      docker run -d --read-only --cap-drop=ALL --security-opt=no-new-privileges
-      --network=agentforge-zap-isolated --name=agentforge-zap-fake
-      -v "$CI_PROJECT_DIR/security-tools/zap-fixture:/fixture:ro"
-      --entrypoint=python3
-      ghcr.io/zaproxy/zaproxy@sha256:c558ee87358911ab17278c70991e856f57793e115d9cd0f88ca475cf82907a1a
-      -m http.server 8765 --bind 0.0.0.0 --directory /fixture
-    - >-
-      for attempt in 1 2 3 4 5; do
-        if docker exec agentforge-zap-fake python3 -c "import socket; socket.create_connection(('127.0.0.1', 8765), 1).close()"; then break; fi;
-        sleep 1;
-      done
-    - >-
-      timeout 180s docker run --rm --network=agentforge-zap-isolated --read-only --cap-drop=ALL
-      --security-opt=no-new-privileges --pids-limit=256 --memory=2g --cpus=2
-      --tmpfs /tmp:rw,noexec,nosuid,size=256m
-      --tmpfs /home/zap:rw,exec,nosuid,mode=1777,size=512m
-      -v "$ZAP_WORK:/zap/wrk:rw"
-      ghcr.io/zaproxy/zaproxy@sha256:c558ee87358911ab17278c70991e856f57793e115d9cd0f88ca475cf82907a1a
-      zap-baseline.py -t http://agentforge-zap-fake:8765 -J zap.json -m 1 -T 2 -I
-      -z "-config spider.maxDuration=1 -config spider.maxDepth=5 -config spider.maxChildren=10 -config scanner.threadPerHost=1"
-    - test "$(wc -c < "$ZAP_WORK/zap.json")" -le 10485760
-  after_script:
-    - docker rm -f agentforge-zap-fake >/dev/null 2>&1 || true
-    - docker network rm agentforge-zap-isolated >/dev/null 2>&1 || true
   artifacts:
     name: security-tool-artifacts
     expire_in: 14 days
@@ -185,4 +127,33 @@ security-tools:
       - pip-audit.json
       - promptfoo-validate.txt
       - .llm-security-tools/
+
+zap-baseline:
+  stage: security
+  image:
+    name: ghcr.io/zaproxy/zaproxy@sha256:c558ee87358911ab17278c70991e856f57793e115d9cd0f88ca475cf82907a1a
+    entrypoint: [""]
+  variables:
+    ZAP_WORK: "$CI_PROJECT_DIR/.zap"
+  script:
+    - install -d -m 0777 "$ZAP_WORK"
+    - python3 -m http.server 8765 --bind 127.0.0.1 --directory security-tools/zap-fixture > /tmp/zap-fixture.log 2>&1 &
+    - fixture_pid=$!
+    - trap 'kill "$fixture_pid" >/dev/null 2>&1 || true' EXIT
+    - >-
+      for attempt in 1 2 3 4 5; do
+        if python3 -c "import socket; socket.create_connection(('127.0.0.1', 8765), 1).close()"; then break; fi;
+        if [ "$attempt" = 5 ]; then cat /tmp/zap-fixture.log; exit 1; fi;
+        sleep 1;
+      done
+    - cd "$ZAP_WORK"
+    - >-
+      timeout 180s /zap/zap-baseline.py -t http://127.0.0.1:8765 -J zap.json -m 1 -T 2 -I
+      -z "-config spider.maxDuration=1 -config spider.maxDepth=5 -config spider.maxChildren=10 -config scanner.threadPerHost=1"
+    - test "$(wc -c < zap.json)" -le 10485760
+  artifacts:
+    name: zap-artifact
+    expire_in: 14 days
+    when: always
+    paths:
       - .zap/zap.json

@@ -13,7 +13,7 @@ SECURITY_SCANNER_MARKERS = {
     "semgrep": "semgrep scan --config .semgrep.yml",
     "pip-audit": "pip-audit . --strict --progress-spinner=off",
     "promptfoo": "promptfoo@0.121.19 validate",
-    "zap": "zap-baseline.py -t http://agentforge-zap-fake:8765",
+    "zap": "zap-baseline.py -t",
 }
 LLM_TOOL_RUNNER = "scripts/run_offline_llm_tools.sh"
 
@@ -48,20 +48,37 @@ def test_github_ci_runs_in_image_migrations_runtime_and_secret_scan() -> None:
     assert "sha256sum --check --strict" in workflow
 
 
-def test_gitlab_ci_keeps_the_same_material_gates() -> None:
+def test_gitlab_ci_keeps_material_gates_on_the_unprivileged_runner() -> None:
     workflow = _workflow(".gitlab-ci.yml")
     for command in (
         "npm ci --ignore-scripts",
         "npm audit --audit-level=high",
         "npm run test:browser",
-        "scripts/verify_runtime_image.sh",
-        "scripts/verify_container_migrations.sh",
-        "scripts/smoke_ready_container.sh",
-        "scripts/smoke_runtime_container.sh",
+        "buildctl-daemonless.sh build",
+        "Dockerfile.gitlab",
+        "scripts/verify_container_archive.sh",
         "gitleaks git . --redact --verbose",
         "sha256sum --check --strict",
     ):
         assert command in workflow
+    assert "docker:27.5.1-dind" not in workflow
+    assert "DOCKER_HOST" not in workflow
+
+
+def test_gitlab_daemonless_dockerfile_preserves_the_runtime_boundary() -> None:
+    canonical = _workflow("Dockerfile")
+    daemonless = _workflow("Dockerfile.gitlab")
+    for marker in (
+        "FROM python:3.12.11-slim-bookworm AS wheel-build",
+        "python -m pip install --no-index --find-links=/wheels agentforge==0.1.0",
+        "COPY alembic.ini /app/alembic.ini",
+        "COPY migrations /app/migrations",
+        "COPY evals /app/evals",
+        "USER app",
+        'CMD ["python", "-m", "agentforge.web"]',
+    ):
+        assert marker in canonical
+        assert marker in daemonless
 
 
 def test_github_ci_runs_every_pinned_security_scanner() -> None:
