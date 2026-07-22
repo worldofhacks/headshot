@@ -68,7 +68,7 @@ run_without_ci_credentials "$work_root/home-promptfoo" "$work_root/tmp-promptfoo
 
 PYTHONPATH=src "$work_root/giskard/bin/python" \
   security-tools/offline/validate_native_artifacts.py "$artifact_dir"
-find "$artifact_dir" -type f -size +10M -print -quit | grep -q . && {
+if find "$artifact_dir" -type f -size +10M -print -quit | grep -q .; then
   echo "offline LLM-security artifact exceeded 10 MiB" >&2
   exit 1
-}
+fi
