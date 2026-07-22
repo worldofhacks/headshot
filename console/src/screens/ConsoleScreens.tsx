@@ -716,11 +716,14 @@ function TargetManagement({
   const allowed = hasPermission(principal, PERMISSIONS.targetsManage);
   const canAuthorizeProbe = hasPermission(principal, PERMISSIONS.campaignAuthorize);
   const template = selected.campaign_template;
-  const [runNonce, setRunNonce] = useState("");
-  const [budgetUsd, setBudgetUsd] = useState("");
-  const [maxAttempts, setMaxAttempts] = useState("");
-  const [requestsPerSecond, setRequestsPerSecond] = useState("");
-  const [timeoutSeconds, setTimeoutSeconds] = useState("");
+  // Pre-filled bounded defaults so an Operator can request a campaign without hand-entering
+  // caps or a nonce. The nonce is freshly generated per mount (unused → replay-safe); every
+  // field stays editable, and the server still validates caps against the target's ceiling.
+  const [runNonce, setRunNonce] = useState(() => `live-${globalThis.crypto.randomUUID()}`);
+  const [budgetUsd, setBudgetUsd] = useState("1");
+  const [maxAttempts, setMaxAttempts] = useState("9");
+  const [requestsPerSecond, setRequestsPerSecond] = useState("0.5");
+  const [timeoutSeconds, setTimeoutSeconds] = useState("600");
   const parsedCaps = {
     budget_usd: Number(budgetUsd),
     max_attempts_per_run: Number(maxAttempts),
@@ -834,7 +837,12 @@ function TargetManagement({
             label="Request exact campaign authorization"
             allowed={Boolean(requestPayload) && hasPermission(principal, PERMISSIONS.campaignLaunch)}
             unavailableReason={requestPayload ? PERMISSIONS.campaignLaunch : "valid operator-provided caps and nonce"}
-            onAcknowledged={refresh}
+            onAcknowledged={() => {
+              // Roll a fresh unused nonce after each accepted request so the next campaign
+              // can be requested immediately without a replayed-nonce rejection.
+              setRunNonce(`live-${globalThis.crypto.randomUUID()}`);
+              refresh();
+            }}
           />
         </div>
       )}
