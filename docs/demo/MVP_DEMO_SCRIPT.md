@@ -1,119 +1,110 @@
-# Week 3 AgentForge MVP demo script
+# Headshot MVP demo script
 
-**Recording target:** 4–5 minutes
+**Length:** 4–5 minutes
 
-**Staging app:** https://web-staging-8e30.up.railway.app
-**Login:** use the `godmode` demo credential supplied separately. Do not place the
-password in the recording notes or repository.
+**App:** https://web-staging-8e30.up.railway.app
 
 ## Before recording
 
-1. Open the staging app, sign in, and leave **Live** selected.
-2. Keep this script beside the browser.
-3. Do not start a new live campaign during the recording unless a different human
-   approver has already approved that exact target, scope, caps, budget, and nonce.
-4. If a panel is still refreshing, continue to the next section and return once.
+1. Have the Operator and Approver credentials ready.
+2. Sign in as **Operator**.
+3. Do not show passwords, session IDs, or Railway variables.
+4. Use the deployed Clinical Co-Pilot target and synthetic test data only.
 
-## 0:00–0:35 — Frame the product and prove it is live
+## 0:00 — What Headshot does
 
-**Click:** **Live**
+**Open:** **Live**
 
-> “AgentForge is a multi-agent adversarial evaluation platform continuously testing
-> the live OpenEMR Clinical Co-Pilot. This is the deployed staging control plane—not
-> a mock. The Web API, Postgres evidence store, private Runner, and Langfuse tracing
-> connection are all operational.”
+> “Headshot tests the live OpenEMR Clinical Co-Pilot for adversarial failures.
+> This is the deployed control plane, not a mock. The Web API, Postgres evidence
+> store, private Runner, and Langfuse connection are operational.”
 
-Point to the component statuses. Explain that the platform attacks the separate live
-target over its deployed URL; no target source code lives in this repository.
+## 0:20 — Select the target
 
-## 0:35–1:10 — Target, authorization, and safety caps
+**Open:** **Targets**
 
-**Click:** **Targets**
+1. Select **openemr-copilot** from the target registry.
+2. Point out the deployed URL, enabled `chat` surface, live execution profile,
+   configured server-side credential, and synthetic-data restriction.
 
-> “The target is the deployed Clinical Co-Pilot. Its exact origin is allowlisted, its
-> credential is server-side, and the Runner fails closed on origin escape. Campaigns
-> require explicit caps: nine attempts, one request per second, a fifteen-minute
-> timeout, and a one-dollar maximum.”
+> “I am selecting the deployed Clinical Co-Pilot and its versioned chat surface.
+> Headshot can only dispatch to this exact allowlisted origin.”
 
-Point to the configured target and surface. Mention that all fixtures are synthetic and
-no real PHI is used.
+## 0:45 — Configure the scan
 
-## 1:10–1:50 — Real multi-agent campaign and evaluation coverage
+In **Exact campaign authorization request**, use:
 
-**Click:** **Live**, then open campaign `bebb4d82…` if it is visible.
+- Budget: **$1**
+- Maximum attempts: **9**
+- Target requests per second: **1**
+- Run timeout: **900 seconds**
+- Run nonce: leave the generated unique value
 
-**Then click:** **Coverage**
+Click **Request exact campaign authorization**.
 
-> “This completed live campaign executed nine physical requests across prompt
-> injection, data exfiltration, and tool misuse. Every evaluation is classified as a
-> boundary, invariant, or regression and mapped to OWASP Web and OWASP LLM risks.
-> The Red Team generates attacks, while the independent Judge evaluates evidence;
-> it cannot turn an unverified result into an approved exploit.”
+> “This scan covers nine cases across prompt injection, data exfiltration, and
+> tool misuse. The request binds the target, surface, corpus, rate, timeout,
+> budget, and one-time nonce.”
 
-Point out the verified attempt count. If a verdict is indeterminate, say that this is
-fail-closed behavior—not a failure hidden by the UI.
+## 1:15 — Approve the exact scope
 
-## 1:50–2:40 — Live DAST evidence and the publication gate
+**Open:** **Approvals**
 
-**Click:** **Findings**
+1. Select the newest **pending** request and show its operation hash and scope.
+2. Sign out as Operator.
+3. Sign in as **Approver**.
+4. Return to **Approvals**, select the same request, and click
+   **Approve exact scope**.
 
-> “A second real attack surface is represented here: an OWASP ZAP 2.17 passive
-> baseline against the same deployed target. It produced three normalized findings:
-> missing HSTS, missing X-Content-Type-Options, and cache-control review. They are
-> Low, Low, and Informational—not confirmed exploits.”
+> “A different authenticated person must approve the exact scope. The requester
+> cannot approve their own campaign, and changing any bound value invalidates
+> the approval.”
 
-Open one finding.
+## 1:55 — Launch the scan
 
-> “Every finding carries live-target provenance, tool version, configuration digest,
-> run nonce, reproduction pointer, and the raw artifact SHA-256 beginning
-> `89f10c94`. Publication remains blocked pending independent human validation.
-> Even godmode cannot approve its own live campaign or bypass the publication gate.”
+1. Sign out as Approver.
+2. Sign back in as **Operator**.
+3. Open **Approvals** and select the approved request.
+4. Click **Launch approved campaign**.
+5. Open **Live** and point to the queued or running campaign.
 
-## 2:40–3:25 — Request-level observability, latency, and real cost
+> “The approved campaign is now queued for the private Runner. The Runner
+> rechecks the authorization, destination, credential reference, synthetic-data
+> policy, caps, and abort controls before sending any request.”
 
-**Click:** **Traces**
+## 2:30 — Show attack coverage
 
-> “Every physical target request receives a correlation trace, measured duration,
-> status, and Langfuse export state. The Runner owns the tracing secret; the browser
-> and Web tier never do.”
+**Open:** **Coverage**
 
-**Click:** **Costs**
+> “The attack suite contains nine reproducible cases across three categories.
+> Each case records its prompt, expected safe behavior, severity, exploitability,
+> OWASP mappings, and regression criteria. The Red Team generates attacks and
+> the independent Judge evaluates recorded evidence.”
 
-> “Accounting is measured from persisted request records—not estimated as tokens
-> multiplied by a constant. This campaign recorded nine requests, nine cents total,
-> one cent per request, and approximately 321,485 milliseconds of end-to-end run
-> latency.”
+## 3:00 — Show findings
 
-Point to `$0.09`, `9`, `$0.01`, and `321484.759 ms`.
+**Open:** **Findings**
 
-## 3:25–4:10 — Human governance and reproducibility
+> “Headshot also ingested a live OWASP ZAP passive baseline. It recorded missing
+> HSTS, missing X-Content-Type-Options, and cache-control review. These are
+> publication-gated Low, Low, and Informational findings—not confirmed exploits.”
 
-**Click:** **Approvals**
+## 3:30 — Show observability and cost
 
-> “Live execution and critical publication are human-gated. Authorization binds the
-> target, surface, rate, attempt cap, timeout, dollar budget, and nonce. The operator
-> who requests or runs a campaign cannot satisfy the distinct-human approval check
-> for that same authorization.”
+**Open:** **Traces**, then **Costs**
 
-**Click:** **Configuration**
+> “Every physical request has a correlation trace, measured latency, status, and
+> Langfuse export state. The completed nine-request campaign cost nine cents,
+> averaged one cent per request, and took about 321 seconds.”
 
-> “The control plane uses versioned typed contracts, deterministic tool adapters,
-> durable Postgres state, migrations, bounded queues, audit history, and explicit
-> error schemas. The repository also includes the threat model, architecture,
-> persona documentation, reproducible eval fixtures, AI-use disclosure, and
-> deployment evidence required by the Week 3 rubric.”
+## 4:05 — Close
 
-## 4:10–4:40 — Close
+> “Headshot meets the MVP requirements: a live deployed target, a structured
+> threat model, a reproducible three-category attack suite, and a defensible
+> multi-agent architecture with evidence, cost tracking, and human approval.”
 
-> “The defensible result is two real evaluation surfaces: a nine-case adversarial
-> LLM campaign plus a live passive web baseline. We have three evidenced web
-> hardening findings, no confirmed exploit, measured cost and latency, Langfuse
-> request traces, and fail-closed human gates. The application, evidence contracts,
-> and reproducible artifacts are deployed and reviewable.”
+## If time is short
 
-## Fast fallback
-
-If campaign detail is slow, show **Coverage**, **Findings**, **Traces**, and **Costs** in
-that order. These are authoritative server projections and contain the strongest MVP
-proof. Never claim an exploit was confirmed; say “three publication-gated hardening
-findings from a passive baseline.”
+Show **Targets → Approvals → Live → Coverage → Findings → Costs**. Never claim
+that an exploit was confirmed. Say that the current scan produced
+publication-gated evidence and fail-closed verdicts.
