@@ -66,6 +66,8 @@ def test_gitlab_ci_keeps_material_gates_on_the_unprivileged_runner() -> None:
     assert "buildah" not in workflow.lower()
     assert "--no-push" in workflow
     assert "--tar-path" in workflow
+    assert 'install -d -m 0777 "$ZAP_WORK" /zap/wrk' in workflow
+    assert 'cp /zap/wrk/zap.json "$ZAP_WORK/zap.json"' in workflow
     assert (
         "gcr.io/kaniko-project/executor@sha256:"
         "c3109d5926a997b100c4343944e06c6b30a6804b2f9abe0994d3de6ef92b028e" in workflow
