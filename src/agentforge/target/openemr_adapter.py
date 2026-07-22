@@ -16,9 +16,10 @@ client and open no connection.
 
 Transport failures are mapped onto the typed taxonomy in ``agentforge.target.base`` — a
 connect/timeout failure -> :class:`TargetUnreachableError`, an HTTP 429 -> :class:`RateLimitedError`
-(carrying ``retry_after``), anything else -> the base :class:`AdapterError`. A failure is NEVER
-swallowed into a synthetic 200, and there is NO fallback to the P9 fake: a failure surfaces as
-a typed error the gateway turns into backoff -> queue -> abort.
+(carrying ``retry_after``), and an expired delegated /chat session ->
+:class:`TargetSessionExpiredError`. A failure is NEVER swallowed into a synthetic 200, and there
+is NO fallback to the P9 fake: retryable failures become backoff -> queue -> abort, while expired
+human delegation aborts after the first request.
 
 Framework-neutral (D10): imports base/secrets only — never a web framework, never httpx at
 import time.
@@ -26,6 +27,7 @@ import time.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -38,6 +40,7 @@ from agentforge.target.base import (
     TargetAdapter,
     TargetRequest,
     TargetResponse,
+    TargetSessionExpiredError,
     TargetUnreachableError,
 )
 
@@ -171,6 +174,7 @@ class OpenEmrAdapter(TargetAdapter):
 
         * a connect/timeout failure   -> :class:`TargetUnreachableError`
         * an HTTP 429                  -> :class:`RateLimitedError` (``retry_after`` from header)
+        * an expired /chat session    -> :class:`TargetSessionExpiredError` (no blind retry)
         * any other transport failure  -> the base :class:`AdapterError` ('adapter-error')
 
         A real non-200 target *answer* (e.g. a 403 refusal) is surfaced verbatim — it is a
@@ -252,6 +256,10 @@ class OpenEmrAdapter(TargetAdapter):
                     ) from exc
                 if content_type not in self.allowed_content_types:
                     raise AdapterError("OpenEMR target response content type is outside policy")
+            if self._is_expired_session_response(status, output):
+                raise TargetSessionExpiredError(
+                    "OpenEMR delegated session expired; a fresh SMART launch is required"
+                )
         except (RateLimitedError, AdapterError) as exc:
             if telemetry_handle is not None:
                 telemetry_handle.finish(
@@ -373,3 +381,18 @@ class OpenEmrAdapter(TargetAdapter):
             return float(value)
         except (TypeError, ValueError):
             return None
+
+    @staticmethod
+    def _is_expired_session_response(status: int, output: str) -> bool:
+        """Recognize the target's typed 401 without retaining or echoing its body."""
+
+        if status != 401:
+            return False
+        try:
+            payload = json.loads(output)
+        except (json.JSONDecodeError, TypeError):
+            return False
+        if not isinstance(payload, dict):
+            return False
+        detail = payload.get("detail")
+        return isinstance(detail, str) and detail.strip().lower().startswith("session expired")

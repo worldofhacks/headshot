@@ -31,6 +31,7 @@ from agentforge.target.base import (
     AdapterError,
     TargetRequest,
     TargetResponse,
+    TargetSessionExpiredError,
 )
 from agentforge.target.openemr_adapter import OpenEmrAdapter
 
@@ -165,6 +166,24 @@ def test_chat_mode_returns_200_envelope_verbatim() -> None:
     assert isinstance(resp, TargetResponse)
     assert resp.status == 200
     assert resp.output == _CHAT_ENVELOPE  # byte-for-byte, unparsed
+
+
+def test_chat_mode_maps_expired_session_401_to_terminal_typed_error() -> None:
+    client = _RecordingClient(
+        _FakeResponse(
+            401,
+            json.dumps({"detail": "session expired — re-launch the co-pilot"}),
+            headers={"Content-Type": "application/json"},
+        )
+    )
+    adapter = _chat_adapter(client, credential=Secret(FAKE_SESSION_SENTINEL))
+
+    with pytest.raises(TargetSessionExpiredError) as caught:
+        adapter.send(TargetRequest(turns=("hello",)))
+
+    assert caught.value.code == "target-session-expired"
+    assert caught.value.retryable is False
+    assert len(client.calls) == 1
 
 
 # ---------------------------------------------------------------------------

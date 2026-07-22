@@ -11,6 +11,7 @@
     { "$ref": "#/$defs/no_findings_in_window" },
     { "$ref": "#/$defs/regression_detected" },
     { "$ref": "#/$defs/rate_limited" },
+    { "$ref": "#/$defs/target_session_expired" },
     { "$ref": "#/$defs/adapter_error" },
     { "$ref": "#/$defs/evidence_missing" },
     { "$ref": "#/$defs/evidence_integrity_failed" }
@@ -22,6 +23,7 @@
     "no_findings_in_window": { "$ref": "#/$defs/base", "properties": { "code": { "const": "no-findings-in-window" }, "message": { "type": "string" }, "retryable": { "type": "boolean" } } },
     "regression_detected": { "$ref": "#/$defs/base", "properties": { "code": { "const": "regression-detected" }, "message": { "type": "string" }, "retryable": { "type": "boolean" } } },
     "rate_limited": { "$ref": "#/$defs/base", "properties": { "code": { "const": "rate-limited" }, "message": { "type": "string" }, "retryable": { "type": "boolean" }, "retry_after_s": { "type": "number" } } },
+    "target_session_expired": { "$ref": "#/$defs/base", "required": ["retryable"], "properties": { "code": { "const": "target-session-expired" }, "message": { "type": "string" }, "retryable": { "const": false } } },
     "adapter_error": { "$ref": "#/$defs/base", "properties": { "code": { "const": "adapter-error" }, "message": { "type": "string" }, "retryable": { "type": "boolean" } } },
     "evidence_missing": { "$ref": "#/$defs/base", "properties": { "code": { "const": "evidence-missing" }, "message": { "type": "string" }, "retryable": { "type": "boolean" } } },
     "evidence_integrity_failed": { "$ref": "#/$defs/base", "properties": { "code": { "const": "evidence-integrity-failed" }, "message": { "type": "string" }, "retryable": { "type": "boolean" } } },

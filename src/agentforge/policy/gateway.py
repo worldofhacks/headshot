@@ -307,6 +307,19 @@ class PolicyGateway:
                 self.accounting.charge()
                 self._last_dispatch_at = self.clock.now()
                 last_error = exc
+                if not exc.retryable:
+                    self.queued_attempts.append(
+                        {
+                            "attack_attempt": attack_attempt,
+                            "reason": exc.code,
+                            "queued": True,
+                        }
+                    )
+                    raise AbortError(
+                        "target credential requires human renewal after one dispatch; "
+                        "attempt queued — HARD ABORT",
+                        code=exc.code,
+                    ) from exc
                 # Backoff on the injectable clock: adapter-provided retry_after when given,
                 # else exponential — advanced by hand so tests never really sleep.
                 retry_after = getattr(exc, "retry_after", None)

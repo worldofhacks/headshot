@@ -165,10 +165,29 @@ def test_consumer_required_field_is_enforced(name: str) -> None:
 def test_typed_error_validates() -> None:
     validate("errors", {"code": "target-unreachable", "message": "target down", "retryable": True})
     validate("errors", {"code": "rate-limited", "message": "slow down", "retry_after_s": 5})
+    validate(
+        "errors",
+        {
+            "code": "target-session-expired",
+            "message": "fresh SMART launch required",
+            "retryable": False,
+        },
+    )
 
 
 def test_unknown_error_code_rejected() -> None:
     assert not is_valid("errors", {"code": "made-up-code", "message": "x"})
+
+
+def test_expired_target_session_is_never_declared_retryable() -> None:
+    assert not is_valid(
+        "errors",
+        {
+            "code": "target-session-expired",
+            "message": "fresh SMART launch required",
+            "retryable": True,
+        },
+    )
 
 
 def test_attempt_result_rejects_unknown_execution_provenance() -> None:

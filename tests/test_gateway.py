@@ -36,6 +36,7 @@ from agentforge.secrets import Secret
 from agentforge.target.base import (
     RateLimitedError,
     TargetRequest,
+    TargetSessionExpiredError,
     TargetUnreachableError,
 )
 from agentforge.target.fake_adapter import FakeTargetAdapter
@@ -362,6 +363,24 @@ def test_rate_limited_adapter_error_backs_off_against_the_clock() -> None:
     with pytest.raises((AbortError, RateLimitedError)):
         gw.execute(_attack_attempt(("slow",)), _policy())
     assert len(adapter.calls) >= 2  # backed off and retried, not a single-shot failure
+
+
+def test_expired_target_session_aborts_after_one_physical_request() -> None:
+    request = TargetRequest(turns=("hello",))
+    adapter = FakeTargetAdapter().fail(
+        request,
+        TargetSessionExpiredError("fresh SMART launch required"),
+    )
+    accounting = FakeAccounting(per_call_usd=0.01)
+    gateway = _gateway(adapter=adapter, accounting=accounting)
+
+    with pytest.raises(AbortError) as caught:
+        gateway.execute(_attack_attempt(("hello",)), _policy())
+
+    assert caught.value.code == "target-session-expired"
+    assert len(adapter.calls) == 1
+    assert accounting.spent_usd == pytest.approx(0.01)
+    assert gateway.queued_attempts[0]["reason"] == "target-session-expired"
 
 
 def test_adapter_error_never_becomes_a_synthetic_success() -> None:
