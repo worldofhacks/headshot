@@ -88,11 +88,17 @@ secret-scan:
 
 security-tools:
   stage: security
-  image: node:24-bookworm
+  image: python:3.12.11-bookworm
   variables:
     LLM_TOOL_ARTIFACT_DIR: "$CI_PROJECT_DIR/.llm-security-tools"
   before_script:
-    - apt-get update && apt-get install -y --no-install-recommends python3 python3-pip python3-venv
+    - apt-get update && apt-get install -y --no-install-recommends ca-certificates curl xz-utils
+    - curl -sSfL https://nodejs.org/dist/v24.4.1/node-v24.4.1-linux-x64.tar.xz -o /tmp/node.tar.xz
+    - >-
+      echo "7e067b13cd0dc7ee8b239f4ebe1ae54f3bba3a6e904553fcb5f581530eb8306d  /tmp/node.tar.xz" |
+      sha256sum --check --strict
+    - tar -xJf /tmp/node.tar.xz -C /usr/local --strip-components=1
+    - node --version
     - python3 -m venv .scanner-venv
     - .scanner-venv/bin/python -m pip install semgrep==1.170.0 pip-audit==2.10.1
   script:
@@ -134,7 +140,7 @@ zap-baseline:
   variables:
     ZAP_WORK: "$CI_PROJECT_DIR/.zap"
   script:
-    - install -d -m 0777 "$ZAP_WORK"
+    - install -d -m 0777 "$ZAP_WORK" /zap/wrk
     - python3 -m http.server 8765 --bind 127.0.0.1 --directory security-tools/zap-fixture > /tmp/zap-fixture.log 2>&1 &
     - fixture_pid=$!
     - trap 'kill "$fixture_pid" >/dev/null 2>&1 || true' EXIT
@@ -144,11 +150,11 @@ zap-baseline:
         if [ "$attempt" = 5 ]; then cat /tmp/zap-fixture.log; exit 1; fi;
         sleep 1;
       done
-    - cd "$ZAP_WORK"
     - >-
       timeout 180s /zap/zap-baseline.py -t http://127.0.0.1:8765 -J zap.json -m 1 -T 2 -I
       -z "-config spider.maxDuration=1 -config spider.maxDepth=5 -config spider.maxChildren=10 -config scanner.threadPerHost=1"
-    - test "$(wc -c < zap.json)" -le 10485760
+    - cp /zap/wrk/zap.json "$ZAP_WORK/zap.json"
+    - test "$(wc -c < "$ZAP_WORK/zap.json")" -le 10485760
   artifacts:
     name: zap-artifact
     expire_in: 14 days
