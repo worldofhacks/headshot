@@ -123,7 +123,11 @@ class _AuthorizedSyntheticRun(NamedTuple):
     run: object
 
 
-def _authorize_synthetic_run(engine: Engine) -> _AuthorizedSyntheticRun:
+def _authorize_synthetic_run(
+    engine: Engine,
+    *,
+    target_requests_per_second: float = 100.0,
+) -> _AuthorizedSyntheticRun:
     """Drive the full two-person control-plane handshake and enqueue one dispatchable job.
 
     This is the exact harness the happy-path test uses; the negative tests reuse it and
@@ -149,7 +153,7 @@ def _authorize_synthetic_run(engine: Engine) -> _AuthorizedSyntheticRun:
         caps=SafetyCaps(
             budget_usd=1.0,
             max_attempts_per_run=9,
-            target_requests_per_second=100.0,
+            target_requests_per_second=target_requests_per_second,
             run_timeout_seconds=300.0,
         ),
         run_nonce="runner-negative-nonce-0001",
@@ -444,3 +448,66 @@ def test_synthetic_campaign_executes_all_nine_cases_and_completes_atomically(
     assert coverage_projection.data[0]["covered"] is True
     assert coverage_projection.data[0]["verified_attempt_count"] == 9
     assert any(event["type"] == "campaign.complete" for event in events.events)
+
+
+def test_runner_throttles_from_response_completion_for_slow_target(
+    migrated_db: Engine,
+    tmp_path,
+) -> None:
+    """A slow response must not consume the next request's completion-based rate interval."""
+
+    authorized = _authorize_synthetic_run(
+        migrated_db,
+        target_requests_per_second=1.0,
+    )
+    clock = _AdvancingClock()
+    runner = DurableCampaignRunner(
+        engine=migrated_db,
+        environment="staging",
+        corpus=authorized.corpus,
+        catalog=authorized.catalog,
+        manifest_root=tmp_path,
+        clock=clock,
+        sleeper=clock.advance,
+    )
+
+    build_adapter = runner._adapter
+
+    def slow_adapter(prepared: object) -> object:
+        adapter = build_adapter(prepared)  # type: ignore[arg-type]
+        send = adapter.send
+
+        def delayed_send(request: object) -> object:
+            response = send(request)
+            clock.advance(2.0)
+            return response
+
+        adapter.send = delayed_send
+        return adapter
+
+    runner._adapter = slow_adapter  # type: ignore[method-assign]
+    record_outcome = runner.store.record_attempt_outcome
+
+    def record_with_processing_time(**kwargs: object) -> str | None:
+        result = record_outcome(**kwargs)  # type: ignore[arg-type]
+        clock.advance(0.01)
+        return result
+
+    runner.store.record_attempt_outcome = record_with_processing_time  # type: ignore[method-assign]
+
+    assert runner.run_once(worker_id="runner-rate-window-test") is True
+
+    with migrated_db.connect() as connection:
+        state = connection.execute(
+            text(
+                "SELECT state FROM campaign_run_events WHERE run_id = :run ORDER BY id DESC LIMIT 1"
+            ),
+            {"run": authorized.run.run_id},
+        ).scalar_one()
+        evidence = connection.execute(
+            text("SELECT count(*) FROM attempt_result WHERE campaign_run_id = :run"),
+            {"run": authorized.run.run_id},
+        ).scalar_one()
+
+    assert state == "complete"
+    assert evidence == 9

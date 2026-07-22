@@ -443,7 +443,6 @@ class DurableCampaignRunner:
                 or current.approval.decision_id != authorized.approval.decision_id
             ):
                 raise CampaignAbort("persisted authorization changed", code="authorization_changed")
-            last_dispatch_at = self.clock.now()
 
         provenance = (
             "synthetic_offline"
@@ -492,6 +491,13 @@ class DurableCampaignRunner:
                 verdict=outcome.verdict,
                 evidence_content_hash=outcome.result.content_hash,
             )
+            # The gateway's rate window begins when the physical response finishes.  Anchor the
+            # Runner's conservative inter-attempt throttle after the entire attempt has returned
+            # and its outcome is durable as well.  Anchoring before dispatch lets a slow response
+            # consume the interval, then the next case reaches the gateway immediately after the
+            # response and is correctly (but unexpectedly) hard-aborted by its completion-based
+            # rate check.
+            last_dispatch_at = self.clock.now()
 
         self.store.complete_campaign_job(
             job=job,
