@@ -54,28 +54,18 @@ console:
 container:
   stage: package
   image:
-    name: quay.io/buildah/stable@sha256:90aeeb40ab1402bc76b3c3eab38548dfddf1c8d80ef006daa21a6a1a90a0cde3
+    name: gcr.io/kaniko-project/executor@sha256:c3109d5926a997b100c4343944e06c6b30a6804b2f9abe0994d3de6ef92b028e
     entrypoint: [""]
-  variables:
-    BUILDAH_ISOLATION: chroot
-    STORAGE_DRIVER: vfs
   dependencies:
     - console
   script:
     - >-
-      buildah bud
-      --isolation=chroot
-      --storage-driver=vfs
-      --format=docker
-      --file "$CI_PROJECT_DIR/Dockerfile.gitlab"
-      --tag agentforge:ci
-      "$CI_PROJECT_DIR"
-    - >-
-      buildah push
-      --storage-driver=vfs
-      --format=docker
-      agentforge:ci
-      "docker-archive:$CI_PROJECT_DIR/agentforge-ci.tar:agentforge:ci"
+      /kaniko/executor
+      --context "dir://$CI_PROJECT_DIR"
+      --dockerfile "$CI_PROJECT_DIR/Dockerfile.gitlab"
+      --destination agentforge:ci
+      --no-push
+      --tar-path "$CI_PROJECT_DIR/agentforge-ci.tar"
     - /bin/sh scripts/verify_container_archive.sh "$CI_PROJECT_DIR/agentforge-ci.tar"
 
 secret-scan:
