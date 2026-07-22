@@ -214,7 +214,7 @@ jobs:
           test "$(wc -c < promptfoo-validate.txt)" -le 1048576
       - name: Passive ZAP baseline in an internal fake-target network only
         run: |
-          mkdir -p "$RUNNER_TEMP/zap"
+          install -d -m 0777 "$RUNNER_TEMP/zap"
           docker network create --internal agentforge-zap-isolated
           cleanup() {
             docker rm -f agentforge-zap-fake >/dev/null 2>&1 || true
