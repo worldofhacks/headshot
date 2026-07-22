@@ -210,17 +210,25 @@ export function LiveScreen({ client, principal, entityId, getToken }: ScreenProp
     decodeComponents,
   );
   const [selectedCampaign, setSelectedCampaign] = useState<CampaignReadModel | null>(null);
-  const selectedCampaignId = selectedCampaign
-    ? identity(selectedCampaign, ["run_id", "campaign_id"])
+  const campaignRecords = campaigns.result.data ?? [];
+  const effectiveCampaign = selectedCampaign
+    ?? campaignRecords.find((campaign) => campaign.state === "running")
+    ?? campaignRecords[0]
+    ?? null;
+  const selectedCampaignId = effectiveCampaign
+    ? identity(effectiveCampaign, ["run_id", "campaign_id"])
     : null;
   const reconcile = useCallback(() => {
     campaigns.refresh();
     components.refresh();
   }, [campaigns.refresh, components.refresh]);
   const events = useConsoleEvents(getToken, reconcile);
-  const preparedScope = selectedCampaign && isJsonRecord(selectedCampaign.authorization_request_payload)
-    ? selectedCampaign.authorization_request_payload
+  const preparedScope = effectiveCampaign && isJsonRecord(effectiveCampaign.authorization_request_payload)
+    ? effectiveCampaign.authorization_request_payload
     : null;
+  const operationalComponents = (components.result.data ?? []).filter(
+    (component) => component.availability === "operational and evidenced",
+  ).length;
 
   return (
     <div className="screen-stack">
@@ -228,6 +236,12 @@ export function LiveScreen({ client, principal, entityId, getToken }: ScreenProp
         title="Live operations"
         detail="Campaign, queue, component and ordered event state comes from protected server projections."
       />
+      <section className="metric-strip" aria-label="Live platform summary">
+        <div><span>Campaigns</span><strong className="mono">{campaignRecords.length}</strong></div>
+        <div><span>Active run</span><strong className="mono">{effectiveCampaign?.run_id ?? "—"}</strong></div>
+        <div><span>Recorded attempts</span><strong className="mono">{effectiveCampaign?.attempt_count ?? "—"}</strong></div>
+        <div><span>Components evidenced</span><strong className="mono">{operationalComponents}/{components.result.data?.length ?? 0}</strong></div>
+      </section>
       <Panel title="Campaigns">
         <ResourceView result={campaigns.result} emptyLabel="No campaigns have been persisted.">
           {(data) => (
@@ -728,8 +742,8 @@ function TargetManagement({
   const [runNonce, setRunNonce] = useState(() => `live-${globalThis.crypto.randomUUID()}`);
   const [budgetUsd, setBudgetUsd] = useState("1");
   const [maxAttempts, setMaxAttempts] = useState("9");
-  const [requestsPerSecond, setRequestsPerSecond] = useState("0.5");
-  const [timeoutSeconds, setTimeoutSeconds] = useState("600");
+  const [requestsPerSecond, setRequestsPerSecond] = useState("1");
+  const [timeoutSeconds, setTimeoutSeconds] = useState("900");
   const parsedCaps = {
     budget_usd: Number(budgetUsd),
     max_attempts_per_run: Number(maxAttempts),

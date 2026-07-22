@@ -62,6 +62,65 @@ const browserFixture = (): Plugin => ({
         response.end('{"state":"empty","data":[]}');
         return;
       }
+      if (path === "/api/v1/targets") {
+        response.end(JSON.stringify({
+          state: "ready",
+          data: [{
+            target_id: "browser-target",
+            version: "v1",
+            content_hash: "sha256:browser-target",
+            name: "Browser Test Target",
+            adapter_kind: "bruno",
+            environment: "test",
+            base_url: "https://browser-target.example.test",
+            auth_mode: "header",
+            credential_configured: true,
+            synthetic_data_only: true,
+            safety_caps: {
+              budget_usd: 1,
+              max_attempts_per_run: 9,
+              target_requests_per_second: 1,
+              run_timeout_seconds: 900,
+            },
+            lifecycle: "ready",
+            allowed_lifecycle_transitions: ["disabled"],
+            surfaces: [{
+              surface_id: "chat",
+              version: "v1",
+              target_version: "v1",
+              content_hash: "sha256:browser-surface",
+              kind: "chat",
+              protocol: "https",
+              method: "POST",
+              relative_path: "/chat",
+              trust_boundary: "external",
+              authentication_required: true,
+              risk: "high",
+              owasp_mappings: [],
+              oracle_refs: [],
+              enabled: true,
+              created_at: "2026-07-22T00:00:00Z",
+            }],
+            campaign_template: {
+              target_id: "browser-target",
+              target_version: "v1",
+              surface_id: "chat",
+              surface_version: "v1",
+              corpus_id: "browser-corpus",
+              corpus_hash: "sha256:browser-corpus",
+              execution_profile: "live",
+              maximum_caps: {
+                budget_usd: 1,
+                max_attempts_per_run: 9,
+                target_requests_per_second: 1,
+                run_timeout_seconds: 900,
+              },
+            },
+            created_at: "2026-07-22T00:00:00Z",
+          }],
+        }));
+        return;
+      }
       response.end(
         '{"state":"unavailable","data":null,"reason_code":"browser_fixture_dependency"}',
       );
