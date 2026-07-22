@@ -15,8 +15,8 @@
 
 **Open:** **Live**
 
-> “Headshot tests the live OpenEMR Clinical Co-Pilot for adversarial failures.
-> This is the deployed control plane, not a mock. The Web API, Postgres evidence
+> “Headshot tests the live AI agents for adversarial failures.
+> This is the deployed control plane. The Web API, Postgres evidence
 > store, private Runner, and Langfuse connection are operational.”
 
 ## 0:20 — Select the target
