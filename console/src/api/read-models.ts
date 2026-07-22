@@ -480,9 +480,15 @@ const decodeTrace = (value: unknown): TraceReadModel => {
     "measured_cost",
     "currency",
     "langfuse_status",
+    "request_preview",
+    "response_preview",
+    "request_sha256",
+    "response_sha256",
+    "inspection_flags",
+    "inspection_owasp_mappings",
   ], name);
   for (const key of ["trace_id", "campaign_id", "operation", "provider", "status", "currency", "langfuse_status"]) string(result, key, name);
-  for (const key of ["request_id", "attempt_id", "method", "destination_host", "relative_path", "error_code"]) nullableString(result, key, name);
+  for (const key of ["request_id", "attempt_id", "method", "destination_host", "relative_path", "error_code", "request_preview", "response_preview", "request_sha256", "response_sha256"]) nullableString(result, key, name);
   nullableNumber(result, "status_code", name);
   timestamp(result, "started_at", name);
   nullableTimestamp(result, "finished_at", name);
@@ -490,6 +496,8 @@ const decodeTrace = (value: unknown): TraceReadModel => {
   number(result, "request_bytes", name, { integer: true, minimum: 0 });
   if (result.response_bytes !== null) number(result, "response_bytes", name, { integer: true, minimum: 0 });
   number(result, "measured_cost", name, { minimum: 0 });
+  stringArray(result, "inspection_flags", name);
+  stringArray(result, "inspection_owasp_mappings", name);
   return result as TraceReadModel;
 };
 

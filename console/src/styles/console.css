@@ -237,6 +237,10 @@
 .telemetry-status.success { border-color: var(--phos-line); background: var(--phos-tint); color: var(--phos); }
 .telemetry-status.failure { border-color: var(--v-conf); background: var(--v-conf-t); color: var(--v-conf); }
 .trace-detail-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.traffic-inspector { display: grid; gap: 12px; }
+.traffic-inspector > div { min-width: 0; }
+.traffic-inspector .adversarial-text { max-height: 230px; overflow: auto; }
+.traffic-inspector .data-note { margin: 0; }
 .correlation-chain { min-width: 0; display: grid; grid-template-columns: repeat(7, auto); align-items: center; justify-content: start; gap: 8px; overflow: auto; padding: 10px 11px; border: 1px solid var(--sep); border-radius: var(--r-sm); background: var(--bg-inset); color: var(--tx2); font-size: var(--fs-2xs); white-space: nowrap; }
 .correlation-chain span { padding: 4px 7px; border: 1px solid var(--bd); border-radius: var(--r-xs); background: var(--bg-panel); }
 .correlation-chain i { color: var(--tx3); font-style: normal; }

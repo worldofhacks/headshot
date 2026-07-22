@@ -242,6 +242,12 @@ class TraceReadModel(_ReadModel):
     measured_cost: float = Field(ge=0)
     currency: str
     langfuse_status: str
+    request_preview: str | None
+    response_preview: str | None
+    request_sha256: str | None
+    response_sha256: str | None
+    inspection_flags: list[str]
+    inspection_owasp_mappings: list[str]
 
 
 class CostReadModel(_ReadModel):

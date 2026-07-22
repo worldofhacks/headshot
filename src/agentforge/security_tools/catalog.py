@@ -24,7 +24,7 @@ class SecurityToolDefinition:
     tool_id: str
     name: str
     version: str
-    kind: Literal["llm-attack", "llm-eval", "dast", "sast", "dependency", "commercial"]
+    kind: Literal["llm-attack", "llm-eval", "llm-proxy", "dast", "sast", "dependency", "commercial"]
     availability: ToolAvailability
     integration_mode: str
     target_access: Literal["none", "policy_gateway_only", "exact_origin_passive", "repository_only"]
@@ -187,16 +187,57 @@ SECURITY_TOOL_CATALOG: tuple[SecurityToolDefinition, ...] = (
         detail="Scans Headshot source only; it is not presented as live-target evidence.",
     ),
     SecurityToolDefinition(
-        tool_id="burp-suite",
-        name="Burp Suite",
-        version="not-installed",
-        kind="commercial",
-        availability="evaluated and rejected",
-        integration_mode="not adopted",
-        target_access="none",
-        capabilities=("manual web testing", "commercial DAST"),
+        tool_id="headshot-llm-workbench",
+        name="Headshot LLM Security Workbench",
+        version="1.0.0",
+        kind="llm-proxy",
+        availability="operational and evidenced",
+        integration_mode=(
+            "sanitized intercept ledger + governed replay/fuzzing + ZAP + independent Judge"
+        ),
+        target_access="policy_gateway_only",
+        capabilities=(
+            "request and response inspector",
+            "traffic logger and search",
+            "governed replay",
+            "bounded LLM fuzzing",
+            "passive DAST",
+            "message comparison",
+            "multi-turn sequence analysis",
+            "encoding transforms",
+        ),
+        owasp_llm=tuple(f"LLM{index:02d}:2025" for index in range(1, 11)),
+        owasp_web=(
+            "A01:2021",
+            "A02:2021",
+            "A03:2021",
+            "A04:2021",
+            "A05:2021",
+            "A07:2021",
+            "A09:2021",
+            "A10:2021",
+        ),
+        operational_scope=(
+            "Postgres + Langfuse traffic ledger",
+            "sanitized request/response inspector",
+            "reviewed-corpus regression replay",
+            "Garak/PyRIT/Giskard/Promptfoo mutation",
+            "exact-origin passive ZAP",
+            "independent Judge comparison",
+        ),
+        adapter_only_scope=(
+            "active web DAST",
+            "public out-of-band callback listener",
+            "DOM and instrumented-runtime testing",
+        ),
+        execution_evidence=(
+            "postgres://outbound_http_requests",
+            "langfuse://target-http-request",
+            "ci://tests/test_outbound_telemetry.py",
+        ),
         detail=(
-            "Rejected for the MVP: paid, closed provenance, and duplicates bounded ZAP coverage."
+            "Burp-style LLM workflow built from governed Headshot capabilities; PortSwigger "
+            "Burp Suite itself is not installed or claimed."
         ),
     ),
 )

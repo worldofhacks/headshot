@@ -154,6 +154,12 @@ export interface TraceReadModel extends JsonRecord {
   measured_cost: number;
   currency: string;
   langfuse_status: string;
+  request_preview: string | null;
+  response_preview: string | null;
+  request_sha256: string | null;
+  response_sha256: string | null;
+  inspection_flags: string[];
+  inspection_owasp_mappings: string[];
 }
 
 export interface CostReadModel extends JsonRecord {

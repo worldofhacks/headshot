@@ -201,6 +201,12 @@ const browserFixture = (): Plugin => ({
             measured_cost: 0.01,
             currency: "USD",
             langfuse_status: index === 7 ? "error" : "exported",
+            request_preview: JSON.stringify({ turns: [`Synthetic LLM attack case ${index + 1}`] }),
+            response_preview: index === 7 ? "upstream unavailable" : JSON.stringify({ answer: `Synthetic target response ${index + 1}` }),
+            request_sha256: "a".repeat(64),
+            response_sha256: "b".repeat(64),
+            inspection_flags: index === 7 ? ["transport_or_server_error"] : [],
+            inspection_owasp_mappings: index === 7 ? ["A09:2021"] : [],
           })),
         }));
         return;
@@ -333,6 +339,17 @@ const browserFixture = (): Plugin => ({
               observability: { langfuse: true, durable_request_ledger: true },
               safety: { synthetic_data_only: true, publication_gate: true },
               judge: { independent: true, calibration_set: "week3-v2" },
+              security_workbench: {
+                name: "Headshot LLM Security Workbench",
+                burp_suite_installed: false,
+                capabilities: [
+                  { workflow: "Proxy + Logger + Inspector", headshot_control: "Traces", state: "operational", llm_focus: "Sanitized prompt/response exchange inspection with correlation and cost", safeguard: "Secrets are redacted before Postgres and Langfuse persistence", evidence: "outbound_http_requests + Langfuse trace ID" },
+                  { workflow: "Repeater", headshot_control: "Regression replay", state: "governed", llm_focus: "Replay a confirmed synthetic case against a versioned target", safeguard: "New corpus hash and fresh exact-scope authorization", evidence: "regression attempt + immutable evidence hash" },
+                  { workflow: "Intruder", headshot_control: "Garak + PyRIT + Giskard + Promptfoo", state: "governed", llm_focus: "Prompt injection, exfiltration, tool misuse and multi-turn mutation", safeguard: "PolicyGateway applies all caps", evidence: "ToolAttackBundle + mutation lineage" },
+                  { workflow: "Scanner", headshot_control: "OWASP ZAP + independent Judge", state: "operational", llm_focus: "Passive web DAST plus behavioral agent evaluation", safeguard: "Exact-origin passive ZAP and human publication gate", evidence: "ToolFinding + Judge verdict" },
+                  { workflow: "Comparer", headshot_control: "Judge + evidence + resilience", state: "operational", llm_focus: "Compare invariants, outputs, prior fixes and verdicts", safeguard: "Attack generation cannot approve its own result", evidence: "AttemptResult + Verdict" },
+                ],
+              },
             },
             published_at: "2026-07-22T00:10:00Z",
             published_by: "user_configuration_admin",
@@ -344,10 +361,11 @@ const browserFixture = (): Plugin => ({
         response.end(JSON.stringify({
           state: "ready",
           data: [
-            { component_id: "orchestrator", name: "Orchestrator", kind: "agent", availability: "operational and evidenced", environment: "staging", detail: "Coverage-gap scheduling and bounded dispatch are active.", heartbeat_at: "2026-07-22T00:24:00Z" },
-            { component_id: "red-team", name: "Red Team", kind: "agent", availability: "operational and evidenced", environment: "staging", detail: "Live mutation worker is consuming authorized work.", heartbeat_at: "2026-07-22T00:24:02Z" },
-            { component_id: "judge", name: "Independent Judge", kind: "agent", availability: "operational and evidenced", environment: "staging", detail: "Independent verdict projection is current.", heartbeat_at: "2026-07-22T00:24:03Z" },
-            { component_id: "zap", name: "OWASP ZAP", kind: "security_tool", availability: "adapter integrated, execution deferred", environment: "staging", detail: "Adapter ready; execution requires exact authorization.", heartbeat_at: "2026-07-22T00:23:59Z" },
+            { component_id: "orchestrator", name: "Orchestrator", kind: "agent", availability: "operational and evidenced", environment: "staging", detail: "Coverage-gap scheduling and bounded dispatch are active.", version: "1", target_access: "policy_gateway_only", capabilities: ["coverage scheduling"], owasp_llm: [], owasp_web: [], operational_scope: ["campaign orchestration"], adapter_only_scope: [], execution_evidence: ["campaign ledger"], heartbeat_at: "2026-07-22T00:24:00Z" },
+            { component_id: "red-team", name: "Red Team", kind: "agent", availability: "operational and evidenced", environment: "staging", detail: "Live mutation worker is consuming authorized work.", version: "1", target_access: "policy_gateway_only", capabilities: ["attack mutation"], owasp_llm: ["LLM01:2025"], owasp_web: [], operational_scope: ["authorized candidates"], adapter_only_scope: [], execution_evidence: ["attempt ledger"], heartbeat_at: "2026-07-22T00:24:02Z" },
+            { component_id: "judge", name: "Independent Judge", kind: "agent", availability: "operational and evidenced", environment: "staging", detail: "Independent verdict projection is current.", version: "1", target_access: "none", capabilities: ["independent verdict"], owasp_llm: [], owasp_web: [], operational_scope: ["evidence adjudication"], adapter_only_scope: [], execution_evidence: ["verdict ledger"], heartbeat_at: "2026-07-22T00:24:03Z" },
+            { component_id: "security-tool:zap", name: "OWASP ZAP", kind: "security-tool:dast", availability: "operational and evidenced", environment: "isolated-ci-tooling", detail: "Exact-origin passive DAST is normalized into advisory findings.", version: "2.17.0", target_access: "exact_origin_passive", capabilities: ["passive DAST"], owasp_llm: [], owasp_web: ["A05:2021"], operational_scope: ["passive baseline"], adapter_only_scope: ["active DAST"], execution_evidence: ["ci://security-tools/zap.json"], heartbeat_at: "2026-07-22T00:23:59Z" },
+            { component_id: "security-tool:headshot-llm-workbench", name: "Headshot LLM Security Workbench", kind: "security-tool:llm-proxy", availability: "operational and evidenced", environment: "staging", detail: "Governed Burp-style LLM workflow over real Headshot controls.", version: "1.0.0", target_access: "policy_gateway_only", capabilities: ["inspect", "replay", "fuzz", "scan", "compare"], owasp_llm: ["LLM01:2025", "LLM02:2025", "LLM06:2025"], owasp_web: ["A05:2021", "A07:2021", "A09:2021"], operational_scope: ["traffic inspector", "governed mutation", "independent comparison"], adapter_only_scope: ["active DAST", "public OOB listener"], execution_evidence: ["postgres://outbound_http_requests", "langfuse://target-http-request"], heartbeat_at: "2026-07-22T00:24:04Z" },
           ],
         }));
         return;

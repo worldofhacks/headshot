@@ -37,6 +37,10 @@ from agentforge.policy.recorder import (
 )
 from agentforge.secrets import redact_mapping
 from agentforge.security_tools.catalog import SECURITY_TOOL_CATALOG, security_tool_records
+from agentforge.security_tools.workbench import (
+    inspect_sanitized_exchange,
+    security_workbench_records,
+)
 from agentforge.target.catalog import SYNTHETIC_TARGET_ID, TrustedTargetCatalog
 from agentforge.target.spec import (
     AttackSurfaceDefinition,
@@ -244,6 +248,11 @@ class PostgresApiBackend(ApiBackend):
                         },
                         "target_auth_material_browser_exposure": "none",
                         "security_tools": security_tool_records(),
+                        "security_workbench": {
+                            "name": "Headshot LLM Security Workbench",
+                            "burp_suite_installed": False,
+                            "capabilities": security_workbench_records(),
+                        },
                     }
                     snapshot_id = hashlib.sha256(
                         json.dumps(configuration, sort_keys=True, separators=(",", ":")).encode()
@@ -676,19 +685,34 @@ class PostgresApiBackend(ApiBackend):
                         "SELECT request_id, trace_id, campaign_run_id AS campaign_id, attempt_id, "
                         "operation, provider, method, destination_host, relative_path, status, "
                         "status_code, error_code, started_at, finished_at, duration_ms, "
-                        "request_bytes, response_bytes, measured_cost, currency, langfuse_status "
+                        "request_bytes, response_bytes, measured_cost, currency, langfuse_status, "
+                        "request_payload, response_payload "
                         "FROM outbound_http_requests WHERE organization_id = :org "
                         "AND finished_at IS NOT NULL ORDER BY started_at DESC LIMIT 200",
                         {"org": principal.organization_id},
                     )
-                    rows = [
-                        {
-                            **source,
-                            "duration_ms": float(source["duration_ms"] or 0.0),
-                            "measured_cost": float(source["measured_cost"] or 0.0),
-                        }
-                        for source in request_rows
-                    ]
+                    rows = []
+                    for source in request_rows:
+                        request_payload = _safe(source.pop("request_payload"))
+                        response_payload = _safe(source.pop("response_payload"))
+                        duration_ms = float(source["duration_ms"] or 0.0)
+                        inspection = inspect_sanitized_exchange(
+                            request_payload=request_payload,
+                            response_payload=(
+                                response_payload if isinstance(response_payload, str) else None
+                            ),
+                            status_code=source["status_code"],
+                            error_code=source["error_code"],
+                            duration_ms=duration_ms,
+                        )
+                        rows.append(
+                            {
+                                **source,
+                                **inspection,
+                                "duration_ms": duration_ms,
+                                "measured_cost": float(source["measured_cost"] or 0.0),
+                            }
+                        )
                     legacy_rows = _rows(
                         connection,
                         "SELECT ar.trace_id, ar.campaign_run_id AS campaign_id, ar.attempt_id, "
@@ -735,6 +759,12 @@ class PostgresApiBackend(ApiBackend):
                                 "measured_cost": 0.0,
                                 "currency": "USD",
                                 "langfuse_status": "historical_not_instrumented",
+                                "request_preview": None,
+                                "response_preview": None,
+                                "request_sha256": None,
+                                "response_sha256": None,
+                                "inspection_flags": [],
+                                "inspection_owasp_mappings": [],
                             }
                         )
                     summary_rows = _rows(
@@ -774,6 +804,12 @@ class PostgresApiBackend(ApiBackend):
                                 "measured_cost": float(source["measured_cost"] or 0.0),
                                 "currency": source["currency"],
                                 "langfuse_status": "historical_not_instrumented",
+                                "request_preview": None,
+                                "response_preview": None,
+                                "request_sha256": None,
+                                "response_sha256": None,
+                                "inspection_flags": [],
+                                "inspection_owasp_mappings": [],
                             }
                         )
                 elif resource == "approvals":

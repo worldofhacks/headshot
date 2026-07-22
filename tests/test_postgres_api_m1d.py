@@ -170,12 +170,13 @@ def test_security_tool_catalog_is_exposed_with_truthful_scope_and_no_target_acce
         "promptfoo",
         "zap",
         "semgrep",
-        "burp-suite",
+        "headshot-llm-workbench",
     } <= tools.keys()
     assert tools["garak"]["version"] == "0.15.1"
     assert tools["pyrit"]["target_access"] == "none"
     assert tools["giskard"]["adapter_only_scope"]
-    assert tools["burp-suite"]["availability"] == "evaluated and rejected"
+    assert tools["headshot-llm-workbench"]["availability"] == "operational and evidenced"
+    assert tools["headshot-llm-workbench"]["target_access"] == "policy_gateway_only"
     assert configuration.state == "ready"
     assert len(configuration.data["configuration"]["security_tools"]) == len(tools)
 
@@ -663,6 +664,12 @@ def test_traces_projection_is_ready_from_persisted_attempt_and_verdict(
         "measured_cost",
         "currency",
         "langfuse_status",
+        "request_preview",
+        "response_preview",
+        "request_sha256",
+        "response_sha256",
+        "inspection_flags",
+        "inspection_owasp_mappings",
     }
     assert row["trace_id"] == "trace-projection-0001"
     assert row["operation"] == "attempt:copilot-api@1.0.0"
@@ -674,6 +681,8 @@ def test_traces_projection_is_ready_from_persisted_attempt_and_verdict(
     assert row["attempt_id"] == "attempt-trace-0001"
     assert row["langfuse_status"] == "historical_not_instrumented"
     assert row["request_id"] is None
+    assert row["request_preview"] is None
+    assert row["inspection_flags"] == []
     assert row["finished_at"].startswith("2026-07-21T10:00:02.500")
 
 
@@ -723,3 +732,8 @@ def test_traces_projection_exposes_safe_physical_request_metadata(migrated_db: E
     assert row["relative_path"] == "chat"
     assert row["finished_at"].startswith("2026-07-21T10:00:00.125500")
     assert row["langfuse_status"] == "exported"
+    assert row["request_preview"] == '{"turns":["synthetic"]}'
+    assert row["response_preview"] == '{"answer":"safe"}'
+    assert len(row["request_sha256"]) == 64
+    assert len(row["response_sha256"]) == 64
+    assert row["inspection_flags"] == []
