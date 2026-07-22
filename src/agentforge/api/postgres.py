@@ -451,6 +451,40 @@ class PostgresApiBackend(ApiBackend):
                                 "history": history,
                             }
                         )
+                    tool_where = "organization_id = :org"
+                    tool_parameters = {"org": principal.organization_id}
+                    if resource == "finding":
+                        tool_where += " AND finding_id = :finding_id"
+                        tool_parameters["finding_id"] = identifiers.get("finding_id")
+                    tool_rows = _rows(
+                        connection,
+                        "SELECT contract_payload, raw_artifact_sha256 "
+                        "FROM security_tool_findings WHERE " + tool_where + " ORDER BY finding_id",
+                        tool_parameters,
+                    )
+                    for source in tool_rows:
+                        payload = source["contract_payload"]
+                        reproduction = payload.get("reproduction_evidence", {})
+                        rows.append(
+                            {
+                                "finding_id": payload["finding_id"],
+                                "state": payload["validation_state"],
+                                "severity": payload["severity"],
+                                "category": reproduction.get("summary", "security tool finding"),
+                                "target_version": payload["target_id"],
+                                "publication_status": payload["human_publication_state"],
+                                "evidence_integrity": "verified",
+                                "source_kind": payload["source_kind"],
+                                "execution_profile": "live"
+                                if payload["scan_provenance"] == "live_target"
+                                else "synthetic",
+                                "evidence_provenance": payload["evidence_provenance"],
+                                "campaign_run_id": None,
+                                "attempt_id": None,
+                                "evidence_content_hash": source["raw_artifact_sha256"],
+                                "history": [],
+                            }
+                        )
                 elif resource == "coverage":
                     source_rows = _rows(
                         connection,

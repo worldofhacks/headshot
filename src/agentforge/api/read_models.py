@@ -193,8 +193,8 @@ class FindingReadModel(_ReadModel):
     source_kind: str
     execution_profile: Literal["synthetic", "live"]
     evidence_provenance: str
-    campaign_run_id: str
-    attempt_id: str
+    campaign_run_id: str | None
+    attempt_id: str | None
     evidence_content_hash: str
     history: tuple[FindingHistoryReadModel, ...]
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from typing import Any
 
 from fastapi.testclient import TestClient
@@ -12,6 +13,7 @@ from agentforge.auth.config import ClerkAuthConfig
 from agentforge.auth.dependencies import get_clerk_auth_config, require_authenticated
 from agentforge.auth.principal import Principal
 from agentforge.control_plane import ControlPlaneStore
+from agentforge.security_tools.repository import SecurityToolEvidenceRepository
 from agentforge.target.spec import TargetLifecycle
 from agentforge.web import WebSecurityConfig, create_web_app
 
@@ -60,7 +62,8 @@ def _clean(engine: Engine) -> None:
     with engine.begin() as connection:
         connection.execute(
             text(
-                "TRUNCATE TABLE finding_decision_events, audit_events, command_idempotency, "
+                "TRUNCATE TABLE tool_execution_errors, security_tool_findings, scan_artifacts, "
+                "security_tool_runs, finding_decision_events, audit_events, command_idempotency, "
                 "campaign_attempts, campaign_run_events, campaign_runs, "
                 "campaign_authorization_decisions, campaign_authorization_requests, "
                 "surface_state_events, attack_surface_definitions, surface_identities, "
@@ -142,6 +145,100 @@ def _seed_ready_target(engine: Engine, principal: Principal) -> None:
             lifecycle=lifecycle,
             idempotency_key=f"server-catalog-lifecycle-{lifecycle.value}-0001",
         )
+
+
+def test_live_security_tool_findings_are_projected_into_the_console_register(
+    migrated_db: Engine,
+) -> None:
+    _clean(migrated_db)
+    raw = b'{"site":[]}'
+    digest = hashlib.sha256(raw).hexdigest()
+    observed_at = "2026-07-22T03:34:56+00:00"
+    run = {
+        "schema_version": "1",
+        "run_id": "zap-live-projection-0001",
+        "tool_name": "zap",
+        "tool_version": "2.17.0",
+        "configuration_sha256": "a" * 64,
+        "run_nonce": "zap-live-projection-nonce-0001",
+        "target_id": "openemr-copilot",
+        "surface_id": "copilot-site",
+        "scan_provenance": "live_target",
+        "status": "completed",
+        "started_at": observed_at,
+        "finished_at": observed_at,
+        "artifact_sha256": digest,
+    }
+    artifact = {
+        "schema_version": "1",
+        "artifact_id": "artifact-zap-live-projection-0001",
+        "run_id": run["run_id"],
+        "tool_name": "zap",
+        "tool_version": "2.17.0",
+        "media_type": "application/json",
+        "sha256": digest,
+        "sanitized": True,
+        "byte_length": len(raw),
+        "created_at": observed_at,
+        "artifact_locator": "docs/evidence/zap/zap-target.json",
+    }
+    finding = {
+        "schema_version": "1",
+        "finding_id": "zap:projection0000000000000001",
+        "tool_name": "zap",
+        "tool_version": "2.17.0",
+        "configuration_sha256": run["configuration_sha256"],
+        "run_id": run["run_id"],
+        "run_nonce": run["run_nonce"],
+        "target_id": run["target_id"],
+        "surface_id": run["surface_id"],
+        "scan_provenance": "live_target",
+        "observed_at": observed_at,
+        "raw_artifact_sha256": digest,
+        "owasp_mappings": ["A05:2021"],
+        "severity": "low",
+        "confidence": 0.9,
+        "reproduction_evidence": {
+            "summary": "X-Content-Type-Options Header Missing",
+            "artifact_locator": "docs/evidence/zap/zap-target.json#finding=0",
+        },
+        "validation_state": "unvalidated",
+        "disposition": "validate",
+        "human_publication_state": "blocked_pending_human_approval",
+        "source_kind": "security_tool",
+        "evidence_provenance": "scan_only",
+    }
+    SecurityToolEvidenceRepository(migrated_db).ingest(
+        organization_id=ORG_ID,
+        run=run,
+        artifact=artifact,
+        sanitized_artifact=raw,
+        findings=[finding],
+    )
+
+    result = PostgresApiBackend(migrated_db, environment="staging").read(
+        "findings", _principal(LAUNCHER_ID, "org:findings:read")
+    )
+
+    assert result.state == "ready"
+    assert result.data == [
+        {
+            "finding_id": finding["finding_id"],
+            "state": "unvalidated",
+            "severity": "low",
+            "category": "X-Content-Type-Options Header Missing",
+            "target_version": "openemr-copilot",
+            "publication_status": "blocked_pending_human_approval",
+            "evidence_integrity": "verified",
+            "source_kind": "security_tool",
+            "execution_profile": "live",
+            "evidence_provenance": "scan_only",
+            "campaign_run_id": None,
+            "attempt_id": None,
+            "evidence_content_hash": digest,
+            "history": [],
+        }
+    ]
 
 
 def test_exact_scope_two_person_flow_reaches_persistence_but_not_unwired_runner(

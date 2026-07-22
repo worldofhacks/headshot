@@ -366,12 +366,12 @@ const decodeFindingRecord = (value: unknown): FindingReadModel => {
     "evidence_integrity",
     "source_kind",
     "evidence_provenance",
-    "campaign_run_id",
-    "attempt_id",
     "evidence_content_hash",
   ]) {
     string(result, key, name);
   }
+  nullableString(result, "campaign_run_id", name);
+  nullableString(result, "attempt_id", name);
   literal(result, "execution_profile", ["synthetic", "live"], name);
   result.history = records(result.history, "finding history", decodeFindingHistory);
   return result as FindingReadModel;

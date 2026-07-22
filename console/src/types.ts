@@ -91,8 +91,8 @@ export interface FindingReadModel extends JsonRecord {
   source_kind: string;
   execution_profile: "synthetic" | "live";
   evidence_provenance: string;
-  campaign_run_id: string;
-  attempt_id: string;
+  campaign_run_id: string | null;
+  attempt_id: string | null;
   evidence_content_hash: string;
   history: FindingHistoryReadModel[];
 }

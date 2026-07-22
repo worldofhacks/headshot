@@ -392,8 +392,8 @@ function FindingDetail({
                 path={COMMAND_PATHS.decideFinding(findingId)}
                 payload={{ decision: "approved", rationale: rationale.trim() }}
                 label="Approve finding"
-                allowed={hasPermission(principal, PERMISSIONS.findingsApprove) && rationale.trim().length > 0}
-                unavailableReason={rationale.trim() ? PERMISSIONS.findingsApprove : "a decision rationale"}
+                allowed={data.source_kind !== "security_tool" && hasPermission(principal, PERMISSIONS.findingsApprove) && rationale.trim().length > 0}
+                unavailableReason={data.source_kind === "security_tool" ? "independent validation before a finding decision" : rationale.trim() ? PERMISSIONS.findingsApprove : "a decision rationale"}
                 onAcknowledged={refresh}
               />
               <CommandButton
@@ -401,8 +401,8 @@ function FindingDetail({
                 path={COMMAND_PATHS.decideFinding(findingId)}
                 payload={{ decision: "rejected", rationale: rationale.trim() }}
                 label="Reject finding"
-                allowed={hasPermission(principal, PERMISSIONS.findingsApprove) && rationale.trim().length > 0}
-                unavailableReason={rationale.trim() ? PERMISSIONS.findingsApprove : "a decision rationale"}
+                allowed={data.source_kind !== "security_tool" && hasPermission(principal, PERMISSIONS.findingsApprove) && rationale.trim().length > 0}
+                unavailableReason={data.source_kind === "security_tool" ? "independent validation before a finding decision" : rationale.trim() ? PERMISSIONS.findingsApprove : "a decision rationale"}
                 onAcknowledged={refresh}
               />
               <CommandButton
@@ -410,8 +410,8 @@ function FindingDetail({
                 path={COMMAND_PATHS.resolveFinding(findingId)}
                 payload={{ rationale: rationale.trim() }}
                 label="Resolve finding"
-                allowed={hasPermission(principal, PERMISSIONS.findingsResolve) && rationale.trim().length > 0}
-                unavailableReason={rationale.trim() ? PERMISSIONS.findingsResolve : "a resolution rationale"}
+                allowed={data.source_kind !== "security_tool" && hasPermission(principal, PERMISSIONS.findingsResolve) && rationale.trim().length > 0}
+                unavailableReason={data.source_kind === "security_tool" ? "independent validation before resolution" : rationale.trim() ? PERMISSIONS.findingsResolve : "a resolution rationale"}
                 onAcknowledged={refresh}
               />
             </div>
