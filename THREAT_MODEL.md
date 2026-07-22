@@ -1,9 +1,11 @@
-# THREAT_MODEL.md — OpenEMR Clinical Co-Pilot (target #1)
+# THREAT_MODEL.md — OpenEMR target + Headshot platform identity boundary
 
-> **First-pass** threat model produced by `/arch-draft` (the "AUDIT.md slot" per CLAUDE.md). The
-> `threat-model` skill deepens this for MVP once the platform has probed the live target. Existing
-> defenses are marked **to-be-probed** where they are not yet observed — never assumed. Describes the
-> **target**, not the platform. No real PHI is referenced anywhere in this repo.
+> **First-pass** target threat model produced by `/arch-draft` (the "AUDIT.md slot" per CLAUDE.md). The
+> `threat-model` skill deepens it once the platform has probed the live target. Existing target defenses
+> are marked **to-be-probed** where they are not yet observed — never assumed. The six numbered categories
+> describe the **external target**. A separate section below now models the Headshot platform's human
+> identity boundary. Clerk integration and authenticated Railway deployment are selected/planned, not
+> claimed deployed. No real PHI is referenced anywhere in this repo.
 
 ## Summary (~500 words)
 
@@ -44,7 +46,7 @@ tools, uploads). Its *existing defenses* — input filtering, output guardrails,
 authorization, rate limits, tool allowlists — are largely **unobserved** and are exactly what the
 platform exists to establish empirically. This document therefore states each category's surface and
 impact with confidence, and its existing-defenses column as a hypothesis the eval suite will confirm
-or refute. The exact auth mode and API shape of the Co-Pilot are open questions pending inspection
+or refute. The exact **external target** auth mode and API shape of the Co-Pilot are open questions pending inspection
 (`PRESEARCH.md` OQ1–OQ3); they change *how* attacks are delivered, not *which* categories apply.
 
 **Risk scoring** below is qualitative (Likelihood × Clinical Impact → Critical/High/Medium),
@@ -133,9 +135,39 @@ anchor): `A03:2025` Software Supply Chain Failures, `A10:2025` Mishandling of Ex
   Excessive Agency, LLM07 System Prompt Leakage.
 - **Risk: High.**
 
+## Platform identity boundary — Headshot console/API
+
+This section models attacks against **AgentForge/Headshot itself**, not the external Co-Pilot. The
+protected assets are target configuration, campaign controls, findings, hostile evidence, approval/audit
+records, and event streams. The trust path is Browser → Clerk → public Railway Web → private Railway
+services/Postgres. Clerk provides human identity; custom organization permissions provide application
+RBAC; service identities and target-scoped credentials remain separate workload controls. All controls
+below are required by the selected design and remain **planned until integration/deployment verification**.
+
+| Platform identity threat | Abuse path and impact | Required control / failure behavior | OWASP Web Top 10:2021 |
+|---|---|---|---|
+| **1. Session-token theft** | A stolen bearer token lets an attacker act as a valid member until the token expires, exposing findings or campaign controls. | TLS; mandatory MFA for account access; short session lifetime; never persist a token in application storage unnecessarily; never log/token-trace it; revoke and investigate by immutable user/session ID. Sensitive operations still require custom permission and, where applicable, a different Approver. | **A07** Identification and Authentication Failures; **A02** Cryptographic Failures; **A09** Security Logging and Monitoring Failures |
+| **2. XSS / token exposure** | Injected console content, especially hostile evidence, can execute in the Browser or leak a token through DOM, storage, telemetry, error reporting, or third-party scripts. | Escape/sanitize hostile content; strict CSP and dependency hygiene; never render raw evidence by default; no token in URL, Principal, error, log, trace, or client telemetry; keep frontend checks non-authoritative. | **A03** Injection; **A02** Cryptographic Failures |
+| **3. Authorized-party misconfiguration** | A wildcard or incorrect `azp` allowlist lets a token minted for an unintended origin reach Headshot. | `CLERK_AUTHORIZED_PARTIES` is explicit per environment; wildcard rejected at config load; production entries require HTTPS; localhost allowed only locally; invalid config fails readiness and request-time failures return 503. | **A05** Security Misconfiguration; **A07** Identification and Authentication Failures |
+| **4. Cross-origin / subdomain-cookie abuse** | An attacker-controlled origin or sibling subdomain induces authenticated requests, receives credentials, or abuses ambient cookies. | Exact CORS/authorized-party allowlists; secure cookie attributes where cookies are used; CSRF protection for ambient-cookie mutations; never trust all subdomains; no broad origin reflection; only the Web service is public. | **A01** Broken Access Control; **A05** Security Misconfiguration |
+| **5. RBAC bypass** | Frontend role labels, Clerk system permissions, or client-supplied permission text are treated as authorization and unlock privileged actions. | Backend dependencies authorize only immutable custom organization permissions from the verified session claims. The role label is descriptive; client fields are ignored. Every handler defaults denied without its exact named permission. | **A01** Broken Access Control |
+| **6. IDOR** | A permitted user changes a campaign, finding, evidence, target, or approval identifier to access a different object outside the authorized operation. | Permission checks are necessary but not sufficient: scope every lookup and mutation to the authorized organization/resource relationship; use server-derived identity; return non-enumerating denial; audit object and Principal IDs. | **A01** Broken Access Control |
+| **7. Organization confusion** | A valid Clerk session with no organization, the wrong organization, or a production organization reused in staging is accepted. | Require the exact environment-specific `CLERK_REQUIRED_ORG_ID`; deny missing/wrong org with 403; personal accounts and user-created orgs disabled; staging config containing the production org ID fails load/readiness. | **A01** Broken Access Control; **A04** Insecure Design |
+| **8. Approval identity spoofing** | The launcher supplies an approver ID, changes a role label, or replays their own session to satisfy a two-person gate. | Derive both identities only from verified immutable Principals and server-side workflow state; require `org:campaign:authorize`/`org:findings:approve`; enforce `approver.user_id != launcher_user_id`; bind action nonce; audit both user/session IDs. No solo/break-glass bypass. | **A01** Broken Access Control; **A07** Identification and Authentication Failures; **A04** Insecure Design |
+| **9. Stale/revoked permission behavior** | A user removed from a role or organization continues using a still-valid signed session claim during its remaining lifetime. | Use short session lifetime and re-authentication for high-risk actions; revoke sessions and monitor audit events. **Residual:** networkless JWT verification deliberately accepts a valid signed claim until expiry, so permission revocation is not instantaneous. Never claim otherwise. | **A01** Broken Access Control; **A07** Identification and Authentication Failures |
+| **10. Event-stream leakage** | An unauthenticated or under-authorized SSE/WebSocket subscriber receives findings, traces, costs, or hostile evidence; a token in a query string leaks via logs/referrers. | Authenticate and authorize before opening each stream; require the corresponding read permission and object scope; never place tokens in URLs; close/revalidate at token expiry; sanitize payloads; event routes are excluded from the public allowlist. | **A01** Broken Access Control; **A02** Cryptographic Failures; **A09** Security Logging and Monitoring Failures |
+| **11. Authentication outage / fail-open** | Clerk, verifier, key, or configuration failure causes the service to bypass authentication so work can continue. | Networkless verification keeps valid signed sessions independent of a Clerk/JWKS request. Invalid config blocks readiness; unexpected verifier/SDK/config failure returns generic 503; no cached raw claim, frontend decision, anonymous fallback, or dynamic JWKS escape hatch is accepted. | **A04** Insecure Design; **A05** Security Misconfiguration; **A07** Identification and Authentication Failures |
+
+**Priority.** RBAC/IDOR/organization confusion and approval spoofing are Critical because they can permit
+live operations or expose hostile evidence; session/XSS/event-stream leakage is High because it can steal
+the same authority; configuration, freshness, and outage behavior are High because a single fail-open
+mistake collapses every route-level control. Authentication still does not authorize an attack: after
+Clerk identity/RBAC and distinct-Approver checks, the Policy Gateway must independently enforce exact
+target authorization, allowlist, scoped credentials, synthetic data, budget/rate, monitoring, and abort.
+
 ---
 
-## Coverage priority (feeds the Orchestrator)
+## Target coverage priority (feeds the Orchestrator)
 `1 Prompt Injection (Critical)` → `2 Data Exfiltration (Critical)` → `4 Tool Misuse (Critical)` →
 `3 State Corruption (High)` → `5 DoS/Cost (High)` → `6 Identity/Role (High)`. Priority is
 re-evaluated each run from observability; a category with clustering partial-successes is escalated.

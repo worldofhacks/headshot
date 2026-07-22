@@ -1,0 +1,14 @@
+{
+  "schema_version": "1",
+  "tools": {
+    "gitleaks": {"version": "8.30.1"},
+    "pip-audit": {"version": "2.10.1"},
+    "promptfoo": {"version": "0.121.19"},
+    "semgrep": {"version": "1.170.0"},
+    "zap": {
+      "version": "2.17.0",
+      "image": "ghcr.io/zaproxy/zaproxy",
+      "linux_amd64_digest": "sha256:c558ee87358911ab17278c70991e856f57793e115d9cd0f88ca475cf82907a1a"
+    }
+  }
+}

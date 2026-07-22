@@ -9,6 +9,33 @@ context for what an exploit puts at risk.)
 
 ## 1. Primary users
 
+### 1.0 Invitation-only access and authenticated roles
+
+All human users enter through **Clerk** and must be invited into the exact required **Headshot**
+Organization for the environment. Personal accounts and user-created organizations are disabled. MFA is
+mandatory for every member, with TOTP plus backup codes preferred; SMS is not the only factor. Clerk and
+authenticated Railway integration are selected/planned and are not yet claimed deployed.
+
+The backend authorizes the following custom organization permissions from verified Clerk session claims.
+Frontend role labels and client-supplied roles/permissions are display data only and create no authority.
+
+| Authenticated workflow | Clerk role | Backend-authoritative permissions | What the user does |
+|---|---|---|---|
+| **Observer** | `org:observer` | `org:console:read`, `org:findings:read`, `org:evidence:read` | Reviews posture, findings, and approved evidence without mutating platform state. |
+| **Operator** | `org:operator` | `org:console:read`, `org:findings:read`, `org:evidence:read`, `org:campaign:launch`, `org:campaign:abort`, `org:targets:manage`, `org:config:manage` | Configures an allowed target, proposes/launches an authorized workflow, monitors it, and can abort it. |
+| **Approver** | `org:approver` | `org:console:read`, `org:findings:read`, `org:evidence:read`, `org:campaign:authorize`, `org:findings:approve`, `org:findings:resolve` | Independently authorizes a launch, approves a critical finding, and resolves findings/remediation decisions. |
+| **Auditor** | `org:auditor` | `org:console:read`, `org:findings:read`, `org:evidence:read`, `org:audit:read` | Reconstructs who launched, authorized, aborted, approved, or resolved an operation and reviews evidence. |
+
+**Separation of launcher and approver is an identity invariant, not a role convention.** An Operator's
+operation requires a different authenticated Approver: `approver.user_id != launcher_user_id`. The
+launcher cannot approve their own operation even if they also possess an Approver role or permission;
+there is no solo or emergency self-approval bypass. Both identities are recorded in the append-only audit
+trail.
+
+Authentication controls who may ask the application to act. It does **not** authorize a live attack by
+itself: the Policy Gateway must still validate exact target authorization, environment allowlist,
+target-scoped credentials, synthetic-data-only status, budget/rate caps, timeout/monitoring, and hard abort.
+
 ### 1.1 AI Security Engineer / Red-Teamer (primary operator)
 Owns the security posture of an LLM application wired into clinical workflows. Today they test by
 hand: craft a prompt, try it, eyeball the response, maybe save the good ones in a doc.
@@ -16,10 +43,11 @@ hand: craft a prompt, try it, eyeball the response, maybe save the good ones in 
 **Workflows the platform gives them**
 - **Author + seed** attack cases across categories (injection, PHI exfiltration, state corruption,
   tool misuse, DoS, identity/role) — tagged boundary/invariant/regression and mapped to OWASP.
-- **Launch an authorized live campaign** against an allowlisted target under budget + rate caps,
-  with synthetic data only and a hard abort.
-- **Review + approve** confirmed findings; approve or deny publication of critical reports and any
-  remediation (the human gate).
+- As an authenticated **Operator**, request/launch a campaign against an allowlisted target under budget
+  + rate caps, with synthetic data only and a hard abort. Launch permission does not bypass the separate
+  campaign authorization gate.
+- As a **different authenticated Approver**, independently authorize the operation and approve or deny
+  publication of critical reports and remediation. The launcher can never approve their own operation.
 - **Read the posture over time**: which categories are covered, pass/fail trend, is the target
   getting more or less resilient, what's open vs resolved, what it cost.
 
@@ -53,6 +81,10 @@ reads the system's own state and decides what to test next, so that overnight an
 produce learning, not just noise. The human stays in the loop for **judgment gates** (approve
 critical findings, approve remediation), not for **every step**.
 
+That machine user is not a Clerk user. Agents use service identity, per-agent database roles, provider
+credentials, and target-scoped credential bindings. Human session tokens are never workload credentials,
+and an agent cannot acquire a human permission by emitting role or permission text.
+
 ---
 
 ## 3. Why automation is the right solution (explicit justification)
@@ -79,9 +111,11 @@ The PRD demands this justification, and it is defensible line by line:
    property you get from multi-agent structure, not from one bigger prompt.
 
 ## 4. Where automation deliberately stops (so it stays trustworthy)
-Automation earns trust by knowing its limits. AgentForge stops and asks a human before **publishing
-a critical-severity finding** and before **any remediation** — because "an agent that confidently
+Automation earns trust by knowing its limits. AgentForge stops for a distinct authenticated Approver
+before **authorizing a live operation**, before **publishing a critical-severity finding**, and before
+**any remediation** — because "an agent that confidently
 documents a false positive wastes engineering time" and "an agent with the ability to push fixes
 without review can introduce entirely new vulnerabilities." Autonomy covers discovery, evaluation,
-regression, and drafting; humans own the gates where a wrong call has real cost. This boundary is
+regression, and drafting; humans own the gates where a wrong call has real cost. Role or permission
+alone cannot waive launcher/approver identity separation. This boundary is
 the answer to the CISO's core question — *where does it proceed on its own, and where does it stop?*

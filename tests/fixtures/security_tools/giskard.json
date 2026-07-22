@@ -1,0 +1,12 @@
+{
+  "findings": [
+    {
+      "id": "giskard.llm.SycophancyDetector-001",
+      "severity": "low",
+      "confidence": 0.76,
+      "owasp_mappings": ["LLM09:2025"],
+      "summary": "Synthetic parser fixture for a response-quality detector.",
+      "disposition": "document"
+    }
+  ]
+}

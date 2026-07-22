@@ -49,9 +49,19 @@ _PERSISTED_COLUMNS: tuple[str, ...] = (
     "request_transcript",
     "response_transcript",
     "policy_decision_id",
+    "executed_at",
+    "trace_id",
+    "correlation_id",
     "recorder_identity",
     "recorder_version",
+    "organization_id",
+    "surface_id",
+    "surface_version",
+    "authorization_scope_hash",
+    "execution_profile",
+    "evidence_provenance",
 )
+PERSISTED_EVIDENCE_COLUMNS = _PERSISTED_COLUMNS
 
 # Columns whose SQL type is JSONB — serialized to a JSON string for the psycopg parameter.
 _JSONB_COLUMNS: frozenset[str] = frozenset({"attack_attempt", "request_transcript"})

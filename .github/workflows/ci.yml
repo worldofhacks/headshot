@@ -2,21 +2,21 @@ name: CI
 
 on:
   push:
-    # main + the swarm/* integration branches (so live-gate work is CI-verified on push, not
-    # only via a PR to main). All existing checks (test, secret-scan) run unchanged.
-    branches: [main, "swarm/**"]
+    branches: [main, "swarm/**", "run/**", "codex/**"]
   pull_request:
     branches: [main]
 
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     name: test
     runs-on: ubuntu-latest
-    # AC-4: an ephemeral PostgreSQL the test job can reach. Torn down with the job — no
-    # persistence, no real credentials (throwaway local-CI values only, never a secret).
     services:
       postgres:
         image: postgres:16
@@ -32,7 +32,6 @@ jobs:
           --health-timeout 3s
           --health-retries 5
     env:
-      # Point the suite at the ephemeral service above (AC-4).
       DATABASE_URL: postgresql://agentforge:local_dev_only@localhost:5432/agentforge
     steps:
       - uses: actions/checkout@v4
@@ -40,7 +39,8 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Install package (editable) + dev tooling
+          cache: pip
+      - name: Install package and development tooling
         run: |
           python -m pip install --upgrade pip
           python -m pip install -e ".[dev]"
@@ -52,32 +52,104 @@ jobs:
         run: |
           PYTHONPATH=src python -m agentforge.evals validate-corpus evals
           PYTHONPATH=src python -m agentforge.evals detect-duplicate-sequence evals/seeds
-      - name: Pytest (full suite)
+      - name: Pytest full suite
         run: pytest
       - name: Contract tests
         run: pytest tests/contract -q
-      - name: Wheel packaging gate (schemas resolve with NO repo checkout)
-        # The contract + eval schemas now ship INSIDE the package and resolve via
-        # importlib.resources. Build the wheel, install ONLY it (+ jsonschema) into a fresh venv
-        # in a temp dir OUTSIDE the repo, copy just the corpus DATA (never the schemas), and run
-        # the installed console from a CWD outside the repo — proving schema resolution needs no
-        # repo on disk. This is the regression guard against the repo-relative-path packaging bug.
+      - name: Wheel packaging gate
         run: bash scripts/wheel_outside_repo_check.sh
-      - name: Docker build (AC-1 image gate)
-        # Gate the container image on every push/PR so AC-1 is no longer only manually
-        # verified — a broken Dockerfile fails CI here.
-        run: docker build -t agentforge:ci-smoke .
-      - name: Container validation smoke (schemas ship in the image)
-        # The image installs the package as a wheel (non-editable), so the schemas must ride in
-        # the image itself. Copy ONLY the corpus DATA into the container and run the installed
-        # validator — proving the packaged schemas resolve inside the container with no repo mount.
-        # Lightweight + deterministic: one validate-corpus + one detect-duplicate-sequence run.
+
+  console:
+    name: console
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: console
+    steps:
+      - uses: actions/checkout@v4
+      - name: Generate public Clerk fixture identifier
+        run: |
+          encoded=$(printf 'clerk.example.com$' | base64 | tr -d '\n')
+          printf 'VITE_CLERK_PUBLISHABLE_KEY=pk_test_%s\n' "$encoded" >> "$GITHUB_ENV"
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.17.1
+          cache: npm
+          cache-dependency-path: console/package-lock.json
+      - name: Install locked frontend dependencies
+        run: npm ci --ignore-scripts
+      - name: Audit complete frontend dependency graph
+        run: npm audit --audit-level=high
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Unit and component tests
+        run: npm test
+      - name: Forbidden-language and production-source gate
+        run: npm run check:forbidden
+      - name: Production build
+        run: npm run build
+      - name: Production bundle honesty gate
+        run: npm run check:bundle
+      - name: Install browser for deterministic smoke tests
+        run: npx playwright install --with-deps chromium
+      - name: Direct-route, history, responsive, console and network tests
+        run: npm run test:browser
+      - name: Source maps are absent
+        run: test -z "$(find dist -type f -name '*.map' -print -quit)"
+
+  container:
+    name: container
+    runs-on: ubuntu-latest
+    needs: [test, console]
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: agentforge
+          POSTGRES_PASSWORD: local_dev_only
+          POSTGRES_DB: agentforge
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U agentforge -d agentforge"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 5
+    env:
+      CLEAN_DATABASE_URL: postgresql://agentforge:local_dev_only@127.0.0.1:5432/agentforge_clean
+      UPGRADE_DATABASE_URL: postgresql://agentforge:local_dev_only@127.0.0.1:5432/agentforge_upgrade
+      READY_DATABASE_URL: postgresql://agentforge:local_dev_only@127.0.0.1:5432/agentforge_clean
+    steps:
+      - uses: actions/checkout@v4
+      - name: Generate public Clerk fixture identifier
+        run: |
+          encoded=$(printf 'clerk.example.com$' | base64 | tr -d '\n')
+          printf 'VITE_CLERK_PUBLISHABLE_KEY=pk_test_%s\n' "$encoded" >> "$GITHUB_ENV"
+      - name: Create isolated migration databases
+        run: |
+          docker exec "${{ job.services.postgres.id }}" createdb -U agentforge agentforge_clean
+          docker exec "${{ job.services.postgres.id }}" createdb -U agentforge agentforge_upgrade
+      - name: Build production image
+        run: >-
+          docker build
+          --build-arg VITE_CLERK_PUBLISHABLE_KEY="$VITE_CLERK_PUBLISHABLE_KEY"
+          -t agentforge:ci .
+      - name: Verify final image boundary
+        run: bash scripts/verify_runtime_image.sh agentforge:ci
+      - name: Verify clean and upgrade migrations inside image
+        run: bash scripts/verify_container_migrations.sh agentforge:ci
+      - name: Verify configured offline readiness inside image
+        run: bash scripts/smoke_ready_container.sh agentforge:ci
+      - name: Verify Railway PORT and HTTP route boundaries
+        run: bash scripts/smoke_runtime_container.sh agentforge:ci
+      - name: Validate packaged corpus schemas in image
         run: |
           docker run --rm --entrypoint python \
-            -v "$PWD/evals:/corpus:ro" agentforge:ci-smoke \
+            -v "$PWD/evals:/corpus:ro" agentforge:ci \
             -m agentforge.evals validate-corpus /corpus
           docker run --rm --entrypoint python \
-            -v "$PWD/evals:/corpus:ro" agentforge:ci-smoke \
+            -v "$PWD/evals:/corpus:ro" agentforge:ci \
             -m agentforge.evals detect-duplicate-sequence /corpus/seeds
 
   secret-scan:
@@ -86,14 +158,100 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0 # full history so gitleaks scans every commit
+          fetch-depth: 0
       - name: Install gitleaks
         run: |
           curl -sSfL \
             https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz \
             -o /tmp/gitleaks.tar.gz
+          echo "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  /tmp/gitleaks.tar.gz" \
+            | sha256sum --check --strict
           tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
           sudo mv /tmp/gitleaks /usr/local/bin/gitleaks
           gitleaks version
-      - name: Gitleaks scan (full history)
+      - name: Gitleaks full-history scan
         run: gitleaks git . --redact --verbose
+
+  security-tools:
+    name: security-tools
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install pinned Python scanners
+        run: python -m pip install semgrep==1.170.0 pip-audit==2.10.1
+      - name: Semgrep deterministic JSON artifact
+        run: >-
+          timeout 180s semgrep scan --config .semgrep.yml --error --metrics=off
+          --timeout 30 --max-target-bytes 1000000
+          --json --output semgrep.json src console/src migrations scripts
+      - name: Semgrep deterministic SARIF artifact
+        run: >-
+          timeout 180s semgrep scan --config .semgrep.yml --error --metrics=off
+          --timeout 30 --max-target-bytes 1000000
+          --sarif --output semgrep.sarif src console/src migrations scripts
+      - name: Enforce scanner artifact size caps
+        run: |
+          test "$(wc -c < semgrep.json)" -le 10485760
+          test "$(wc -c < semgrep.sarif)" -le 10485760
+      - name: Python dependency audit
+        run: >-
+          pip-audit . --strict --progress-spinner=off
+          --format=json --output pip-audit.json
+      - name: Set up Node for pinned Promptfoo validation
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Validate offline Promptfoo configuration
+        run: |
+          timeout 120s npx --yes promptfoo@0.121.19 validate \
+            -c security-tools/promptfoo/promptfooconfig.yaml \
+            | tee promptfoo-validate.txt
+          test "$(wc -c < promptfoo-validate.txt)" -le 1048576
+      - name: Passive ZAP baseline in an internal fake-target network only
+        run: |
+          install -d -m 0777 "$RUNNER_TEMP/zap"
+          docker network create --internal agentforge-zap-isolated
+          cleanup() {
+            docker rm -f agentforge-zap-fake >/dev/null 2>&1 || true
+            docker network rm agentforge-zap-isolated >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+          docker run -d --read-only --cap-drop=ALL --security-opt=no-new-privileges \
+            --network=agentforge-zap-isolated --name=agentforge-zap-fake \
+            -v "$PWD/security-tools/zap-fixture:/fixture:ro" \
+            --entrypoint=python3 \
+            ghcr.io/zaproxy/zaproxy@sha256:c558ee87358911ab17278c70991e856f57793e115d9cd0f88ca475cf82907a1a \
+            -m http.server 8765 --bind 0.0.0.0 --directory /fixture
+          for attempt in 1 2 3 4 5; do
+            docker exec agentforge-zap-fake python3 -c \
+              "import socket; socket.create_connection(('127.0.0.1', 8765), 1).close()" \
+              && break
+            sleep 1
+          done
+          timeout 180s docker run --rm --network=agentforge-zap-isolated --read-only --cap-drop=ALL \
+            --security-opt=no-new-privileges --pids-limit=256 --memory=2g --cpus=2 \
+            --tmpfs /tmp:rw,noexec,nosuid,size=256m \
+            --tmpfs /home/zap:rw,exec,nosuid,mode=1777,size=512m \
+            -v "$RUNNER_TEMP/zap:/zap/wrk:rw" \
+            ghcr.io/zaproxy/zaproxy@sha256:c558ee87358911ab17278c70991e856f57793e115d9cd0f88ca475cf82907a1a \
+            zap-baseline.py -t http://agentforge-zap-fake:8765 -J zap.json -m 1 -T 2 -I \
+            -z "-config spider.maxDuration=1 -config spider.maxDepth=5 \
+            -config spider.maxChildren=10 -config scanner.threadPerHost=1"
+          test "$(wc -c < "$RUNNER_TEMP/zap/zap.json")" -le 10485760
+      - name: Preserve sanitized scanner artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-tool-artifacts
+          path: |
+            semgrep.json
+            semgrep.sarif
+            pip-audit.json
+            promptfoo-validate.txt
+            ${{ runner.temp }}/zap/zap.json
+          if-no-files-found: error
+          retention-days: 14

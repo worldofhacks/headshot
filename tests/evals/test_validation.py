@@ -988,6 +988,35 @@ def test_repository_category_owasp_unions_cover_binding_threat_model_mappings() 
         assert mappings <= actual[category]
 
 
+def test_repository_corpus_union_covers_every_mandated_owasp_category() -> None:
+    # The per-category assertion above only proves each category carries *some* of its
+    # OWASP tags; a refactor could delete the sole carrier of a mandated code (e.g. A06,
+    # A07, A09, A10, LLM03, LLM05) and stay green.  This test binds to the platform's own
+    # coverage gate — `_REQUIRED_WEB` / `_REQUIRED_LLM` in agentforge.api.postgres, the
+    # exact sets the API's `covered` flag enforces (postgres.py §"coverage") — and asserts
+    # the corpus-wide UNION of OWASP mappings satisfies it, so retagging or removing any
+    # unique carrier turns this red.
+    from agentforge.api.postgres import _REQUIRED_LLM, _REQUIRED_WEB
+
+    root = Path(__file__).resolve().parents[2] / "evals" / "seeds"
+    cases = [json.loads(path.read_text()) for path in sorted(root.glob("*.json"))]
+    assert cases, "expected the offline seed corpus to be present"
+
+    web_union: set[str] = set()
+    llm_union: set[str] = set()
+    for case in cases:
+        for tag in case["owasp"]:
+            if tag["framework"] == "OWASP Web":
+                web_union.add(tag["id"])
+            elif tag["framework"] == "OWASP LLM":
+                llm_union.add(tag["id"])
+
+    missing_web = sorted(_REQUIRED_WEB - web_union)
+    missing_llm = sorted(_REQUIRED_LLM - llm_union)
+    assert not missing_web, f"mandated OWASP Web categories have no seed carrier: {missing_web}"
+    assert not missing_llm, f"mandated OWASP LLM categories have no seed carrier: {missing_llm}"
+
+
 def test_corpus_rejects_ground_truth_backlink_to_a_different_case(tmp_path: Path) -> None:
     corpus = tmp_path / "evals"
     shutil.copytree(Path(__file__).resolve().parents[2] / "evals", corpus)

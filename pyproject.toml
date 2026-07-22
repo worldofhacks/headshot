@@ -8,9 +8,10 @@ version = "0.1.0"
 description = "AgentForge / Adversarial Machine — a reusable multi-agent adversarial evaluation platform. This package holds the framework-neutral core (domain, target adapters, contracts); runtime agents land in later phases."
 requires-python = ">=3.12"
 license = { text = "UNLICENSED" }
-# Runtime deps are scoped to the deployment/health surface only. The framework-neutral
-# core (domain, contracts, config) imports NONE of these (D10); only agentforge.health
-# imports fastapi. uvicorn is the ASGI server the Dockerfile/compose run the app under.
+# Runtime deps are scoped to deployment/health, storage/target, and the isolated human-auth
+# boundary. The framework-neutral core (domain, contracts, config) imports NONE of these
+# (D10); agentforge.health and agentforge.auth.errors/dependencies import FastAPI, while
+# agentforge.auth.clerk alone imports Clerk's SDK. uvicorn is the ASGI server.
 # psycopg backs the /ready DB-connectivity probe (M1a); it is imported lazily inside the
 # readiness path only — never at config.py top level (D10).
 dependencies = [
@@ -39,6 +40,13 @@ dependencies = [
     # preflight (D10), so a bare import and preflight pull in no client and open no connection.
     # A live send() over this client is reachable ONLY inside an authorized live campaign.
     "httpx>=0.27",
+    # Official Clerk Python backend SDK. Request authentication pins explicit session_token
+    # acceptance, authorized parties, and CLERK_JWT_KEY for networkless RS256 verification;
+    # CLERK_SECRET_KEY is deliberately not required on this path.
+    "clerk-backend-api==6.0.1",
+    # External-out telemetry adapter. Imported lazily by the private Runner only; PostgreSQL
+    # remains the authoritative fallback when Langfuse is unavailable.
+    "langfuse==4.14.1",
 ]
 
 [project.optional-dependencies]
@@ -58,7 +66,7 @@ where = ["src"]
 # lookup resolves under a non-editable install and `alembic upgrade` creates the view in a
 # deployed container.
 "agentforge.observability" = ["*.sql"]
-# The seven versioned inter-agent contract schemas. They now live INSIDE the package and are
+# The eleven versioned inter-agent/security-tool contract schemas. They live INSIDE the package and are
 # resolved via importlib.resources (registry.py), so they must ship in the wheel — otherwise a
 # non-editable/wheel install outside a repo checkout cannot validate any inter-agent message.
 "agentforge.contracts" = ["v1/*.json"]

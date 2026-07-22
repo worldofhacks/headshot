@@ -70,18 +70,22 @@ def main() -> None:
     url_status = f"set={_set('HEADSHOT_TARGET_BASE_URL')} https={https} format-valid={parseable}"
     provider_ready = provider in _SUPPORTED_PROVIDERS and _set(f"{provider.upper()}_API_KEY")
 
+    canary_available = _set("HEADSHOT_CANARY_VALUE")
+    database_url_set = _set("DATABASE_URL")
+
     rows = [
         ("Target URL", url_status),
         ("Allowlist (target_id)", f"configured={_set('HEADSHOT_TARGET_ID')}"),
         ("Auth mode", _auth_consistency()),
         ("Synthetic provenance", "ready" if synthetic else "not-ready"),
-        ("Canary", "deterministic" if _set("HEADSHOT_CANARY_VALUE") else "unavailable"),
+        ("Canary", "deterministic" if canary_available else "unavailable"),
         ("Provider", "ready" if provider_ready else "not-ready"),
         ("Model", "set" if _set("HEADSHOT_RED_TEAM_MODEL") else "empty"),
         ("Budget (USD)", _positive_number("HEADSHOT_RUN_BUDGET_USD")),
         ("Attempt cap", _positive_number("HEADSHOT_MAX_ATTEMPTS_PER_RUN")),
         ("Rate (req/s)", _positive_number("HEADSHOT_TARGET_REQUESTS_PER_SECOND")),
         ("Timeout (s)", _positive_number("HEADSHOT_RUN_TIMEOUT_SECONDS")),
+        ("DATABASE_URL", "set" if database_url_set else "unavailable"),
         # Abort path is runtime code in the M4 gateway; monitoring is the M6a observability core.
         ("Abort path", "ready (gateway hard-abort, code)"),
         ("Monitoring", "ready (M6a core; M6b Langfuse external)"),
@@ -89,6 +93,42 @@ def main() -> None:
     print("=== LIVE-CAMPAIGN PREFLIGHT — PRESENCE ONLY (no values) ===")
     for label, status in rows:
         print(f"  {label:<24} : {status}")
+
+    # The GO blockers, stated explicitly. (1)/(2) are env-presence; (3)/(4) are STRUCTURAL — they
+    # cannot be satisfied from env at all: no minted-grant check and no authenticated Approver
+    # exist yet. While (3)/(4) hold, a live run is BLOCKED regardless of env, and this command must
+    # never be called live-operational.
+    blockers = [
+        (
+            "1. synthetic canary",
+            "UNAVAILABLE" if not canary_available else "available",
+            not canary_available,
+        ),
+        (
+            "2. DATABASE_URL at runtime",
+            "UNAVAILABLE" if not database_url_set else "set",
+            not database_url_set,
+        ),
+        (
+            "3. approved RunAuthorization for the exact scope",
+            "NONE (request via `scope`; approval not verifiable here)",
+            True,
+        ),
+        (
+            "4. authenticated / two-person authorization service",
+            "NOT INTEGRATED (Clerk approval path pending)",
+            True,
+        ),
+    ]
+    print("--- GO BLOCKERS (all must clear before a live run) ---")
+    for label, status, blocking in blockers:
+        flag = "BLOCKING" if blocking else "ok"
+        print(f"  [{flag:<8}] {label}: {status}")
+    print(
+        "STATUS: BLOCKED — NOT live-operational. `scope` only REQUESTS authorization; a distinct "
+        "authenticated Approver (two-person control) must approve the exact operation hash, and "
+        "that service is not yet integrated."
+    )
     print("NOTE: presence/validity only; NO value is displayed. This does NOT authorize traffic.")
 
 

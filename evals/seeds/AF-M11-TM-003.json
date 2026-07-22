@@ -52,6 +52,7 @@
   },
   "owasp": [
     {"framework": "OWASP Web", "version": "2021", "id": "A04", "name": "Insecure Design"},
+    {"framework": "OWASP Web", "version": "2021", "id": "A09", "name": "Security Logging and Monitoring Failures"},
     {"framework": "OWASP LLM", "version": "2025", "id": "LLM06", "name": "Excessive Agency"},
     {"framework": "OWASP LLM", "version": "2025", "id": "LLM10", "name": "Unbounded Consumption"}
   ],

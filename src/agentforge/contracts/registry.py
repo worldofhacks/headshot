@@ -38,7 +38,9 @@ def safe_schema_name(name: str) -> str:
     return name
 
 
-# The six success-message boundaries (ARCHITECTURE.md §4). Errors live in errors.json.
+# The success-message boundaries (ARCHITECTURE.md §4 plus the additive security-tool
+# integration boundary). Runtime errors live in errors.json; a sanitized tool execution
+# failure has its own provenance-bound contract because it is persisted as scan evidence.
 SUCCESS_SCHEMAS: tuple[str, ...] = (
     "campaign_directive",
     "attack_attempt",
@@ -46,6 +48,10 @@ SUCCESS_SCHEMAS: tuple[str, ...] = (
     "evidence_envelope",
     "verdict",
     "regression_admission",
+    "security_tool_run",
+    "tool_finding",
+    "scan_artifact",
+    "tool_execution_error",
 )
 
 

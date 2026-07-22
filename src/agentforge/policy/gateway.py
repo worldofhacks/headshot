@@ -133,6 +133,8 @@ class PolicyGateway:
         *,
         target_id: str = "fake",
         trigger: str = "direct",
+        campaign_run_id: str | None = None,
+        attempt_id: str | None = None,
     ) -> AttemptResult:
         """Enforce the gate, then dispatch exactly one logical attempt through the adapter.
 
@@ -171,13 +173,31 @@ class PolicyGateway:
         # (5) Dispatch through the SOLE adapter. Caps are RE-CHECKED and the meter CHARGED on
         # each physical send inside the loop, so a failing target's retries consume budget/rate
         # and abort the moment a cap is breached — a failed dispatch is never free.
-        request = TargetRequest(turns=tuple(attack_attempt.get("input_sequence", [])))
+        request_metadata = {
+            "campaign_run_id": campaign_run_id or "",
+            "attempt_id": attempt_id or "",
+            "organization_id": str(attack_attempt.get("organization_id", "")),
+            "case_id": str(attack_attempt.get("case_ref", "")),
+            "attack_category": str(attack_attempt.get("category", "")),
+        }
+        request = TargetRequest(
+            turns=tuple(attack_attempt.get("input_sequence", [])),
+            metadata=request_metadata,
+        )
         response = self._dispatch_with_backoff(request, attack_attempt, policy)
 
         # (6) Count the logical attempt after a real dispatch, then build hashed evidence.
         # (charge + _last_dispatch_at are committed per physical send in _dispatch_with_backoff.)
         self._attempts_used += 1
-        return self._build_result(attack_attempt, target_id, request, response, credential)
+        return self._build_result(
+            attack_attempt,
+            target_id,
+            request,
+            response,
+            credential,
+            campaign_run_id=campaign_run_id,
+            attempt_id=attempt_id,
+        )
 
     # ------------------------------------------------------------------ gate steps
 
@@ -287,6 +307,19 @@ class PolicyGateway:
                 self.accounting.charge()
                 self._last_dispatch_at = self.clock.now()
                 last_error = exc
+                if not exc.retryable:
+                    self.queued_attempts.append(
+                        {
+                            "attack_attempt": attack_attempt,
+                            "reason": exc.code,
+                            "queued": True,
+                        }
+                    )
+                    raise AbortError(
+                        "target credential requires human renewal after one dispatch; "
+                        "attempt queued — HARD ABORT",
+                        code=exc.code,
+                    ) from exc
                 # Backoff on the injectable clock: adapter-provided retry_after when given,
                 # else exponential — advanced by hand so tests never really sleep.
                 retry_after = getattr(exc, "retry_after", None)
@@ -326,10 +359,13 @@ class PolicyGateway:
         request: TargetRequest,
         response,
         credential: Secret | None,
+        *,
+        campaign_run_id: str | None = None,
+        attempt_id: str | None = None,
     ) -> AttemptResult:
         """Mint a fresh run-nonce (S3) + policy_decision_id and build hashed D14 evidence."""
-        campaign_run_id = uuid.uuid4().hex  # FRESH per-dispatch nonce (S3 replay detection)
-        attempt_id = uuid.uuid4().hex
+        campaign_run_id = campaign_run_id or uuid.uuid4().hex
+        attempt_id = attempt_id or uuid.uuid4().hex
         policy_decision_id = f"pd-{uuid.uuid4().hex}"
         fields: dict[str, Any] = {
             "schema_version": "1",
@@ -341,6 +377,7 @@ class PolicyGateway:
             "attack_attempt": attack_attempt,
             "request_transcript": {"request": list(request.turns)},
             "response_transcript": response.output,
+            "trace_id": response.metadata.get("trace_id"),
             "policy_decision_id": policy_decision_id,
             "recorder_identity": "policy-gateway@1",
         }

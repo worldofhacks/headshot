@@ -21,6 +21,7 @@ class AdapterError(Exception):
     """Base of the typed adapter-error taxonomy. ``code`` matches the contract error id."""
 
     code: str = "adapter-error"
+    retryable: bool = True
 
 
 class TargetUnreachableError(AdapterError):
@@ -33,6 +34,13 @@ class RateLimitedError(AdapterError):
     def __init__(self, message: str = "", retry_after: float | None = None) -> None:
         super().__init__(message)
         self.retry_after = retry_after
+
+
+class TargetSessionExpiredError(AdapterError):
+    """The target rejected an opaque delegated session that requires human relaunch."""
+
+    code = "target-session-expired"
+    retryable = False
 
 
 @dataclass(frozen=True)

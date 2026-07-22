@@ -1,0 +1,12 @@
+{
+  "findings": [
+    {
+      "id": "garak.promptinject.HijackHateHumans",
+      "severity": "high",
+      "confidence": 0.91,
+      "owasp_mappings": ["LLM01:2025"],
+      "summary": "Synthetic parser fixture for a prompt-injection probe.",
+      "disposition": "validate"
+    }
+  ]
+}
