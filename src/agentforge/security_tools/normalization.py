@@ -1,10 +1,4 @@
-"""Normalize scanner output without granting it target-evidence authority.
-
-The adapters deliberately accept a small, documented interchange fixture instead of importing
-large scanner SDKs into the platform runtime. A future real execution supplies the same fields
-from the pinned tool parser. Every result remains ``scan_only`` (or explicitly ``simulated``),
-and publication is always blocked for a human decision.
-"""
+"""Normalize advisory scanner output without granting it target-evidence authority."""
 
 from __future__ import annotations
 
@@ -15,7 +9,6 @@ from typing import Any, Protocol
 
 from agentforge.contracts import validate
 
-ADAPTER_INTEGRATION_STATUS = "adapter integrated, execution deferred"
 _SEVERITIES = {"info", "low", "medium", "high", "critical"}
 _DISPOSITIONS = {"validate", "remediate", "defer", "document", "false_positive"}
 _VALIDATION_STATES = {
@@ -138,25 +131,3 @@ def normalize_fixture_findings(
         validate("tool_finding", payload)
         normalized.append(payload)
     return normalized
-
-
-class _FixtureAdapter:
-    name = ""
-    interface_version = "1"
-
-    def parse(self, raw: bytes, context: NormalizationContext) -> list[dict[str, Any]]:
-        if context.tool_name != self.name:
-            raise ValueError(f"{self.name} adapter cannot normalize {context.tool_name}")
-        return normalize_fixture_findings(raw, context)
-
-
-class GarakAdapter(_FixtureAdapter):
-    name = "garak"
-
-
-class PyritAdapter(_FixtureAdapter):
-    name = "pyrit"
-
-
-class GiskardAdapter(_FixtureAdapter):
-    name = "giskard"

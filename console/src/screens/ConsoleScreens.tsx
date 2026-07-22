@@ -1243,7 +1243,7 @@ export function ConfigurationScreen({ client, principal }: ScreenProps) {
           { label: "Snapshot", value: shortId(configRecord.snapshot_id), note: `version ${configRecord.version}` },
           { label: "Publication state", value: configRecord.status, note: configRecord.published_at },
           { label: "Configuration areas", value: count(configurationKeys.length), note: configurationKeys.slice(0, 3).join(" · ") || "No top-level keys" },
-          { label: "Components evidenced", value: `${operationalComponents}/${componentRecords.length}`, note: components.result.state },
+          { label: "Components/tools evidenced", value: `${operationalComponents}/${componentRecords.length}`, note: components.result.state },
         ]} />
       )}
       <div className="panel-grid analytical-grid">
@@ -1259,13 +1259,32 @@ export function ConfigurationScreen({ client, principal }: ScreenProps) {
             <ResourceView result={configuration.result} emptyLabel="No configuration snapshot is published.">{() => null}</ResourceView>
           )}
         </Panel>
-        <Panel title="Component readiness" meta="latest heartbeats" eyebrow="RUNTIME POSTURE">
+        <Panel title="Component and tool status" meta="heartbeat + catalog verification" eyebrow="RUNTIME POSTURE">
           {componentRecords.length > 0
             ? <DistributionBars rows={distribution(componentRecords.map((component) => component.availability))} />
             : <ResourceView result={components.result} emptyLabel="No runtime components are registered.">{() => null}</ResourceView>}
           {componentRecords.length > 0 && <p className="data-note">{unique(componentRecords.map((component) => component.environment)).join(" · ")}</p>}
         </Panel>
       </div>
+      <Panel title="LLM security toolchain" meta="isolated CI execution" eyebrow="NATIVE ARTIFACTS">
+        {componentRecords.filter((component) => component.kind.startsWith("security-tool:")).length > 0 ? (
+          <RecordTable
+            data={componentRecords.filter((component) => component.kind.startsWith("security-tool:"))}
+            identityKeys={["component_id"]}
+            columns={[
+              { key: "name", label: "Tool" },
+              { key: "version", label: "Version", mono: true },
+              { key: "availability", label: "Availability" },
+              { key: "operational_scope", label: "Operational scope" },
+              { key: "adapter_only_scope", label: "Adapter-only scope" },
+              { key: "owasp_llm", label: "OWASP LLM" },
+              { key: "target_access", label: "Tool target access", mono: true },
+            ]}
+          />
+        ) : (
+          <ResourceView result={components.result} emptyLabel="No security-tool records are available.">{() => null}</ResourceView>
+        )}
+      </Panel>
       <Panel title="Effective configuration">
         <ResourceView result={configuration.result} emptyLabel="No configuration snapshot is published.">
           {(data) => (

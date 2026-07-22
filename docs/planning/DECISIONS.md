@@ -18,7 +18,7 @@
 | D9 | Security tooling = configure/wrap OSS; build the 4 graded capabilities; buy nothing | locked (→ ADR-0001) |
 | D10 | Contracts = versioned JSON Schema, framework-neutral, typed error taxonomy | locked |
 | D11 | Compliance = synthetic-data simulation, ATO-*style*; OSS self-host sufficient, no BAA tier | locked |
-| D12 | MVP seed strategy = hand-authored corpus + custom mutation loop; wrap PyRIT/Garak/Giskard post-MVP | proposed |
+| D12 | MVP seed identity remains hand-authored; bounded native tool imports use a separate reviewed corpus hash and fresh authorization; framework orchestrators stay post-MVP | locked (rev. 2026-07-22) |
 | D13 | Judge invariant = **deterministic, fail-closed verdict state machine** (oracle precedence; fail-closed on the verdict, not the run; async dual-judging calibration) | locked (2026-07-20, F1) |
 | D14 | Trust split = untrusted generator → **trusted Policy Gateway + Execution Recorder** → external target; Judge sees hashed recorder `AttemptResult` only; canonical-hash + append-only (not signatures) within the trust domain | locked (2026-07-20, F2/F5) |
 | D15 | OWASP taxonomy = **anchor 2021** (PRD's set) + 2021↔2025 crosswalk; structured `{framework,version,id,name}` tags | locked (2026-07-20, F8) |
@@ -128,12 +128,12 @@ un-governable, and *is* the product we're asked to build. Full record + verdict:
 want), not a real authorization. Self-hosted OSS observability is sufficient; the design stays
 BAA-upgradeable (masking, data-residency notes) as a documented hardening path, unpaid.
 
-### D12 — MVP seed strategy `proposed`
-**Why.** Wrapping PyRIT/Garak/Giskard is real Python engineering that CSA notes needs scoping; it
-risks the Tue MVP. Ship MVP with a hand-authored seed corpus + our custom mutation loop (the hard
-gates: Orchestrator, Judge, regression admission cannot be cut), then wrap the OSS seed sources
-post-MVP. The contract JSON makes seed sources hot-swappable. *A tasks-gen sequencing call — arch-
-finalize/tasks-gen to ratify.*
+### D12 — MVP seed identity and bounded native imports `locked` (rev. 2026-07-22)
+**Why.** The approved MVP remains the exact hand-authored nine-case corpus plus custom mutation
+loop. A bounded slice now imports native Garak/PyRIT/Giskard/Promptfoo artifacts into untrusted
+candidates and advisory findings. Selected candidates form a distinct reviewed corpus hash and need
+fresh authorization, so existing grants cannot silently expand. Framework multi-turn orchestrators
+and all tool-to-target execution remain post-MVP; Policy Gateway and Judge authority are unchanged.
 
 ---
 

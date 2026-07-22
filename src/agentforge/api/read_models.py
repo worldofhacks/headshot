@@ -284,6 +284,14 @@ class ComponentReadModel(_ReadModel):
     ]
     environment: str
     detail: str
+    version: str
+    target_access: str
+    capabilities: list[str]
+    owasp_llm: list[str]
+    owasp_web: list[str]
+    operational_scope: list[str]
+    adapter_only_scope: list[str]
+    execution_evidence: list[str]
     heartbeat_at: datetime.datetime
 
 

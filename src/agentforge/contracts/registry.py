@@ -52,6 +52,7 @@ SUCCESS_SCHEMAS: tuple[str, ...] = (
     "tool_finding",
     "scan_artifact",
     "tool_execution_error",
+    "tool_attack_bundle",
 )
 
 

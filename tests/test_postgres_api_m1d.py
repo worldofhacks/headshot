@@ -148,6 +148,38 @@ def _seed_ready_target(engine: Engine, principal: Principal) -> None:
         )
 
 
+def test_security_tool_catalog_is_exposed_with_truthful_scope_and_no_target_access(
+    migrated_db: Engine,
+) -> None:
+    backend = PostgresApiBackend(migrated_db, environment="staging")
+    principal = _principal(LAUNCHER_ID, "org:console:read")
+
+    components = backend.read("components", principal)
+    configuration = backend.read("configuration", principal)
+
+    assert components.state == "ready"
+    tools = {
+        row["component_id"].removeprefix("security-tool:"): row
+        for row in components.data
+        if row["component_id"].startswith("security-tool:")
+    }
+    assert {
+        "garak",
+        "pyrit",
+        "giskard",
+        "promptfoo",
+        "zap",
+        "semgrep",
+        "burp-suite",
+    } <= tools.keys()
+    assert tools["garak"]["version"] == "0.15.1"
+    assert tools["pyrit"]["target_access"] == "none"
+    assert tools["giskard"]["adapter_only_scope"]
+    assert tools["burp-suite"]["availability"] == "evaluated and rejected"
+    assert configuration.state == "ready"
+    assert len(configuration.data["configuration"]["security_tools"]) == len(tools)
+
+
 def test_live_security_tool_findings_are_projected_into_the_console_register(
     migrated_db: Engine,
 ) -> None:

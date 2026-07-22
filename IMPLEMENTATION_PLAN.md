@@ -600,8 +600,11 @@ runs at Final), P6/P7 (Final skills), and all F1–F14. These are scheduled into
 
 ## Cut / deferred
 
-- **2026-07-20 — Wrapping PyRIT/Garak/Giskard seed sources → post-MVP** (D12, `proposed`). MVP ships a
-  hand-authored corpus + the custom mutation loop (M8); contract JSON keeps seed sources hot-swappable.
+- **2026-07-22 — Bounded native LLM-tool import implemented; orchestration stays post-MVP** (D12).
+  Garak 0.15.1 JSONL, PyRIT 0.14.0 converter/`AttackResult`, Giskard Scan 1.0.0b3 scenario/result,
+  and Promptfoo 0.121.19 result adapters are operational with isolated offline CI evidence. The MVP
+  nine-case corpus is unchanged; reviewed tool candidates get a distinct hash and fresh authorization.
+  Crescendo/TAP/GOAT/GCG and all tool-to-target execution remain deferred.
 - **2026-07-20 — D2/D4 diagram render → D3**, a pre-presentation gate off the critical path. Rendered
   artifacts + `DIAGRAM_PLAN.md` legend remain **stale/non-binding** until D3; `ARCHITECTURE.md` +
   `DECISIONS.md` are authoritative. **Not executed in the current pass.**

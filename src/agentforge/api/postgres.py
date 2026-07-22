@@ -36,6 +36,7 @@ from agentforge.policy.recorder import (
     ExecutionRecorder,
 )
 from agentforge.secrets import redact_mapping
+from agentforge.security_tools.catalog import SECURITY_TOOL_CATALOG, security_tool_records
 from agentforge.target.catalog import SYNTHETIC_TARGET_ID, TrustedTargetCatalog
 from agentforge.target.spec import (
     AttackSurfaceDefinition,
@@ -242,6 +243,7 @@ class PostgresApiBackend(ApiBackend):
                             "environment": self._environment,
                         },
                         "target_auth_material_browser_exposure": "none",
+                        "security_tools": security_tool_records(),
                     }
                     snapshot_id = hashlib.sha256(
                         json.dumps(configuration, sort_keys=True, separators=(",", ":")).encode()
@@ -266,6 +268,7 @@ class PostgresApiBackend(ApiBackend):
                             "availability": "operational and evidenced",
                             "environment": self._environment,
                             "detail": "authenticated API and database projection responded",
+                            "version": "1",
                             "heartbeat_at": heartbeat_at,
                         },
                         {
@@ -275,6 +278,7 @@ class PostgresApiBackend(ApiBackend):
                             "availability": "operational and evidenced",
                             "environment": self._environment,
                             "detail": "organization-scoped projection query succeeded",
+                            "version": "16",
                             "heartbeat_at": heartbeat_at,
                         },
                     ]
@@ -303,6 +307,35 @@ class PostgresApiBackend(ApiBackend):
                                     "heartbeat_at": heartbeat_at,
                                 }
                             )
+                    for row in rows:
+                        row.setdefault("version", "unreported")
+                        row.setdefault("target_access", "none")
+                        row.setdefault("capabilities", [])
+                        row.setdefault("owasp_llm", [])
+                        row.setdefault("owasp_web", [])
+                        row.setdefault("operational_scope", [])
+                        row.setdefault("adapter_only_scope", [])
+                        row.setdefault("execution_evidence", [])
+                    for tool in SECURITY_TOOL_CATALOG:
+                        rows.append(
+                            {
+                                "component_id": f"security-tool:{tool.tool_id}",
+                                "name": tool.name,
+                                "kind": f"security-tool:{tool.kind}",
+                                "availability": tool.availability,
+                                "environment": "isolated-ci-tooling",
+                                "detail": tool.detail,
+                                "heartbeat_at": tool.last_verified_at,
+                                "version": tool.version,
+                                "target_access": tool.target_access,
+                                "capabilities": list(tool.capabilities),
+                                "owasp_llm": list(tool.owasp_llm),
+                                "owasp_web": list(tool.owasp_web),
+                                "operational_scope": list(tool.operational_scope),
+                                "adapter_only_scope": list(tool.adapter_only_scope),
+                                "execution_evidence": list(tool.execution_evidence),
+                            }
+                        )
                 elif resource == "campaigns":
                     rows = _rows(
                         connection,

@@ -129,6 +129,33 @@ VALID: dict[str, dict] = {
         "sanitized_message": "tool exceeded its configured deadline",
         "created_at": "2026-07-21T12:00:00Z",
     },
+    "tool_attack_bundle": {
+        "schema_version": "1",
+        "bundle_id": "garak-offline-1",
+        "tool_name": "garak",
+        "tool_version": "0.15.1",
+        "configuration_sha256": HEX64,
+        "generated_at": "2026-07-22T12:00:00Z",
+        "artifact_sha256": HEX64,
+        "source_kind": "security_tool",
+        "candidate_provenance": "tool_generated",
+        "target_access": "policy_gateway_only",
+        "candidates": [
+            {
+                "candidate_id": "garak:candidate-1",
+                "tool_name": "garak",
+                "tool_version": "0.15.1",
+                "technique": "dan.Dan_11_0",
+                "category": "prompt_injection",
+                "input_sequence": ["synthetic candidate"],
+                "owasp_mappings": ["LLM01:2025"],
+                "source_ref": "garak-jsonl:attempt:1",
+                "source_artifact_sha256": HEX64,
+                "provenance_sha256": HEX64,
+                "deterministic": True,
+            }
+        ],
+    },
 }
 
 CONSUMER_REQUIRED = {
@@ -142,6 +169,7 @@ CONSUMER_REQUIRED = {
     "tool_finding": "raw_artifact_sha256",
     "scan_artifact": "sha256",
     "tool_execution_error": "code",
+    "tool_attack_bundle": "candidates",
 }
 
 

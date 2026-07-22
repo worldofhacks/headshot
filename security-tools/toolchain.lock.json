@@ -1,9 +1,16 @@
 {
   "schema_version": "1",
   "tools": {
+    "garak": {"version": "0.15.1", "litellm_constraint": "1.84.0"},
+    "giskard-scan": {
+      "version": "1.0.0b3",
+      "wheel": "https://github.com/Giskard-AI/giskard-oss/releases/download/giskard-scan/v1.0.0b3/giskard_scan-1.0.0b3-py3-none-any.whl",
+      "wheel_sha256": "38ecd28d91e2f28962b413545b76030db2081ff142aa140dd36f5539a77b0da3"
+    },
     "gitleaks": {"version": "8.30.1"},
     "pip-audit": {"version": "2.10.1"},
     "promptfoo": {"version": "0.121.19"},
+    "pyrit": {"version": "0.14.0"},
     "semgrep": {"version": "1.170.0"},
     "zap": {
       "version": "2.17.0",

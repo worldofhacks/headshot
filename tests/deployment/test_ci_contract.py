@@ -15,6 +15,7 @@ SECURITY_SCANNER_MARKERS = {
     "promptfoo": "promptfoo@0.121.19 validate",
     "zap": "zap-baseline.py -t http://agentforge-zap-fake:8765",
 }
+LLM_TOOL_RUNNER = "scripts/run_offline_llm_tools.sh"
 
 
 def _workflow(path: str) -> str:
@@ -67,12 +68,14 @@ def test_github_ci_runs_every_pinned_security_scanner() -> None:
     workflow = _workflow(".github/workflows/ci.yml")
     for scanner, marker in SECURITY_SCANNER_MARKERS.items():
         assert marker in workflow, f"GitHub CI dropped the {scanner} scanner"
+    assert LLM_TOOL_RUNNER in workflow
 
 
 def test_gitlab_ci_runs_every_pinned_security_scanner() -> None:
     workflow = _workflow(".gitlab-ci.yml")
     for scanner, marker in SECURITY_SCANNER_MARKERS.items():
         assert marker in workflow, f"GitLab CI dropped the {scanner} scanner"
+    assert LLM_TOOL_RUNNER in workflow
 
 
 def test_both_ci_systems_pin_the_same_security_tool_versions() -> None:
@@ -87,3 +90,18 @@ def test_both_ci_systems_pin_the_same_security_tool_versions() -> None:
     ):
         assert pin in github, f"GitHub CI is missing pinned scanner version {pin}"
         assert pin in gitlab, f"GitLab CI is missing pinned scanner version {pin}"
+
+
+def test_offline_llm_tool_runner_pins_native_tools_and_disables_remote_generation() -> None:
+    runner = _workflow(LLM_TOOL_RUNNER)
+    for marker in (
+        "garak==0.15.1",
+        "pyrit==0.14.0",
+        "giskard_scan-1.0.0b3",
+        "promptfoo@0.121.19 eval",
+        "PROMPTFOO_DISABLE_REMOTE_GENERATION=true",
+        "PROMPTFOO_DISABLE_REDTEAM_REMOTE_GENERATION=true",
+        "env -i",
+        "security-tools/offline/validate_native_artifacts.py",
+    ):
+        assert marker in runner

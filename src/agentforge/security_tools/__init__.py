@@ -1,19 +1,20 @@
 """Bounded security-tool adapters and provenance-preserving normalization."""
 
-from agentforge.security_tools.normalization import (
-    ADAPTER_INTEGRATION_STATUS,
+from agentforge.security_tools.native import (
     GarakAdapter,
     GiskardAdapter,
-    NormalizationContext,
+    PromptfooAdapter,
     PyritAdapter,
-    normalize_fixture_findings,
+    ToolImportResult,
 )
+from agentforge.security_tools.normalization import NormalizationContext, normalize_fixture_findings
 
 __all__ = [
-    "ADAPTER_INTEGRATION_STATUS",
     "GarakAdapter",
     "GiskardAdapter",
     "NormalizationContext",
+    "PromptfooAdapter",
     "PyritAdapter",
+    "ToolImportResult",
     "normalize_fixture_findings",
 ]

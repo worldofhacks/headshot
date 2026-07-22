@@ -1,6 +1,6 @@
 # Security-tool ATO evidence
 
-Evidence date: 2026-07-21 (America/New_York)
+Evidence date: 2026-07-22 (America/New_York)
 
 Branch: `codex/m1d-live-console-railway`
 
@@ -47,22 +47,21 @@ authorization`.
 | gitleaks 8.30.1 | Secret scan | operational and evidenced | `tmp/sec/gitleaks.json`; CI `secret-scan` gate |
 | Promptfoo 0.121.19 | Deterministic eval-runner + OWASP LLM/API/ATLAS/NIST mapping | operational and evidenced | `tmp/sec/promptfoo-eval.json`; CI `security-tools` job |
 | OWASP ZAP 2.17.0 | Web-layer DAST (OWASP Web half) | operational and evidenced (isolated fake-target baseline; also runs in CI, pinned by digest) | `tmp/sec/zap/zap.json`; CI `security-tools` job |
-| NVIDIA Garak | Breadth probe / seed source | adapter integrated, execution deferred | `GarakAdapter` (`src/agentforge/security_tools/normalization.py:153`), fixture `tests/fixtures/security_tools/garak.json`, contract test `tests/security_tools/test_security_tools.py:55` |
-| Microsoft PyRIT | Multi-turn attack orchestrator (never verdict authority) | adapter integrated, execution deferred | `PyritAdapter` (`normalization.py:157`), fixture `tests/fixtures/security_tools/pyrit.json`, same contract test |
-| Giskard RAGET | RAG-specific seed source | adapter integrated, execution deferred | `GiskardAdapter` (`normalization.py:161`), fixture `tests/fixtures/security_tools/giskard.json`, same contract test |
+| NVIDIA Garak 0.15.1 | Breadth candidate source | operational and evidenced (bounded slice) | native `garak.report.jsonl` + adapter summary from `scripts/run_offline_llm_tools.sh`; CI `security-tools` job |
+| Microsoft PyRIT 0.14.0 | Converter/multi-turn candidate source (never verdict authority) | operational and evidenced (bounded slice) | native converter + undetermined `AttackResult` JSON; CI `security-tools` job |
+| Giskard Scan 1.0.0b3 | Agent/RAG scenario source | operational and evidenced (packaged-scenario slice) | native packaged LLM01 scenario export; CI `security-tools` job |
 | Burp Suite Pro / DAST / Enterprise | Commercial web DAST | evaluated and rejected | ADR-0001 §D (`docs/adrs/0001-build-vs-configure.md:70`) |
 | Lakera Red / HiddenLayer / Robust Intelligence (Cisco AI Defense) | Commercial LLM red-team platforms | evaluated and rejected | ADR-0001 §D (`docs/adrs/0001-build-vs-configure.md:64`) |
 | ZAP Railway staging / live-target self-scan | Deployed-origin DAST | blocked pending authorization | requires separately persisted exact ZAP authorization; campaign approval is insufficient |
 
-**Garak / PyRIT / Giskard — confirmed real status.** Each ships as a v1 fixture adapter
-(`GarakAdapter` / `PyritAdapter` / `GiskardAdapter`, all subclasses of `_FixtureAdapter`) that
-parses a documented interchange fixture and normalizes it through the shared
-`normalize_fixture_findings` path. `ADAPTER_INTEGRATION_STATUS` is hard-coded to
-`"adapter integrated, execution deferred"` (`normalization.py:18`) and the contract test asserts
-that exact string plus a blocked publication state (`test_security_tools.py:61,65`). No pinned
-live/offline scanner invocation is claimed. The integration plan states the same:
-"Their status is **adapter integrated, execution deferred** until a pinned offline invocation is
-completed and its raw output is evidenced" (`docs/planning/SECURITY_TOOL_INTEGRATION_PLAN.md:79`).
+**Garak / PyRIT / Giskard — confirmed bounded status.** Pinned native execution now runs in isolated
+CI and locally: one Garak offline probe, three PyRIT converters plus native `AttackResult`, and the
+Giskard packaged prompt-injection loader. Their native parsers are in
+`src/agentforge/security_tools/native.py`; exact operational and adapter-only scope is maintained in
+`src/agentforge/security_tools/catalog.py` and `docs/security/LLM_TOOLCHAIN.md`. No tool receives a
+target URL or credential. Giskard's packaged generator template resolves no attack interaction and
+therefore truthfully yields zero candidates. Framework orchestrators and target execution are not
+claimed.
 
 **Burp / commercial — why rejected.** ADR-0001 §D records the exclusion on cumulative grounds:
 (1) licensing/purchase cost exceeds the approved $50–200 OSS path (commercial LLM red-team
@@ -94,9 +93,9 @@ invariant for both the deferred adapters and the simulated corpus
 | ZAP local fake passive baseline | **operational and evidenced** | Pinned `2.17.0` image digest; isolated internal network; 4 warnings normalized and human-blocked |
 | ZAP Railway staging self-scan | **blocked pending authorization** | Exact deployed staging origin and deployment verification are not yet recorded |
 | ZAP live-target scan | **blocked pending authorization** | Requires a separate persisted exact ZAP authorization; campaign approval is not sufficient |
-| Garak v1 adapter seam | **adapter integrated, execution deferred** | Fixture parser, normalization, duplicate rejection, provenance and contract tests pass; no pinned invocation claimed |
-| PyRIT v1 adapter seam | **adapter integrated, execution deferred** | Fixture parser, normalization, duplicate rejection, provenance and contract tests pass; never verdict authority |
-| Giskard v1 adapter seam | **adapter integrated, execution deferred** | Fixture parser, normalization, duplicate rejection, provenance and contract tests pass; no pinned invocation claimed |
+| Garak 0.15.1 bounded slice | **operational and evidenced** | Native JSONL: 9 records, 1 candidate, 1 advisory in the 2026-07-22 local mirror; same script runs in both CIs |
+| PyRIT 0.14.0 bounded slice | **operational and evidenced** | Native JSON: 3 converter candidates and an undetermined `AttackResult`; never verdict authority |
+| Giskard Scan 1.0.0b3 bounded slice | **operational and evidenced** | One packaged LLM01 scenario loaded; 0 explicit candidates and 0 findings, as expected for the unresolved generator template |
 | Burp/commercial security platforms | **evaluated and rejected** | ADR-0001 records cost, licensing, closed-architecture, governance and ZAP/custom-platform redundancy rationale |
 
 ## Semgrep

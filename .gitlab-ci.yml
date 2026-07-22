@@ -124,8 +124,9 @@ security-tools:
     DOCKER_HOST: tcp://docker:2375
     DOCKER_TLS_CERTDIR: ""
     ZAP_WORK: "$CI_PROJECT_DIR/.zap"
+    LLM_TOOL_ARTIFACT_DIR: "$CI_PROJECT_DIR/.llm-security-tools"
   before_script:
-    - apk add --no-cache bash curl nodejs npm python3 py3-pip
+    - apk add --no-cache bash curl nodejs npm python3 py3-pip py3-virtualenv coreutils
   script:
     - python3 -m pip install --break-system-packages semgrep==1.170.0 pip-audit==2.10.1
     - >-
@@ -146,6 +147,7 @@ security-tools:
       -c security-tools/promptfoo/promptfooconfig.yaml
       | tee promptfoo-validate.txt
     - test "$(wc -c < promptfoo-validate.txt)" -le 1048576
+    - bash scripts/run_offline_llm_tools.sh
     - install -d -m 0777 "$ZAP_WORK"
     - docker network create --internal agentforge-zap-isolated
     - >-
@@ -182,4 +184,5 @@ security-tools:
       - semgrep.sarif
       - pip-audit.json
       - promptfoo-validate.txt
+      - .llm-security-tools/
       - .zap/zap.json

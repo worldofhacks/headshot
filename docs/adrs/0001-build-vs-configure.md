@@ -24,10 +24,10 @@ fails the assignment, the budget, and the governance model.
 ### A. CONFIGURE / WRAP (free OSS, behind our framework-neutral JSON-Schema contracts)
 | Tool | Role | Why configure, not build |
 |---|---|---|
-| **NVIDIA Garak** v0.15.0 | Breadth **seed** source (50+ probes + Agent-breaker/GOAT multi-turn) | Reimplementing a probe corpus is wasted effort; its output normalizes into our contract JSON |
-| **Microsoft PyRIT** | Multi-turn **engine** inside the Red Team (Crescendo/TAP/RedTeaming + converters + memory) | Best-in-class multi-turn orchestrators; building them from scratch buys nothing. Its *scorers are NOT our verdict authority* |
-| **Giskard RAGET** v3 | **RAG-specific seeds** (retrieval poisoning, cross-patient context leakage) | The one seed gap Garak/PyRIT leave open for a clinical RAG target |
-| **Promptfoo** (MIT) | Deterministic **eval-runner + OWASP mapping** (no-custom-code presets: `owasp:llm` OWASP LLM Top 10 · `owasp:api` OWASP API Security Top 10 · `mitre:atlas` · `nist:ai:measure`) | Satisfies the mandatory per-case **OWASP LLM** mapping with *no custom code*. **Correction (F12, verified 2026-07-20 against promptfoo.dev/docs):** Promptfoo ships **no `owasp:web` preset** — the OWASP **Web** Top 10 category mapping is done by **our own deterministic validator over OWASP ZAP output**, not by Promptfoo. `owasp:api` partially covers the API/write-back surface (authz, SSRF, injection) but is not equivalent to the OWASP Web Top 10 |
+| **NVIDIA Garak** 0.15.1 | Breadth candidate source | Native JSONL import and one bounded offline probe are operational; other probe families remain adapter-only |
+| **Microsoft PyRIT** 0.14.0 | Converter and multi-turn candidate source | Three converters and native `AttackResult` import are operational; scorers and multi-turn orchestrators are advisory/adapter-only, never verdict authority |
+| **Giskard Scan** 1.0.0b3 | Agent/RAG scenario source | Packaged prompt-injection scenario loading and native scenario/result import are operational; generated attacks and target scans remain adapter-only |
+| **Promptfoo** 0.121.19 | Deterministic offline eval-runner + mapping metadata | Native results import and a pre-authored offline eval are operational with remote generation disabled. Promptfoo has no `owasp:web` preset; ZAP supplies deterministic OWASP Web mapping |
 | **OWASP ZAP** | **Web-layer DAST** + CI gate for the OWASP *Web* Top 10 half (upload/ingestion, write-back API, SSRF, path traversal, authz) | Deterministic web scanning is a solved problem; an LLM is the wrong tool. *Contingent on the target exposing a web surface — confirm at inspection* |
 | **Semgrep** (free CLI) | **SAST on our own platform code** (agents, adapter, prompt-construction, policy) | Scans *our* code, never the target; deterministic beats an LLM here |
 | **LangGraph** (MIT engine), **Langfuse Cloud (Hobby) for MVP** (self-host post-MVP), **Postgres `SKIP LOCKED` queue**, **Railway cron** | Infrastructure we configure | Reinventing orchestration/observability/queue is not the assignment. Observability = Langfuse **Cloud Hobby (synthetic data only)** for MVP; self-hosting (Web+Worker+PG+ClickHouse+Redis+S3) is a documented post-MVP path (F3) |
@@ -81,9 +81,10 @@ assessment may revisit Burp, but it is not installed or purchased here.
   work; wrapped-tool output is
   normalized into versioned contract JSON, so **no tool choice can force a schema rewrite**; the whole
   stack runs under our own cost/allowlist governance.
-- **Negative / risks:** wrapping PyRIT/Garak/Giskard is real Python engineering (CSA notes it needs
-  scoping) → **MVP ships a hand-authored seed corpus + our custom mutation loop, with OSS seed sources
-  wrapped post-MVP** (D12). LangGraph checkpoints are crash-persistence, not durable execution → add an
+- **Negative / risks:** the bounded native adapter and offline-execution slice is implemented, but the
+  **MVP still ships the reviewed nine-case corpus**. Tool candidates require a separate reviewed corpus
+  hash and fresh authorization; multi-turn framework orchestrators remain adapter-only (D12). LangGraph
+  checkpoints are crash-persistence, not durable execution → add an
   app-level `thread_id` lock, consider DBOS-on-Postgres for unattended long campaigns. Promptfoo
   (OpenAI-acquired Mar 2026) is a single-vendor licensing risk → Giskard/custom-runner fallback.
 

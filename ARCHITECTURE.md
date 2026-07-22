@@ -711,8 +711,10 @@ residual risk remains.
   crossover), **`exploit_rate`** (Documentation call volume). **No cost number is CISO-defensible until
   measured** — §11 carries the method, not numbers.
 - **Pin the LangGraph 1.x version** before the ADR is frozen (§7).
-- **D12 (proposed):** MVP ships a hand-authored seed corpus + custom mutation loop; wrap PyRIT/Garak/Giskard
-  post-MVP — a `tasks-gen`/`tdd-swarm` sequencing call to ratify.
+- **D12 (implemented bounded slice):** MVP retains the hand-authored nine-case corpus + custom mutation
+  loop. Native Garak/PyRIT/Giskard/Promptfoo artifacts can supply separately reviewed candidates, but a
+  tool-augmented corpus has a different hash and requires fresh authorization. Tool orchestrators and
+  target execution remain outside this slice; Policy Gateway and Judge authority are unchanged.
 - Concrete regression **SLO budgets** (§10) and **alert SLAs** (§9) are MVP-measured.
 - **Clerk/Railway verification remains open:** Dashboard invitation restrictions, disabled
   personal/user-created organizations, mandatory MFA, role/custom-permission assignments, exact public

@@ -73,11 +73,17 @@ not the Judge and does not claim an `owasp:web` preset.
 
 ### Garak, PyRIT, and Giskard
 
-The v1 adapter seam parses a documented interchange artifact and normalizes it through the same
-contracts, duplicate checks, and publication gate. Garak is a breadth probe/seed source; PyRIT is a
-multi-turn attack orchestrator and never verdict authority; Giskard RAGET is a RAG-specific seed
-source. Fixture-based contract tests are checked in. Their status is **adapter integrated, execution
-deferred** until a pinned offline invocation is completed and its raw output is evidenced.
+The native adapter seam is now operational and bounded. Garak 0.15.1 executes one offline
+`dan.Dan_11_0` probe through its `test.Repeat` generator and imports completed attempt prompts plus
+eval totals from JSONL. PyRIT 0.14.0 executes Base64, ROT13, and ASCII-smuggling converters and
+serializes a native undetermined `AttackResult`. Giskard Scan 1.0.0b3 loads its packaged LLM01
+prompt-injection scenario and validates the native export; that template has no resolved interaction,
+so the evidenced run yields zero candidates. Promptfoo 0.121.19 executes a pre-authored local-provider
+eval with all remote generation disabled. CI preserves these native artifacts and adapter summaries.
+
+Crescendo/TAP/Skeleton Key, GOAT/Crescendo/GCG, Giskard target scans, other Garak probe families, and
+Promptfoo remote red-team generation remain **adapter-only / not executed**. Tools receive no target
+access. See `docs/security/LLM_TOOLCHAIN.md` for exact scope, caps, lineage, and reproduction.
 
 ### Dependency and secret scanning
 

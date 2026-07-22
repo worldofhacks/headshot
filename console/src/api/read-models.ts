@@ -672,8 +672,9 @@ export const decodeConfiguration: ReadModelDecoder<ConfigurationReadModel> = (va
 const decodeComponent = (value: unknown): ComponentReadModel => {
   const name = "component";
   const result = record(value, name);
-  exactKeys(result, ["component_id", "name", "kind", "availability", "environment", "detail", "heartbeat_at"], name);
-  for (const key of ["component_id", "name", "kind", "environment", "detail"]) string(result, key, name);
+  exactKeys(result, ["component_id", "name", "kind", "availability", "environment", "detail", "version", "target_access", "capabilities", "owasp_llm", "owasp_web", "operational_scope", "adapter_only_scope", "execution_evidence", "heartbeat_at"], name);
+  for (const key of ["component_id", "name", "kind", "environment", "detail", "version", "target_access"]) string(result, key, name);
+  for (const key of ["capabilities", "owasp_llm", "owasp_web", "operational_scope", "adapter_only_scope", "execution_evidence"]) stringArray(result, key, name);
   literal(result, "availability", ["operational and evidenced", "adapter integrated, execution deferred", "evaluated and rejected", "blocked pending authorization"], name);
   timestamp(result, "heartbeat_at", name);
   return result as ComponentReadModel;
