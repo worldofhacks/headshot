@@ -54,7 +54,7 @@ def test_gitlab_ci_keeps_material_gates_on_the_unprivileged_runner() -> None:
         "npm ci --ignore-scripts",
         "npm audit --audit-level=high",
         "npm run test:browser",
-        "buildctl-daemonless.sh build",
+        "buildah bud",
         "Dockerfile.gitlab",
         "scripts/verify_container_archive.sh",
         "gitleaks git . --redact --verbose",
@@ -63,6 +63,8 @@ def test_gitlab_ci_keeps_material_gates_on_the_unprivileged_runner() -> None:
         assert command in workflow
     assert "docker:27.5.1-dind" not in workflow
     assert "DOCKER_HOST" not in workflow
+    assert "BUILDAH_ISOLATION: chroot" in workflow
+    assert "STORAGE_DRIVER: vfs" in workflow
 
 
 def test_gitlab_daemonless_dockerfile_preserves_the_runtime_boundary() -> None:
