@@ -34,7 +34,12 @@ from agentforge.storage.queue import JobRecord, LogicalQueue, PostgresJobQueue
 from agentforge.target.cassette_adapter import SyntheticCassetteAdapter
 from agentforge.target.catalog import SYNTHETIC_TARGET_ID, CatalogEntry, TrustedTargetCatalog
 from agentforge.target.openemr_adapter import OpenEmrAdapter
-from agentforge.target.spec import AttackSurfaceDefinition, AuthorizationScope, ExecutionProfile
+from agentforge.target.spec import (
+    AttackSurfaceDefinition,
+    AuthMode,
+    AuthorizationScope,
+    ExecutionProfile,
+)
 
 _PAYLOAD_SCHEMA = "campaign.execute"
 _PAYLOAD_VERSION = 1
@@ -186,6 +191,16 @@ def _exact_job_payload(job: JobRecord, authorized: Any) -> bool:
     )
 
 
+def _scope_payload_profile(*, relative_path: str, method: str, auth_mode: AuthMode) -> str:
+    """Derive request shape only from fields included in the authorization scope hash."""
+
+    if relative_path != "chat":
+        return "openemr_turns"
+    if method != "POST" or auth_mode is not AuthMode.SESSION:
+        raise DispatchUnavailable("copilot_chat_scope_invalid")
+    return "copilot_chat"
+
+
 class DurableCampaignRunner:
     """One concurrency-one worker over the existing PostgreSQL queue."""
 
@@ -288,6 +303,17 @@ class DurableCampaignRunner:
                 blockers.append("method_not_allowed")
             if not _literal_destination_allowed(scope, entry):
                 blockers.append("private_destination_refused")
+            try:
+                scope_profile = _scope_payload_profile(
+                    relative_path=scope.relative_path,
+                    method=scope.method,
+                    auth_mode=scope.auth_mode,
+                )
+            except DispatchUnavailable:
+                blockers.append("payload_profile_scope_invalid")
+            else:
+                if entry.transport_policy.payload_profile != scope_profile:
+                    blockers.append("payload_profile_scope_mismatch")
             if entry.transport_policy.write_upload_allowed:
                 blockers.append("write_upload_policy_not_mvp_safe")
             if scope.execution_profile is ExecutionProfile.SYNTHETIC:
@@ -326,11 +352,23 @@ class DurableCampaignRunner:
                 base_url=target.base_url,
             )
         policy = prepared.entry.transport_policy
+        # The Clinical Co-Pilot's reviewed Bruno contract is exactly POST /chat with a
+        # patient-pinned SMART session carried as ``session_id`` in the JSON body. The catalog
+        # selects the profile, but it must equal the profile derived from fields already bound in
+        # the persisted operation hash; an environment change cannot alter shape after approval.
+        payload_profile = _scope_payload_profile(
+            relative_path=prepared.surface.relative_path,
+            method=prepared.surface.method,
+            auth_mode=scope.auth_mode,
+        )
+        if policy.payload_profile != payload_profile:
+            raise DispatchUnavailable("payload_profile_scope_mismatch")
         return OpenEmrAdapter(
             base_url=target.base_url,
             timeout_seconds=policy.request_timeout_seconds,
             method=prepared.surface.method,
             relative_path=prepared.surface.relative_path,
+            payload_profile=payload_profile,
             redirect_policy=policy.redirect_policy,
             response_size_limit_bytes=policy.response_size_limit_bytes,
             allowed_content_types=policy.allowed_content_types,

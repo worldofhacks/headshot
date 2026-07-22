@@ -216,8 +216,10 @@ reference and never committed, printed, included in build arguments, or copied b
 | `CLERK_PRODUCTION_AUTHORIZED_PARTIES` | Staging Web only | Exact production-origin comparison guard; never treated as a staging origin |
 | `CLERK_PRODUCTION_ORG_ID` | Staging Web only | Exact production Organization comparison guard; never accepted as staging membership |
 | `CLERK_SECRET_KEY` | None for request auth | Absent. Future Backend API administration only after separate review |
+| `AGENTFORGE_LIVE_TARGET_CATALOG_JSON` | Web + Runner | Identical reviewed, secret-free target/surface/policy definitions; never browser-authored |
+| `AGENTFORGE_CREDENTIAL_BINDINGS_JSON` | Runner only | Opaque `secretref://` handle to Runner variable-name mapping; contains no credential value |
 | Model-provider keys | Runner only where needed | Dedicated, scoped, expiring/spend-limited keys; never exposed to Web/browser |
-| Target credential references | Policy Gateway/runner only | Production-only, target-bound secret references; never inline or available in staging |
+| Target credential value | Runner only | Stored under the mapped Runner variable; never present on Web, in the catalog, or in PostgreSQL |
 | Observability secrets | Emitting services only | Synthetic/redacted telemetry; no real PHI or auth tokens |
 
 Treat public Clerk keys as configuration that can change authentication trust even though they are not

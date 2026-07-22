@@ -51,6 +51,21 @@ _DEFAULT_BACKOFF_SECONDS = 1.0
 # talks to the target over its HTTP API, not a scraped UI.
 _API_PATH = "apis/default/api/copilot/message"
 
+# The two supported payload/credential-placement profiles (additive; the default is unchanged):
+#
+#   "openemr_turns" (DEFAULT) — the historical body ``{"turns", "metadata"}`` with the credential
+#       carried in an ``Authorization: Bearer`` header (a bearer-auth target).
+#   "copilot_chat"            — the owner's Bruno /chat contract: body ``{"session_id", "message"}``
+#       with NO Authorization header. ``session_id`` is the injected credential Secret (a
+#       patient-pinned SMART session, revealed only at the send boundary) placed in the BODY, not a
+#       header; ``message`` is derived from the request turns (single-turn: the one turn;
+#       multi-turn: the turns joined with "\n" into one message — a known single-request
+#       simplification, since a
+#       /chat call is one request and this adapter does not yet sequence a multi-turn conversation).
+_PROFILE_OPENEMR_TURNS = "openemr_turns"
+_PROFILE_COPILOT_CHAT = "copilot_chat"
+_PAYLOAD_PROFILES = frozenset({_PROFILE_OPENEMR_TURNS, _PROFILE_COPILOT_CHAT})
+
 
 class _BearerAuth:
     """A redacting bearer-auth applier compatible with httpx's ``auth_flow`` protocol.
@@ -102,9 +117,12 @@ class OpenEmrAdapter(TargetAdapter):
     ``client_factory`` to override how the real client is built. Only when NO ``client`` is
     injected does ``send()`` lazily build one via the factory (real network path).
 
-    ``credential`` is a :class:`Secret` the gateway injects by reference; the adapter reveals it
-    ONLY at the outgoing-request boundary (an ``Authorization`` header) and never logs/inlines
-    the raw value. The dataclass ``repr`` renders the Secret redacted.
+    ``credential`` is a :class:`Secret` the gateway/coordinator injects by reference; the adapter
+    reveals it ONLY at the outgoing-request boundary and never logs/inlines the raw value. WHERE it
+    is placed depends on ``payload_profile``: the default ``openemr_turns`` profile carries it in an
+    ``Authorization: Bearer`` header, while the ``copilot_chat`` profile (the owner's /chat
+    contract) places the revealed session credential in the request BODY as ``session_id`` and
+    sends NO Authorization header. Either way the dataclass ``repr`` renders the Secret redacted.
     """
 
     base_url: str = ""
@@ -115,6 +133,10 @@ class OpenEmrAdapter(TargetAdapter):
     backoff_seconds: float = _DEFAULT_BACKOFF_SECONDS
     method: str = "POST"
     relative_path: str = _API_PATH
+    # Payload/credential-placement profile — selects how the body is shaped and where the credential
+    # is placed. Defaults to the historical turns/Bearer profile (existing behavior byte-for-byte);
+    # set to "copilot_chat" for the owner's /chat contract (session_id in the body, no auth header).
+    payload_profile: str = _PROFILE_OPENEMR_TURNS
     redirect_policy: str = "deny"
     response_size_limit_bytes: int = 1_048_576
     allowed_content_types: tuple[str, ...] = ()
@@ -127,6 +149,8 @@ class OpenEmrAdapter(TargetAdapter):
             raise ValueError("OpenEMR adapter requires an exact HTTPS base URL")
         if self.method not in {"GET", "POST"}:
             raise ValueError("OpenEMR adapter method is not allowed")
+        if self.payload_profile not in _PAYLOAD_PROFILES:
+            raise ValueError("OpenEMR adapter payload profile is not allowed")
         if (
             not self.relative_path
             or self.relative_path.startswith("/")
@@ -228,15 +252,54 @@ class OpenEmrAdapter(TargetAdapter):
         The raw credential is revealed ONLY inside the auth object's outgoing-request flow (the
         HTTPS call boundary), never in a header string that a client would record. The auth
         object's ``repr`` redacts, so it is safe even if a client logs its kwargs.
+
+        In the ``copilot_chat`` profile there is NO Authorization header at all — the scoped
+        session credential travels in the request BODY (see :meth:`_build_body`), so this returns
+        ``None`` regardless of whether a credential is present.
         """
+        if self.payload_profile == _PROFILE_COPILOT_CHAT:
+            return None
         if self.credential is None:
             return None
         return _BearerAuth(self.credential)
 
-    @staticmethod
-    def _build_body(request: TargetRequest) -> dict[str, Any]:
-        """Shape the multi-turn attack sequence into the target's API body."""
+    def _build_body(self, request: TargetRequest) -> dict[str, Any]:
+        """Shape the request into the target's API body per the configured payload profile.
+
+        * ``openemr_turns`` (default) — ``{"turns", "metadata"}`` (credential in the Bearer header).
+        * ``copilot_chat`` — ``{"session_id", "message"}`` per the owner's /chat contract. The
+          injected credential Secret is REVEALED here (at the send boundary only) as
+          ``session_id`` in the BODY, and ``message`` is derived from the turns (single-turn: the
+          one turn; multi-turn: turns joined with "\n" — a known single-request simplification).
+
+        The revealed session value never lands in a log/repr: it is placed into the outgoing body
+        dict that only the injected client sees at the HTTPS boundary, exactly as the Bearer header
+        reveal happens only inside the auth flow.
+        """
+        if self.payload_profile == _PROFILE_COPILOT_CHAT:
+            if self.credential is None:
+                raise AdapterError(
+                    "OpenEMR /chat contract requires an injected session credential (session_id)"
+                )
+            return {
+                # Reveal the scoped SMART session ONLY here, at the send boundary — never logged,
+                # never inlined into a recorded header, never in the adapter's repr.
+                "session_id": self.credential.reveal(),
+                "message": self._message_from_turns(request),
+            }
         return {"turns": list(request.turns), "metadata": dict(request.metadata)}
+
+    @staticmethod
+    def _message_from_turns(request: TargetRequest) -> str:
+        """Derive the single /chat ``message`` from the request turns.
+
+        A single-turn request is the one turn verbatim; a multi-turn request is its turns joined
+        with a newline into ONE message. This is a KNOWN single-request simplification: a /chat call
+        is one request/response, so a multi-turn adversarial sequence is flattened into one message
+        rather than replayed turn-by-turn against a live conversation (see the module note and the
+        coordinator follow-up on multi-turn sequencing).
+        """
+        return "\n".join(request.turns)
 
     @staticmethod
     def _parse_retry_after(headers: Any) -> float | None:

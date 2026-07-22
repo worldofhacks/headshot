@@ -44,6 +44,12 @@ class TransportPolicy:
     request_timeout_seconds: float
     tls_required: bool
     allow_private_destination: bool
+    # Selects how the bound OpenEmrAdapter shapes the request body + places the credential:
+    # "openemr_turns" (default) POSTs {turns, metadata} with a Bearer credential; "copilot_chat"
+    # POSTs {session_id, message} with the scoped session credential in the body (auth:none
+    # transport), for a Clinical Co-Pilot /chat surface. A closed set — an unknown profile is a
+    # fail-closed catalog error.
+    payload_profile: str = "openemr_turns"
 
     def __post_init__(self) -> None:
         if not self.allowed_methods or any(
@@ -82,6 +88,8 @@ class TransportPolicy:
             raise TargetCatalogError("TLS verification must be required")
         if not isinstance(self.allow_private_destination, bool):
             raise TargetCatalogError("private-destination policy is invalid")
+        if self.payload_profile not in {"openemr_turns", "copilot_chat"}:
+            raise TargetCatalogError("transport payload profile is invalid")
 
 
 @dataclass(frozen=True, slots=True)
