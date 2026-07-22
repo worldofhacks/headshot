@@ -459,10 +459,30 @@ export const decodeResilience: ReadModelDecoder<ResilienceReadModel[]> = (value)
 const decodeTrace = (value: unknown): TraceReadModel => {
   const name = "trace";
   const result = record(value, name);
-  exactKeys(result, ["trace_id", "operation", "status", "started_at", "duration_ms"], name);
-  for (const key of ["trace_id", "operation", "status"]) string(result, key, name);
+  exactKeys(result, [
+    "trace_id",
+    "campaign_id",
+    "attempt_id",
+    "operation",
+    "provider",
+    "status",
+    "status_code",
+    "started_at",
+    "duration_ms",
+    "request_bytes",
+    "response_bytes",
+    "measured_cost",
+    "currency",
+    "langfuse_status",
+  ], name);
+  for (const key of ["trace_id", "campaign_id", "operation", "provider", "status", "currency", "langfuse_status"]) string(result, key, name);
+  nullableString(result, "attempt_id", name);
+  nullableNumber(result, "status_code", name);
   timestamp(result, "started_at", name);
   number(result, "duration_ms", name, { minimum: 0 });
+  number(result, "request_bytes", name, { integer: true, minimum: 0 });
+  if (result.response_bytes !== null) number(result, "response_bytes", name, { integer: true, minimum: 0 });
+  number(result, "measured_cost", name, { minimum: 0 });
   return result as TraceReadModel;
 };
 
@@ -478,12 +498,20 @@ const decodeCost = (value: unknown): CostReadModel => {
     "provider",
     "measured_cost",
     "currency",
+    "request_count",
+    "average_cost_per_request",
+    "duration_ms",
+    "execution_profile",
     "recorded_at",
   ], name);
   for (const key of ["accounting_id", "campaign_id", "provider", "currency"]) {
     string(result, key, name);
   }
   number(result, "measured_cost", name, { minimum: 0 });
+  number(result, "request_count", name, { integer: true, minimum: 0 });
+  number(result, "average_cost_per_request", name, { minimum: 0 });
+  number(result, "duration_ms", name, { minimum: 0 });
+  literal(result, "execution_profile", ["synthetic", "live"], name);
   timestamp(result, "recorded_at", name);
   return result as CostReadModel;
 };
@@ -625,8 +653,9 @@ export const decodeConfiguration: ReadModelDecoder<ConfigurationReadModel> = (va
 const decodeComponent = (value: unknown): ComponentReadModel => {
   const name = "component";
   const result = record(value, name);
-  exactKeys(result, ["component_id", "name", "kind", "availability", "heartbeat_at"], name);
-  for (const key of ["component_id", "name", "kind", "availability"]) string(result, key, name);
+  exactKeys(result, ["component_id", "name", "kind", "availability", "environment", "detail", "heartbeat_at"], name);
+  for (const key of ["component_id", "name", "kind", "environment", "detail"]) string(result, key, name);
+  literal(result, "availability", ["operational and evidenced", "adapter integrated, execution deferred", "evaluated and rejected", "blocked pending authorization"], name);
   timestamp(result, "heartbeat_at", name);
   return result as ComponentReadModel;
 };

@@ -40,6 +40,7 @@ from agentforge.target.spec import (
     AuthorizationScope,
     ExecutionProfile,
 )
+from agentforge.telemetry import OutboundHttpTelemetry
 
 _PAYLOAD_SCHEMA = "campaign.execute"
 _PAYLOAD_VERSION = 1
@@ -215,6 +216,7 @@ class DurableCampaignRunner:
         clock: Any | None = None,
         sleeper: Callable[[float], None] = time.sleep,
         manifest_root: str | os.PathLike[str] | None = None,
+        telemetry: OutboundHttpTelemetry | None = None,
     ) -> None:
         self.engine = engine
         self.environment = environment
@@ -234,6 +236,10 @@ class DurableCampaignRunner:
             "AGENTFORGE_MANIFEST_DIR", "/tmp/agentforge-manifests"
         )
         self.manifests = ManifestStore(Path(selected_root))
+        self.telemetry = telemetry or OutboundHttpTelemetry(
+            engine,
+            environment=environment,
+        )
 
     def preflight(self, job: JobRecord) -> tuple[PreflightReport, PreparedRun | None]:
         """Report every blocker without constructing an adapter or opening a target socket."""
@@ -376,6 +382,7 @@ class DurableCampaignRunner:
                 base_url,
                 allow_private=policy.allow_private_destination,
             ),
+            telemetry=getattr(self, "telemetry", None),
         )
 
     def execute_claimed(self, job: JobRecord) -> None:
@@ -415,6 +422,7 @@ class DurableCampaignRunner:
         )
         policy = RunPolicy(**scope.caps.canonical_payload())
         accounting = accounting_from_environment()
+        self.telemetry.per_request_cost_usd = accounting.per_call_usd
         authorization = RunAuthorization(
             operation_hash=authorized.run.scope_hash,
             run_nonce=scope.run_nonce,
@@ -533,6 +541,9 @@ class DurableCampaignRunner:
             with contextlib.suppress(Exception):
                 self.queue.fail(job, failure_code=code, retryable=False)
             raise DispatchUnavailable(code) from exc
+        finally:
+            with contextlib.suppress(Exception):
+                self.telemetry.flush()
         return True
 
 
@@ -574,10 +585,14 @@ def main(argv: list[str] | None = None) -> int:
     except Exception:
         print("runner unavailable: trusted composition failed", file=sys.stderr)
         return 1
+    with contextlib.suppress(Exception):
+        runner.telemetry.heartbeat(force_connection_check=True)
     stop = threading.Event()
     for signum in (signal.SIGTERM, signal.SIGINT):
         signal.signal(signum, lambda *_args: stop.set())
     while not stop.is_set():
+        with contextlib.suppress(Exception):
+            runner.telemetry.heartbeat()
         try:
             worked = runner.run_once(worker_id=_worker_id())
         except DispatchUnavailable:
@@ -586,6 +601,8 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if not worked:
             stop.wait(_DEFAULT_POLL_SECONDS)
+    with contextlib.suppress(Exception):
+        runner.telemetry.shutdown()
     return 0
 
 

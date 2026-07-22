@@ -141,6 +141,7 @@ class OpenEmrAdapter(TargetAdapter):
     response_size_limit_bytes: int = 1_048_576
     allowed_content_types: tuple[str, ...] = ()
     destination_validator: Callable[[str], None] | None = field(default=None, repr=False)
+    telemetry: Any | None = field(default=None, repr=False)
     name: str = "openemr"
 
     def __post_init__(self) -> None:
@@ -181,49 +182,107 @@ class OpenEmrAdapter(TargetAdapter):
         body = self._build_body(request)
         auth = self._auth()
 
+        telemetry_handle = None
         try:
             if self.destination_validator is not None:
                 self.destination_validator(self.base_url)
+            if self.telemetry is not None:
+                redactions = (self.credential.reveal(),) if self.credential is not None else ()
+                telemetry_handle = self.telemetry.begin(
+                    request=request,
+                    method=self.method,
+                    url=url,
+                    provider=self.name,
+                    redactions=redactions,
+                )
             response = client.request(self.method, url, headers=headers, json=body, auth=auth)
         except (TimeoutError, ConnectionError, OSError) as exc:
+            if telemetry_handle is not None:
+                telemetry_handle.finish(
+                    response_text=None,
+                    status_code=None,
+                    error_code="target-unreachable",
+                )
             # Transport-layer failure: the target could not be reached. Redact by construction —
             # the message names only the URL, never the credential.
             raise TargetUnreachableError(
                 f"OpenEMR target unreachable at {url!r}: {type(exc).__name__}"
             ) from exc
-        except (TargetUnreachableError, RateLimitedError, AdapterError):
+        except (TargetUnreachableError, RateLimitedError, AdapterError) as exc:
             # Already a typed adapter error (e.g. from an injected fake) — never re-wrap.
+            if telemetry_handle is not None:
+                telemetry_handle.finish(
+                    response_text=None,
+                    status_code=None,
+                    error_code=exc.code,
+                )
             raise
         except Exception as exc:  # noqa: BLE001 — any other failure is a typed adapter error
+            if telemetry_handle is not None:
+                telemetry_handle.finish(
+                    response_text=None,
+                    status_code=None,
+                    error_code="adapter-error",
+                )
             raise AdapterError(
                 f"OpenEMR adapter failure talking to {url!r}: {type(exc).__name__}"
             ) from exc
 
-        status = int(response.status_code)
-        if 300 <= status < 400:
-            raise AdapterError("OpenEMR target redirect refused by exact-scope policy")
-        if status == 429:
-            # Rate-limited: map to the typed error carrying retry_after (never a synthetic 200).
-            raise RateLimitedError(
-                "OpenEMR target rate-limited (HTTP 429)",
-                retry_after=self._parse_retry_after(response.headers),
-            )
-        output = response.text
-        if len(output.encode("utf-8")) > self.response_size_limit_bytes:
-            raise AdapterError("OpenEMR target response exceeded the configured byte limit")
-        if self.allowed_content_types:
-            try:
-                content_type = response.headers.get("Content-Type", "").split(";", 1)[0].strip()
-            except AttributeError as exc:
-                raise AdapterError("OpenEMR target response content type is unavailable") from exc
-            if content_type not in self.allowed_content_types:
-                raise AdapterError("OpenEMR target response content type is outside policy")
+        status: int | None = None
+        output: str | None = None
+        try:
+            status = int(response.status_code)
+            output = response.text
+            if 300 <= status < 400:
+                raise AdapterError("OpenEMR target redirect refused by exact-scope policy")
+            if status == 429:
+                # Rate-limited: map to the typed error carrying retry_after (never a synthetic 200).
+                raise RateLimitedError(
+                    "OpenEMR target rate-limited (HTTP 429)",
+                    retry_after=self._parse_retry_after(response.headers),
+                )
+            if len(output.encode("utf-8")) > self.response_size_limit_bytes:
+                raise AdapterError("OpenEMR target response exceeded the configured byte limit")
+            if self.allowed_content_types:
+                try:
+                    content_type = response.headers.get("Content-Type", "").split(";", 1)[0].strip()
+                except AttributeError as exc:
+                    raise AdapterError(
+                        "OpenEMR target response content type is unavailable"
+                    ) from exc
+                if content_type not in self.allowed_content_types:
+                    raise AdapterError("OpenEMR target response content type is outside policy")
+        except (RateLimitedError, AdapterError) as exc:
+            if telemetry_handle is not None:
+                telemetry_handle.finish(
+                    response_text=output,
+                    status_code=status,
+                    error_code=exc.code,
+                )
+            raise
+        except Exception as exc:  # noqa: BLE001 — response decoding remains a typed error
+            if telemetry_handle is not None:
+                telemetry_handle.finish(
+                    response_text=output,
+                    status_code=status,
+                    error_code="adapter-error",
+                )
+            raise AdapterError(
+                f"OpenEMR adapter response failure at {url!r}: {type(exc).__name__}"
+            ) from exc
+        assert status is not None and output is not None
+        if telemetry_handle is not None:
+            telemetry_handle.finish(response_text=output, status_code=status)
         # Any other status — including a non-200 target answer — is surfaced verbatim. The
         # adapter NEVER fabricates a 200.
         return TargetResponse(
             output=output,
             status=status,
-            metadata={"adapter": self.name, "url": url},
+            metadata={
+                "adapter": self.name,
+                "url": url,
+                **({"trace_id": telemetry_handle.trace_id} if telemetry_handle is not None else {}),
+            },
         )
 
     # ------------------------------------------------------------------ helpers

@@ -135,10 +135,19 @@ export interface ResilienceReadModel extends JsonRecord {
 
 export interface TraceReadModel extends JsonRecord {
   trace_id: string;
+  campaign_id: string;
+  attempt_id: string | null;
   operation: string;
+  provider: string;
   status: string;
+  status_code: number | null;
   started_at: string;
   duration_ms: number;
+  request_bytes: number;
+  response_bytes: number | null;
+  measured_cost: number;
+  currency: string;
+  langfuse_status: string;
 }
 
 export interface CostReadModel extends JsonRecord {
@@ -147,6 +156,10 @@ export interface CostReadModel extends JsonRecord {
   provider: string;
   measured_cost: number;
   currency: string;
+  request_count: number;
+  average_cost_per_request: number;
+  duration_ms: number;
+  execution_profile: "synthetic" | "live";
   recorded_at: string;
 }
 
@@ -211,7 +224,9 @@ export interface ComponentReadModel extends JsonRecord {
   component_id: string;
   name: string;
   kind: string;
-  availability: string;
+  availability: "operational and evidenced" | "adapter integrated, execution deferred" | "evaluated and rejected" | "blocked pending authorization";
+  environment: string;
+  detail: string;
   heartbeat_at: string;
 }
 

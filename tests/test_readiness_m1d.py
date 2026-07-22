@@ -8,7 +8,7 @@ from agentforge.readiness import build_readiness_check, database_schema_ready, e
 
 
 def test_integrated_alembic_head_is_the_single_forward_m1d_revision() -> None:
-    assert expected_alembic_head() == "0006"
+    assert expected_alembic_head() == "0007"
 
 
 def test_database_schema_ready_accepts_migrated_integrated_head(migrated_db) -> None:

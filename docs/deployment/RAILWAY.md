@@ -136,6 +136,12 @@ Deploy the same reviewed commit through staging before production.
 8. Re-enable scheduling only after readiness, queue, error-rate, and auth-denial signals are healthy.
 9. Promote the same commit to production with explicit human authorization and repeat the gates.
 
+The private Runner owns outbound telemetry. Configure `LANGFUSE_PUBLIC_KEY`,
+`LANGFUSE_SECRET_KEY`, `LANGFUSE_BASE_URL`, and `LANGFUSE_TRACING_ENVIRONMENT` on Runner only.
+Every physical target request is first recorded in PostgreSQL, then exported asynchronously to
+Langfuse with credential-free request content and redacted response content. Langfuse failure never
+causes a duplicate target retry; the console continues from the PostgreSQL system of record.
+
 The process commands are fixed in the repository artifact table above. A command's presence is not
 evidence that its external Railway service exists or is healthy. In particular, do not point Runner at
 the one-shot `python -m agentforge.campaign run` CLI: Railway Runner consumes durable `agent_work` jobs,
@@ -220,7 +226,9 @@ reference and never committed, printed, included in build arguments, or copied b
 | `AGENTFORGE_CREDENTIAL_BINDINGS_JSON` | Runner only | Opaque `secretref://` handle to Runner variable-name mapping; contains no credential value |
 | Model-provider keys | Runner only where needed | Dedicated, scoped, expiring/spend-limited keys; never exposed to Web/browser |
 | Target credential value | Runner only | Stored under the mapped Runner variable; never present on Web, in the catalog, or in PostgreSQL |
-| Observability secrets | Emitting services only | Synthetic/redacted telemetry; no real PHI or auth tokens |
+| `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` | Runner only | Sealed Langfuse project credentials; never exposed to Web/browser |
+| `LANGFUSE_BASE_URL`, `LANGFUSE_TRACING_ENVIRONMENT` | Runner only | Exact regional HTTPS host and environment label (`staging` or `production`) |
+| `HEADSHOT_PER_CALL_USD` | Runner only | Positive contracted target-call cost; shared by budget enforcement and measured telemetry |
 
 Treat public Clerk keys as configuration that can change authentication trust even though they are not
 confidential. Audit all changes. Rotate compromised secrets and redeploy; never “temporarily” log them.

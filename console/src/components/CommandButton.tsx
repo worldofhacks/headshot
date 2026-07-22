@@ -69,13 +69,13 @@ export function CommandButton({
       >
         {state === "sending" ? "Waiting for server…" : label}
       </button>
-      {!allowed && <span className="command-note">Unavailable: {unavailableReason || "permission required"}</span>}
+      {!allowed && <span className="command-note">Requires: {unavailableReason || "permission required"}</span>}
       {state === "acknowledged" && (
         <span className="command-note success">
           Server acknowledged{acknowledgement ? ` · ${acknowledgement}` : ""}. Refreshing state.
         </span>
       )}
-      {state === "unavailable" && <span className="command-note">Server reported this dependency unavailable.</span>}
+      {state === "unavailable" && <span className="command-note">The server connection for this action is not ready.</span>}
       {state === "conflict" && <span className="command-note error">Server rejected an immutable or idempotency conflict.</span>}
       {state === "error" && <span className="command-note error">The command was not acknowledged.</span>}
     </div>

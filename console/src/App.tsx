@@ -246,6 +246,9 @@ export function App() {
   }
   if (path.startsWith("/session-tasks/")) return <SessionTaskRoute path={path} />;
   if (!auth.isSignedIn || path === "/sign-in" || path.startsWith("/sign-in/")) {
+    if (!auth.isSignedIn && path !== "/sign-in" && !path.startsWith("/sign-in/")) {
+      window.history.replaceState(null, "", "/sign-in");
+    }
     return (
       <main className="security-shell">
         <div className="sign-in-frame">

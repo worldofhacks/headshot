@@ -173,7 +173,17 @@ class PolicyGateway:
         # (5) Dispatch through the SOLE adapter. Caps are RE-CHECKED and the meter CHARGED on
         # each physical send inside the loop, so a failing target's retries consume budget/rate
         # and abort the moment a cap is breached — a failed dispatch is never free.
-        request = TargetRequest(turns=tuple(attack_attempt.get("input_sequence", [])))
+        request_metadata = {
+            "campaign_run_id": campaign_run_id or "",
+            "attempt_id": attempt_id or "",
+            "organization_id": str(attack_attempt.get("organization_id", "")),
+            "case_id": str(attack_attempt.get("case_ref", "")),
+            "attack_category": str(attack_attempt.get("category", "")),
+        }
+        request = TargetRequest(
+            turns=tuple(attack_attempt.get("input_sequence", [])),
+            metadata=request_metadata,
+        )
         response = self._dispatch_with_backoff(request, attack_attempt, policy)
 
         # (6) Count the logical attempt after a real dispatch, then build hashed evidence.
@@ -354,6 +364,7 @@ class PolicyGateway:
             "attack_attempt": attack_attempt,
             "request_transcript": {"request": list(request.turns)},
             "response_transcript": response.output,
+            "trace_id": response.metadata.get("trace_id"),
             "policy_decision_id": policy_decision_id,
             "recorder_identity": "policy-gateway@1",
         }

@@ -102,7 +102,7 @@ function MissingCommand({ label, dependency }: { label: string; dependency: stri
   return (
     <div className="command-control">
       <button className="button" type="button" disabled>{label}</button>
-      <span className="command-note">Unavailable: {dependency}</span>
+      <span className="command-note">Requires: {dependency}</span>
     </div>
   );
 }
@@ -291,6 +291,7 @@ export function LiveScreen({ client, principal, entityId, getToken }: ScreenProp
                   { key: "name", label: "Component" },
                   { key: "kind", label: "Kind" },
                   { key: "availability", label: "Server state" },
+                  { key: "detail", label: "Evidence" },
                   { key: "heartbeat_at", label: "Heartbeat", mono: true },
                 ]}
               />
@@ -624,15 +625,18 @@ const simpleScreens: Record<SimpleResourceName, {
   },
   traces: {
     title: "Traces",
-    detail: "This view requires persisted trace or reviewed telemetry data.",
+    detail: "Each physical target request is correlated, timed and exported from the private Runner.",
     empty: "No trace records are persisted.",
     identityKeys: ["trace_id"],
     columns: [
       { key: "trace_id", label: "Trace", mono: true },
+      { key: "campaign_id", label: "Campaign", mono: true },
+      { key: "attempt_id", label: "Attempt", mono: true },
       { key: "operation", label: "Operation" },
       { key: "status", label: "Status" },
-      { key: "started_at", label: "Started", mono: true },
-      { key: "duration_ms", label: "Measured duration", mono: true },
+      { key: "duration_ms", label: "Latency ms", mono: true },
+      { key: "measured_cost", label: "Cost USD", mono: true },
+      { key: "langfuse_status", label: "Langfuse" },
     ],
   },
   costs: {
@@ -645,7 +649,9 @@ const simpleScreens: Record<SimpleResourceName, {
       { key: "campaign_id", label: "Campaign", mono: true },
       { key: "provider", label: "Provider" },
       { key: "measured_cost", label: "Measured cost", mono: true },
-      { key: "currency", label: "Currency" },
+      { key: "request_count", label: "Requests", mono: true },
+      { key: "average_cost_per_request", label: "Cost / request", mono: true },
+      { key: "duration_ms", label: "Run latency ms", mono: true },
       { key: "recorded_at", label: "Recorded", mono: true },
     ],
   },
@@ -986,18 +992,22 @@ export function ConfigurationScreen({ client, principal }: ScreenProps) {
       <Panel title="Effective configuration">
         <ResourceView result={configuration.result} emptyLabel="No configuration snapshot is published.">
           {(data) => (
-            <RecordDetails
-              data={data}
-              preferredKeys={[
-                "snapshot_id",
-                "version",
-                "status",
-                "published_at",
-                "published_by",
-                "corpus_hash",
-                "agent_configuration_hash",
-              ]}
-            />
+            <div className="evidence-stack">
+              <RecordDetails
+                data={data}
+                preferredKeys={[
+                  "snapshot_id",
+                  "version",
+                  "status",
+                  "published_at",
+                  "published_by",
+                ]}
+              />
+              <div>
+                <p className="field-label">Effective server configuration</p>
+                <AdversarialText>{JSON.stringify(data.configuration, null, 2)}</AdversarialText>
+              </div>
+            </div>
           )}
         </ResourceView>
         <div className="command-row">
@@ -1046,7 +1056,7 @@ export function ConfigurationScreen({ client, principal }: ScreenProps) {
         {hasPermission(principal, PERMISSIONS.auditRead) ? (
           <AuditHistory client={client} />
         ) : (
-          <StateNotice state="unavailable" reason={PERMISSIONS.auditRead} />
+          <StateNotice state="empty" detail={`Restricted to ${PERMISSIONS.auditRead}.`} />
         )}
       </Panel>
     </div>

@@ -308,3 +308,206 @@ def test_authoritative_coverage_is_empty_without_verified_persisted_evidence(
 
     assert response.status_code == 200
     assert response.json() == {"state": "empty", "data": []}
+
+
+# --- Cost & trace read-model projections (M1d live-console pages) ----------------------------
+#
+# These pages read directly from persisted campaign artifacts. The seed writes rows with the
+# session-level replication role switched to ``replica`` so that the ``campaign_runs`` INSERT
+# trigger, the ``campaign_run_summaries`` FK/append-only trigger, and the append-only guards
+# are bypassed for THIS seed transaction only (``SET LOCAL`` resets at commit). NOT NULL and
+# CHECK constraints still apply, so the seed rows remain schema-valid. Each test uses a
+# dedicated organization id so it is independent of the session-scoped ``migrated_db``.
+COST_ORG_ID = "org_M1dCostProjection"
+TRACE_ORG_ID = "org_M1dTraceProjection"
+
+
+def _reader(org_id: str) -> Principal:
+    # /costs needs console:read; /traces additionally needs evidence:read.
+    return Principal(
+        user_id="user_M1dConsoleReader",
+        session_id="sess_M1dConsoleReader",
+        organization_id=org_id,
+        organization_role="org:operator",
+        organization_permissions=frozenset({"org:console:read", "org:evidence:read"}),
+    )
+
+
+def _app_for(engine: Engine, principal: Principal) -> Any:
+    """A web app whose Clerk config accepts this principal's (non-fixture) organization."""
+
+    app = create_web_app(
+        backend=PostgresApiBackend(engine, environment="staging", runner_available=False),
+        readiness_check=lambda: True,
+        security_config=WebSecurityConfig(
+            environment="staging",
+            allowed_origins=(ORIGIN,),
+            clerk_frontend_api_origin="https://clerk.staging.headshot.example",
+        ),
+    )
+    app.dependency_overrides[require_authenticated] = lambda: principal
+    app.dependency_overrides[get_clerk_auth_config] = lambda: ClerkAuthConfig(
+        environment="staging",
+        publishable_key="public-test-identifier-not-used",
+        jwt_key="public-test-verification-key-not-used",
+        authorized_parties=(ORIGIN,),
+        required_organization_id=principal.organization_id,
+    )
+    return app
+
+
+def _seed_run_summary(engine: Engine, org_id: str, run_id: str) -> None:
+    with engine.begin() as connection:
+        connection.execute(text("SET LOCAL session_replication_role = replica"))
+        connection.execute(
+            text(
+                "INSERT INTO campaign_runs (run_id, organization_id, authorization_request_id, "
+                "scope_hash, launcher_user_id, launcher_session_id) "
+                "VALUES (:run, :org, :req, :hash, :launcher, :session)"
+            ),
+            {
+                "run": run_id,
+                "org": org_id,
+                "req": f"req-{run_id}",
+                "hash": "b" * 64,
+                "launcher": LAUNCHER_ID,
+                "session": "sess_M1dApiLauncher",
+            },
+        )
+        connection.execute(
+            text(
+                "INSERT INTO campaign_run_summaries (organization_id, run_id, execution_profile, "
+                "provenance, attempt_count, request_count, confirmed_finding_count, "
+                "measured_cost, currency, started_at, ended_at) VALUES (:org, :run, 'synthetic', "
+                "'synthetic_offline', 9, 9, 0, 1.234567, 'USD', "
+                "TIMESTAMPTZ '2026-07-21 10:00:00+00', TIMESTAMPTZ '2026-07-21 10:05:00+00')"
+            ),
+            {"org": org_id, "run": run_id},
+        )
+
+
+def _seed_trace(engine: Engine, org_id: str, run_id: str, attempt_id: str, trace_id: str) -> None:
+    with engine.begin() as connection:
+        connection.execute(text("SET LOCAL session_replication_role = replica"))
+        connection.execute(
+            text(
+                "INSERT INTO attempt_result (organization_id, campaign_run_id, attempt_id, "
+                "target_id, target_version, executed_at, trace_id, content_hash) VALUES "
+                "(:org, :run, :att, 'copilot-api', '1.0.0', "
+                "TIMESTAMPTZ '2026-07-21 10:00:00+00', :trace, :hash)"
+            ),
+            {"org": org_id, "run": run_id, "att": attempt_id, "trace": trace_id, "hash": "c" * 64},
+        )
+        connection.execute(
+            text(
+                "INSERT INTO verdict (state, confidence, campaign_run_id, attempt_id, "
+                "organization_id, created_at) VALUES "
+                "(CAST(:state AS verdict_state), 0.9, :run, :att, :org, "
+                "TIMESTAMPTZ '2026-07-21 10:00:02.500+00')"
+            ),
+            {"state": "NO_EXPLOIT_OBSERVED", "run": run_id, "att": attempt_id, "org": org_id},
+        )
+
+
+def test_costs_projection_is_empty_for_org_without_persisted_summaries(
+    migrated_db: Engine,
+) -> None:
+    reader = _reader("org_M1dCostEmpty")
+
+    response = TestClient(_app_for(migrated_db, reader)).get("/api/v1/costs")
+
+    assert response.status_code == 200
+    assert response.json() == {"state": "empty", "data": []}
+
+
+def test_costs_projection_is_ready_from_persisted_run_summary(migrated_db: Engine) -> None:
+    _seed_run_summary(migrated_db, COST_ORG_ID, "run-cost-projection-0001")
+    reader = _reader(COST_ORG_ID)
+
+    response = TestClient(_app_for(migrated_db, reader)).get("/api/v1/costs")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["state"] == "ready", body
+    assert len(body["data"]) == 1
+    row = body["data"][0]
+    assert set(row) == {
+        "accounting_id",
+        "campaign_id",
+        "provider",
+        "measured_cost",
+        "currency",
+        "request_count",
+        "average_cost_per_request",
+        "duration_ms",
+        "execution_profile",
+        "recorded_at",
+    }
+    assert row["accounting_id"] == "run-cost-projection-0001"
+    assert row["campaign_id"] == "run-cost-projection-0001"
+    assert row["provider"] == "synthetic_offline"
+    # Numeric(14,6) must be projected as a JSON number, never a stringified Decimal.
+    assert isinstance(row["measured_cost"], (int, float))
+    assert row["measured_cost"] == 1.234567
+    assert row["currency"] == "USD"
+    assert row["request_count"] == 9
+    assert abs(row["average_cost_per_request"] - (1.234567 / 9)) < 1e-12
+    assert row["duration_ms"] == 300000.0
+    assert row["execution_profile"] == "synthetic"
+
+
+def test_traces_projection_is_empty_for_org_without_persisted_results(
+    migrated_db: Engine,
+) -> None:
+    reader = _reader("org_M1dTraceEmpty")
+
+    response = TestClient(_app_for(migrated_db, reader)).get("/api/v1/traces")
+
+    assert response.status_code == 200
+    assert response.json() == {"state": "empty", "data": []}
+
+
+def test_traces_projection_is_ready_from_persisted_attempt_and_verdict(
+    migrated_db: Engine,
+) -> None:
+    _seed_trace(
+        migrated_db,
+        TRACE_ORG_ID,
+        "run-trace-projection-0001",
+        "attempt-trace-0001",
+        "trace-projection-0001",
+    )
+    reader = _reader(TRACE_ORG_ID)
+
+    response = TestClient(_app_for(migrated_db, reader)).get("/api/v1/traces")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["state"] == "ready", body
+    assert len(body["data"]) == 1
+    row = body["data"][0]
+    assert set(row) == {
+        "trace_id",
+        "campaign_id",
+        "attempt_id",
+        "operation",
+        "provider",
+        "status",
+        "status_code",
+        "started_at",
+        "duration_ms",
+        "request_bytes",
+        "response_bytes",
+        "measured_cost",
+        "currency",
+        "langfuse_status",
+    }
+    assert row["trace_id"] == "trace-projection-0001"
+    assert row["operation"] == "attempt:copilot-api@1.0.0"
+    assert row["status"] == "NO_EXPLOIT_OBSERVED"
+    # verdict.created_at (10:00:02.500) - attempt_result.executed_at (10:00:00) == 2500 ms.
+    assert row["duration_ms"] == 2500.0
+    assert row["started_at"].startswith("2026-07-21T10:00:00")
+    assert row["campaign_id"] == "run-trace-projection-0001"
+    assert row["attempt_id"] == "attempt-trace-0001"
+    assert row["langfuse_status"] == "historical_not_instrumented"

@@ -375,7 +375,10 @@ class SecureCampaignCoordinator:
         else:
             credential = self.config.credential_resolver(binding.credential_ref)
         result = self._dispatch(
-            attack_attempt,
+            {
+                **attack_attempt,
+                "organization_id": self.config.result_context.get("organization_id", ""),
+            },
             binding,
             policy,
             credential,

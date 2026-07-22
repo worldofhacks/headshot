@@ -44,6 +44,9 @@ dependencies = [
     # acceptance, authorized parties, and CLERK_JWT_KEY for networkless RS256 verification;
     # CLERK_SECRET_KEY is deliberately not required on this path.
     "clerk-backend-api==6.0.1",
+    # External-out telemetry adapter. Imported lazily by the private Runner only; PostgreSQL
+    # remains the authoritative fallback when Langfuse is unavailable.
+    "langfuse==4.14.1",
 ]
 
 [project.optional-dependencies]

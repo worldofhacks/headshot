@@ -223,10 +223,19 @@ class ResilienceReadModel(_ReadModel):
 
 class TraceReadModel(_ReadModel):
     trace_id: str
+    campaign_id: str
+    attempt_id: str | None
     operation: str
+    provider: str
     status: str
+    status_code: int | None
     started_at: datetime.datetime
     duration_ms: float = Field(ge=0)
+    request_bytes: int = Field(ge=0)
+    response_bytes: int | None = Field(default=None, ge=0)
+    measured_cost: float = Field(ge=0)
+    currency: str
+    langfuse_status: str
 
 
 class CostReadModel(_ReadModel):
@@ -235,6 +244,10 @@ class CostReadModel(_ReadModel):
     provider: str
     measured_cost: float = Field(ge=0)
     currency: str
+    request_count: int = Field(ge=0)
+    average_cost_per_request: float = Field(ge=0)
+    duration_ms: float = Field(ge=0)
+    execution_profile: Literal["synthetic", "live"]
     recorded_at: datetime.datetime
 
 
@@ -251,7 +264,14 @@ class ComponentReadModel(_ReadModel):
     component_id: str
     name: str
     kind: str
-    availability: str
+    availability: Literal[
+        "operational and evidenced",
+        "adapter integrated, execution deferred",
+        "evaluated and rejected",
+        "blocked pending authorization",
+    ]
+    environment: str
+    detail: str
     heartbeat_at: datetime.datetime
 
 
@@ -263,6 +283,10 @@ _LIST_ADAPTERS = {
     "audit": TypeAdapter(list[AuditReadModel]),
     "findings": TypeAdapter(list[FindingReadModel]),
     "coverage": TypeAdapter(list[CoverageReadModel]),
+    "resilience": TypeAdapter(list[ResilienceReadModel]),
+    "costs": TypeAdapter(list[CostReadModel]),
+    "traces": TypeAdapter(list[TraceReadModel]),
+    "components": TypeAdapter(list[ComponentReadModel]),
 }
 _SINGLE_ADAPTERS = {
     "principal": TypeAdapter(PrincipalReadModel),
@@ -270,6 +294,7 @@ _SINGLE_ADAPTERS = {
     "evidence": TypeAdapter(EvidenceReadModel),
     "target": TypeAdapter(TargetReadModel),
     "finding": TypeAdapter(FindingReadModel),
+    "configuration": TypeAdapter(ConfigurationReadModel),
 }
 
 

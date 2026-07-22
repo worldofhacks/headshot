@@ -115,12 +115,12 @@ const validResources: Array<[string, (value: unknown) => unknown, unknown]> = [
   [
     "traces",
     decodeTraces,
-    [{ trace_id: "trace-1", operation: "runner.attempt", status: "ok", started_at: at, duration_ms: 12.5 }],
+    [{ trace_id: "trace-1", campaign_id: "run-1", attempt_id: "attempt-1", operation: "target.http", provider: "openemr", status: "succeeded", status_code: 200, started_at: at, duration_ms: 12.5, request_bytes: 25, response_bytes: 50, measured_cost: 0.01, currency: "USD", langfuse_status: "exported" }],
   ],
   [
     "costs",
     decodeCosts,
-    [{ accounting_id: "accounting-1", campaign_id: "run-1", provider: "provider", measured_cost: 0.25, currency: "USD", recorded_at: at }],
+    [{ accounting_id: "accounting-1", campaign_id: "run-1", provider: "provider", measured_cost: 0.25, currency: "USD", request_count: 5, average_cost_per_request: 0.05, duration_ms: 2500, execution_profile: "live", recorded_at: at }],
   ],
   [
     "targets and surfaces",
@@ -135,7 +135,7 @@ const validResources: Array<[string, (value: unknown) => unknown, unknown]> = [
   [
     "components",
     decodeComponents,
-    [{ component_id: "runner-1", name: "runner", kind: "runner", availability: "ready", heartbeat_at: at }],
+    [{ component_id: "runner-1", name: "runner", kind: "runner", availability: "operational and evidenced", environment: "staging", detail: "private worker heartbeat", heartbeat_at: at }],
   ],
   [
     "audit history",
