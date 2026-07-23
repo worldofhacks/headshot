@@ -242,9 +242,7 @@ def test_gateway_delivers_multi_turn_chat_in_order_with_physical_request_caps() 
         "turn two",
         "turn three",
     ]
-    assert all(
-        call["json"]["session_id"] == FAKE_SESSION_SENTINEL for call in client.calls
-    )
+    assert all(call["json"]["session_id"] == FAKE_SESSION_SENTINEL for call in client.calls)
     assert accounting.spent_usd == pytest.approx(0.03)
     assert clock.now() == pytest.approx(2.0)
     assert result.fields["request_transcript"]["request"] == [

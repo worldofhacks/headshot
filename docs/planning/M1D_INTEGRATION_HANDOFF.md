@@ -94,7 +94,9 @@ refusal: neither flag composes the missing trusted service. The code still exits
 M1d consumes the M1c public surface without accepting client authority:
 
 ```python
-def require_authenticated(request: Request, config: ClerkAuthConfig = Depends(...)) -> Principal: ...
+def require_authenticated(
+    request: Request, config: ClerkAuthConfig = Depends(...)
+) -> Principal: ...
 def require_headshot_organization(
     principal: Principal = Depends(require_authenticated),
     config: ClerkAuthConfig = Depends(...),

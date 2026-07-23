@@ -23,21 +23,13 @@ def upgrade() -> None:
         "regression_case_versions, regression_dispositions, vuln_reports, "
         "regression_replay_plans, runtime_component_status TO headshot_scheduler"
     )
-    op.execute(
-        "GRANT INSERT ON TABLE regression_replay_plans TO headshot_scheduler"
-    )
-    op.execute(
-        "GRANT INSERT, UPDATE ON TABLE runtime_component_status TO headshot_scheduler"
-    )
+    op.execute("GRANT INSERT ON TABLE regression_replay_plans TO headshot_scheduler")
+    op.execute("GRANT INSERT, UPDATE ON TABLE runtime_component_status TO headshot_scheduler")
 
 
 def downgrade() -> None:
-    op.execute(
-        "REVOKE INSERT, UPDATE ON TABLE runtime_component_status FROM headshot_scheduler"
-    )
-    op.execute(
-        "REVOKE INSERT ON TABLE regression_replay_plans FROM headshot_scheduler"
-    )
+    op.execute("REVOKE INSERT, UPDATE ON TABLE runtime_component_status FROM headshot_scheduler")
+    op.execute("REVOKE INSERT ON TABLE regression_replay_plans FROM headshot_scheduler")
     op.execute(
         "REVOKE SELECT ON TABLE target_definitions, target_lifecycle_events, "
         "regression_case_versions, regression_dispositions, vuln_reports, "

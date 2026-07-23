@@ -327,9 +327,7 @@ class PolicyGateway:
             )
         if self._run_started_at is not None and policy.target_requests_per_second > 0:
             minimum_sequence_seconds = (turn_count - 1) / policy.target_requests_per_second
-            projected_elapsed = (
-                self.clock.now() - self._run_started_at + minimum_sequence_seconds
-            )
+            projected_elapsed = self.clock.now() - self._run_started_at + minimum_sequence_seconds
             if projected_elapsed > policy.run_timeout_seconds:
                 raise AbortError(
                     "run timeout: the minimum paced multi-turn sequence cannot fit inside the "
