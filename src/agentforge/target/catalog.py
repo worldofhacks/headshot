@@ -216,7 +216,10 @@ def _synthetic_entry(environment: TargetEnvironment) -> CatalogEntry:
     target = TargetDefinition(
         target_id=SYNTHETIC_TARGET_ID,
         name="Deterministic offline Clinical Co-Pilot rehearsal",
-        version="1.0.0",
+        # The safety contract changed from the nine-case MVP cap to the fourteen-case
+        # full scan. Target definitions are immutable, so that change requires a new
+        # catalog version (and therefore a new synchronization idempotency key).
+        version="1.1.0",
         adapter_kind="openemr",
         environment=environment,
         base_url="https://synthetic.invalid",
@@ -239,7 +242,7 @@ def _synthetic_entry(environment: TargetEnvironment) -> CatalogEntry:
     )
     surface = AttackSurfaceDefinition(
         surface_id=SYNTHETIC_SURFACE_ID,
-        version="1.0.0",
+        version="1.1.0",
         target_id=target.target_id,
         target_version=target.version,
         kind=SurfaceKind.CHAT,

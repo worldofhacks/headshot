@@ -115,6 +115,19 @@ def test_live_runner_refuses_catalog_profile_that_differs_from_approved_scope() 
         runner._adapter(_live_chat_prepared(payload_profile="openemr_turns"))
 
 
+def test_synthetic_catalog_versions_the_fourteen_case_safety_contract() -> None:
+    catalog = TrustedTargetCatalog.from_environment("staging")
+
+    entry, surface = catalog.resolve(
+        target_id="synthetic-copilot", surface_id="synthetic-chat"
+    )
+
+    assert entry.target.version == "1.1.0"
+    assert entry.target.safety_caps.max_attempts_per_run == 14
+    assert surface.version == "1.1.0"
+    assert surface.target_version == entry.target.version
+
+
 class _AuthorizedSyntheticRun(NamedTuple):
     launcher: Principal
     corpus: object
@@ -145,9 +158,9 @@ def _authorize_synthetic_run(
     scope = store.build_scope(
         principal=launcher,
         target_id="synthetic-copilot",
-        target_version="1.0.0",
+        target_version="1.1.0",
         surface_id="synthetic-chat",
-        surface_version="1.0.0",
+        surface_version="1.1.0",
         corpus_id=corpus.corpus_id,
         corpus_hash=corpus.content_hash,
         caps=SafetyCaps(
@@ -294,9 +307,9 @@ def test_two_person_control_violation_is_not_dispatchable(
     scope = store.build_scope(
         principal=single_identity,
         target_id="synthetic-copilot",
-        target_version="1.0.0",
+        target_version="1.1.0",
         surface_id="synthetic-chat",
-        surface_version="1.0.0",
+        surface_version="1.1.0",
         corpus_id=corpus.corpus_id,
         corpus_hash=corpus.content_hash,
         caps=SafetyCaps(
@@ -345,9 +358,9 @@ def test_synthetic_campaign_executes_all_nine_cases_and_completes_atomically(
     scope = store.build_scope(
         principal=launcher,
         target_id="synthetic-copilot",
-        target_version="1.0.0",
+        target_version="1.1.0",
         surface_id="synthetic-chat",
-        surface_version="1.0.0",
+        surface_version="1.1.0",
         corpus_id=corpus.corpus_id,
         corpus_hash=corpus.content_hash,
         caps=SafetyCaps(
