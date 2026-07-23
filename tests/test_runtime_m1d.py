@@ -7,7 +7,7 @@ import socket
 import pytest
 
 from agentforge.runner import DispatchUnavailable, process_agent_work
-from agentforge.scheduler import SchedulerUnavailable, enqueue_due_work
+from agentforge.scheduler import DurableScheduler, SchedulerUnavailable, enqueue_due_work
 
 
 class _Job:
@@ -108,3 +108,25 @@ def test_private_process_checks_do_not_bind_public_sockets(monkeypatch) -> None:
 
     assert check_runner(database_url=None) is False
     assert check_scheduler(database_url=None) is False
+
+
+def test_scheduler_runs_as_a_private_heartbeat_process(migrated_db) -> None:
+    scheduler = DurableScheduler(
+        engine=migrated_db,
+        environment="staging",
+        planner=lambda _engine: 0,
+    )
+
+    assert scheduler.run_once() == 0
+
+    from sqlalchemy import text
+
+    with migrated_db.connect() as connection:
+        row = connection.execute(
+            text(
+                "SELECT availability, detail FROM runtime_component_status "
+                "WHERE environment = 'staging' AND component_id = 'scheduler'"
+            )
+        ).one()
+    assert row.availability == "operational and evidenced"
+    assert "0 replay plan(s)" in row.detail

@@ -1,8 +1,8 @@
 # Final requirements matrix
 
-Audit timestamp: `2026-07-22T23:06:25Z`  
-Audited commit: `7749fd598dee1a16ad4fd4d04a6ec37855c0ac2c`  
-Canonical row-level ledger: [`REQUIREMENTS_MATRIX.csv`](REQUIREMENTS_MATRIX.csv)  
+Audit timestamp: `2026-07-22T23:06:25Z`
+Audited commit: `7749fd598dee1a16ad4fd4d04a6ec37855c0ac2c`
+Canonical row-level ledger: [`REQUIREMENTS_MATRIX.csv`](REQUIREMENTS_MATRIX.csv)
 Fresh baseline: [`../evidence/baseline/2026-07-22-final-integration.md`](../evidence/baseline/2026-07-22-final-integration.md)
 
 This is a review view of the canonical CSV. The CSV records, for every requirement, its source, checkpoint, status, owner, automated verification, evidence path, and remaining work. Status is deliberately strict:

@@ -783,6 +783,7 @@ class DurableCampaignRunner:
                 },
                 agent_execution_start=start_coordinator_agent_execution,
                 agent_execution_finish=self.store.finish_agent_execution,
+                dispatch_sleeper=self.sleeper,
             ),
             adapter=adapter,
             engine=self.engine,

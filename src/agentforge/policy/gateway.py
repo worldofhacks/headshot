@@ -28,7 +28,10 @@ Framework-neutral (D10): imports config/secrets/target/policy — never a web fr
 
 from __future__ import annotations
 
+import json
+import time
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
@@ -36,7 +39,13 @@ from agentforge.config import Settings
 from agentforge.policy.allowlist import Allowlist, OffAllowlistDenied
 from agentforge.policy.recorder import ExecutionRecorder
 from agentforge.secrets import Secret
-from agentforge.target.base import AdapterError, RateLimitedError, TargetAdapter, TargetRequest
+from agentforge.target.base import (
+    AdapterError,
+    RateLimitedError,
+    TargetAdapter,
+    TargetRequest,
+    TargetResponse,
+)
 
 # Bound on how many times a single logical attempt is retried against a typed AdapterError
 # before it is queued and the run aborts. >1 so backoff is genuinely exercised, finite so a
@@ -118,6 +127,7 @@ class PolicyGateway:
     accounting: _Accounting
     recorder: ExecutionRecorder = field(default_factory=ExecutionRecorder)
     credentials: dict[str, Any] = field(default_factory=dict)
+    sleeper: Callable[[float], None] = field(default=time.sleep, repr=False)
 
     # Per-gateway run accounting (deterministic, clock/accounting-driven).
     audit_log: list[dict] = field(default_factory=list)
@@ -187,6 +197,7 @@ class PolicyGateway:
             turns=tuple(attack_attempt.get("input_sequence", [])),
             metadata=request_metadata,
         )
+        self._enforce_sequence_capacity(request, policy)
         response = self._dispatch_with_backoff(request, attack_attempt, policy)
 
         # (6) Count the logical attempt after a real dispatch, then build hashed evidence.
@@ -284,13 +295,141 @@ class PolicyGateway:
             return None
         return binding.resolve(target_id, self.settings)
 
+    def _enforce_sequence_capacity(self, request: TargetRequest, policy: RunPolicy) -> None:
+        """Preflight the known minimum cost/time of a gateway-owned turn sequence.
+
+        This prevents a three-turn attempt from sending two turns and only then discovering that
+        the third cannot fit under the authorization-bound budget or minimum rate window.
+        """
+
+        if getattr(self.adapter, "turn_delivery", "atomic") != "sequential":
+            return
+        turn_count = len(request.turns)
+        if turn_count < 1:
+            raise AbortError(
+                "multi-turn sequence contains no request turns — HARD ABORT before dispatch",
+                code="abort",
+            )
+        try:
+            per_call = float(self.accounting.per_call_usd)
+        except AttributeError as exc:
+            raise AbortError(
+                "budget cap: accounting exposes no per-call cost estimate (per_call_usd) — "
+                "sequence cost cannot be bounded; HARD ABORT before dispatch",
+                code="abort",
+            ) from exc
+        projected = self.accounting.spent_usd + (per_call * turn_count)
+        if projected > policy.budget_usd:
+            raise AbortError(
+                f"budget cap: {turn_count}-turn sequence projects ${projected:.2f}, breaching "
+                f"the ${policy.budget_usd:.2f} budget — HARD ABORT before dispatch",
+                code="abort",
+            )
+        if self._run_started_at is not None and policy.target_requests_per_second > 0:
+            minimum_sequence_seconds = (turn_count - 1) / policy.target_requests_per_second
+            projected_elapsed = (
+                self.clock.now() - self._run_started_at + minimum_sequence_seconds
+            )
+            if projected_elapsed > policy.run_timeout_seconds:
+                raise AbortError(
+                    "run timeout: the minimum paced multi-turn sequence cannot fit inside the "
+                    "remaining run window — HARD ABORT before dispatch",
+                    code="abort",
+                )
+
     def _dispatch_with_backoff(
         self, request: TargetRequest, attack_attempt: dict, policy: RunPolicy
-    ):
-        """Dispatch the single logical attempt, retrying a typed AdapterError with backoff.
+    ) -> TargetResponse:
+        """Dispatch one logical attempt as one atomic request or a paced turn sequence.
+
+        Conversational adapters opt in through ``turn_delivery == "sequential"``. The gateway
+        then performs one physical send per turn through the same adapter/client, re-enforcing
+        every cap and charging the meter for every request. Other adapters retain the atomic
+        ordered-sequence contract.
+        """
+
+        if getattr(self.adapter, "turn_delivery", "atomic") != "sequential":
+            return self._dispatch_one_with_backoff(request, attack_attempt, policy)
+
+        responses: list[TargetResponse] = []
+        total = len(request.turns)
+        for index, turn in enumerate(request.turns):
+            if index:
+                self._pace_sequence_turn(policy)
+            turn_request = TargetRequest(
+                turns=(turn,),
+                metadata={
+                    **dict(request.metadata),
+                    "turn_index": str(index),
+                    "turn_count": str(total),
+                },
+            )
+            response = self._dispatch_one_with_backoff(
+                turn_request,
+                attack_attempt,
+                policy,
+            )
+            responses.append(response)
+            if not 200 <= response.status < 300:
+                break
+
+        final = responses[-1]
+        transcript = {
+            "delivery": "sequential",
+            "turns": [
+                {
+                    "index": index,
+                    "status": response.status,
+                    "output": response.output,
+                }
+                for index, response in enumerate(responses)
+            ],
+        }
+        trace_ids = [
+            str(response.metadata["trace_id"])
+            for response in responses
+            if response.metadata.get("trace_id")
+        ]
+        return TargetResponse(
+            output=json.dumps(
+                transcript,
+                allow_nan=False,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ),
+            status=final.status,
+            metadata={
+                "adapter": final.metadata.get("adapter", self.adapter.name),
+                **({"trace_id": trace_ids[-1]} if trace_ids else {}),
+                **({"turn_trace_ids": json.dumps(trace_ids)} if trace_ids else {}),
+            },
+        )
+
+    def _pace_sequence_turn(self, policy: RunPolicy) -> None:
+        if policy.target_requests_per_second <= 0 or self._last_dispatch_at is None:
+            return
+        minimum = 1.0 / policy.target_requests_per_second
+        remaining = minimum - (self.clock.now() - self._last_dispatch_at)
+        if remaining > 0:
+            self._wait(remaining)
+
+    def _wait(self, seconds: float) -> None:
+        advance = getattr(self.clock, "advance", None)
+        if callable(advance):
+            advance(seconds)
+        else:
+            self.sleeper(seconds)
+
+    def _dispatch_one_with_backoff(
+        self,
+        request: TargetRequest,
+        attack_attempt: dict,
+        policy: RunPolicy,
+    ) -> TargetResponse:
+        """Dispatch one physical request, retrying typed AdapterError with backoff.
 
         A typed :class:`AdapterError` is retried up to :data:`_MAX_DISPATCH_ATTEMPTS` with a
-        backoff advanced on the INJECTABLE clock (no real sleeping). Every physical send —
+        backoff driven by the injectable wait seam. Every physical send —
         including a failed retry — is preceded by a full cap re-check (:meth:`_enforce_caps`)
         and followed by an :meth:`charge` + rate-window advance, so retries against a failing
         target consume budget/rate and hard-abort the instant a cap is breached (they are not
@@ -323,13 +462,11 @@ class PolicyGateway:
                         "attempt queued — HARD ABORT",
                         code=exc.code,
                     ) from exc
-                # Backoff on the injectable clock: adapter-provided retry_after when given,
-                # else exponential — advanced by hand so tests never really sleep.
+                # Backoff uses the adapter-provided retry_after when given, else exponential.
+                # Tests advance an injectable clock; production sleeps through the injected seam.
                 retry_after = getattr(exc, "retry_after", None)
                 backoff = float(retry_after) if retry_after else float(2**dispatch_no)
-                advance = getattr(self.clock, "advance", None)
-                if callable(advance):
-                    advance(backoff)
+                self._wait(backoff)
                 continue
             # Success: charge this physical dispatch and advance the rate window, then return.
             self.accounting.charge()

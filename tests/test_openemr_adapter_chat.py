@@ -13,7 +13,8 @@ Contract under test (additive; the default ``openemr_turns`` profile is unchange
   that is EXACTLY ``{"session_id": <injected>, "message": <derived from turns>}``.
 * The injected credential Secret is the patient-pinned SMART ``session_id`` — placed in the BODY,
   NOT a Bearer header. NO ``Authorization`` header is present on the outgoing request.
-* ``message`` is the single turn (single-turn) or the turns joined with "\n" (multi-turn).
+* ``message`` is one turn. The Policy Gateway replays a multi-turn attack as ordered, paced,
+  individually metered physical requests through one campaign-persistent client/session.
 * A 200 envelope is returned VERBATIM as ``TargetResponse.output`` (the coordinator's Judge/canary
   consumes the raw text; no parsing here).
 * The redaction guarantees hold: the raw session value never appears in the adapter's repr, a raised
@@ -26,6 +27,9 @@ import json
 
 import pytest
 
+from agentforge.config import Settings
+from agentforge.policy.allowlist import Allowlist, AllowlistEntry
+from agentforge.policy.gateway import AbortError, PolicyGateway, RunPolicy
 from agentforge.secrets import Secret
 from agentforge.target.base import (
     AdapterError,
@@ -94,6 +98,26 @@ class _ClosableClient(_RecordingClient):
 
     def close(self) -> None:
         self.closed = True
+
+
+class _Clock:
+    def __init__(self) -> None:
+        self.value = 0.0
+
+    def now(self) -> float:
+        return self.value
+
+    def advance(self, seconds: float) -> None:
+        self.value += seconds
+
+
+class _Accounting:
+    def __init__(self, per_call_usd: float = 0.01) -> None:
+        self.per_call_usd = per_call_usd
+        self.spent_usd = 0.0
+
+    def charge(self) -> None:
+        self.spent_usd += self.per_call_usd
 
 
 def _chat_adapter(client, *, credential: Secret | None) -> OpenEmrAdapter:
@@ -172,17 +196,97 @@ def test_chat_mode_sends_no_authorization_header_and_no_bearer_auth() -> None:
     assert call.get("auth") is None
 
 
-def test_chat_mode_joins_multi_turn_into_one_message_with_newline() -> None:
-    """spec — a multi-turn attack is flattened into ONE message joined by "\\n" (a known
-    single-request simplification: /chat is one request/response)."""
+def test_chat_adapter_refuses_to_flatten_multiple_turns() -> None:
+    """The adapter cannot hide physical requests from the Policy Gateway by flattening turns."""
     client = _RecordingClient(_FakeResponse(200, _CHAT_ENVELOPE))
     adapter = _chat_adapter(client, credential=Secret(FAKE_SESSION_SENTINEL))
 
-    adapter.send(TargetRequest(turns=("turn one", "turn two", "turn three")))
+    with pytest.raises(AdapterError, match="sequential delivery"):
+        adapter.send(TargetRequest(turns=("turn one", "turn two", "turn three")))
 
-    body = client.calls[0]["json"]
-    assert body["message"] == "turn one\nturn two\nturn three"
-    assert body["session_id"] == FAKE_SESSION_SENTINEL
+    assert client.calls == []
+
+
+def test_gateway_delivers_multi_turn_chat_in_order_with_physical_request_caps() -> None:
+    client = _RecordingClient(_FakeResponse(200, _CHAT_ENVELOPE))
+    adapter = _chat_adapter(client, credential=Secret(FAKE_SESSION_SENTINEL))
+    clock = _Clock()
+    accounting = _Accounting()
+    gateway = PolicyGateway(
+        allowlist=Allowlist([AllowlistEntry(target_id="openemr", adapter_name="openemr")]),
+        adapter=adapter,
+        settings=Settings(environment="production"),
+        clock=clock,
+        accounting=accounting,
+    )
+    policy = RunPolicy(
+        budget_usd=0.03,
+        max_attempts_per_run=1,
+        target_requests_per_second=1.0,
+        run_timeout_seconds=10.0,
+    )
+
+    result = gateway.execute(
+        {
+            "schema_version": "1",
+            "case_ref": "AF-M11-PI-002",
+            "input_sequence": ["turn one", "turn two", "turn three"],
+            "category": "prompt_injection",
+        },
+        policy,
+        target_id="openemr",
+    )
+
+    assert [call["json"]["message"] for call in client.calls] == [
+        "turn one",
+        "turn two",
+        "turn three",
+    ]
+    assert all(
+        call["json"]["session_id"] == FAKE_SESSION_SENTINEL for call in client.calls
+    )
+    assert accounting.spent_usd == pytest.approx(0.03)
+    assert clock.now() == pytest.approx(2.0)
+    assert result.fields["request_transcript"]["request"] == [
+        "turn one",
+        "turn two",
+        "turn three",
+    ]
+    response = json.loads(result.fields["response_transcript"])
+    assert response["delivery"] == "sequential"
+    assert [turn["index"] for turn in response["turns"]] == [0, 1, 2]
+
+
+def test_multi_turn_budget_is_rejected_before_the_first_physical_request() -> None:
+    client = _RecordingClient(_FakeResponse(200, _CHAT_ENVELOPE))
+    adapter = _chat_adapter(client, credential=Secret(FAKE_SESSION_SENTINEL))
+    gateway = PolicyGateway(
+        allowlist=Allowlist([AllowlistEntry(target_id="openemr", adapter_name="openemr")]),
+        adapter=adapter,
+        settings=Settings(environment="production"),
+        clock=_Clock(),
+        accounting=_Accounting(),
+    )
+    policy = RunPolicy(
+        budget_usd=0.01,
+        max_attempts_per_run=1,
+        target_requests_per_second=10.0,
+        run_timeout_seconds=10.0,
+    )
+
+    with pytest.raises(AbortError, match="sequence"):
+        gateway.execute(
+            {
+                "schema_version": "1",
+                "case_ref": "AF-M11-PI-002",
+                "input_sequence": ["turn one", "turn two"],
+                "category": "prompt_injection",
+            },
+            policy,
+            target_id="openemr",
+        )
+
+    assert client.calls == []
 
 
 # ---------------------------------------------------------------------------

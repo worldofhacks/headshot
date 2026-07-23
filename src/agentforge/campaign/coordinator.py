@@ -42,6 +42,7 @@ Framework-neutral where the core is; SQLAlchemy is used only for the recorder re
 from __future__ import annotations
 
 import datetime
+import time
 import uuid
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
@@ -185,6 +186,7 @@ class RunConfig:
     result_context: Mapping[str, Any] = field(default_factory=dict, repr=False)
     agent_execution_start: Callable[..., str] | None = field(default=None, repr=False)
     agent_execution_finish: Callable[..., None] | None = field(default=None, repr=False)
+    dispatch_sleeper: Callable[[float], None] = field(default=time.sleep, repr=False)
 
 
 @dataclass(frozen=True)
@@ -580,6 +582,7 @@ class SecureCampaignCoordinator:
                 clock=self.clock,
                 accounting=self.accounting,
                 recorder=self.recorder,
+                sleeper=self.config.dispatch_sleeper,
             )
         return self._gateway
 
