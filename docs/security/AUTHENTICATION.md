@@ -175,14 +175,11 @@ Assign them as follows:
 
 | Role | Custom permissions |
 |---|---|
-| `org:observer` | `org:console:read`, `org:findings:read`, `org:evidence:read` |
-| `org:operator` | `org:console:read`, `org:findings:read`, `org:evidence:read`, `org:campaign:launch`, `org:campaign:abort`, `org:targets:manage`, `org:config:manage` |
-| `org:approver` | `org:console:read`, `org:findings:read`, `org:evidence:read`, `org:campaign:authorize`, `org:findings:approve`, `org:findings:resolve` |
-| `org:auditor` | `org:console:read`, `org:findings:read`, `org:evidence:read`, `org:audit:read` |
+| `org:operator` | `org:console:read`, `org:findings:read`, `org:evidence:read`, `org:audit:read`, `org:campaign:launch`, `org:campaign:abort`, `org:targets:manage`, `org:config:manage` |
+| `org:approver` | `org:console:read`, `org:findings:read`, `org:evidence:read`, `org:audit:read`, `org:campaign:authorize`, `org:findings:approve`, `org:findings:resolve` |
 
-Current Clerk documentation requires the Enhanced B2B Authentication add-on for more than two custom
-production roles; provisioning that add-on is required before the four-role matrix can be claimed
-operational.
+The role set is intentionally limited to these two roles. Both roles can inspect the full protected
+platform and audit history; action permissions remain least-privilege.
 
 Role strings are never mapped to permissions in application code. If a token says
 `org:approver` but its verified custom-permission set lacks `org:campaign:authorize`, authorization is
@@ -195,7 +192,7 @@ denied. If a request body says it has a permission absent from the verified toke
 | `require_authenticated()` | Return a verified immutable Principal; otherwise raise the generic authentication error |
 | `require_headshot_organization()` | Require the exact configured Organization ID on an authenticated Principal |
 | `require_permissions(*permissions)` | Require every named custom permission from the verified immutable set; empty or unknown dependency configuration is rejected |
-| `require_distinct_approver(launcher_user_id, principal)` | Require the approval custom permission and prove `principal.user_id != launcher_user_id`; the verified `org:godmode` demo role is the only exception. Both Principal and launcher ID come from server dependencies/request state, never request parameters or bodies. A godmode self-approval is persisted as `self_approval_override=true` and revalidated by the database and Runner. |
+| `require_distinct_approver(launcher_user_id, principal)` | Require the approval custom permission and prove `principal.user_id != launcher_user_id`. Both Principal and launcher ID come from server dependencies/request state, never request parameters or bodies. There is no role or self-approval exception. |
 
 For a campaign authorization, the distinct approver must carry `org:campaign:authorize`. Finding
 approval and resolution additionally use `org:findings:approve` and `org:findings:resolve` on their
@@ -317,9 +314,8 @@ tokens, invitations, or backup codes into tickets or this repository.
       Organization.
 - [ ] Enable required MFA as a session task for all users.
 - [ ] Enable authenticator-app TOTP and backup codes; verify SMS is not the only enabled factor.
-- [ ] Provision the Enhanced B2B Authentication add-on required by four custom production roles.
-- [ ] Create `org:observer`, `org:operator`, `org:approver`, and `org:auditor` and add them to the
-      Headshot Organization's role set.
+- [ ] Create exactly `org:operator` and `org:approver` and add them to the Headshot
+      Organization's role set; remove any retired or demo roles.
 - [ ] Create all eleven custom permissions and assign the exact matrix above.
 - [ ] Confirm backend checks never depend on Clerk system permissions.
 - [ ] Invite at least two different test humans so launcher/approver separation can be exercised.

@@ -14,7 +14,6 @@ from agentforge.auth.permissions import (
     CAMPAIGN_AUTHORIZE,
     CAMPAIGN_LAUNCH,
     FINDINGS_APPROVE,
-    ROLE_GODMODE,
     TARGETS_MANAGE,
 )
 from agentforge.auth.principal import Principal
@@ -248,50 +247,6 @@ def test_authorization_persists_launcher_and_denies_self_approval(
             decision="approved",
             idempotency_key="approve-self-fixture",
         )
-
-
-def test_godmode_self_approval_is_explicit_audited_and_dispatchable(
-    store: ControlPlaneStore,
-    migrated_db: Engine,
-) -> None:
-    godmode = _principal(
-        LAUNCHER_ID,
-        organization_role=ROLE_GODMODE,
-        permissions=(TARGETS_MANAGE, CAMPAIGN_LAUNCH, CAMPAIGN_AUTHORIZE),
-    )
-    scope = _ready_scope(store, godmode)
-    request = store.request_campaign_authorization(
-        principal=godmode,
-        scope=scope,
-        expires_at=datetime.datetime.now(datetime.UTC) + datetime.timedelta(minutes=10),
-        idempotency_key="request-auth-godmode-self-fixture",
-    )
-
-    decision = store.decide_campaign_authorization(
-        principal=godmode,
-        request_id=request.request_id,
-        decision="approved",
-        idempotency_key="approve-godmode-self-fixture",
-    )
-    run = store.launch_campaign(
-        principal=godmode,
-        request_id=request.request_id,
-        idempotency_key="launch-godmode-self-fixture",
-    )
-    authorized = store.load_run_for_execution(run.run_id)
-
-    assert decision.approver_user_id == LAUNCHER_ID
-    assert decision.self_approval_override is True
-    assert authorized.approval.self_approval_override is True
-    with migrated_db.connect() as connection:
-        audit_payload = connection.execute(
-            text(
-                "SELECT payload FROM audit_events "
-                "WHERE event_type = 'campaign.authorization_approved' AND aggregate_id = :id"
-            ),
-            {"id": request.request_id},
-        ).scalar_one()
-    assert audit_payload["self_approval_override"] is True
 
 
 def test_distinct_approver_can_approve_exact_scope_and_launcher_can_launch(
@@ -637,6 +592,24 @@ def test_db_rejects_direct_self_approval_and_append_only_mutation(
                 "hash": request.scope_hash,
                 "user_id": LAUNCHER_ID,
                 "session_id": launcher.session_id,
+            },
+        )
+
+    with pytest.raises(DBAPIError), migrated_db.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO campaign_authorization_decisions "
+                "(decision_id, organization_id, request_id, scope_hash, decision, "
+                "approver_user_id, approver_session_id, self_approval_override) VALUES "
+                "(:id, :org, :request, :hash, 'approved', :user_id, :session_id, true)"
+            ),
+            {
+                "id": uuid.uuid4().hex,
+                "org": ORG_ID,
+                "request": request.request_id,
+                "hash": request.scope_hash,
+                "user_id": APPROVER_ID,
+                "session_id": "sess_M1dApprover",
             },
         )
 

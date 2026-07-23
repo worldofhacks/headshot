@@ -54,6 +54,7 @@ from sqlalchemy import (
     Index,
     Integer,
     MetaData,
+    Numeric,
     String,
     Text,
     UniqueConstraint,
@@ -404,6 +405,393 @@ class RegressionCase(Base):
     )
     created_at: Mapped[datetime.datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+# ---------------------------------------------------------------------------
+# vuln_report / regression_disposition — append-only draft and admission proof
+# ---------------------------------------------------------------------------
+class VulnReport(Base):
+    """A schema-validated Documentation Agent draft; never publication authority."""
+
+    __tablename__ = "vuln_reports"
+
+    organization_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    report_id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    finding_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    campaign_run_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    attempt_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    reproduction_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    publication_state: Mapped[str] = mapped_column(String(48), nullable=False)
+    contract_payload: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["organization_id", "finding_id"],
+            ["finding.organization_id", "finding.finding_id"],
+            name="fk_vuln_report_finding",
+        ),
+        ForeignKeyConstraint(
+            ["organization_id", "campaign_run_id", "attempt_id"],
+            [
+                "attempt_result.organization_id",
+                "attempt_result.campaign_run_id",
+                "attempt_result.attempt_id",
+            ],
+            name="fk_vuln_report_attempt_result",
+        ),
+        UniqueConstraint("organization_id", "finding_id", name="uq_vuln_report_org_finding"),
+        UniqueConstraint(
+            "organization_id",
+            "reproduction_sha256",
+            name="uq_vuln_report_org_reproduction",
+        ),
+        CheckConstraint(
+            "reproduction_sha256 ~ '^[0-9a-f]{64}$'",
+            name="vuln_report_reproduction_hash",
+        ),
+        CheckConstraint("status = 'draft'", name="vuln_report_draft_only"),
+        CheckConstraint(
+            "publication_state IN ('draft_unpublished','blocked_pending_human_approval')",
+            name="vuln_report_publication_draft_only",
+        ),
+        CheckConstraint(
+            "jsonb_typeof(contract_payload) = 'object'",
+            name="vuln_report_payload_object",
+        ),
+        CheckConstraint(
+            "((contract_payload->>'report_id' = report_id) AND "
+            "(contract_payload->>'finding_id' = finding_id) AND "
+            "(contract_payload->>'campaign_run_id' = campaign_run_id) AND "
+            "(contract_payload->>'attempt_id' = attempt_id) AND "
+            "(contract_payload->>'reproduction_sha256' = reproduction_sha256) AND "
+            "(contract_payload->>'status' = status) AND "
+            "(contract_payload->>'publication_state' = publication_state)) IS TRUE",
+            name="payload_projection",
+        ),
+        CheckConstraint(
+            "((contract_payload->>'severity' <> 'critical') OR "
+            "publication_state = 'blocked_pending_human_approval') IS TRUE",
+            name="critical_publication",
+        ),
+        Index(
+            "ix_vuln_reports_run_attempt",
+            "organization_id",
+            "campaign_run_id",
+            "attempt_id",
+        ),
+    )
+
+
+class RegressionDisposition(Base):
+    """Append-only deterministic decision about regression-corpus admission."""
+
+    __tablename__ = "regression_dispositions"
+
+    organization_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    disposition_id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    finding_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    report_id: Mapped[str] = mapped_column(String(80), nullable=False)
+    campaign_run_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    attempt_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    state: Mapped[str] = mapped_column(String(48), nullable=False)
+    admitted: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    contract_payload: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["organization_id", "finding_id"],
+            ["finding.organization_id", "finding.finding_id"],
+            name="fk_regression_disposition_finding",
+        ),
+        ForeignKeyConstraint(
+            ["organization_id", "report_id"],
+            ["vuln_reports.organization_id", "vuln_reports.report_id"],
+            name="fk_regression_disposition_report",
+        ),
+        ForeignKeyConstraint(
+            ["organization_id", "campaign_run_id", "attempt_id"],
+            [
+                "attempt_result.organization_id",
+                "attempt_result.campaign_run_id",
+                "attempt_result.attempt_id",
+            ],
+            name="fk_regression_disposition_attempt_result",
+        ),
+        CheckConstraint(
+            "state IN ('pending_deterministic_reproduction','rejected_non_deterministic',"
+            "'rejected_wrong_reason','blocked_pending_human_approval','admitted')",
+            name="regression_disposition_state",
+        ),
+        CheckConstraint(
+            "(state = 'admitted' AND admitted) OR (state <> 'admitted' AND NOT admitted)",
+            name="regression_disposition_admitted_consistent",
+        ),
+        CheckConstraint(
+            "jsonb_typeof(contract_payload) = 'object'",
+            name="regression_disposition_payload_object",
+        ),
+        CheckConstraint(
+            "((contract_payload->>'disposition_id' = disposition_id) AND "
+            "(contract_payload->>'finding_id' = finding_id) AND "
+            "(contract_payload->>'report_id' = report_id) AND "
+            "(contract_payload->>'campaign_run_id' = campaign_run_id) AND "
+            "(contract_payload->>'attempt_id' = attempt_id) AND "
+            "(contract_payload->>'state' = state) AND "
+            "(contract_payload->>'admitted' = "
+            "CASE WHEN admitted THEN 'true' ELSE 'false' END)) IS TRUE",
+            name="payload_projection",
+        ),
+        CheckConstraint(
+            "((state <> 'admitted') OR "
+            "((contract_payload->>'reproduction_attempted' = 'true') AND "
+            "(contract_payload->>'deterministic_reproduction' = 'true') AND "
+            "(contract_payload->>'passes_for_right_reason' = 'true') AND "
+            "(contract_payload->>'human_approved' = 'true'))) IS TRUE",
+            name="admission_proof",
+        ),
+        Index(
+            "ix_regression_dispositions_run_attempt",
+            "organization_id",
+            "campaign_run_id",
+            "attempt_id",
+        ),
+        Index(
+            "ix_regression_dispositions_finding_history",
+            "organization_id",
+            "finding_id",
+            "created_at",
+        ),
+    )
+
+
+class RegressionReplayPlan(Base):
+    """Append-only, execution-blocked plan tied to a persisted disposition."""
+
+    __tablename__ = "regression_replay_plans"
+
+    organization_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    replay_id: Mapped[str] = mapped_column(String(67), primary_key=True)
+    regression_case_id: Mapped[str] = mapped_column(String(67), nullable=False)
+    finding_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    report_id: Mapped[str] = mapped_column(String(80), nullable=False)
+    disposition_id: Mapped[str] = mapped_column(String(80), nullable=False)
+    target_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_target_version: Mapped[str] = mapped_column(String(128), nullable=False)
+    replay_target_version: Mapped[str] = mapped_column(String(128), nullable=False)
+    attack_sequence_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    contract_payload: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["organization_id", "finding_id"],
+            ["finding.organization_id", "finding.finding_id"],
+            name="fk_regression_replay_plan_finding",
+        ),
+        ForeignKeyConstraint(
+            ["organization_id", "report_id"],
+            ["vuln_reports.organization_id", "vuln_reports.report_id"],
+            name="fk_regression_replay_plan_report",
+        ),
+        ForeignKeyConstraint(
+            ["organization_id", "disposition_id"],
+            ["regression_dispositions.organization_id", "regression_dispositions.disposition_id"],
+            name="fk_regression_replay_plan_disposition",
+        ),
+        CheckConstraint(
+            "attack_sequence_sha256 ~ '^[0-9a-f]{64}$'",
+            name="regression_replay_plan_attack_hash",
+        ),
+        CheckConstraint(
+            "jsonb_typeof(contract_payload) = 'object'",
+            name="regression_replay_plan_payload_object",
+        ),
+        CheckConstraint(
+            "((contract_payload->>'replay_id' = replay_id) AND "
+            "(contract_payload->>'regression_case_id' = regression_case_id) AND "
+            "(contract_payload->>'finding_id' = finding_id) AND "
+            "(contract_payload->>'report_id' = report_id) AND "
+            "(contract_payload->>'target_id' = target_id) AND "
+            "(contract_payload->>'source_target_version' = source_target_version) AND "
+            "(contract_payload->>'replay_target_version' = replay_target_version) AND "
+            "(contract_payload->>'attack_sequence_sha256' = attack_sequence_sha256) AND "
+            "(contract_payload->>'authorization_state' = 'pending_human_authorization') AND "
+            "(contract_payload->>'execution_state' = 'blocked')) IS TRUE",
+            name="regression_replay_plan_payload_projection",
+        ),
+        Index(
+            "ix_regression_replay_plans_target_version",
+            "organization_id",
+            "target_id",
+            "replay_target_version",
+        ),
+        Index(
+            "ix_regression_replay_plans_case",
+            "organization_id",
+            "regression_case_id",
+            "created_at",
+        ),
+    )
+
+
+class RegressionReplayResult(Base):
+    """Append-only replay evidence tied to a two-person-authorized campaign."""
+
+    __tablename__ = "regression_replay_results"
+
+    organization_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    result_id: Mapped[str] = mapped_column(String(68), primary_key=True)
+    replay_id: Mapped[str] = mapped_column(String(67), nullable=False)
+    campaign_run_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    authorization_scope_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    target_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    replay_target_version: Mapped[str] = mapped_column(String(128), nullable=False)
+    state: Mapped[str] = mapped_column(String(16), nullable=False)
+    reappeared: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    contract_payload: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["organization_id", "replay_id"],
+            ["regression_replay_plans.organization_id", "regression_replay_plans.replay_id"],
+            name="fk_regression_replay_result_plan",
+        ),
+        ForeignKeyConstraint(
+            ["organization_id", "campaign_run_id"],
+            ["campaign_runs.organization_id", "campaign_runs.run_id"],
+            name="fk_regression_replay_result_campaign",
+        ),
+        UniqueConstraint(
+            "organization_id", "replay_id", "campaign_run_id", name="uq_replay_result_run"
+        ),
+        CheckConstraint(
+            "authorization_scope_hash ~ '^[0-9a-f]{64}$'",
+            name="regression_replay_result_scope_hash",
+        ),
+        CheckConstraint(
+            "state IN ('passing','failing','inconclusive')",
+            name="regression_replay_result_state",
+        ),
+        CheckConstraint(
+            "(state = 'failing' AND reappeared) OR (state <> 'failing')",
+            name="regression_replay_result_reappearance",
+        ),
+        CheckConstraint(
+            "jsonb_typeof(contract_payload) = 'object'",
+            name="regression_replay_result_payload_object",
+        ),
+        CheckConstraint(
+            "((contract_payload->>'result_id' = result_id) AND "
+            "(contract_payload->>'replay_id' = replay_id) AND "
+            "(contract_payload->>'campaign_run_id' = campaign_run_id) AND "
+            "(contract_payload->>'authorization_scope_hash' = authorization_scope_hash) AND "
+            "(contract_payload->>'target_id' = target_id) AND "
+            "(contract_payload->>'replay_target_version' = replay_target_version) AND "
+            "(contract_payload->>'state' = state) AND "
+            "(contract_payload->>'reappeared' = "
+            "CASE WHEN reappeared THEN 'true' ELSE 'false' END)) IS TRUE",
+            name="regression_replay_result_payload_projection",
+        ),
+        Index(
+            "ix_regression_replay_results_target_version",
+            "organization_id",
+            "target_id",
+            "replay_target_version",
+            "state",
+        ),
+    )
+
+
+class RegressionCaseVersion(Base):
+    """Human-admitted, immutable version of one deterministic regression case."""
+
+    __tablename__ = "regression_case_versions"
+
+    organization_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    regression_case_id: Mapped[str] = mapped_column(String(67), primary_key=True)
+    case_version: Mapped[str] = mapped_column(String(32), primary_key=True)
+    finding_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    report_id: Mapped[str] = mapped_column(String(80), nullable=False)
+    admission_disposition_id: Mapped[str] = mapped_column(String(80), nullable=False)
+    admission_result_id: Mapped[str] = mapped_column(String(68), nullable=False)
+    source_case_id: Mapped[str] = mapped_column(String(120), nullable=False)
+    target_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_target_version: Mapped[str] = mapped_column(String(128), nullable=False)
+    attack_sequence_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    attack_attempt: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    required_oracle_ids: Mapped[list] = mapped_column(JSONB, nullable=False)
+    planned_repetitions: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["organization_id", "finding_id"],
+            ["finding.organization_id", "finding.finding_id"],
+            name="fk_regression_case_version_finding",
+        ),
+        ForeignKeyConstraint(
+            ["organization_id", "report_id"],
+            ["vuln_reports.organization_id", "vuln_reports.report_id"],
+            name="fk_regression_case_version_report",
+        ),
+        ForeignKeyConstraint(
+            ["organization_id", "admission_disposition_id"],
+            ["regression_dispositions.organization_id", "regression_dispositions.disposition_id"],
+            name="fk_regression_case_version_admission",
+        ),
+        ForeignKeyConstraint(
+            ["organization_id", "admission_result_id"],
+            ["regression_replay_results.organization_id", "regression_replay_results.result_id"],
+            name="fk_regression_case_version_result",
+        ),
+        CheckConstraint(
+            "case_version ~ '^[0-9]+\\.[0-9]+\\.[0-9]+$'",
+            name="regression_case_version_semver",
+        ),
+        CheckConstraint(
+            "attack_sequence_sha256 ~ '^[0-9a-f]{64}$'",
+            name="regression_case_version_attack_hash",
+        ),
+        CheckConstraint(
+            "jsonb_typeof(attack_attempt) = 'object'",
+            name="regression_case_version_attack_object",
+        ),
+        CheckConstraint(
+            "jsonb_typeof(required_oracle_ids) = 'array' AND "
+            "jsonb_array_length(required_oracle_ids) > 0",
+            name="regression_case_version_oracles",
+        ),
+        CheckConstraint(
+            "planned_repetitions BETWEEN 2 AND 20",
+            name="regression_case_version_repetitions",
+        ),
+        Index(
+            "ix_regression_case_versions_target",
+            "organization_id",
+            "target_id",
+            "source_target_version",
+        ),
+        Index(
+            "ix_regression_case_versions_finding",
+            "organization_id",
+            "finding_id",
+            "case_version",
+        ),
     )
 
 
@@ -907,6 +1295,8 @@ class CampaignAttemptRecord(Base):
     attempt_id: Mapped[str] = mapped_column(String(64), nullable=False)
     ordinal: Mapped[int] = mapped_column(Integer, nullable=False)
     case_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    source_tool: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    source_technique: Mapped[str | None] = mapped_column(String(200), nullable=True)
 
     __table_args__ = (
         ForeignKeyConstraint(
@@ -921,6 +1311,145 @@ class CampaignAttemptRecord(Base):
             "organization_id", "run_id", "ordinal", name="uq_campaign_attempt_ordinal"
         ),
         CheckConstraint("ordinal >= 0", name="campaign_attempt_ordinal_nonnegative"),
+    )
+
+
+class AgentConfigurationVersion(Base):
+    """Append-only operator configuration for one role's actual or staged engine."""
+
+    __tablename__ = "agent_configuration_versions"
+
+    organization_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    agent_role: Mapped[str] = mapped_column(String(32), primary_key=True)
+    version: Mapped[int] = mapped_column(Integer, primary_key=True)
+    provider: Mapped[str] = mapped_column(String(32), nullable=False)
+    model: Mapped[str] = mapped_column(String(160), nullable=False)
+    execution_mode: Mapped[str] = mapped_column(String(32), nullable=False)
+    activation_state: Mapped[str] = mapped_column(String(48), nullable=False)
+    configuration_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    rationale: Mapped[str] = mapped_column(Text, nullable=False)
+    actor_user_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    actor_session_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "agent_role IN ('orchestrator','red_team','judge','documentation')",
+            name="agent_configuration_role",
+        ),
+        CheckConstraint("version > 0", name="agent_configuration_version_positive"),
+        CheckConstraint(
+            "execution_mode IN ('deterministic','hosted_advisory')",
+            name="agent_configuration_execution_mode",
+        ),
+        CheckConstraint(
+            "activation_state IN ('active','staged_pending_authorization')",
+            name="agent_configuration_activation_state",
+        ),
+        CheckConstraint(
+            "configuration_sha256 ~ '^[0-9a-f]{64}$'",
+            name="agent_configuration_hash",
+        ),
+        Index(
+            "ix_agent_configuration_latest",
+            "organization_id",
+            "agent_role",
+            "version",
+        ),
+    )
+
+
+class AgentExecution(Base):
+    """Durable real-time activity and measured accounting for one agent invocation."""
+
+    __tablename__ = "agent_executions"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    execution_id: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    organization_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    campaign_run_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    attempt_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    parent_execution_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    agent_role: Mapped[str] = mapped_column(String(32), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, server_default="running")
+    provider: Mapped[str] = mapped_column(String(32), nullable=False)
+    model: Mapped[str] = mapped_column(String(160), nullable=False)
+    execution_mode: Mapped[str] = mapped_column(String(32), nullable=False)
+    configuration_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    input_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    output_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    input_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    output_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    measured_cost: Mapped[float] = mapped_column(Numeric(14, 6), nullable=False, server_default="0")
+    currency: Mapped[str] = mapped_column(String(3), nullable=False, server_default="USD")
+    trace_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    detail: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
+    error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    started_at: Mapped[datetime.datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    finished_at: Mapped[datetime.datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    duration_ms: Mapped[float | None] = mapped_column(Numeric(14, 3), nullable=True)
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["organization_id", "campaign_run_id"],
+            ["campaign_runs.organization_id", "campaign_runs.run_id"],
+            name="fk_agent_execution_campaign",
+        ),
+        CheckConstraint(
+            "agent_role IN ('orchestrator','red_team','judge','documentation')",
+            name="agent_execution_role",
+        ),
+        CheckConstraint(
+            "status IN ('running','succeeded','failed','skipped')",
+            name="agent_execution_status",
+        ),
+        CheckConstraint(
+            "execution_mode IN ('deterministic','hosted_advisory')",
+            name="agent_execution_mode",
+        ),
+        CheckConstraint(
+            "input_sha256 ~ '^[0-9a-f]{64}$' AND "
+            "(output_sha256 IS NULL OR output_sha256 ~ '^[0-9a-f]{64}$')",
+            name="agent_execution_hashes",
+        ),
+        CheckConstraint(
+            "input_tokens IS NULL OR input_tokens >= 0",
+            name="agent_execution_input_tokens",
+        ),
+        CheckConstraint(
+            "output_tokens IS NULL OR output_tokens >= 0",
+            name="agent_execution_output_tokens",
+        ),
+        CheckConstraint("measured_cost >= 0", name="agent_execution_cost"),
+        CheckConstraint(
+            "jsonb_typeof(detail) = 'object'",
+            name="agent_execution_detail_object",
+        ),
+        CheckConstraint(
+            "(status = 'running' AND finished_at IS NULL AND duration_ms IS NULL "
+            "AND output_sha256 IS NULL AND error_code IS NULL) OR "
+            "(status <> 'running' AND finished_at IS NOT NULL AND duration_ms IS NOT NULL "
+            "AND output_sha256 IS NOT NULL)",
+            name="agent_execution_terminal_shape",
+        ),
+        Index(
+            "ix_agent_execution_campaign_order",
+            "organization_id",
+            "campaign_run_id",
+            "id",
+        ),
+        Index(
+            "ix_agent_execution_role_started",
+            "organization_id",
+            "agent_role",
+            "started_at",
+        ),
     )
 
 

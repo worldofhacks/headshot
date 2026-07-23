@@ -50,6 +50,28 @@ describe("console stream control events", () => {
     );
 
     await waitFor(() => expect(result.current.state).toBe("ready"));
-    expect(reconcile).toHaveBeenCalled();
+    await waitFor(() => expect(reconcile).toHaveBeenCalled());
+  });
+
+  it("reconciles protected projections after each ordered delta", async () => {
+    const reconcile = vi.fn();
+    const getToken = vi.fn(async () => "fixture-session");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>().mockResolvedValue(
+        new Response(
+          'id: 1\nevent: campaign.started\ndata: {"aggregate_type":"campaign"}\n\n',
+          { status: 200, headers: { "content-type": "text/event-stream" } },
+        ),
+      ),
+    );
+
+    const { result } = renderHook(() =>
+      useConsoleEvents(getToken, reconcile),
+    );
+
+    await waitFor(() => expect(result.current.state).toBe("ready"));
+    await waitFor(() => expect(reconcile).toHaveBeenCalledTimes(1));
+    expect("cursor" in result.current && result.current.cursor).toBe(1);
   });
 });

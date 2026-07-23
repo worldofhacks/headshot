@@ -18,7 +18,6 @@ from agentforge.auth.errors import (
 from agentforge.auth.permissions import (
     CAMPAIGN_AUTHORIZE,
     ORGANIZATION_CUSTOM_PERMISSIONS,
-    ROLE_GODMODE,
 )
 from agentforge.auth.principal import Principal
 
@@ -99,8 +98,6 @@ def require_distinct_approver(
     """Require a separately identified human with campaign-authorization authority."""
 
     require_permissions(CAMPAIGN_AUTHORIZE)(principal)
-    if not launcher_user_id or (
-        principal.user_id == launcher_user_id and principal.organization_role != ROLE_GODMODE
-    ):
+    if not launcher_user_id or principal.user_id == launcher_user_id:
         raise AuthorizationError()
     return principal

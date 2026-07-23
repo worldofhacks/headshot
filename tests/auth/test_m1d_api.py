@@ -84,6 +84,7 @@ def test_meaningful_api_is_default_deny(monkeypatch, auth_environ) -> None:
         "/api/v1/targets",
         "/api/v1/configuration",
         "/api/v1/components",
+        "/api/v1/birdseye",
         "/api/v1/events",
     ):
         response = client.get(path, headers={"Origin": "https://staging.headshot.example"})

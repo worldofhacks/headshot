@@ -66,10 +66,8 @@ authority. Frontend controls improve UX; they never enforce access.
 
 | Clerk Organization role | Backend-authoritative custom permissions |
 |---|---|
-| `org:observer` | `org:console:read`, `org:findings:read`, `org:evidence:read` |
-| `org:operator` | `org:console:read`, `org:findings:read`, `org:evidence:read`, `org:campaign:launch`, `org:campaign:abort`, `org:targets:manage`, `org:config:manage` |
-| `org:approver` | `org:console:read`, `org:findings:read`, `org:evidence:read`, `org:campaign:authorize`, `org:findings:approve`, `org:findings:resolve` |
-| `org:auditor` | `org:console:read`, `org:findings:read`, `org:evidence:read`, `org:audit:read` |
+| `org:operator` | `org:console:read`, `org:findings:read`, `org:evidence:read`, `org:audit:read`, `org:campaign:launch`, `org:campaign:abort`, `org:targets:manage`, `org:config:manage` |
+| `org:approver` | `org:console:read`, `org:findings:read`, `org:evidence:read`, `org:audit:read`, `org:campaign:authorize`, `org:findings:approve`, `org:findings:resolve` |
 
 **Two-person invariant.** A launcher cannot approve or authorize their own operation. Approval
 requires a different authenticated `org:approver` principal carrying the required custom permission;

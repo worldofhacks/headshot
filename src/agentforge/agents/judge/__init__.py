@@ -17,6 +17,21 @@ OFFLINE: no hosted-model call, no network, no side effect — evaluating an enve
 
 from __future__ import annotations
 
+from agentforge.agents.judge.calibration import (
+    CalibrationGate,
+    CalibrationGateClosed,
+    CalibrationInputError,
+    CalibrationThresholds,
+    JudgeIdentity,
+)
 from agentforge.agents.judge.judge import Judge, is_safe
 
-__all__ = ["Judge", "is_safe"]
+__all__ = [
+    "Judge",
+    "is_safe",
+    "CalibrationGate",
+    "CalibrationGateClosed",
+    "CalibrationInputError",
+    "CalibrationThresholds",
+    "JudgeIdentity",
+]

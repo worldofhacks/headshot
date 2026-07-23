@@ -68,6 +68,10 @@ class TargetAdapter(ABC):
     """Generic interface every target adapter implements — no target-specific assumptions."""
 
     name: str = "abstract"
+    # Most APIs accept the complete ordered sequence as one request. Conversational APIs may
+    # opt in to gateway-owned, cap-enforced turn delivery. The gateway, not the adapter, performs
+    # that sequencing so every physical request is budgeted and rate limited.
+    turn_delivery: str = "atomic"
 
     @abstractmethod
     def send(self, request: TargetRequest) -> TargetResponse:

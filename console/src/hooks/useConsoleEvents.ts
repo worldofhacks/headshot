@@ -37,6 +37,14 @@ export function useConsoleEvents(
 
   useEffect(() => {
     const controller = new AbortController();
+    let reconcileTimer: number | null = null;
+    const scheduleReconcile = () => {
+      if (reconcileTimer !== null) window.clearTimeout(reconcileTimer);
+      reconcileTimer = window.setTimeout(() => {
+        reconcileTimer = null;
+        reconcile.current();
+      }, 100);
+    };
 
     const connect = async () => {
       while (!controller.signal.aborted) {
@@ -62,7 +70,7 @@ export function useConsoleEvents(
               return;
             }
             if (event.event === "snapshot") {
-              reconcile.current();
+              scheduleReconcile();
               if (event.cursor === null) {
                 ordered.current = {
                   cursor: ordered.current.cursor,
@@ -80,7 +88,7 @@ export function useConsoleEvents(
               gap = true;
               ordered.current = { cursor: 0, events: [] };
               setResult({ state: "degraded", data: [], reason_code: "event_cursor_gap" });
-              reconcile.current();
+              scheduleReconcile();
               return;
             }
             const next = applyOrderedEvent(ordered.current, event);
@@ -92,11 +100,12 @@ export function useConsoleEvents(
                 data: [],
                 reason_code: "event_cursor_gap",
               });
-              reconcile.current();
+              scheduleReconcile();
               return;
             }
             ordered.current = { cursor: next.cursor, events: next.events };
             setResult({ state: "ready", data: next.events, cursor: next.cursor });
+            scheduleReconcile();
           });
           if (gap) continue;
           if (!unavailable && ordered.current.events.length === 0) {
@@ -116,7 +125,10 @@ export function useConsoleEvents(
     };
 
     void connect();
-    return () => controller.abort();
+    return () => {
+      controller.abort();
+      if (reconcileTimer !== null) window.clearTimeout(reconcileTimer);
+    };
   }, [getToken]);
 
   return result;

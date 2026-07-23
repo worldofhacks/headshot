@@ -42,6 +42,7 @@ Framework-neutral where the core is; SQLAlchemy is used only for the recorder re
 from __future__ import annotations
 
 import datetime
+import time
 import uuid
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
@@ -61,12 +62,17 @@ from agentforge.campaign.authorization import (
 from agentforge.campaign.binding import BindingError, TargetBinding
 from agentforge.campaign.manifest import ManifestStore
 from agentforge.config import Settings
+from agentforge.contracts import validate as validate_contract
 from agentforge.policy.allowlist import Allowlist, AllowlistEntry
 from agentforge.policy.gateway import AttemptResult, PolicyGateway, RunPolicy
 from agentforge.policy.recorder import (
     PERSISTED_EVIDENCE_COLUMNS,
     EvidenceIntegrityError,
     ExecutionRecorder,
+)
+from agentforge.policy.scoped_credentials import (
+    CredentialLeaseExpiredError,
+    CredentialResolutionError,
 )
 
 # The gateway's own credential resolution is bypassed here: the coordinator resolves the scoped
@@ -178,6 +184,9 @@ class RunConfig:
     pre_dispatch_gate: Callable[[str], None] | None = field(default=None, repr=False)
     credential_resolver: Callable[[str | None], Any] | None = field(default=None, repr=False)
     result_context: Mapping[str, Any] = field(default_factory=dict, repr=False)
+    agent_execution_start: Callable[..., str] | None = field(default=None, repr=False)
+    agent_execution_finish: Callable[..., None] | None = field(default=None, repr=False)
+    dispatch_sleeper: Callable[[float], None] = field(default=time.sleep, repr=False)
 
 
 @dataclass(frozen=True)
@@ -240,6 +249,7 @@ class SecureCampaignCoordinator:
         self,
         seed_case: Mapping[str, Any],
         *,
+        attack_attempt: Mapping[str, Any] | None = None,
         run_oracle: bool = True,
         tamper_after_persist: Callable[[Engine, str, str], None] | None = None,
         attempt_id: str | None = None,
@@ -262,6 +272,7 @@ class SecureCampaignCoordinator:
         try:
             return self._run_case_gated(
                 seed_case,
+                attack_attempt=attack_attempt,
                 run_oracle=run_oracle,
                 tamper_after_persist=tamper_after_persist,
                 attempt_id=attempt_id,
@@ -309,6 +320,7 @@ class SecureCampaignCoordinator:
         self,
         seed_case: Mapping[str, Any],
         *,
+        attack_attempt: Mapping[str, Any] | None,
         run_oracle: bool,
         tamper_after_persist: Callable[[Engine, str, str], None] | None,
         attempt_id: str | None,
@@ -357,9 +369,23 @@ class SecureCampaignCoordinator:
         # the abort-state manifest on disk, never a durable config manifest for a refused run.
         self._write_config_manifest_once()
 
-        # (4) SEED REPLAY — a trusted-provenance seed -> a schema-valid attack_attempt (the Red
-        # Team produces no evidence). Hosted generation is skipped (deterministic replay).
-        attack_attempt = seed_to_attempt(dict(seed_case))
+        # (4) RED TEAM HANDOFF — accept only a schema-valid proposal that is byte-for-byte the
+        # deterministic projection of the exact reviewed seed bound into the authorized corpus.
+        # An altered/mutated proposal requires a NEW corpus hash and a NEW authorization.
+        expected_attempt = seed_to_attempt(dict(seed_case))
+        proposed_attempt = expected_attempt if attack_attempt is None else dict(attack_attempt)
+        try:
+            validate_contract("attack_attempt", proposed_attempt)
+        except Exception as exc:
+            raise CampaignAbort(
+                "Red Team proposal fails the AttackAttempt contract",
+                code="red-team-proposal-invalid",
+            ) from exc
+        if proposed_attempt != expected_attempt:
+            raise CampaignAbort(
+                "Red Team proposal differs from the exact authorized corpus seed",
+                code="red-team-proposal-out-of-scope",
+            )
 
         # Re-read persisted approval, abort, scope, and lease ownership immediately before the
         # dispatch boundary. The callback is trusted Runner composition, never browser state.
@@ -370,15 +396,28 @@ class SecureCampaignCoordinator:
 
         # (5) SCOPED CREDENTIAL at THIS verified dispatch boundary + dispatch through the BOUND
         # live connector. The credential resolves to a Secret only here (O1), never at construction.
-        if self.config.credential_resolver is None:
-            credential = binding.resolve_credential(Settings(environment=self.config.environment))
-        else:
-            credential = self.config.credential_resolver(binding.credential_ref)
+        try:
+            if self.config.credential_resolver is None:
+                credential = binding.resolve_credential(
+                    Settings(environment=self.config.environment)
+                )
+            else:
+                credential = self.config.credential_resolver(binding.credential_ref)
+        except CredentialLeaseExpiredError as exc:
+            # Keep the persisted abort reason bounded: resolver messages can reflect deployment
+            # details and must never become evidence/log output.  Expiry is terminal; a campaign
+            # may not silently switch to a freshly delegated patient session mid-run.
+            raise CampaignAbort(
+                "delegated target session is no longer valid",
+                code="target-session-expired",
+            ) from exc
+        except (CredentialResolutionError, ValueError) as exc:
+            raise CampaignAbort(
+                "campaign-scoped target credential is unavailable",
+                code="credential-resolution-failed",
+            ) from exc
         result = self._dispatch(
-            {
-                **attack_attempt,
-                "organization_id": self.config.result_context.get("organization_id", ""),
-            },
+            proposed_attempt,
             binding,
             policy,
             credential,
@@ -498,6 +537,7 @@ class SecureCampaignCoordinator:
                 target_id=binding.target_id,
                 campaign_run_id=self.config.campaign_run_id,
                 attempt_id=attempt_id,
+                organization_id=str(self.config.result_context.get("organization_id", "")),
             )
         except Exception as exc:  # a gateway abort / off-allowlist denial is a durable hard abort
             raise CampaignAbort(
@@ -542,6 +582,7 @@ class SecureCampaignCoordinator:
                 clock=self.clock,
                 accounting=self.accounting,
                 recorder=self.recorder,
+                sleeper=self.config.dispatch_sleeper,
             )
         return self._gateway
 
@@ -627,26 +668,65 @@ class SecureCampaignCoordinator:
         can never suppress or fabricate. When ``run_oracle`` is False the trusted block carries no
         signal (the non-oracle path), so a run with no trusted hit is forced INDETERMINATE at MVP.
         """
-        if run_oracle:
-            if not canary_token:
-                raise CampaignAbort("oracle canary is missing", code="oracle-config-invalid")
-            oracle = CanaryOracle(canary_token, id="canary-token")
-            oracle_signal = oracle.evaluate(reread_transcript)
-            oracle_results = [oracle_signal]
-        else:
-            oracle_signal = {"id": "canary-token", "provenance": "code", "hit": False}
-            oracle_results = []
+        execution_id: str | None = None
+        if self.config.agent_execution_start is not None:
+            execution_id = self.config.agent_execution_start(
+                agent_role="judge",
+                input_payload={
+                    "attempt_id": result.attempt_id,
+                    "evidence_content_hash": result.content_hash,
+                    "evidence_integrity_verified": integrity_ok,
+                    "oracle_enabled": run_oracle,
+                },
+                attempt_id=result.attempt_id,
+                detail={"phase": "independent_adjudication"},
+            )
+        try:
+            if run_oracle:
+                if not canary_token:
+                    raise CampaignAbort("oracle canary is missing", code="oracle-config-invalid")
+                oracle = CanaryOracle(canary_token, id="canary-token")
+                oracle_signal = oracle.evaluate(reread_transcript)
+                oracle_results = [oracle_signal]
+            else:
+                oracle_signal = {"id": "canary-token", "provenance": "code", "hit": False}
+                oracle_results = []
 
-        envelope = self.builder.build(
-            campaign_run_id=result.campaign_run_id,
-            attempt_id=result.attempt_id,
-            transcript=reread_transcript,
-            oracle_results=oracle_results,
-            canary_hits=[],
-            policy_decision=_POLICY_DECISION_ALLOW,
-            campaign_id=result.fields.get("campaign_id"),
-        )
-        verdict = self.judge.evaluate(envelope, integrity_ok=integrity_ok)
+            envelope = self.builder.build(
+                campaign_run_id=result.campaign_run_id,
+                attempt_id=result.attempt_id,
+                transcript=reread_transcript,
+                oracle_results=oracle_results,
+                canary_hits=[],
+                policy_decision=_POLICY_DECISION_ALLOW,
+                campaign_id=result.fields.get("campaign_id"),
+            )
+            verdict = self.judge.evaluate(envelope, integrity_ok=integrity_ok)
+        except Exception:
+            if execution_id is not None and self.config.agent_execution_finish is not None:
+                self.config.agent_execution_finish(
+                    execution_id=execution_id,
+                    status="failed",
+                    output_payload={"attempt_id": result.attempt_id},
+                    error_code="judge_execution_failed",
+                    detail={"phase": "independent_adjudication"},
+                )
+            raise
+        if execution_id is not None and self.config.agent_execution_finish is not None:
+            self.config.agent_execution_finish(
+                execution_id=execution_id,
+                status="succeeded",
+                output_payload={
+                    "attempt_id": result.attempt_id,
+                    "verdict_state": verdict.get("state"),
+                    "reason_codes": list(verdict.get("reason_codes", [])),
+                    "oracle_hit": bool(oracle_signal.get("hit")),
+                },
+                detail={
+                    "phase": "independent_adjudication",
+                    "evidence_integrity_verified": integrity_ok,
+                },
+            )
         return oracle_signal, verdict
 
     # ------------------------------------------------------------------ manifests (redacted)

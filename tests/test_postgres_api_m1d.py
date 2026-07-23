@@ -13,6 +13,7 @@ from agentforge.api.postgres import PostgresApiBackend, _safe
 from agentforge.auth.config import ClerkAuthConfig
 from agentforge.auth.dependencies import get_clerk_auth_config, require_authenticated
 from agentforge.auth.principal import Principal
+from agentforge.campaign.corpus import load_full_scan_corpus
 from agentforge.control_plane import ControlPlaneStore
 from agentforge.security_tools.repository import SecurityToolEvidenceRepository
 from agentforge.target.spec import TargetLifecycle
@@ -63,7 +64,8 @@ def _clean(engine: Engine) -> None:
     with engine.begin() as connection:
         connection.execute(
             text(
-                "TRUNCATE TABLE tool_execution_errors, security_tool_findings, scan_artifacts, "
+                "TRUNCATE TABLE agent_executions, agent_configuration_versions, "
+                "tool_execution_errors, security_tool_findings, scan_artifacts, "
                 "security_tool_runs, finding_decision_events, audit_events, command_idempotency, "
                 "campaign_attempts, campaign_run_events, campaign_runs, "
                 "campaign_authorization_decisions, campaign_authorization_requests, "
@@ -179,6 +181,75 @@ def test_security_tool_catalog_is_exposed_with_truthful_scope_and_no_target_acce
     assert tools["headshot-llm-workbench"]["target_access"] == "policy_gateway_only"
     assert configuration.state == "ready"
     assert len(configuration.data["configuration"]["security_tools"]) == len(tools)
+
+
+def test_agent_models_and_tool_scope_are_real_configurable_projections(
+    migrated_db: Engine,
+) -> None:
+    _clean(migrated_db)
+    principal = _principal(
+        LAUNCHER_ID,
+        "org:console:read",
+        "org:targets:manage",
+        "org:config:manage",
+    )
+    _seed_ready_target(migrated_db, principal)
+    backend = PostgresApiBackend(
+        migrated_db,
+        environment="staging",
+        corpus=load_full_scan_corpus(),
+    )
+    client = TestClient(_app(migrated_db, principal))
+    client.app.state.api_backend = backend
+
+    agents = client.get("/api/v1/agents")
+    tooling = client.get("/api/v1/tooling")
+
+    assert agents.status_code == tooling.status_code == 200
+    assert agents.json()["state"] == "ready", agents.text
+    assert tooling.json()["state"] == "ready", tooling.text
+    assert {row["role"] for row in agents.json()["data"]} == {
+        "orchestrator",
+        "red_team",
+        "judge",
+        "documentation",
+    }
+    tool_rows = {row["tool_id"]: row for row in tooling.json()["data"]}
+    assert tool_rows["garak"]["applicability"] == "in_campaign"
+    assert tool_rows["garak"]["reviewed_candidate_count"] == 1
+    assert tool_rows["pyrit"]["reviewed_candidate_count"] == 3
+    assert tool_rows["zap"]["applicability"] == "companion_scan"
+    assert tool_rows["semgrep"]["applicability"] == "platform_assurance"
+
+    staged = client.post(
+        "/api/v1/agents/red_team/configuration",
+        json={
+            "provider": "openrouter",
+            "model": "provider/model-v1",
+            "execution_mode": "hosted_advisory",
+            "rationale": "Evaluate a reviewed hosted generator for a future corpus.",
+        },
+        headers=_headers("agent-config-stage-0001"),
+    )
+    assert staged.status_code == 200, staged.text
+    red_team = next(
+        row for row in client.get("/api/v1/agents").json()["data"] if row["role"] == "red_team"
+    )
+    assert red_team["active_assignment"]["model"] == "full-scan-corpus-v1"
+    assert red_team["staged_assignment"]["model"] == "provider/model-v1"
+    assert red_team["staged_assignment"]["activation_state"] == "staged_pending_authorization"
+
+    rejected = client.post(
+        "/api/v1/agents/judge/configuration",
+        json={
+            "provider": "anthropic",
+            "model": "provider-model-v1",
+            "execution_mode": "hosted_advisory",
+            "rationale": "Attempt to replace the independent deterministic Judge.",
+        },
+        headers=_headers("agent-config-reject-0001"),
+    )
+    assert rejected.status_code == 409
 
 
 def test_live_security_tool_findings_are_projected_into_the_console_register(

@@ -22,6 +22,13 @@ test("390px navigation exposes every screen without application overflow", async
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/live");
   await expect(page.getByRole("heading", { name: "Live operations" })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "Birdseye" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  await expect(page.getByText("Security posture", { exact: true })).toBeVisible();
+
+  await page.getByRole("tab", { name: "Attempt stream" }).click();
   await expect(page.getByRole("button", { name: "Request rerun authorization" })).toBeEnabled();
   const firstEvent = page.locator(".event-record").first();
   await expect(firstEvent).toBeVisible();
@@ -69,7 +76,7 @@ test("browser boundary has no console errors or external asset requests", async 
 
   await page.goto("/live");
   await expect(page.getByRole("heading", { name: "Live operations" })).toBeVisible();
-  await expect(page.getByText("snapshot", { exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Security posture" })).toBeVisible();
   await page.evaluate(() => document.fonts.ready);
 
   expect(errors).toEqual([]);

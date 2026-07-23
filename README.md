@@ -5,10 +5,12 @@ red-teaming AI applications. Its first target is the externally deployed OpenEMR
 Co-Pilot. The target is reached over an authorized live URL; its code does not live in this
 repository.
 
-> **Delivery status — 2026-07-22:** the Clerk-backed React console, protected FastAPI `/api/v1`,
+> **Delivery status — 2026-07-23:** the Clerk-backed React console, protected FastAPI `/api/v1`,
 > organization-scoped PostgreSQL control plane, private Runner, live target adapter, and Langfuse
-> telemetry projection are deployed on Railway. Live campaigns remain bounded by persisted exact-
-> scope authorization, synthetic-only evidence, rate/budget/timeout caps, and abort controls.
+> telemetry projection have a provisioned Railway baseline. The current release adds the private
+> regression planner and migrations through `0013`; its exact deployment evidence is recorded
+> separately after promotion. Live campaigns remain bounded by persisted exact-scope authorization,
+> synthetic-only evidence, rate/budget/timeout caps, and abort controls.
 
 | Endpoint | Status |
 |---|---|
@@ -35,8 +37,9 @@ The requirements source of truth is [Week_3_AgentForge.pdf](Week_3_AgentForge.pd
 
 ## Locked Railway topology
 
-The full platform is hosted on Railway in separate staging and production environments. This
-is the target topology; it is not a claim that the services have been provisioned.
+The full platform is hosted on Railway in separate staging and production environments. Web, Runner,
+and PostgreSQL are provisioned in both environments. Scheduler is part of this release and must be
+verified as a private service during promotion.
 
 | Railway component | Network boundary | Responsibility |
 |---|---|---|
@@ -59,9 +62,8 @@ configuration, including different exact Organization IDs and authorized origins
    Accounts, and disable user-created Organizations.
 3. Require MFA for every user. Enable authenticator-app TOTP and backup codes; SMS may be offered
    but must not be the only factor.
-4. Create the four Organization roles and the custom permissions in the matrix below. Clerk's
-   production plan includes only the first two custom roles without the Enhanced B2B
-   Authentication add-on; the locked four-role design therefore requires that add-on.
+4. Create exactly the `org:operator` and `org:approver` Organization roles and assign the custom
+   permissions in the matrix below. Remove any retired or demo roles.
 5. Copy the publishable key and PEM JWT public key for each environment. Configure exact,
    non-wildcard authorized parties and the environment's exact Headshot Organization ID.
 6. Do **not** configure `CLERK_SECRET_KEY` for request authentication. It is a future-only
@@ -150,10 +152,8 @@ Frontend labels and Clerk system permissions are not backend authority.
 
 | Role | Backend-authoritative custom permissions |
 |---|---|
-| `org:observer` | `org:console:read`, `org:findings:read`, `org:evidence:read` |
-| `org:operator` | `org:console:read`, `org:findings:read`, `org:evidence:read`, `org:campaign:launch`, `org:campaign:abort`, `org:targets:manage`, `org:config:manage` |
-| `org:approver` | `org:console:read`, `org:findings:read`, `org:evidence:read`, `org:campaign:authorize`, `org:findings:approve`, `org:findings:resolve` |
-| `org:auditor` | `org:console:read`, `org:findings:read`, `org:evidence:read`, `org:audit:read` |
+| `org:operator` | `org:console:read`, `org:findings:read`, `org:evidence:read`, `org:audit:read`, `org:campaign:launch`, `org:campaign:abort`, `org:targets:manage`, `org:config:manage` |
+| `org:approver` | `org:console:read`, `org:findings:read`, `org:evidence:read`, `org:audit:read`, `org:campaign:authorize`, `org:findings:approve`, `org:findings:resolve` |
 
 A role is useful for assignment and audit display, but the backend checks the verified custom
 permission set for each operation. Client-supplied roles or permissions are ignored.
@@ -176,22 +176,30 @@ agent, runner, scheduler, model-provider, or target credentials.
 
 ## Current local availability
 
-Revision `0006` adds authoritative attempt taxonomy/provenance, verdict reasons, append-only
-finding-to-evidence links, run accounting, and append-only security-tool evidence repositories to the
-`0005` exact-scope control plane. A trusted server catalog prepares immutable campaign scopes; a private
-durable Runner claims the existing PostgreSQL queue, revalidates authorization immediately before every
-dispatch, resolves scoped credentials only at that boundary, and persists evidence before atomic job
-completion. Application and database controls reject self-approval, and queue completion is never
-approval.
+Revisions through `0013` add authoritative results, exact two-role authorization, regression replay
+planning, and four-agent runtime observability to the exact-scope control plane. A trusted server
+catalog prepares immutable campaign scopes; a private durable Runner claims the PostgreSQL queue,
+revalidates authorization immediately before every dispatch, resolves scoped credentials only at that
+boundary, and persists evidence before atomic job completion. The private Scheduler creates one
+append-only, human-authorization-blocked replay plan when a ready target version changes; it never
+executes an attack or bypasses campaign authorization. Application and database controls reject
+self-approval, and neither queue completion nor a replay plan is approval.
+
+For the Clinical Co-Pilot `/chat` surface, a live campaign pins one versioned, patient-scoped SMART
+session for its entire bounded run and reuses one HTTP client so cookies and connection state persist.
+The Runner never silently refreshes or rotates that identity: local expiry or the target's session-
+expired response hard-aborts the run before another attempt. Rotation requires a new secret-reference
+generation, target version, exact authorization scope, and distinct-person approval.
 
 The deterministic synthetic profile runs the real nine-case corpus through the queue, Runner,
 coordinator, recorder, independent Judge, findings, API, Coverage, and event repositories without a
-target/model socket. Local integration evidence proves all nine attempts and hash-verified Coverage;
+target/model socket. Local integration evidence proves all attempts and hash-verified Coverage;
 this is not a deployed or live-target claim. A live run remains blocked until the exact deployed target,
 ownership authorization, synthetic fixture/canary, surface, credential reference, caps, nonce, and a
 distinct Clerk Approver are persisted and every network-free preflight gate passes. Scheduling, traces,
 immutable configuration snapshots, component heartbeats, resilience history, and live-probe
-authorization remain typed unavailable rather than being replaced by dummy data.
+authorization are projected only from durable records; unavailable observations remain explicitly
+unavailable rather than being replaced by dummy data.
 
 ## Further documentation
 
@@ -201,6 +209,8 @@ authorization remain typed unavailable rather than being replaced by dummy data.
 - [Identity and access ADR](docs/adrs/0002-identity-and-access.md)
 - [Authentication security contract](docs/security/AUTHENTICATION.md)
 - [Railway deployment runbook](docs/deployment/RAILWAY.md)
+- [Measured-cost and nonlinear scale model](docs/cost/COST_ANALYSIS.md)
+- [Clinical Co-Pilot target/session readiness](docs/target/READINESS.md)
 - [Threat model](THREAT_MODEL.md)
 - [User workflows](USERS.md)
 - [User-locked requirements matrix](docs/requirements/REQUIREMENTS_MATRIX.csv)

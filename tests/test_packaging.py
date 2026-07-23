@@ -41,11 +41,17 @@ _CORPUS_ROOT = _REPO_ROOT / "evals"
 # ship in the wheel.
 _CONTRACT_SCHEMAS = (
     "campaign_directive",
+    "orchestration_snapshot",
+    "judge_calibration",
     "attack_attempt",
     "attempt_result",
     "evidence_envelope",
     "verdict",
     "regression_admission",
+    "vuln_report",
+    "regression_disposition",
+    "regression_replay_plan",
+    "regression_replay_result",
     "security_tool_run",
     "tool_finding",
     "scan_artifact",

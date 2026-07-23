@@ -3,10 +3,9 @@
 spec(M5) — ARCHITECTURE.md §2/§5, DECISIONS.md D14/D16; PRD-01.
 
 This is the ONLY live-target adapter in this wave. It is reached EXCLUSIVELY through the
-trusted Policy Gateway (``agentforge.policy.gateway``) — never directly by an agent — and it
-holds NO credential of its own: the gateway resolves a scoped :class:`Secret` by reference and
-injects it, and the adapter uses it only at the HTTPS call boundary, never logging or inlining
-it.
+trusted Policy Gateway (``agentforge.policy.gateway``) — never directly by an agent. The Runner
+injects one campaign-scoped :class:`Secret`; the adapter retains it only for that campaign, uses it
+at the HTTPS call boundary, and clears it during close without logging it.
 
 ``send()`` would make a real HTTPS request in an *authorized* live campaign, but the transport
 is fully injectable: a test drives it with a fake client (no socket), and the real client
@@ -61,10 +60,8 @@ _API_PATH = "apis/default/api/copilot/message"
 #   "copilot_chat"            — the owner's Bruno /chat contract: body ``{"session_id", "message"}``
 #       with NO Authorization header. ``session_id`` is the injected credential Secret (a
 #       patient-pinned SMART session, revealed only at the send boundary) placed in the BODY, not a
-#       header; ``message`` is derived from the request turns (single-turn: the one turn;
-#       multi-turn: the turns joined with "\n" into one message — a known single-request
-#       simplification, since a
-#       /chat call is one request and this adapter does not yet sequence a multi-turn conversation).
+#       header. Each adapter send accepts exactly one conversational turn; the Policy Gateway
+#       sequences a multi-turn attempt so every physical /chat request is separately gated.
 _PROFILE_OPENEMR_TURNS = "openemr_turns"
 _PROFILE_COPILOT_CHAT = "copilot_chat"
 _PAYLOAD_PROFILES = frozenset({_PROFILE_OPENEMR_TURNS, _PROFILE_COPILOT_CHAT})
@@ -145,7 +142,15 @@ class OpenEmrAdapter(TargetAdapter):
     allowed_content_types: tuple[str, ...] = ()
     destination_validator: Callable[[str], None] | None = field(default=None, repr=False)
     telemetry: Any | None = field(default=None, repr=False)
+    _owned_client: Any | None = field(default=None, init=False, repr=False)
+    _closed: bool = field(default=False, init=False, repr=False)
     name: str = "openemr"
+
+    @property
+    def turn_delivery(self) -> str:
+        """Tell the Policy Gateway when this target requires turn-by-turn delivery."""
+
+        return "sequential" if self.payload_profile == _PROFILE_COPILOT_CHAT else "atomic"
 
     def __post_init__(self) -> None:
         parts = urlsplit(self.base_url)
@@ -296,10 +301,25 @@ class OpenEmrAdapter(TargetAdapter):
     # ------------------------------------------------------------------ helpers
 
     def _client(self) -> Any:
-        """Return the injected client, or lazily build the real one (network path only)."""
+        """Return one campaign-persistent client (connection pool + cookie jar)."""
+        if self._closed:
+            raise AdapterError("OpenEMR adapter is closed")
         if self.client is not None:
             return self.client
-        return self.client_factory(self.timeout_seconds)
+        if self._owned_client is None:
+            self._owned_client = self.client_factory(self.timeout_seconds)
+        return self._owned_client
+
+    def close(self) -> None:
+        """Release owned transport state and the in-memory credential; safe to call twice."""
+
+        owned = self._owned_client
+        self._owned_client = None
+        self.credential = None
+        self._closed = True
+        close = getattr(owned, "close", None)
+        if callable(close):
+            close()
 
     def _build_url(self) -> str:
         """Join the configured base URL with the API path (no double slash)."""
@@ -336,8 +356,8 @@ class OpenEmrAdapter(TargetAdapter):
         * ``openemr_turns`` (default) — ``{"turns", "metadata"}`` (credential in the Bearer header).
         * ``copilot_chat`` — ``{"session_id", "message"}`` per the owner's /chat contract. The
           injected credential Secret is REVEALED here (at the send boundary only) as
-          ``session_id`` in the BODY, and ``message`` is derived from the turns (single-turn: the
-          one turn; multi-turn: turns joined with "\n" — a known single-request simplification).
+          ``session_id`` in the BODY. The Policy Gateway passes exactly one turn per physical
+          request and retains one campaign-persistent client/session across the sequence.
 
         The revealed session value never lands in a log/repr: it is placed into the outgoing body
         dict that only the injected client sees at the HTTPS boundary, exactly as the Bearer header
@@ -358,15 +378,13 @@ class OpenEmrAdapter(TargetAdapter):
 
     @staticmethod
     def _message_from_turns(request: TargetRequest) -> str:
-        """Derive the single /chat ``message`` from the request turns.
+        """Return the one /chat message supplied by the gateway-owned turn sequencer."""
 
-        A single-turn request is the one turn verbatim; a multi-turn request is its turns joined
-        with a newline into ONE message. This is a KNOWN single-request simplification: a /chat call
-        is one request/response, so a multi-turn adversarial sequence is flattened into one message
-        rather than replayed turn-by-turn against a live conversation (see the module note and the
-        coordinator follow-up on multi-turn sequencing).
-        """
-        return "\n".join(request.turns)
+        if len(request.turns) != 1:
+            raise AdapterError(
+                "OpenEMR /chat requires gateway-owned sequential delivery of exactly one turn"
+            )
+        return request.turns[0]
 
     @staticmethod
     def _parse_retry_after(headers: Any) -> float | None:

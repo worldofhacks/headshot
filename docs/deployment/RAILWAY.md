@@ -1,8 +1,11 @@
 # Railway deployment runbook
 
-> **Status — selected/planned, not deployed:** Railway is the locked full-platform host. No Railway
-> project, service, domain, database, deployment, rollback, or green check is asserted by this
-> document. Resource creation and live verification require an authorized human integration step.
+> **Status — provisioned baseline, release promotion pending:** the Headshot Railway project has
+> separate Staging and production environments with Web, Runner, and PostgreSQL provisioned. This
+> release adds the private Scheduler and migrations through `0013`. A provisioned resource is not
+> evidence that the current release is deployed or that a live campaign is authorized; exact
+> deployment IDs, commit, probes, schema revision, private-ingress checks, and CI results must be
+> recorded after promotion.
 
 This runbook defines the required staging and production topology and the evidence needed before a
 deployed status can be claimed.
@@ -26,14 +29,12 @@ installed wheel, `/app/alembic.ini`, the complete `/app/migrations` tree, and on
 assets under `/app/console`. Node, npm, TypeScript sources, tests, source maps, and development servers
 remain outside the runtime stage.
 
-The commands are packaging contracts, not evidence that all private runtime composition exists. At
-this integration point Runner refuses to start without the trusted credential resolver, adapter
-factory, and atomic result/queue-completion composition; Scheduler refuses to start without an
-authoritative persisted schedule repository and queue composition. Keep both services private and
-stopped until those dependencies are implemented and verified. Do not set their readiness override
-variables merely to make Railway show a running process. Runner enablement also requires a gate before
-every outbound dispatch and a bounded active-work cancellation signal; a campaign-level queue claim
-cannot provide either invariant by itself.
+The commands are packaging contracts, not deployment evidence. Runner composes the trusted credential
+resolver, adapter factory, per-dispatch Policy Gateway, bounded cancellation, and atomic
+result/queue-completion path. Scheduler writes idempotent target-version replay plans to PostgreSQL and
+heartbeats its state; every plan remains blocked on the normal human and policy authorization gates.
+Keep both services private. Do not set readiness overrides merely to make Railway show a running
+process.
 
 `VITE_CLERK_PUBLISHABLE_KEY` is the one frontend build argument. It is a public, environment-specific
 identifier, is required by every service build because all three services build the same image, and is
@@ -49,7 +50,7 @@ Create the same four-service pattern in separate Railway **staging** and **produ
 |---|---:|---|---|
 | Web | **Yes — the only public service** | PostgreSQL, runner/scheduler control surfaces where explicitly required | React console shell, FastAPI, Clerk human authentication, backend authorization, health/readiness |
 | Runner | No | PostgreSQL, approved model providers, external target only through the Policy Gateway | Claims durable jobs and executes agent/campaign work |
-| Scheduler | No | PostgreSQL | Enqueues scheduled regression/campaign jobs; never performs attack execution inline |
+| Scheduler | No | PostgreSQL | Creates target-version regression replay plans blocked on human authorization; never performs attack execution inline |
 | PostgreSQL | No | Web, runner, scheduler through Railway private networking | Jobs, checkpoints, findings, approvals, audit records, append-only evidence |
 
 External boundaries:
@@ -224,6 +225,7 @@ reference and never committed, printed, included in build arguments, or copied b
 | `CLERK_SECRET_KEY` | None for request auth | Absent. Future Backend API administration only after separate review |
 | `AGENTFORGE_LIVE_TARGET_CATALOG_JSON` | Web + Runner | Identical reviewed, secret-free target/surface/policy definitions; never browser-authored |
 | `AGENTFORGE_CREDENTIAL_BINDINGS_JSON` | Runner only | Opaque `secretref://` handle to Runner variable-name mapping; contains no credential value |
+| `AGENTFORGE_SESSION_LEASES_JSON` | Runner only | Non-secret generation, RFC 3339 expiry, and sealed-value SHA-256 for each versioned delegated session; never contains the session value |
 | Model-provider keys | Runner only where needed | Dedicated, scoped, expiring/spend-limited keys; never exposed to Web/browser |
 | Target credential value | Runner only | Stored under the mapped Runner variable; never present on Web, in the catalog, or in PostgreSQL |
 | `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` | Runner only | Sealed Langfuse project credentials; never exposed to Web/browser |
@@ -232,6 +234,48 @@ reference and never committed, printed, included in build arguments, or copied b
 
 Treat public Clerk keys as configuration that can change authentication trust even though they are not
 confidential. Audit all changes. Rotate compromised secrets and redeploy; never “temporarily” log them.
+
+## Delegated target-session continuity
+
+The Clinical Co-Pilot `/chat` surface uses a patient-pinned SMART session in the JSON `session_id`
+field. It is not a Clerk session and must exist only on the private Runner. Configure one immutable,
+versioned reference per target-session generation; the final reference segment must equal the metadata
+generation:
+
+```text
+AGENTFORGE_CREDENTIAL_BINDINGS_JSON={"secretref://staging/openemr/session/generation-20260722a":"OPENEMR_SMART_SESSION_20260722A"}
+AGENTFORGE_SESSION_LEASES_JSON={"secretref://staging/openemr/session/generation-20260722a":{"generation":"generation-20260722a","expires_at":"2026-07-22T23:30:00Z","value_sha256":"<64 lowercase hex characters>"}}
+OPENEMR_SMART_SESSION_20260722A=<sealed Runner variable; never paste or print>
+```
+
+The expiry must be strictly later than the earlier of the authorization deadline and Runner start plus
+the authorization-bound run timeout. The digest must be computed by the secret-provisioning process
+without exposing the value in shell history, logs, tickets, screenshots, or the Web service.
+
+At execution, Runner resolves this reference once, verifies the sealed value against its generation
+metadata, and pins the resulting `Secret` for the campaign. All attempts use one `OpenEmrAdapter` and
+one HTTP client, preserving its connection pool and cookie jar. The lease is checked before every
+attempt and both the credential reference and owned HTTP client are released on success or abort. This
+continuity never bypasses the Policy Gateway: every physical `/chat` request still passes the persisted
+authorization, allowlist, budget, rate, timeout, lease-ownership, and hard-abort checks.
+
+Do not refresh or replace a session inside an active campaign. A target `401` identified as session
+expiry or a local lease expiry is terminal: preserve completed evidence, abort the run, and dispatch no
+more attempts. To rotate safely:
+
+1. Stop new launches and let the old campaign finish, or hard-abort it.
+2. Choose a new generation identifier and create a new immutable target version whose credential
+   reference ends in that generation.
+3. Obtain a fresh SMART session for the reviewed synthetic patient fixture and provision its value,
+   expiry, and digest on Runner only.
+4. Restart/redeploy the private Runner so it loads the new sealed configuration.
+5. Create a new exact-scope authorization request and obtain approval from a different human.
+6. Launch a new campaign only after network-free preflight reports the session can cover its full
+   bounded window.
+
+If the new session expires while approval is pending, do not overwrite the value under the same
+reference. Allocate another generation and repeat the scope and approval flow. The complete target
+readiness and residual-unknown record is in `docs/target/READINESS.md`.
 
 ## Exact Clerk configuration by environment
 
@@ -246,7 +290,7 @@ keys, invitation links, session tokens, or backup codes.
 | User-created Organizations | Disabled | Disabled |
 | MFA session task | Required for all users | Required for all users |
 | Factors | TOTP + backup codes; SMS optional/not sole | TOTP + backup codes; SMS optional/not sole |
-| Roles | Observer, Operator, Approver, Auditor | Observer, Operator, Approver, Auditor; Enhanced B2B add-on provisioned |
+| Roles | Operator, Approver only | Operator, Approver only |
 | Permissions | Exact custom matrix in `docs/security/AUTHENTICATION.md` | Exact same keys; environment-local assignments |
 | Authorized parties | Exact staging Railway HTTPS origin | Exact production Railway HTTPS origin |
 | Frontend API origin | Exact staging Clerk FAPI HTTPS origin | Exact production Clerk FAPI HTTPS origin |
@@ -285,6 +329,7 @@ authentication to recover availability.
 - [ ] Only Web has a public domain; runner, scheduler, and PostgreSQL have none.
 - [ ] Environment-scoped variables and least-privilege database roles are verified.
 - [ ] Staging cannot resolve production target credentials or accept production Clerk configuration.
+- [ ] Every live session reference is versioned, its Runner-only metadata covers the bounded campaign window, and rotation creates a new target version and approval scope.
 - [ ] Alembic migration and revision evidence is captured without credentials.
 - [ ] The Web service uses `/railway/web.json`; Runner and Scheduler use their respective private config paths.
 - [ ] The built image contains `/app/alembic.ini`, the complete migration tree, and compiled console assets, and contains no Node/npm/source maps.

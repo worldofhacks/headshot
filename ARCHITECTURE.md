@@ -229,10 +229,8 @@ create authority.
 
 | Headshot Organization role | Backend-authoritative Clerk custom permissions |
 |---|---|
-| **Observer** `org:observer` | `org:console:read`, `org:findings:read`, `org:evidence:read` |
-| **Operator** `org:operator` | `org:console:read`, `org:findings:read`, `org:evidence:read`, `org:campaign:launch`, `org:campaign:abort`, `org:targets:manage`, `org:config:manage` |
-| **Approver** `org:approver` | `org:console:read`, `org:findings:read`, `org:evidence:read`, `org:campaign:authorize`, `org:findings:approve`, `org:findings:resolve` |
-| **Auditor** `org:auditor` | `org:console:read`, `org:findings:read`, `org:evidence:read`, `org:audit:read` |
+| **Operator** `org:operator` | `org:console:read`, `org:findings:read`, `org:evidence:read`, `org:audit:read`, `org:campaign:launch`, `org:campaign:abort`, `org:targets:manage`, `org:config:manage` |
+| **Approver** `org:approver` | `org:console:read`, `org:findings:read`, `org:evidence:read`, `org:audit:read`, `org:campaign:authorize`, `org:findings:approve`, `org:findings:resolve` |
 
 Permissions are checked independently of the role label. The matrix is the intended Clerk Dashboard
 assignment; backend code checks the named permission, not `organization_role`. The distinct-approver

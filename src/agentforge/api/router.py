@@ -168,6 +168,13 @@ class ConfigPublishInput(ConfigValidateInput):
     rationale: str = Field(min_length=1, max_length=2000)
 
 
+class AgentConfigurationInput(_StrictModel):
+    provider: Literal["headshot", "openrouter", "together", "anthropic"]
+    model: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,159}$")
+    execution_mode: Literal["deterministic", "hosted_advisory"]
+    rationale: str = Field(min_length=1, max_length=2000)
+
+
 def _backend(request: Request) -> ApiBackend:
     return request.app.state.api_backend
 
@@ -320,6 +327,26 @@ def configuration(request: Request, principal: ConsolePrincipal) -> JSONResponse
 @router.get("/components")
 def components(request: Request, principal: ConsolePrincipal) -> JSONResponse:
     return _read(request, "components", principal)
+
+
+@router.get("/agents")
+def agents(request: Request, principal: ConsolePrincipal) -> JSONResponse:
+    return _read(request, "agents", principal)
+
+
+@router.get("/agent-activity")
+def agent_activity(request: Request, principal: ConsolePrincipal) -> JSONResponse:
+    return _read(request, "agent_activity", principal)
+
+
+@router.get("/tooling")
+def tooling(request: Request, principal: ConsolePrincipal) -> JSONResponse:
+    return _read(request, "tooling", principal)
+
+
+@router.get("/birdseye")
+def birdseye(request: Request, principal: ConsolePrincipal) -> JSONResponse:
+    return _read(request, "birdseye", principal)
 
 
 @router.get("/audit")
@@ -539,6 +566,24 @@ def publish_configuration(
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
 ) -> JSONResponse:
     return _command(request, "publish_configuration", principal, body, idempotency_key)
+
+
+@router.post("/agents/{agent_role}/configuration")
+def configure_agent(
+    request: Request,
+    agent_role: Literal["orchestrator", "red_team", "judge", "documentation"],
+    body: AgentConfigurationInput,
+    principal: ConfigPrincipal,
+    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
+) -> JSONResponse:
+    return _command(
+        request,
+        "configure_agent",
+        principal,
+        body,
+        idempotency_key,
+        {"agent_role": agent_role},
+    )
 
 
 def _sse(event: str, data: Mapping[str, Any], *, cursor: int | None = None) -> bytes:

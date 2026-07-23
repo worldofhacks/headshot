@@ -78,7 +78,7 @@
 <text x="425.0" y="277.0" font-size="14.5" font-weight="700" text-anchor="middle" fill="#212529">RED TEAM</text>
 <text x="425.0" y="293.0" font-size="10.5" text-anchor="middle" fill="#495057">untrusted / quarantined</text>
 <rect x="838" y="242" width="214" height="82" rx="10" fill="#ffc9c9" stroke="#e03131" stroke-width="2.5"/>
-<text x="945.0" y="277.0" font-size="14.5" font-weight="700" text-anchor="middle" fill="#212529">TARGET ADAPTER</text>
+<text x="945.0" y="277.0" font-size="14.5" font-weight="700" text-anchor="middle" fill="#212529">POLICY GATEWAY</text>
 <text x="945.0" y="293.0" font-size="10.5" text-anchor="middle" fill="#495057">allowlist + synthetic data</text>
 <rect x="300" y="392" width="250" height="80" rx="10" fill="#96f2d7" stroke="#0ca678" stroke-width="2.5"/>
 <text x="425.0" y="426.0" font-size="14.5" font-weight="700" text-anchor="middle" fill="#212529">DOCUMENTATION</text>

@@ -304,6 +304,269 @@ class ComponentReadModel(_ReadModel):
     heartbeat_at: datetime.datetime
 
 
+class AgentAssignmentReadModel(_ReadModel):
+    role: str
+    provider: str
+    model: str
+    execution_mode: Literal["deterministic", "hosted_advisory"]
+    activation_state: Literal["active", "staged_pending_authorization"]
+    version: int = Field(ge=1)
+    configuration_sha256: str
+    configured_at: datetime.datetime | None = None
+    configured_by: str | None = None
+
+
+class AgentReadModel(_ReadModel):
+    role: str
+    display_name: str
+    responsibility: str
+    trust_level: str
+    target_access: str
+    input_contract: str
+    output_contract: str
+    active_assignment: AgentAssignmentReadModel
+    staged_assignment: AgentAssignmentReadModel | None = None
+    execution_count: int = Field(ge=0)
+    running_count: int = Field(ge=0)
+    succeeded_count: int = Field(ge=0)
+    failed_count: int = Field(ge=0)
+    skipped_count: int = Field(ge=0)
+    measured_cost: float = Field(ge=0)
+    currency: str
+    input_tokens: int | None = Field(default=None, ge=0)
+    output_tokens: int | None = Field(default=None, ge=0)
+    token_observation_count: int = Field(ge=0)
+    average_duration_ms: float | None = Field(default=None, ge=0)
+    last_activity_at: datetime.datetime | None = None
+    last_status: str | None = None
+    last_campaign_run_id: str | None = None
+    last_attempt_id: str | None = None
+
+
+class AgentActivityReadModel(_ReadModel):
+    execution_id: str
+    campaign_run_id: str
+    attempt_id: str | None = None
+    parent_execution_id: str | None = None
+    agent_role: str
+    status: Literal["running", "succeeded", "failed", "skipped"]
+    provider: str
+    model: str
+    execution_mode: Literal["deterministic", "hosted_advisory"]
+    configuration_version: int = Field(ge=1)
+    input_sha256: str
+    output_sha256: str | None = None
+    input_tokens: int | None = Field(default=None, ge=0)
+    output_tokens: int | None = Field(default=None, ge=0)
+    measured_cost: float = Field(ge=0)
+    currency: str
+    trace_id: str
+    detail: dict[str, Any]
+    error_code: str | None = None
+    started_at: datetime.datetime
+    finished_at: datetime.datetime | None = None
+    duration_ms: float | None = Field(default=None, ge=0)
+
+
+class ToolScopeReadModel(_ReadModel):
+    tool_id: str
+    name: str
+    version: str
+    kind: str
+    availability: str
+    target_access: str
+    target_id: str
+    target_version: str
+    target_lifecycle: str
+    surface_id: str
+    surface_version: str
+    surface_kind: str
+    endpoint: str
+    applicability: Literal[
+        "in_campaign",
+        "companion_scan",
+        "platform_assurance",
+        "adapter_available",
+        "not_applicable",
+    ]
+    execution_mode: str
+    scope_reason: str
+    requires_separate_authorization: bool
+    capabilities: tuple[str, ...]
+    owasp_llm: tuple[str, ...]
+    owasp_web: tuple[str, ...]
+    reviewed_candidate_count: int = Field(ge=0)
+    executed_attempt_count: int = Field(ge=0)
+    recorded_scan_count: int = Field(ge=0)
+    recorded_finding_count: int = Field(ge=0)
+    last_executed_at: datetime.datetime | None = None
+
+
+class BirdseyeCampaignReadModel(_ReadModel):
+    run_id: str
+    target_id: str
+    target_name: str
+    target_version: str
+    state: Literal["queued", "running", "complete", "aborted", "failed"]
+    execution_profile: Literal["synthetic", "live"]
+    scope_hash: str
+    attempt_count: int = Field(ge=0)
+
+
+class BirdseyeInstrumentationReadModel(_ReadModel):
+    budget_usd: float = Field(ge=0)
+    measured_cost_usd: float = Field(ge=0)
+    budget_utilization: float = Field(ge=0)
+    requests_per_second_cap: float = Field(ge=0)
+    queue_queued: int = Field(ge=0)
+    queue_leased: int = Field(ge=0)
+    queue_dead_letter: int = Field(ge=0)
+    confirmed_count: int = Field(ge=0)
+    likely_count: int = Field(ge=0)
+    review_count: int = Field(ge=0)
+    healthy_components: int = Field(ge=0)
+    total_components: int = Field(ge=0)
+    system_state: Literal["nominal", "degraded", "unavailable"]
+
+
+class BirdseyeSecurityPostureReadModel(_ReadModel):
+    tested_categories: int = Field(ge=0)
+    required_categories: int = Field(ge=1)
+    verified_case_count: int = Field(ge=0)
+    held_count: int = Field(ge=0)
+    exploited_count: int = Field(ge=0)
+    review_count: int = Field(ge=0)
+    observed_hold_rate: float | None = Field(default=None, ge=0, le=1)
+    open_finding_count: int = Field(ge=0)
+    in_progress_finding_count: int = Field(ge=0)
+    resolved_finding_count: int = Field(ge=0)
+    critical_open_finding_count: int = Field(ge=0)
+    resilience_direction: Literal["improving", "steady", "degrading", "unavailable"]
+    current_regression_hold_rate: float | None = Field(default=None, ge=0, le=1)
+    previous_regression_hold_rate: float | None = Field(default=None, ge=0, le=1)
+    resilience_delta: float | None = Field(default=None, ge=-1, le=1)
+    cost_per_attempt_usd: float | None = Field(default=None, ge=0)
+    cost_velocity_usd_per_minute: float | None = Field(default=None, ge=0)
+    projected_cost_at_attempt_cap_usd: float | None = Field(default=None, ge=0)
+    priority_category: str | None = None
+    priority_reason: str
+    priority_source: Literal["orchestrator_decision", "coverage_policy", "unavailable"]
+    priority_at: datetime.datetime | None = None
+
+
+class BirdseyeCategoryOutcomeReadModel(_ReadModel):
+    target_version: str
+    category: str
+    verified_case_count: int = Field(ge=0)
+    verified_attempt_count: int = Field(ge=0)
+    held_count: int = Field(ge=0)
+    exploited_count: int = Field(ge=0)
+    review_count: int = Field(ge=0)
+    last_evaluated_at: datetime.datetime | None = None
+
+
+class BirdseyeAgentActivityReadModel(_ReadModel):
+    execution_id: str
+    parent_execution_id: str | None = None
+    agent_role: Literal["orchestrator", "red_team", "judge", "documentation"]
+    status: Literal["running", "succeeded", "failed", "skipped"]
+    phase: str
+    attempt_id: str | None = None
+    category: str | None = None
+    verdict_state: str | None = None
+    finding_id: str | None = None
+    error_code: str | None = None
+    started_at: datetime.datetime
+    finished_at: datetime.datetime | None = None
+    duration_ms: float | None = Field(default=None, ge=0)
+
+
+class BirdseyeNodeReadModel(_ReadModel):
+    component_id: str
+    name: str
+    kind: str
+    trust_zone: Literal[
+        "human",
+        "untrusted",
+        "control",
+        "execution",
+        "evaluation",
+        "governance",
+        "data",
+        "observability",
+        "unclassified",
+    ]
+    availability: str
+    runtime_state: Literal[
+        "ready",
+        "working",
+        "waiting",
+        "degraded",
+        "error",
+        "stale",
+        "unavailable",
+    ]
+    detail: str
+    current_task: str
+    heartbeat_at: datetime.datetime | None = None
+    freshness_seconds: float | None = Field(default=None, ge=0)
+    is_fresh: bool
+    healthy_instances: int = Field(ge=0)
+    total_instances: int = Field(ge=1)
+    p50_latency_ms: float | None = Field(default=None, ge=0)
+    p95_latency_ms: float | None = Field(default=None, ge=0)
+    queue_depth: int | None = Field(default=None, ge=0)
+    target_access: str
+
+
+class BirdseyeEdgeReadModel(_ReadModel):
+    edge_id: str
+    source_component_id: str
+    target_component_id: str
+    contract_name: str
+    state: Literal["idle", "active", "complete", "error", "stale", "unavailable"]
+    attempt_id: str | None = None
+    last_event_at: datetime.datetime | None = None
+    detail: str
+
+
+class BirdseyeAttentionReadModel(_ReadModel):
+    attention_id: str
+    priority: int = Field(ge=0)
+    kind: Literal["integrity", "approval", "finding", "component"]
+    title: str
+    detail: str
+    continuation: str
+    record_type: str
+    record_id: str
+    route: str
+    created_at: datetime.datetime
+
+
+class BirdseyeTimelineReadModel(_ReadModel):
+    cursor: int = Field(ge=1)
+    event_type: str
+    actor: str
+    summary: str
+    aggregate_type: str
+    aggregate_id: str
+    created_at: datetime.datetime
+
+
+class BirdseyeSnapshotReadModel(_ReadModel):
+    campaign: BirdseyeCampaignReadModel | None = None
+    instrumentation: BirdseyeInstrumentationReadModel
+    security_posture: BirdseyeSecurityPostureReadModel
+    category_outcomes: tuple[BirdseyeCategoryOutcomeReadModel, ...]
+    agent_activity: tuple[BirdseyeAgentActivityReadModel, ...]
+    nodes: tuple[BirdseyeNodeReadModel, ...]
+    edges: tuple[BirdseyeEdgeReadModel, ...]
+    attention: tuple[BirdseyeAttentionReadModel, ...]
+    timeline: tuple[BirdseyeTimelineReadModel, ...]
+    cursor: int = Field(ge=0)
+    as_of: datetime.datetime
+
+
 _LIST_ADAPTERS = {
     "campaigns": TypeAdapter(list[CampaignReadModel]),
     "attempts": TypeAdapter(list[AttemptReadModel]),
@@ -316,6 +579,9 @@ _LIST_ADAPTERS = {
     "costs": TypeAdapter(list[CostReadModel]),
     "traces": TypeAdapter(list[TraceReadModel]),
     "components": TypeAdapter(list[ComponentReadModel]),
+    "agents": TypeAdapter(list[AgentReadModel]),
+    "agent_activity": TypeAdapter(list[AgentActivityReadModel]),
+    "tooling": TypeAdapter(list[ToolScopeReadModel]),
 }
 _SINGLE_ADAPTERS = {
     "principal": TypeAdapter(PrincipalReadModel),
@@ -324,6 +590,7 @@ _SINGLE_ADAPTERS = {
     "target": TypeAdapter(TargetReadModel),
     "finding": TypeAdapter(FindingReadModel),
     "configuration": TypeAdapter(ConfigurationReadModel),
+    "birdseye": TypeAdapter(BirdseyeSnapshotReadModel),
 }
 
 
@@ -338,8 +605,21 @@ def validate_ready_data(resource: str, data: Any) -> Any:
 
 __all__ = [
     "ApprovalReadModel",
+    "AgentActivityReadModel",
+    "AgentAssignmentReadModel",
+    "AgentReadModel",
     "AttemptReadModel",
     "AuditReadModel",
+    "BirdseyeAgentActivityReadModel",
+    "BirdseyeAttentionReadModel",
+    "BirdseyeCampaignReadModel",
+    "BirdseyeCategoryOutcomeReadModel",
+    "BirdseyeEdgeReadModel",
+    "BirdseyeInstrumentationReadModel",
+    "BirdseyeNodeReadModel",
+    "BirdseyeSecurityPostureReadModel",
+    "BirdseyeSnapshotReadModel",
+    "BirdseyeTimelineReadModel",
     "CampaignReadModel",
     "CampaignTemplateReadModel",
     "ComponentReadModel",
@@ -352,6 +632,7 @@ __all__ = [
     "ResilienceReadModel",
     "SurfaceReadModel",
     "TargetReadModel",
+    "ToolScopeReadModel",
     "TraceReadModel",
     "validate_ready_data",
 ]

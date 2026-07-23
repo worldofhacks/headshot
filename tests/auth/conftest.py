@@ -177,7 +177,7 @@ def token_factory(
         *,
         permissions: Iterable[str] = ("org:console:read",),
         organization_id: str | None = None,
-        role: str = "observer",
+        role: str = "operator",
         authorized_party: str | None = None,
         user_id: str | None = None,
         session_id: str | None = None,
