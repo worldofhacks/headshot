@@ -1,9 +1,10 @@
 # Final requirements matrix
 
-Audit timestamp: `2026-07-22T23:06:25Z`
-Audited commit: `7749fd598dee1a16ad4fd4d04a6ec37855c0ac2c`
+Audit timestamp: `2026-07-23T20:42:45Z`
+Audited parent commit: `215584f4a16522073b8aef9453c1578bdd243669`
 Canonical row-level ledger: [`REQUIREMENTS_MATRIX.csv`](REQUIREMENTS_MATRIX.csv)
 Fresh baseline: [`../evidence/baseline/2026-07-22-final-integration.md`](../evidence/baseline/2026-07-22-final-integration.md)
+Release audit: [`../evidence/baseline/2026-07-23-role-agent-release-audit.md`](../evidence/baseline/2026-07-23-role-agent-release-audit.md)
 
 This is a review view of the canonical CSV. The CSV records, for every requirement, its source, checkpoint, status, owner, automated verification, evidence path, and remaining work. Status is deliberately strict:
 
@@ -16,13 +17,20 @@ This is a review view of the canonical CSV. The CSV records, for every requireme
 
 | Scope | Complete | Partial | Missing | Blocked | Total |
 |---|---:|---:|---:|---:|---:|
-| Canonical PRD | 17 | 11 | 6 | 3 | 37 |
+| Canonical PRD | 17 | 13 | 4 | 3 | 37 |
 | Optional engineering deliverables | 7 | 9 | 1 | 1 | 18 |
 | User deployment constraints | 1 | 5 | 0 | 1 | 7 |
 | Implementation-lead acceptance | 0 | 7 | 1 | 2 | 10 |
-| **All requirements** | **25** | **32** | **8** | **7** | **72** |
+| **All requirements** | **25** | **34** | **6** | **7** | **72** |
 
-The public platform, target health boundary, deterministic suites, production container, security-tool baseline, dual remotes, and both `main` CI systems are verified. The authoritative offline slice now includes verified-signal Orchestration, a typed Red Team handoff, independent judging, draft-only Documentation, and blocked regression disposition. The decisive remaining path is deterministic regression execution and Judge calibration, followed by a distinct human Approver for one bounded synthetic staging campaign. Nothing below treats passive health checks as live-test authorization.
+The public platform baseline, target health boundary, deterministic suites, production container,
+security-tool baseline, and dual remotes are verified. Candidate and deployment CI status is recorded
+separately and is never inferred by this ledger. The authoritative offline slice now includes
+verified-signal Orchestration, a typed Red Team handoff, independent judging, draft-only Documentation,
+and target-version replay planning blocked on human authorization. The decisive remaining path is
+deterministic regression execution and Judge calibration, followed by a distinct human Approver for one
+bounded synthetic staging campaign. Nothing below treats passive health checks or replay planning as
+live-test authorization.
 
 ## Canonical PRD
 
@@ -50,7 +58,7 @@ The public platform, target health boundary, deterministic suites, production co
 | PRD-20 | complete | Documentation Agent converts confirmed exploits into reports | Draft generation is complete; publication remains human-gated. |
 | PRD-21 | complete | Reports contain every mandated field | Keep every generated report contract-valid and unpublished by default. |
 | PRD-22 | missing | A senior engineer can reproduce, validate, and fix from each report | Independently reproduce each genuine report; simulated triage does not count. |
-| PRD-23 | missing | Versioned exploit store auto-replays and detects reappearance/cross-category regression | Implement store, worker, target-version trigger, and detection. |
+| PRD-23 | partial | Versioned exploit store auto-replays and detects reappearance/cross-category regression | Storage and target-version planning exist; execute authorization-bound replays and add reappearance/cross-category analysis. |
 | PRD-24 | partial | Regression admission/pass requires deterministic reproduction and the right reason | Admission is fail-closed; implement deterministic replay and the expected-safe oracle. |
 | PRD-25 | complete | Humans can answer coverage, status, resilience, lifecycle, cost, and order questions | Deploy migration 0011; retain unavailable/null states when provider telemetry was not observed. |
 | PRD-26 | complete | Observability is the Orchestrator decision substrate | Continue excluding raw spans and hash-invalid rows. |
@@ -60,7 +68,7 @@ The public platform, target health boundary, deterministic suites, production co
 | PRD-30 | complete | `USERS.md` defines users, workflows, use cases, and automation rationale | None. |
 | PRD-31 | missing | A 3–5 minute demo shows live attacks and key decisions | Record after an authorized campaign, with no PHI or credentials. |
 | PRD-32 | missing | At least three distinct genuine vulnerability reports exist | Continue authorized testing; count only confirmed, independently reproducible findings. |
-| PRD-33 | missing | Actual cost and nonlinear 100/1K/10K/100K projections exist | Merge/recreate measured cost evidence including compute, storage, egress, CI, power, and human time. |
+| PRD-33 | partial | Actual cost and nonlinear 100/1K/10K/100K projections exist | The nonlinear D17 model exists; populate it with actual development spend and measured runtime inputs. |
 | PRD-34 | blocked | Public platform runs live tests against the deployed target | Platform and target are healthy; distinct human approval remains required. |
 | PRD-35 | missing | Final social post describes the platform and tags GauntletAI | Draft now; human publication follows live demo evidence. |
 | PRD-36 | partial | Platform discovers, evaluates, reproduces, documents, prevents regressions, and adapts | Complete deterministic regression replay, calibration, and deployed feedback-loop proof. |

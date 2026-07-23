@@ -8,9 +8,9 @@ This document implements the method locked by
 test-runs**. A test-run is a bounded campaign execution, not an individual test case, model call, or
 attempt. The number of attempts and agent calls inside a run must be measured rather than assumed.
 
-At source commit `075a7ec`, the repository contains offline deterministic evidence but no authorized
-live result, provider billing export, token trace, local-capacity benchmark, deployed-platform invoice,
-or utilization measurement. Consequently:
+At the 2026-07-23 release-candidate audit, the repository contains offline deterministic evidence and
+a provisioned Railway baseline but no authorized live result, provider billing export, token trace,
+local-capacity benchmark, deployed-platform invoice, or utilization measurement. Consequently:
 
 - present MVP dollar spend is **TBD — unmeasured**;
 - every tier total below is **projected, unmeasured**;
@@ -228,7 +228,7 @@ Neither scenario is currently populated because its authoritative inputs are una
 
 ## Present MVP cost versus future scale
 
-### Present MVP at `075a7ec`
+### Present MVP at the 2026-07-23 release candidate
 
 - Offline corpus validation, deterministic fake execution, and tests do not invoke hosted inference.
 - No live campaign has produced attempts, Judge usage, Documentation drafts, or Orchestrator calls.
