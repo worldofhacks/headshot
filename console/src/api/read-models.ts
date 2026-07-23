@@ -394,6 +394,7 @@ const decodeApproval = (value: unknown): ApprovalReadModel => {
     "status",
     "decision",
     "approver_user_id",
+    "self_approval_override",
     "decided_at",
   ]);
   for (const key of ["request_id", "scope_hash", "launcher_user_id"]) string(result, key, name);
@@ -402,6 +403,7 @@ const decodeApproval = (value: unknown): ApprovalReadModel => {
   literal(result, "status", ["pending", "approved", "rejected"], name);
   nullableLiteral(result, "decision", ["approved", "rejected"], name);
   nullableString(result, "approver_user_id", name);
+  boolean(result, "self_approval_override", name);
   nullableTimestamp(result, "decided_at", name);
   return result as ApprovalReadModel;
 };
@@ -636,6 +638,8 @@ const decodeTarget = (value: unknown): TargetReadModel => {
       "surface_version",
       "corpus_id",
       "corpus_hash",
+      "case_count",
+      "tool_sources",
       "execution_profile",
       "maximum_caps",
     ], "campaign template");
@@ -647,6 +651,8 @@ const decodeTarget = (value: unknown): TargetReadModel => {
       "corpus_id",
       "corpus_hash",
     ]) string(template, key, "campaign template");
+    number(template, "case_count", "campaign template", { integer: true, minimum: 1 });
+    stringArray(template, "tool_sources", "campaign template");
     literal(template, "execution_profile", ["synthetic", "live"], "campaign template");
     template.maximum_caps = decodeCaps(template.maximum_caps);
   }

@@ -232,7 +232,7 @@ def _synthetic_entry(environment: TargetEnvironment) -> CatalogEntry:
         oracle_refs=("oracle://agentforge/deterministic-cassette-v1",),
         safety_caps=SafetyCaps(
             budget_usd=1.0,
-            max_attempts_per_run=9,
+            max_attempts_per_run=14,
             target_requests_per_second=100.0,
             run_timeout_seconds=300.0,
         ),

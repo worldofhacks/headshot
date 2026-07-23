@@ -804,6 +804,9 @@ class CampaignAuthorizationDecisionRecord(Base):
     decision: Mapped[str] = mapped_column(String(16), nullable=False)
     approver_user_id: Mapped[str] = mapped_column(String(128), nullable=False)
     approver_session_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    self_approval_override: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
 
     __table_args__ = (
         ForeignKeyConstraint(

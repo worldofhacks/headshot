@@ -108,6 +108,7 @@ export interface ApprovalReadModel extends AuthorizationScopeReadModel {
   status: "pending" | "approved" | "rejected";
   decision: "approved" | "rejected" | null;
   approver_user_id: string | null;
+  self_approval_override: boolean;
   decided_at: string | null;
 }
 
@@ -206,6 +207,8 @@ export interface CampaignTemplateReadModel extends JsonRecord {
   surface_version: string;
   corpus_id: string;
   corpus_hash: string;
+  case_count: number;
+  tool_sources: string[];
   execution_profile: "synthetic" | "live";
   maximum_caps: SafetyCapsReadModel;
 }

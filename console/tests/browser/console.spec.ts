@@ -22,6 +22,10 @@ test("390px navigation exposes every screen without application overflow", async
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/live");
   await expect(page.getByRole("heading", { name: "Live operations" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Request rerun authorization" })).toBeEnabled();
+  const firstEvent = page.locator(".event-record").first();
+  await expect(firstEvent).toBeVisible();
+  expect((await firstEvent.boundingBox())?.height).toBeGreaterThanOrEqual(36);
 
   await page.getByRole("button", { name: "Targets", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Targets", exact: true })).toBeVisible();

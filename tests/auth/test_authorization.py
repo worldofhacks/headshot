@@ -158,6 +158,20 @@ def test_fastapi_distinct_approver_uses_only_server_workflow_state(
     assert absent_server_state.status_code == 403
 
 
+def test_fastapi_godmode_may_use_audited_self_approval_exception(
+    monkeypatch, auth_environ, auth_values, token_factory
+) -> None:
+    _install_auth_environ(monkeypatch, auth_environ)
+    token = token_factory(permissions=(CAMPAIGN_AUTHORIZE,), role="godmode")
+
+    response = TestClient(_approval_app(auth_values.user_id)).post(
+        "/approve", headers={"Authorization": f"Bearer {token}"}
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"user_id": auth_values.user_id}
+
+
 def test_require_headshot_organization_accepts_exact_match(auth_config, auth_values) -> None:
     principal = _principal(auth_values, permissions=(CONSOLE_READ,))
 

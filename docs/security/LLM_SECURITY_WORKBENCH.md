@@ -16,7 +16,7 @@ out-of-band/browser-specific tools:
 | Dashboard + Target | Targets, Campaigns, Coverage | Versioned ready targets and enabled surfaces only |
 | Proxy + Logger + Inspector | PostgreSQL outbound request ledger, Langfuse projection, sanitized Traces inspector | Every target request is recorded; secrets are redacted before persistence |
 | Repeater | Regression replay | Versioned corpus plus fresh exact-scope authorization; no arbitrary raw resend |
-| Intruder | Garak, PyRIT, Giskard and Promptfoo candidate/mutation toolchain | Candidates cannot dispatch; PolicyGateway applies rate, attempt, timeout and cost caps |
+| Intruder | Garak, PyRIT, Giskard and Promptfoo candidate/mutation toolchain | Five reviewed Garak/PyRIT/Promptfoo candidates join the 14-attempt full scan; Giskard remains analysis-only until it emits an explicit attack; PolicyGateway applies rate, attempt, timeout and cost caps |
 | Scanner | Exact-origin passive ZAP plus independent Judge | Scanner findings are advisory and publication remains human-gated |
 | Decoder | PyRIT Base64, ROT13 and ASCII-smuggling converters | Offline candidate transformation only |
 | Comparer | Attempt evidence, independent Verdict and resilience history | Attack generation cannot approve its own result |
@@ -32,7 +32,8 @@ passive signals. Signals are not findings and cannot replace the independent Jud
 
 - There is one target exit: the PolicyGateway. Neither the workbench nor an imported tool opens a
   second network path.
-- Repeater- and Intruder-style execution changes the corpus identity and requires a fresh approval
+- Repeater- and Intruder-style execution uses `headshot-full-scan-v1`, changes the baseline corpus
+  identity, and requires a fresh approval
   bound to target, surface, corpus hash, nonce, rate, attempts, timeout, and cost.
 - The request ledger stores sanitized content and hashes. Raw credentials never reach the browser or
   Langfuse.

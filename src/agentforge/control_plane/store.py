@@ -20,6 +20,7 @@ from agentforge.auth.permissions import (
     CAMPAIGN_LAUNCH,
     FINDINGS_APPROVE,
     FINDINGS_RESOLVE,
+    ROLE_GODMODE,
     TARGETS_MANAGE,
 )
 from agentforge.auth.principal import Principal
@@ -683,8 +684,13 @@ class ControlPlaneStore:
                 raise RecordConflictError("authorization request already has a terminal decision")
             if request.expires_at <= datetime.datetime.now(datetime.UTC):
                 raise AuthorizationDeniedError("authorization request is expired")
+            self_approval_override = (
+                decision == "approved"
+                and principal.user_id == request.launcher_user_id
+                and principal.organization_role == ROLE_GODMODE
+            )
             if decision == "approved":
-                if principal.user_id == request.launcher_user_id:
+                if principal.user_id == request.launcher_user_id and not self_approval_override:
                     raise AuthorizationDeniedError(
                         "launcher cannot approve own authorization request"
                     )
@@ -699,9 +705,9 @@ class ControlPlaneStore:
                     text(
                         "INSERT INTO campaign_authorization_decisions "
                         "(decision_id, organization_id, request_id, scope_hash, decision, "
-                        "approver_user_id, approver_session_id) VALUES "
+                        "approver_user_id, approver_session_id, self_approval_override) VALUES "
                         "(:decision_id, :org, :request_id, :scope_hash, :decision, "
-                        ":user, :session) "
+                        ":user, :session, :self_approval_override) "
                         "RETURNING created_at"
                     ),
                     {
@@ -712,6 +718,7 @@ class ControlPlaneStore:
                         "decision": decision,
                         "user": principal.user_id,
                         "session": principal.session_id,
+                        "self_approval_override": self_approval_override,
                     },
                 )
                 .mappings()
@@ -724,7 +731,11 @@ class ControlPlaneStore:
                 "campaign_authorization_request",
                 request_id,
                 principal,
-                {"decision_id": decision_id, "scope_hash": request.scope_hash},
+                {
+                    "decision_id": decision_id,
+                    "scope_hash": request.scope_hash,
+                    "self_approval_override": self_approval_override,
+                },
             )
             response = {"decision_id": decision_id}
             self._finish_command(
@@ -743,6 +754,7 @@ class ControlPlaneStore:
                 decision=decision,
                 approver_user_id=principal.user_id,
                 approver_session_id=principal.session_id,
+                self_approval_override=self_approval_override,
                 created_at=row["created_at"],
             )
 
@@ -958,6 +970,7 @@ class ControlPlaneStore:
                     text(
                         "SELECT r.*, q.scope_payload, q.expires_at, "
                         "d.decision_id, d.decision, d.approver_user_id, d.approver_session_id, "
+                        "d.self_approval_override, "
                         "d.created_at AS decision_created_at, "
                         "(SELECT state FROM campaign_run_events e "
                         "WHERE e.organization_id = r.organization_id "
@@ -983,8 +996,11 @@ class ControlPlaneStore:
                 datetime.UTC
             ):
                 raise AuthorizationDeniedError("campaign run authorization is not live")
-            if row["approver_user_id"] == row["launcher_user_id"]:
+            same_person = row["approver_user_id"] == row["launcher_user_id"]
+            if same_person and not row["self_approval_override"]:
                 raise AuthorizationDeniedError("campaign run violates two-person control")
+            if row["self_approval_override"] and not same_person:
+                raise AuthorizationDeniedError("campaign self-approval override is invalid")
             if row["state"] not in {"queued", "running"}:
                 raise AuthorizationDeniedError("campaign run is not executable")
             scope = scope_from_payload(dict(row["scope_payload"]))
@@ -1000,6 +1016,7 @@ class ControlPlaneStore:
                 decision=row["decision"],
                 approver_user_id=row["approver_user_id"],
                 approver_session_id=row["approver_session_id"],
+                self_approval_override=bool(row["self_approval_override"]),
                 created_at=row["decision_created_at"],
             )
             return AuthorizedRunRecord(
@@ -2156,6 +2173,7 @@ class ControlPlaneStore:
             decision=row["decision"],
             approver_user_id=row["approver_user_id"],
             approver_session_id=row["approver_session_id"],
+            self_approval_override=bool(row["self_approval_override"]),
             created_at=row["created_at"],
         )
 

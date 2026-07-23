@@ -65,8 +65,9 @@ ROLE_PERMISSION_MATRIX: Final = MappingProxyType(
         ROLE_APPROVER: _READ_PERMISSIONS
         | frozenset({CAMPAIGN_AUTHORIZE, FINDINGS_APPROVE, FINDINGS_RESOLVE}),
         ROLE_AUDITOR: _READ_PERMISSIONS | frozenset({AUDIT_READ}),
-        # Demo/grader role. Runtime authority still comes only from verified Clerk
-        # custom-permission claims, and distinct-human approval remains enforced.
+        # Demo/grader role. Runtime authority still comes only from verified Clerk custom-
+        # permission claims. Campaign self-approval is allowed only for this verified role and
+        # is persisted as an explicit override for database/Runner revalidation.
         ROLE_GODMODE: ORGANIZATION_CUSTOM_PERMISSIONS,
     }
 )

@@ -19,7 +19,7 @@ from agentforge.api.backend import ApiBackend, ApiBackendUnavailable, ApiConflic
 from agentforge.api.read_models import validate_ready_data
 from agentforge.api.schemas import CommandResult, EventBatch, ResourceResult
 from agentforge.auth.errors import AuthorizationError
-from agentforge.campaign.corpus import AuthoredCorpus, load_mvp_corpus
+from agentforge.campaign.corpus import AuthoredCorpus, load_full_scan_corpus
 from agentforge.control_plane import ControlPlaneStore
 from agentforge.control_plane.errors import (
     AuthorizationDeniedError,
@@ -617,7 +617,7 @@ class PostgresApiBackend(ApiBackend):
                                 "owasp_llm": sorted(group["llm"]),
                                 "verdict_counts": group["verdicts"],
                                 "covered": (
-                                    len(group["cases"]) == 9
+                                    len(group["cases"]) >= 9
                                     and group["categories"] == _REQUIRED_CATEGORIES
                                     and _REQUIRED_WEB.issubset(group["web"])
                                     and _REQUIRED_LLM.issubset(group["llm"])
@@ -822,6 +822,7 @@ class PostgresApiBackend(ApiBackend):
                         " AND t.target_id = q.scope_payload->>'target_id' "
                         " AND t.version = q.scope_payload->>'target_version' LIMIT 1) "
                         "AS target_base_url, d.decision, d.approver_user_id, "
+                        "coalesce(d.self_approval_override, false) AS self_approval_override, "
                         "d.created_at AS decided_at FROM campaign_authorization_requests q "
                         "LEFT JOIN campaign_authorization_decisions d "
                         "ON d.organization_id = q.organization_id AND d.request_id = q.request_id "
@@ -897,6 +898,8 @@ class PostgresApiBackend(ApiBackend):
                                 "surface_version": surface["version"],
                                 "corpus_id": self._corpus.corpus_id,
                                 "corpus_hash": self._corpus.content_hash,
+                                "case_count": len(self._corpus.cases),
+                                "tool_sources": list(self._corpus.tool_sources),
                                 "execution_profile": "synthetic"
                                 if row["target_id"] == SYNTHETIC_TARGET_ID
                                 else "live",
@@ -1140,7 +1143,7 @@ def build_postgres_backend(
 
         return UnavailableApiBackend()
     engine = create_engine(normalize_psycopg_url(database_url), pool_pre_ping=True, future=True)
-    corpus = load_mvp_corpus()
+    corpus = load_full_scan_corpus()
     required_org = os.environ.get("CLERK_REQUIRED_ORG_ID")
     if required_org:
         catalog = TrustedTargetCatalog.from_environment(environment)

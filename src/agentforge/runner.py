@@ -23,7 +23,12 @@ from sqlalchemy import Engine, text
 from agentforge.campaign.authorization import RunAuthorization
 from agentforge.campaign.binding import TargetBinding
 from agentforge.campaign.coordinator import CampaignAbort, RunConfig, SecureCampaignCoordinator
-from agentforge.campaign.corpus import MVP_CASE_COUNT, AuthoredCorpus, load_mvp_corpus
+from agentforge.campaign.corpus import (
+    MVP_CASE_COUNT,
+    MVP_CATEGORIES,
+    AuthoredCorpus,
+    load_full_scan_corpus,
+)
 from agentforge.campaign.manifest import ManifestStore
 from agentforge.campaign.runtime import SystemClock, accounting_from_environment, production_engine
 from agentforge.control_plane.store import ControlPlaneStore
@@ -220,7 +225,7 @@ class DurableCampaignRunner:
     ) -> None:
         self.engine = engine
         self.environment = environment
-        self.corpus = corpus or load_mvp_corpus()
+        self.corpus = corpus or load_full_scan_corpus()
         self.catalog = catalog or TrustedTargetCatalog.from_environment(environment)
         self.credentials = credentials or SealedEnvironmentCredentialResolver.from_environment()
         self.clock = clock or SystemClock()
@@ -263,8 +268,11 @@ class DurableCampaignRunner:
         scope = authorized.scope
         if not _exact_job_payload(job, authorized):
             blockers.append("queue_payload_mismatch")
-        if authorized.approval.approver_user_id == authorized.run.launcher_user_id:
+        same_person = authorized.approval.approver_user_id == authorized.run.launcher_user_id
+        if same_person and not authorized.approval.self_approval_override:
             blockers.append("two_person_control_failed")
+        if authorized.approval.self_approval_override and not same_person:
+            blockers.append("self_approval_override_invalid")
         if scope.scope_hash() != authorized.run.scope_hash:
             blockers.append("operation_hash_mismatch")
         if (
@@ -272,7 +280,9 @@ class DurableCampaignRunner:
             or scope.corpus_hash != self.corpus.content_hash
         ):
             blockers.append("corpus_hash_mismatch")
-        if len(self.corpus.cases) != MVP_CASE_COUNT or len(self.corpus.categories) != 3:
+        if len(self.corpus.cases) < MVP_CASE_COUNT or not MVP_CATEGORIES.issubset(
+            self.corpus.categories
+        ):
             blockers.append("corpus_not_complete")
 
         entry: CatalogEntry | None = None
@@ -329,7 +339,7 @@ class DurableCampaignRunner:
                 blockers.append("live_profile_cannot_use_cassette")
 
         caps = scope.caps
-        if caps.max_attempts_per_run < MVP_CASE_COUNT or not caps.is_within(
+        if caps.max_attempts_per_run < len(self.corpus.cases) or not caps.is_within(
             entry.target.safety_caps if entry is not None else caps
         ):
             blockers.append("campaign_caps_incompatible")
@@ -386,7 +396,7 @@ class DurableCampaignRunner:
         )
 
     def execute_claimed(self, job: JobRecord) -> None:
-        """Execute all nine cases and atomically commit the result before releasing the lease."""
+        """Execute the exact authorized corpus and commit the result before releasing the lease."""
 
         report, prepared = self.preflight(job)
         report.require_ready()
@@ -556,7 +566,7 @@ def check_runtime(database_url: str | None = None) -> bool:
         return False
     try:
         engine = _engine(url)
-        return _schema_is_current(engine) and len(load_mvp_corpus().cases) == MVP_CASE_COUNT
+        return _schema_is_current(engine) and len(load_full_scan_corpus().cases) >= MVP_CASE_COUNT
     except Exception:
         return False
 
