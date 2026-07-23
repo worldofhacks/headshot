@@ -118,9 +118,7 @@ def test_live_runner_refuses_catalog_profile_that_differs_from_approved_scope() 
 def test_synthetic_catalog_versions_the_fourteen_case_safety_contract() -> None:
     catalog = TrustedTargetCatalog.from_environment("staging")
 
-    entry, surface = catalog.resolve(
-        target_id="synthetic-copilot", surface_id="synthetic-chat"
-    )
+    entry, surface = catalog.resolve(target_id="synthetic-copilot", surface_id="synthetic-chat")
 
     assert entry.target.version == "1.1.0"
     assert entry.target.safety_caps.max_attempts_per_run == 14
