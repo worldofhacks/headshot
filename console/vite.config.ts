@@ -271,9 +271,9 @@ const browserFixture = (): Plugin => ({
         response.end(JSON.stringify({
           state: "ready",
           data: [
-            { ...browserScope, run_nonce: "browser-run-alpha-0001", request_id: "browser-approval-alpha", scope_hash: "sha256:scope-alpha", launcher_user_id: "user_operator", expires_at: "2026-07-22T00:15:00Z", created_at: "2026-07-22T00:00:00Z", status: "approved", decision: "approved", approver_user_id: "user_approver", decided_at: "2026-07-22T00:01:00Z" },
-            { ...browserScope, run_nonce: "browser-run-beta-0002", request_id: "browser-approval-beta", scope_hash: "sha256:scope-beta", launcher_user_id: "user_operator", expires_at: "2026-07-22T00:22:00Z", created_at: "2026-07-22T00:07:00Z", status: "rejected", decision: "rejected", approver_user_id: "user_approver", decided_at: "2026-07-22T00:08:00Z" },
-            { ...browserScope, run_nonce: "browser-run-gamma-0003", request_id: "browser-approval-gamma", scope_hash: "sha256:scope-gamma", launcher_user_id: "user_operator", expires_at: "2026-07-22T00:29:00Z", created_at: "2026-07-22T00:14:00Z", status: "pending", decision: null, approver_user_id: null, decided_at: null },
+            { ...browserScope, run_nonce: "browser-run-alpha-0001", request_id: "browser-approval-alpha", scope_hash: "sha256:scope-alpha", launcher_user_id: "user_operator", expires_at: "2026-07-22T00:15:00Z", created_at: "2026-07-22T00:00:00Z", status: "approved", decision: "approved", approver_user_id: "user_approver", self_approval_override: false, decided_at: "2026-07-22T00:01:00Z" },
+            { ...browserScope, run_nonce: "browser-run-beta-0002", request_id: "browser-approval-beta", scope_hash: "sha256:scope-beta", launcher_user_id: "user_operator", expires_at: "2026-07-22T00:22:00Z", created_at: "2026-07-22T00:07:00Z", status: "rejected", decision: "rejected", approver_user_id: "user_approver", self_approval_override: false, decided_at: "2026-07-22T00:08:00Z" },
+            { ...browserScope, run_nonce: "browser-run-gamma-0003", request_id: "browser-approval-gamma", scope_hash: "sha256:scope-gamma", launcher_user_id: "user_operator", expires_at: "2026-07-22T00:29:00Z", created_at: "2026-07-22T00:14:00Z", status: "pending", decision: null, approver_user_id: null, self_approval_override: false, decided_at: null },
           ],
         }));
         return;
@@ -428,6 +428,8 @@ const browserFixture = (): Plugin => ({
               surface_version: "v1",
               corpus_id: "browser-corpus",
               corpus_hash: "sha256:browser-corpus",
+              case_count: 9,
+              tool_sources: [],
               execution_profile: "live",
               maximum_caps: {
                 budget_usd: 1,

@@ -149,9 +149,15 @@
 .surface-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 10px 11px; border: 1px solid var(--sep); border-radius: var(--r-sm); background: var(--bg-inset); }
 .surface-row > span { min-width: 0; overflow: hidden; color: var(--tx2); font-size: var(--fs-xs); text-overflow: ellipsis; }
 .event-stack { display: flex; max-height: 440px; flex-direction: column; gap: 8px; overflow: auto; }
-.event-record { border: 1px solid var(--sep); border-radius: var(--r-sm); background: var(--bg-inset); overflow: hidden; }
-.event-record > header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 7px 9px; border-bottom: 1px solid var(--sep); font-size: var(--fs-xs); }
-.event-record > header span { color: var(--tx3); font-size: var(--fs-2xs); }
+.event-record { flex: 0 0 auto; border: 1px solid var(--sep); border-radius: var(--r-sm); background: var(--bg-inset); overflow: hidden; }
+.event-record > summary { display: flex; min-height: 36px; align-items: center; justify-content: space-between; gap: 12px; padding: 7px 9px; color: var(--tx2); cursor: pointer; font-size: var(--fs-xs); list-style: none; }
+.event-record > summary::-webkit-details-marker { display: none; }
+.event-record > summary::before { flex: 0 0 auto; color: var(--tx3); content: "+"; font-family: "Geist Mono", monospace; }
+.event-record[open] > summary { border-bottom: 1px solid var(--sep); }
+.event-record[open] > summary::before { content: "−"; }
+.event-record > summary > span:first-of-type { display: flex; min-width: 0; align-items: baseline; gap: 8px; overflow: hidden; }
+.event-record > summary strong, .event-record > summary small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.event-record > summary small, .event-record > summary > .mono { color: var(--tx3); font-size: var(--fs-2xs); }
 .event-record .adversarial-text { max-height: 180px; border: 0; border-radius: 0; }
 
 .observability-metrics { grid-template-columns: repeat(4, minmax(0, 1fr)); }

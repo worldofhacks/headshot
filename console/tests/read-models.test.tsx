@@ -100,7 +100,7 @@ const validResources: Array<[string, (value: unknown) => unknown, unknown]> = [
   [
     "approvals",
     decodeApprovals,
-    [{ ...scope, request_id: "request-1", status: "pending", decision: null, scope_hash: "scope-1", launcher_user_id: "user-1", approver_user_id: null, decided_at: null, created_at: at, expires_at: "2026-07-21T00:15:00Z" }],
+    [{ ...scope, request_id: "request-1", status: "pending", decision: null, scope_hash: "scope-1", launcher_user_id: "user-1", approver_user_id: null, self_approval_override: false, decided_at: null, created_at: at, expires_at: "2026-07-21T00:15:00Z" }],
   ],
   [
     "coverage",

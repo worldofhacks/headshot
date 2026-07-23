@@ -12,9 +12,12 @@ Coverage, or a verdict. Only the Policy Gateway dispatches an explicitly reviewe
 only the independent Judge adjudicates trusted gateway evidence. Critical publication remains
 blocked pending human approval.
 
-The approved `m11-seed-corpus-v1` remains exactly nine attempts. Reviewed tool candidates are
-composed by `build_reviewed_tool_corpus` into a distinct content hash and corpus ID with
-`fresh_authorization_required=true`; no existing campaign grant can authorize the changed corpus.
+The approved `m11-seed-corpus-v1` remains the nine-case authored baseline. The deployed Web and
+Runner now prepare `headshot-full-scan-v1`: those nine cases plus five explicitly reviewed,
+contract-validated candidates from the pinned Garak, PyRIT, and Promptfoo artifacts. The exact 14
+attempts receive a distinct content hash and corpus ID, so no existing nine-case campaign grant can
+authorize the expanded scan. The native tools remain isolated CI/tooling dependencies; only their
+reviewed, content-hashed candidate bundles are packaged into the Railway runtime.
 
 ## Implemented and evidenced scope
 
@@ -28,6 +31,11 @@ composed by `build_reviewed_tool_corpus` into a distinct content hash and corpus
 Giskard's packaged LLM01 scenario currently contains a generator template rather than a resolved
 attack message, so the evidenced run truthfully imports zero candidates. The adapter will import an
 explicit interaction if a later authorized, offline scenario resolution supplies one.
+
+At runtime, each tool-generated attempt has an `AF-M11-TOOL-*` case ID containing the first 12
+hex characters of its provenance hash. The complete tool/version/technique/candidate/provenance
+record is part of the schema-validated authored case and its content hash. Every attempt—authored or
+tool-generated—uses the same Policy Gateway, recorder, independent Judge, and publication gate.
 
 Promptfoo runs with `PROMPTFOO_DISABLE_REMOTE_GENERATION=true`,
 `PROMPTFOO_DISABLE_REDTEAM_REMOTE_GENERATION=true`, and telemetry disabled. ZAP 2.17.0 and Semgrep

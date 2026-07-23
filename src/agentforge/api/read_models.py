@@ -113,6 +113,7 @@ class ApprovalReadModel(SafeAuthorizationScopeReadModel):
     status: Literal["pending", "approved", "rejected"]
     decision: Literal["approved", "rejected"] | None = None
     approver_user_id: str | None = None
+    self_approval_override: bool = False
     decided_at: datetime.datetime | None = None
 
 
@@ -141,6 +142,8 @@ class CampaignTemplateReadModel(_ReadModel):
     surface_version: str
     corpus_id: str
     corpus_hash: str
+    case_count: int = Field(gt=0)
+    tool_sources: tuple[str, ...]
     execution_profile: Literal["synthetic", "live"]
     maximum_caps: SafetyCapsReadModel
 

@@ -195,7 +195,7 @@ denied. If a request body says it has a permission absent from the verified toke
 | `require_authenticated()` | Return a verified immutable Principal; otherwise raise the generic authentication error |
 | `require_headshot_organization()` | Require the exact configured Organization ID on an authenticated Principal |
 | `require_permissions(*permissions)` | Require every named custom permission from the verified immutable set; empty or unknown dependency configuration is rejected |
-| `require_distinct_approver(launcher_user_id, principal)` | Require the approval custom permission and prove `principal.user_id != launcher_user_id`; when used as a FastAPI dependency, both Principal and launcher ID come from server dependencies/request state, never request parameters or bodies |
+| `require_distinct_approver(launcher_user_id, principal)` | Require the approval custom permission and prove `principal.user_id != launcher_user_id`; the verified `org:godmode` demo role is the only exception. Both Principal and launcher ID come from server dependencies/request state, never request parameters or bodies. A godmode self-approval is persisted as `self_approval_override=true` and revalidated by the database and Runner. |
 
 For a campaign authorization, the distinct approver must carry `org:campaign:authorize`. Finding
 approval and resolution additionally use `org:findings:approve` and `org:findings:resolve` on their

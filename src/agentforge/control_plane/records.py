@@ -50,6 +50,7 @@ class AuthorizationDecisionRecord:
     decision: str
     approver_user_id: str
     approver_session_id: str
+    self_approval_override: bool
     created_at: datetime.datetime
 
 

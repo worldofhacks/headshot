@@ -233,6 +233,11 @@ export function LiveScreen({ client, principal, entityId, getToken }: ScreenProp
     RESOURCE_PATHS.components,
     decodeComponents,
   );
+  const targets = useResource<TargetReadModel[]>(
+    client,
+    RESOURCE_PATHS.targets,
+    decodeTargets,
+  );
   const [selectedCampaign, setSelectedCampaign] = useState<CampaignReadModel | null>(null);
   const campaignRecords = campaigns.result.data ?? [];
   const effectiveCampaign = selectedCampaign
@@ -245,10 +250,47 @@ export function LiveScreen({ client, principal, entityId, getToken }: ScreenProp
   const reconcile = useCallback(() => {
     campaigns.refresh();
     components.refresh();
-  }, [campaigns.refresh, components.refresh]);
+    targets.refresh();
+  }, [campaigns.refresh, components.refresh, targets.refresh]);
   const events = useConsoleEvents(getToken, reconcile);
-  const preparedScope = effectiveCampaign && isJsonRecord(effectiveCampaign.authorization_request_payload)
-    ? effectiveCampaign.authorization_request_payload
+  const [rerunNonce, setRerunNonce] = useState(() => `live-${globalThis.crypto.randomUUID()}`);
+  const currentTarget = effectiveCampaign
+    ? targets.result.data?.find((target) => (
+        target.target_id === effectiveCampaign.target_id && target.campaign_template !== null
+      )) ?? null
+    : null;
+  const rerunTemplate = currentTarget?.campaign_template ?? null;
+  // A persisted campaign is an immutable historical scope. A rerun must use the current
+  // server-prepared target/corpus template, bounded by both that target and the prior run's
+  // operator-selected budget/rate/timeout. A fresh nonce prevents authorization replay.
+  const preparedScope = effectiveCampaign && rerunTemplate
+    && rerunTemplate.maximum_caps.max_attempts_per_run >= rerunTemplate.case_count
+    ? {
+        target_id: rerunTemplate.target_id,
+        target_version: rerunTemplate.target_version,
+        surface_id: rerunTemplate.surface_id,
+        surface_version: rerunTemplate.surface_version,
+        corpus_id: rerunTemplate.corpus_id,
+        corpus_hash: rerunTemplate.corpus_hash,
+        execution_profile: rerunTemplate.execution_profile,
+        caps: {
+          budget_usd: Math.min(
+            effectiveCampaign.caps.budget_usd,
+            rerunTemplate.maximum_caps.budget_usd,
+          ),
+          max_attempts_per_run: rerunTemplate.case_count,
+          target_requests_per_second: Math.min(
+            effectiveCampaign.caps.target_requests_per_second,
+            rerunTemplate.maximum_caps.target_requests_per_second,
+          ),
+          run_timeout_seconds: Math.min(
+            effectiveCampaign.caps.run_timeout_seconds,
+            rerunTemplate.maximum_caps.run_timeout_seconds,
+          ),
+        },
+        run_nonce: rerunNonce,
+        expires_in_seconds: 900,
+      }
     : null;
   const componentRecords = components.result.data ?? [];
   const operationalComponents = componentRecords.filter(
@@ -309,15 +351,18 @@ export function LiveScreen({ client, principal, entityId, getToken }: ScreenProp
               client={client}
               path={COMMAND_PATHS.createCampaignAuthorizationRequest}
               payload={preparedScope}
-              label="Request campaign authorization"
+              label="Request rerun authorization"
               allowed={hasPermission(principal, PERMISSIONS.campaignLaunch)}
               unavailableReason={PERMISSIONS.campaignLaunch}
-              onAcknowledged={campaigns.refresh}
+              onAcknowledged={() => {
+                setRerunNonce(`live-${globalThis.crypto.randomUUID()}`);
+                campaigns.refresh();
+              }}
             />
           ) : (
             <MissingCommand
-              label="Request campaign authorization"
-              dependency="a server-prepared canonical scope"
+              label="Request rerun authorization"
+              dependency="a current full-scan target template"
             />
           )}
           {selectedCampaignId ? (
@@ -363,17 +408,26 @@ export function LiveScreen({ client, principal, entityId, getToken }: ScreenProp
           <ResourceView result={events} emptyLabel="No stream events are available after the current cursor.">
             {(data) => (
               <div className="event-stack">
-                {data.map((event, index) => (
-                  <article className="event-record" key={`${event.cursor ?? "event"}:${index}`}>
-                    <header>
-                      <strong>{event.event}</strong>
-                      <span className="mono">
-                        {event.cursor === null ? "no cursor" : `cursor ${event.cursor}`}
-                      </span>
-                    </header>
-                    <AdversarialText>{JSON.stringify(event.data, null, 2)}</AdversarialText>
-                  </article>
-                ))}
+                {data.map((event, index) => {
+                  const aggregateType = isJsonRecord(event.data)
+                    && typeof event.data.aggregate_type === "string"
+                    ? event.data.aggregate_type
+                    : null;
+                  return (
+                    <details className="event-record" key={`${event.cursor ?? "event"}:${index}`}>
+                      <summary>
+                        <span>
+                          <strong>{event.event}</strong>
+                          {aggregateType && <small>{aggregateType}</small>}
+                        </span>
+                        <span className="mono">
+                          {event.cursor === null ? "no cursor" : `cursor ${event.cursor}`}
+                        </span>
+                      </summary>
+                      <AdversarialText>{JSON.stringify(event.data, null, 2)}</AdversarialText>
+                    </details>
+                  );
+                })}
               </div>
             )}
           </ResourceView>
@@ -582,10 +636,13 @@ export function ApprovalsScreen({ client, principal, entityId }: ScreenProps) {
     ? selected.launcher_user_id
     : null;
   const distinctHuman = launcher === null || launcher !== principal.user_id;
+  const godmodeSelfApproval = !distinctHuman && principal.organization_role === "org:godmode";
+  const canApproveIdentity = distinctHuman || godmodeSelfApproval;
+  const isLauncher = launcher !== null && launcher === principal.user_id;
   const pending = selected?.status === "pending";
   const approved = selected?.status === "approved";
   const canAuthorize =
-    hasPermission(principal, PERMISSIONS.campaignAuthorize) && distinctHuman && pending;
+    hasPermission(principal, PERMISSIONS.campaignAuthorize) && canApproveIdentity && pending;
 
   return (
     <div className="screen-stack">
@@ -671,15 +728,22 @@ export function ApprovalsScreen({ client, principal, entityId }: ScreenProps) {
               "run_nonce",
               "launcher_user_id",
               "approver_user_id",
+              "self_approval_override",
               "expires_at",
             ]}
           />
-          {!distinctHuman && (
+          {!distinctHuman && !godmodeSelfApproval && (
             <StateNotice
               state="unavailable"
               reason="requester_cannot_approve_own_operation"
               detail="The backend enforces a distinct authenticated approver; this courtesy control cannot bypass it."
             />
+          )}
+          {godmodeSelfApproval && pending && (
+            <p className="data-note">
+              Godmode demo exception: self-approval is explicitly recorded on the decision and
+              revalidated by the database and Runner.
+            </p>
           )}
           <div className="command-row">
             <CommandButton
@@ -691,9 +755,9 @@ export function ApprovalsScreen({ client, principal, entityId }: ScreenProps) {
               unavailableReason={
                 !pending
                   ? "a pending authorization request"
-                  : distinctHuman
+                  : canApproveIdentity
                     ? PERMISSIONS.campaignAuthorize
-                    : "distinct approver required"
+                    : "a distinct approver or verified godmode role"
               }
               onAcknowledged={approvals.refresh}
             />
@@ -713,9 +777,13 @@ export function ApprovalsScreen({ client, principal, entityId }: ScreenProps) {
               path={COMMAND_PATHS.launchCampaign}
               payload={{ authorization_request_id: requestId }}
               label="Launch approved campaign"
-              allowed={hasPermission(principal, PERMISSIONS.campaignLaunch) && approved}
+              allowed={hasPermission(principal, PERMISSIONS.campaignLaunch) && approved && isLauncher}
               unavailableReason={
-                approved ? PERMISSIONS.campaignLaunch : "an approved authorization request"
+                !approved
+                  ? "an approved authorization request"
+                  : isLauncher
+                    ? PERMISSIONS.campaignLaunch
+                    : "the persisted campaign launcher"
               }
               onAcknowledged={approvals.refresh}
             />
@@ -897,7 +965,7 @@ function TargetManagement({
   // field stays editable, and the server still validates caps against the target's ceiling.
   const [runNonce, setRunNonce] = useState(() => `live-${globalThis.crypto.randomUUID()}`);
   const [budgetUsd, setBudgetUsd] = useState("1");
-  const [maxAttempts, setMaxAttempts] = useState("9");
+  const [maxAttempts, setMaxAttempts] = useState(() => String(template?.case_count ?? 9));
   const [requestsPerSecond, setRequestsPerSecond] = useState("1");
   const [timeoutSeconds, setTimeoutSeconds] = useState("900");
   const parsedCaps = {
@@ -908,7 +976,18 @@ function TargetManagement({
   };
   const capsValid = Object.values(parsedCaps).every((value) => Number.isFinite(value) && value > 0)
     && Number.isSafeInteger(parsedCaps.max_attempts_per_run);
-  const requestPayload = template && capsValid && runNonce.trim().length >= 16
+  const fullScanFitsTarget = Boolean(
+    template && template.maximum_caps.max_attempts_per_run >= template.case_count,
+  );
+  const capsWithinTarget = template
+    ? parsedCaps.budget_usd <= template.maximum_caps.budget_usd
+      && parsedCaps.max_attempts_per_run <= template.maximum_caps.max_attempts_per_run
+      && parsedCaps.max_attempts_per_run >= template.case_count
+      && parsedCaps.target_requests_per_second <= template.maximum_caps.target_requests_per_second
+      && parsedCaps.run_timeout_seconds <= template.maximum_caps.run_timeout_seconds
+    : false;
+  const requestPayload = template && fullScanFitsTarget && capsValid && capsWithinTarget
+    && runNonce.trim().length >= 16
     ? {
         target_id: template.target_id,
         target_version: template.target_version,
@@ -988,6 +1067,12 @@ function TargetManagement({
       {template && (
         <div className="evidence-stack">
           <p className="field-label">Exact campaign authorization request</p>
+          <MetricStrip label="Full scan profile" values={[
+            { label: "Planned attacks", value: count(template.case_count), note: "Exact corpus bound into authorization" },
+            { label: "Authored core", value: count(9), note: "Injection · exfiltration · tool misuse" },
+            { label: "Tool-generated", value: count(Math.max(0, template.case_count - 9)), note: template.tool_sources.join(" · ") || "No reviewed tool candidates" },
+            { label: "Execution", value: template.execution_profile, note: "Every request passes the policy gateway" },
+          ]} />
           <RecordDetails
             data={template}
             preferredKeys={[
@@ -998,6 +1083,8 @@ function TargetManagement({
               "surface_version",
               "corpus_id",
               "corpus_hash",
+              "case_count",
+              "tool_sources",
               "maximum_caps",
             ]}
           />
@@ -1029,7 +1116,9 @@ function TargetManagement({
             payload={requestPayload ?? {}}
             label="Request exact campaign authorization"
             allowed={Boolean(requestPayload) && hasPermission(principal, PERMISSIONS.campaignLaunch)}
-            unavailableReason={requestPayload ? PERMISSIONS.campaignLaunch : "valid operator-provided caps and nonce"}
+            unavailableReason={requestPayload
+              ? PERMISSIONS.campaignLaunch
+              : "a complete full-scan cap envelope and valid nonce"}
             onAcknowledged={() => {
               // Roll a fresh unused nonce after each accepted request so the next campaign
               // can be requested immediately without a replayed-nonce rejection.
