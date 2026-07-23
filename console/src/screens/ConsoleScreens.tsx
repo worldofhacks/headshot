@@ -11,6 +11,7 @@ import {
   decodeApprovals,
   decodeAttempts,
   decodeAuditHistory,
+  decodeBirdseye,
   decodeCampaigns,
   decodeComponents,
   decodeConfiguration,
@@ -22,6 +23,7 @@ import {
   decodeTargets,
 } from "../api/read-models";
 import { AdversarialText } from "../components/AdversarialText";
+import { Birdseye } from "../components/Birdseye";
 import {
   count,
   DistributionBars,
@@ -50,6 +52,8 @@ import {
   type ApprovalReadModel,
   type AttemptReadModel,
   type AuditReadModel,
+  type BirdseyeAttentionReadModel,
+  type BirdseyeSnapshotReadModel,
   type CampaignReadModel,
   type ComponentReadModel,
   type ConfigurationReadModel,
@@ -238,6 +242,14 @@ export function LiveScreen({ client, principal, entityId, getToken }: ScreenProp
     RESOURCE_PATHS.targets,
     decodeTargets,
   );
+  const birdseye = useResource<BirdseyeSnapshotReadModel>(
+    client,
+    RESOURCE_PATHS.birdseye,
+    decodeBirdseye,
+  );
+  const [liveView, setLiveView] = useState<"birdseye" | "attempts">(
+    entityId ? "attempts" : "birdseye",
+  );
   const [selectedCampaign, setSelectedCampaign] = useState<CampaignReadModel | null>(null);
   const campaignRecords = campaigns.result.data ?? [];
   const effectiveCampaign = selectedCampaign
@@ -251,7 +263,8 @@ export function LiveScreen({ client, principal, entityId, getToken }: ScreenProp
     campaigns.refresh();
     components.refresh();
     targets.refresh();
-  }, [campaigns.refresh, components.refresh, targets.refresh]);
+    birdseye.refresh();
+  }, [campaigns.refresh, components.refresh, targets.refresh, birdseye.refresh]);
   const events = useConsoleEvents(getToken, reconcile);
   const [rerunNonce, setRerunNonce] = useState(() => `live-${globalThis.crypto.randomUUID()}`);
   const currentTarget = effectiveCampaign
@@ -309,6 +322,50 @@ export function LiveScreen({ client, principal, entityId, getToken }: ScreenProp
         title="Live operations"
         detail="Campaign, queue, component and ordered event state comes from protected server projections."
       />
+      <div className="view-switcher" role="tablist" aria-label="Live operations view">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={liveView === "birdseye"}
+          className={liveView === "birdseye" ? "active" : undefined}
+          onClick={() => setLiveView("birdseye")}
+        >
+          Birdseye
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={liveView === "attempts"}
+          className={liveView === "attempts" ? "active" : undefined}
+          onClick={() => setLiveView("attempts")}
+        >
+          Attempt stream
+        </button>
+      </div>
+      {liveView === "birdseye" ? (
+        <ResourceView
+          result={birdseye.result}
+          emptyLabel="No authoritative Birdseye snapshot is available."
+        >
+          {(snapshot) => (
+            <Birdseye
+              snapshot={snapshot}
+              stream={events}
+              onOpenAttention={(item: BirdseyeAttentionReadModel) => {
+                if (item.kind === "approval") {
+                  navigateTo({ screen: "approvals", entityId: item.record_id });
+                } else if (item.kind === "finding") {
+                  navigateTo({ screen: "findings", entityId: item.record_id });
+                } else if (item.kind === "integrity") {
+                  navigateTo({ screen: "live", entityId: item.record_id });
+                  setLiveView("attempts");
+                }
+              }}
+            />
+          )}
+        </ResourceView>
+      ) : (
+        <>
       <MetricStrip label="Live platform summary" values={[
         { label: "Campaigns", value: count(campaignRecords.length), note: `${completedCampaigns} complete · ${activeCampaigns} active` },
         { label: "Selected run", value: shortId(selectedCampaignId), note: effectiveCampaign?.state ?? "No campaign selected" },
@@ -433,6 +490,8 @@ export function LiveScreen({ client, principal, entityId, getToken }: ScreenProp
           </ResourceView>
         </Panel>
       </div>
+        </>
+      )}
     </div>
   );
 }
@@ -636,8 +695,7 @@ export function ApprovalsScreen({ client, principal, entityId }: ScreenProps) {
     ? selected.launcher_user_id
     : null;
   const distinctHuman = launcher === null || launcher !== principal.user_id;
-  const godmodeSelfApproval = !distinctHuman && principal.organization_role === "org:godmode";
-  const canApproveIdentity = distinctHuman || godmodeSelfApproval;
+  const canApproveIdentity = distinctHuman;
   const isLauncher = launcher !== null && launcher === principal.user_id;
   const pending = selected?.status === "pending";
   const approved = selected?.status === "approved";
@@ -732,18 +790,12 @@ export function ApprovalsScreen({ client, principal, entityId }: ScreenProps) {
               "expires_at",
             ]}
           />
-          {!distinctHuman && !godmodeSelfApproval && (
+          {!distinctHuman && (
             <StateNotice
               state="unavailable"
               reason="requester_cannot_approve_own_operation"
               detail="The backend enforces a distinct authenticated approver; this courtesy control cannot bypass it."
             />
-          )}
-          {godmodeSelfApproval && pending && (
-            <p className="data-note">
-              Godmode demo exception: self-approval is explicitly recorded on the decision and
-              revalidated by the database and Runner.
-            </p>
           )}
           <div className="command-row">
             <CommandButton
@@ -757,7 +809,7 @@ export function ApprovalsScreen({ client, principal, entityId }: ScreenProps) {
                   ? "a pending authorization request"
                   : canApproveIdentity
                     ? PERMISSIONS.campaignAuthorize
-                    : "a distinct approver or verified godmode role"
+                    : "a distinct approver"
               }
               onAcknowledged={approvals.refresh}
             />

@@ -56,3 +56,27 @@ Append-only project record. Newest entries appear at the bottom.
 - Why: Deliver the presentation-critical two-person request → queue → Runner → nine cases → evidence/verdict/findings/Coverage sequence while keeping live traffic authorization-gated.
 - Result: Current PR #12 working tree; `migrations/versions/0006_authoritative_results.py`, `src/agentforge/runner.py`, `src/agentforge/security_tools`, and `docs/evidence/ato/SECURITY_TOOL_EVIDENCE.md`. Local gates: 852 passed/3 skipped, 67 console tests, 3 Playwright tests, container clean/upgrade migrations, runtime/readiness smoke, Semgrep/pip-audit/ZAP/Promptfoo evidence.
 - Stage: MVP release candidate; commit, CI, Railway and human Clerk/live authorization evidence pending.
+
+## [2026-07-22] Final integration audit and authoritative four-agent offline slice   ·   type: milestone
+- What: Audited all 72 PRD/optional/user/lead requirements; added verified-signal Orchestration, the typed Red Team proposal handoff, confirmed-only draft Documentation, fail-closed regression disposition, append-only revision `0008`, API projection updates, and current integration/migration evidence.
+- Why: Close the highest-risk runtime gaps without fabricating deployed or human-gated evidence, while preserving exact-corpus authorization, independent Judge authority, synthetic-only fixtures, content-addressed lineage, and draft-only critical findings.
+- Result: `codex/final-integration-audit` working tree. The authoritative local path is PostgreSQL snapshot → Orchestrator → Red Team → Policy Gateway → adapter → Recorder → PostgreSQL reread/hash verification → Judge → Documentation → regression disposition. Fresh gates: 955 Python tests, 71 console tests, 4 Playwright tests, 15 packaged contracts, clean `0003→0008` and `0008→0007→0008` container migrations, runtime/readiness smokes, and zero Semgrep/pip-audit/npm-audit/gitleaks findings. Final image: `sha256:4af41a54884a8cf918334e5a781c3e2aa510946048d82b9dfe934d4c9dbaf634`.
+- Evidence: `docs/requirements/REQUIREMENTS_MATRIX.csv`, `docs/evidence/baseline/2026-07-22-final-integration.md`, `docs/integration/INTEGRATION_PACKET.md`, and `docs/integration/migration-notes/0008-documentation-regression.md`.
+- Remaining: Judge calibration/drift, deterministic regression execution/target-version replay, performance/load baselines, current dual-CI proof after commit, and a distinct-human-approved bounded staging campaign. Passive health checks do not authorize `/chat`.
+- Stage: Final integration candidate; no live campaign, publication, remediation, or regression promotion performed.
+
+## [2026-07-23] Two-role authorization and four-agent runtime observability   ·   type: security correction
+- What: Reduced Clerk Organization roles to Operator and Approver, removed the self-approval path,
+  added database/runtime enforcement, and traced Orchestrator, Red Team, independent Judge, and
+  Documentation executions through the durable ledger and console.
+- Why: Human identity must never bypass two-person campaign authorization, and the Final platform
+  must show real agent order, state, lineage, latency, and measured cost rather than inferred nodes.
+- Result: Revisions `0009`-`0012`, role-matrix tests, four-agent Runner integration tests, Birdseye,
+  agent operations, Judge calibration primitives, and regression replay primitives are present on
+  `codex/final-integration-audit`.
+- Remaining: The branch is not a Final release while canonical matrix rows remain partial, missing,
+  or human-blocked, including novel/mutated turn-by-turn Red Team execution, automatic
+  target-version regression runs, deployed calibration evidence, performance evidence, dual-CI
+  proof, and a distinct-Approver-authorized live campaign.
+- Stage: Integration branch; no merge, deployment, live campaign, publication, or remediation
+  authorized by this entry.

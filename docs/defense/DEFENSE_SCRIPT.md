@@ -264,10 +264,9 @@ from custom permission claims — never a frontend role label or Clerk system pe
 
 **Why it holds.** The Principal is frozen and minimum-data: user ID, session ID, Organization ID, role for
 audit context, and an immutable custom-permission set. It never contains the bearer token or headers. Four
-roles map to exact permissions: Observer reads console/findings/evidence; Operator adds launch, abort,
-target and config management; Approver adds campaign authorization and finding approval/resolution; Auditor
-adds audit read. Current Clerk production pricing makes the **Enhanced B2B Authentication add-on** a
-prerequisite for four custom roles; missing it blocks deployment rather than collapsing the roles.
+roles map to exact permissions: Operator reads the full protected platform and audit history and adds
+launch, abort, target, and config management; Approver reads the same protected data and adds campaign
+authorization and finding approval/resolution. These are the only accepted human roles.
 
 **If pushed — "does an Approver role authorize a launch?"** "No. A verified custom permission authorizes
 the application action; the role is assignment/audit context. Campaign execution still crosses the Policy
@@ -330,7 +329,7 @@ with the reason — the eval suite draws its ≥3 categories from the live-testa
 5. Stand up Langfuse Cloud Hobby so the demo shows inter-agent traces + per-agent cost.
 6. Confirm the deployed target URL is in hand (Stage-1 hard gate).
 7. Keep Railway platform URLs marked `PENDING` until staging/production provisioning and smoke tests pass.
-8. Verify Clerk Restricted mode, Headshot Organization, required MFA, four-role add-on, exact permission
+8. Verify Clerk Restricted mode, Headshot Organization, required MFA, the exact two-role permission
    matrix, and two distinct test users before presenting auth as implemented.
 
 ---
@@ -345,7 +344,7 @@ specific deployed claims."
 - Real per-agent token profiles + Mac tok/s — measured at MVP **before any cost number is presented**.
 - PyRIT/Garak/Giskard wrapping deferred to post-MVP (D12 is the only `proposed` decision).
 - Railway staging/production services, domains, rollback smoke, and URLs — selected/planned, not deployed.
-- Clerk Dashboard resources, Enhanced B2B add-on, two distinct users, and Railway auth smoke —
+- Clerk Dashboard resources, exact Operator/Approver assignments, two distinct users, and Railway auth smoke —
   selected/planned, not deployed.
 - Trusted runner credential resolution/execution and authoritative scheduler composition — absent;
   both private processes fail closed rather than manufacture work.

@@ -1,5 +1,45 @@
 # Integration Packet — MVP Secure Local Spine + M11 Corpus + M5/M8 + Offline E2E
 
+## Final integration supplement — 2026-07-22
+
+Current branch: `codex/final-integration-audit`; base commit: `7749fd598dee`. This supplement is
+working-tree evidence and does not claim a commit, dual-CI result, deployment, or live campaign.
+
+Additive interfaces in this integration:
+
+- `orchestration_snapshot@1`: trusted Store → Orchestrator, built only from PostgreSQL rows whose
+  `AttemptResult` hash recomputes. Raw spans/transcripts are not accepted.
+- `campaign_directive@1`: Orchestrator → Red Team. The Orchestrator chooses coverage/finding/
+  regression priority and copies, but cannot expand, the authorization-bound caps.
+- `attack_attempt@1`: the deterministic Red Team handoff now participates in the durable Runner.
+  The coordinator rejects any proposal differing from the exact corpus-hashed seed before dispatch.
+- `vuln_report@1`: confirmed-verdict-only Documentation drafts with content-addressed evidence and
+  no publication capability.
+- `regression_disposition@1`: Documentation/Regression gate → Store. Admission is unrepresentable
+  without deterministic reproduction, right-reason validation, and human approval.
+
+Current authoritative dependency path:
+
+```text
+PostgreSQL verified signals -> Orchestrator -> CampaignDirective -> Red Team -> AttackAttempt
+-> Policy Gateway -> target adapter -> Execution Recorder -> PostgreSQL reread/hash verify
+-> independent Judge -> Documentation draft -> blocked regression disposition -> read models
+```
+
+Migration `0008` is additive and supplies append-only report/disposition tables. Runner has
+`SELECT/INSERT`, Web has `SELECT`, and Red Team/Judge have no table privilege. The detailed
+compatibility and rollback note is `docs/integration/migration-notes/0008-documentation-regression.md`.
+
+Fresh local evidence: 955 Python tests, 71 frontend tests, 4 browser tests, 15 packaged inter-agent
+contracts, clean `0003 -> 0008` and `0008 -> 0007 -> 0008` container migration paths, configured and
+fail-closed runtime smokes, zero Semgrep/pip-audit/npm-audit/gitleaks findings, and production image
+`sha256:4af41a54884a8cf918334e5a781c3e2aa510946048d82b9dfe934d4c9dbaf634`.
+
+The external gate remains unchanged: no live target request, hosted generation, critical publication,
+remediation, or regression promotion occurs until a distinct human approves the exact bounded scope.
+
+---
+
 Branch: `swarm/mvp-live-gate` (integration head). Reviewed spine PR: **#4** (`swarm/mvp-local-slice` @ `f518daf`, ready for review). This packet contains **no** secret values, target URLs, credentials, canaries, or provider keys.
 
 ## 1. Delivered components & integration sequence

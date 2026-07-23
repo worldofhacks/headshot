@@ -17,6 +17,10 @@ export const RESOURCE_PATHS = {
   target: (targetId: string) => `targets/${segment(targetId)}`,
   configuration: "configuration",
   components: "components",
+  agents: "agents",
+  agentActivity: "agent-activity",
+  tooling: "tooling",
+  birdseye: "birdseye",
   audit: "audit",
 } as const;
 
@@ -39,4 +43,5 @@ export const COMMAND_PATHS = {
   createProbeAuthorizationRequest: "live-probe-authorization-requests",
   validateConfiguration: "configuration/validate",
   publishConfiguration: "configuration/publish",
+  configureAgent: (agentRole: string) => `agents/${segment(agentRole)}/configuration`,
 } as const;

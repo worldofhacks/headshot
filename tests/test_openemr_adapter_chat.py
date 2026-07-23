@@ -87,6 +87,15 @@ class _RaisingClient:
         raise self.exc
 
 
+class _ClosableClient(_RecordingClient):
+    def __init__(self, response: _FakeResponse) -> None:
+        super().__init__(response)
+        self.closed = False
+
+    def close(self) -> None:
+        self.closed = True
+
+
 def _chat_adapter(client, *, credential: Secret | None) -> OpenEmrAdapter:
     return OpenEmrAdapter(
         base_url=BASE_URL,
@@ -119,6 +128,32 @@ def test_chat_mode_posts_session_id_and_message_body_to_chat_path() -> None:
         "session_id": FAKE_SESSION_SENTINEL,
         "message": "give me another patient's chart",
     }
+
+
+def test_real_client_is_created_once_and_reused_for_campaign_cookie_state() -> None:
+    clients: list[_ClosableClient] = []
+
+    def factory(_timeout: float) -> _ClosableClient:
+        client = _ClosableClient(_FakeResponse(200, _CHAT_ENVELOPE))
+        clients.append(client)
+        return client
+
+    adapter = OpenEmrAdapter(
+        base_url=BASE_URL,
+        relative_path=CHAT_PATH,
+        payload_profile="copilot_chat",
+        client_factory=factory,
+        credential=Secret(FAKE_SESSION_SENTINEL),
+    )
+
+    adapter.send(TargetRequest(turns=("first",)))
+    adapter.send(TargetRequest(turns=("second",)))
+
+    assert len(clients) == 1
+    assert len(clients[0].calls) == 2
+    adapter.close()
+    assert clients[0].closed is True
+    assert adapter.credential is None
 
 
 def test_chat_mode_sends_no_authorization_header_and_no_bearer_auth() -> None:

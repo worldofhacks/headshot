@@ -28,12 +28,13 @@ a dead DB: the fixture migrates cleanly on this branch).
 from __future__ import annotations
 
 import socket
+from dataclasses import replace
 from typing import Any
 
 import pytest
 from sqlalchemy import Engine, text
 
-from agentforge.agents.red_team.seed_replay import load_seed_attempts
+from agentforge.agents.red_team.seed_replay import load_seed_attempts, seed_to_attempt
 from agentforge.campaign.authorization import (
     AuthorizationError,
     RunAuthorization,
@@ -48,6 +49,7 @@ from agentforge.campaign.coordinator import (
 )
 from agentforge.campaign.manifest import ManifestImmutableError, ManifestStore
 from agentforge.policy.gateway import RunPolicy
+from agentforge.policy.scoped_credentials import CredentialLeaseExpiredError
 from agentforge.target.fake_adapter import FakeTargetAdapter
 from agentforge.target.openemr_adapter import OpenEmrAdapter
 
@@ -289,6 +291,45 @@ def test_happy_chain_confirms_exploit_end_to_end(migrated_db: Engine, tmp_path: 
     assert {"config", "evidence", "verdict", "result"} <= set(kinds)
 
 
+def test_coordinator_accepts_exact_typed_red_team_proposal(
+    migrated_db: Engine, tmp_path: Any
+) -> None:
+    """The trusted boundary accepts the exact schema-valid proposal for the approved seed."""
+    fake_client = FakeHttpClient(body=SAFE_RESPONSE)
+    coord = _coordinator(
+        migrated_db,
+        tmp_path,
+        adapter=_live_adapter(body=SAFE_RESPONSE, client=fake_client),
+    )
+    seed = _seed_case("AF-M11-PI-005", ["Use only this synthetic reviewed turn."])
+
+    outcome = coord.run_case(seed, attack_attempt=seed_to_attempt(seed))
+
+    assert outcome.result.fields["attack_attempt"]["case_ref"] == seed["case_id"]
+    assert len(fake_client.calls) == 1
+
+
+def test_coordinator_rejects_red_team_proposal_outside_authorized_corpus(
+    migrated_db: Engine, tmp_path: Any
+) -> None:
+    """An unapproved mutation is a corpus-hash change and must fail before target dispatch."""
+    fake_client = FakeHttpClient(body=SAFE_RESPONSE)
+    coord = _coordinator(
+        migrated_db,
+        tmp_path,
+        adapter=_live_adapter(body=SAFE_RESPONSE, client=fake_client),
+    )
+    seed = _seed_case("AF-M11-PI-006", ["Use only this synthetic reviewed turn."])
+    proposal = seed_to_attempt(seed)
+    proposal["input_sequence"].append("unreviewed mutation")
+
+    with pytest.raises(CampaignAbort, match="authorized corpus") as raised:
+        coord.run_case(seed, attack_attempt=proposal)
+
+    assert raised.value.code == "red-team-proposal-out-of-scope"
+    assert fake_client.calls == []
+
+
 def test_happy_chain_persists_and_rereads_the_attempt_result(
     migrated_db: Engine, tmp_path: Any
 ) -> None:
@@ -513,6 +554,31 @@ def test_unresolvable_credential_blocks_before_dispatch(migrated_db: Engine, tmp
     with pytest.raises((BindingError, ValueError, CampaignAbort)):
         coord.run_case(_seed_case("AF-M11-PI-003", ["Credential unresolvable."]))
     assert fake_client.calls == []
+
+
+def test_expired_campaign_session_durably_aborts_before_dispatch(
+    migrated_db: Engine, tmp_path: Any
+) -> None:
+    """A pinned session lease expiring between cases never rotates or reaches the adapter."""
+    fake_client = FakeHttpClient(body=LEAK_RESPONSE)
+    coord = _coordinator(
+        migrated_db,
+        tmp_path,
+        adapter=_live_adapter(body=LEAK_RESPONSE, client=fake_client),
+    )
+
+    def expired(_reference: str | None) -> None:
+        raise CredentialLeaseExpiredError("deployment-internal session detail")
+
+    coord.config = replace(coord.config, credential_resolver=expired)
+
+    with pytest.raises(CampaignAbort) as caught:
+        coord.run_case(_seed_case("AF-M11-PI-SESSION", ["Must not dispatch."]))
+
+    assert caught.value.code == "target-session-expired"
+    assert "deployment-internal" not in str(caught.value)
+    assert fake_client.calls == []
+    assert coord._aborted is True
 
 
 def test_cap_mismatch_blocks_before_dispatch(migrated_db: Engine, tmp_path: Any) -> None:

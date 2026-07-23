@@ -21,10 +21,8 @@ Frontend role labels and client-supplied roles/permissions are display data only
 
 | Authenticated workflow | Clerk role | Backend-authoritative permissions | What the user does |
 |---|---|---|---|
-| **Observer** | `org:observer` | `org:console:read`, `org:findings:read`, `org:evidence:read` | Reviews posture, findings, and approved evidence without mutating platform state. |
-| **Operator** | `org:operator` | `org:console:read`, `org:findings:read`, `org:evidence:read`, `org:campaign:launch`, `org:campaign:abort`, `org:targets:manage`, `org:config:manage` | Configures an allowed target, proposes/launches an authorized workflow, monitors it, and can abort it. |
-| **Approver** | `org:approver` | `org:console:read`, `org:findings:read`, `org:evidence:read`, `org:campaign:authorize`, `org:findings:approve`, `org:findings:resolve` | Independently authorizes a launch, approves a critical finding, and resolves findings/remediation decisions. |
-| **Auditor** | `org:auditor` | `org:console:read`, `org:findings:read`, `org:evidence:read`, `org:audit:read` | Reconstructs who launched, authorized, aborted, approved, or resolved an operation and reviews evidence. |
+| **Operator** | `org:operator` | `org:console:read`, `org:findings:read`, `org:evidence:read`, `org:audit:read`, `org:campaign:launch`, `org:campaign:abort`, `org:targets:manage`, `org:config:manage` | Configures an allowed target, proposes/launches an authorized workflow, monitors or aborts it, and audits the resulting activity. |
+| **Approver** | `org:approver` | `org:console:read`, `org:findings:read`, `org:evidence:read`, `org:audit:read`, `org:campaign:authorize`, `org:findings:approve`, `org:findings:resolve` | Independently authorizes a launch, approves a critical finding, resolves findings/remediation decisions, and audits the resulting activity. |
 
 **Separation of launcher and approver is an identity invariant, not a role convention.** An Operator's
 operation requires a different authenticated Approver: `approver.user_id != launcher_user_id`. The

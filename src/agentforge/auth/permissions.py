@@ -10,15 +10,10 @@ from __future__ import annotations
 from types import MappingProxyType
 from typing import Final
 
-ROLE_OBSERVER: Final = "org:observer"
 ROLE_OPERATOR: Final = "org:operator"
 ROLE_APPROVER: Final = "org:approver"
-ROLE_AUDITOR: Final = "org:auditor"
-ROLE_GODMODE: Final = "org:godmode"
 
-ORGANIZATION_ROLES: Final = frozenset(
-    {ROLE_OBSERVER, ROLE_OPERATOR, ROLE_APPROVER, ROLE_AUDITOR, ROLE_GODMODE}
-)
+ORGANIZATION_ROLES: Final = frozenset({ROLE_OPERATOR, ROLE_APPROVER})
 
 CONSOLE_READ: Final = "org:console:read"
 FINDINGS_READ: Final = "org:findings:read"
@@ -48,11 +43,10 @@ ORGANIZATION_CUSTOM_PERMISSIONS: Final = frozenset(
     }
 )
 
-_READ_PERMISSIONS = frozenset({CONSOLE_READ, FINDINGS_READ, EVIDENCE_READ})
+_READ_PERMISSIONS = frozenset({CONSOLE_READ, FINDINGS_READ, EVIDENCE_READ, AUDIT_READ})
 
 ROLE_PERMISSION_MATRIX: Final = MappingProxyType(
     {
-        ROLE_OBSERVER: _READ_PERMISSIONS,
         ROLE_OPERATOR: _READ_PERMISSIONS
         | frozenset(
             {
@@ -64,10 +58,5 @@ ROLE_PERMISSION_MATRIX: Final = MappingProxyType(
         ),
         ROLE_APPROVER: _READ_PERMISSIONS
         | frozenset({CAMPAIGN_AUTHORIZE, FINDINGS_APPROVE, FINDINGS_RESOLVE}),
-        ROLE_AUDITOR: _READ_PERMISSIONS | frozenset({AUDIT_READ}),
-        # Demo/grader role. Runtime authority still comes only from verified Clerk custom-
-        # permission claims. Campaign self-approval is allowed only for this verified role and
-        # is persisted as an explicit override for database/Runner revalidation.
-        ROLE_GODMODE: ORGANIZATION_CUSTOM_PERMISSIONS,
     }
 )

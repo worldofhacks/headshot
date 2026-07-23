@@ -16,6 +16,7 @@ framework. Any hosted-provider SDK import is LAZY, inside the hosted provider's 
 and is never reached in a test.
 """
 
+from agentforge.agents.red_team.handoff import RedTeamProposalError, SeedReplayRedTeam
 from agentforge.agents.red_team.mutation import mutate
 from agentforge.agents.red_team.providers import (
     CassetteProvider,
@@ -35,6 +36,8 @@ from agentforge.agents.red_team.selection import least_covered_category, select_
 
 __all__ = [
     "RedTeam",
+    "SeedReplayRedTeam",
+    "RedTeamProposalError",
     "mutate",
     "select_cases",
     "least_covered_category",

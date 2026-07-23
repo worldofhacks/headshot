@@ -66,14 +66,12 @@ browser as authority.
 
 | Organization role | Required custom permission assignment |
 |---|---|
-| `org:observer` | `org:console:read`, `org:findings:read`, `org:evidence:read` |
-| `org:operator` | `org:console:read`, `org:findings:read`, `org:evidence:read`, `org:campaign:launch`, `org:campaign:abort`, `org:targets:manage`, `org:config:manage` |
-| `org:approver` | `org:console:read`, `org:findings:read`, `org:evidence:read`, `org:campaign:authorize`, `org:findings:approve`, `org:findings:resolve` |
-| `org:auditor` | `org:console:read`, `org:findings:read`, `org:evidence:read`, `org:audit:read` |
+| `org:operator` | `org:console:read`, `org:findings:read`, `org:evidence:read`, `org:audit:read`, `org:campaign:launch`, `org:campaign:abort`, `org:targets:manage`, `org:config:manage` |
+| `org:approver` | `org:console:read`, `org:findings:read`, `org:evidence:read`, `org:audit:read`, `org:campaign:authorize`, `org:findings:approve`, `org:findings:resolve` |
 
-The production four-role design requires Clerk's **Enhanced B2B Authentication** add-on: current Clerk
-documentation includes only the first two custom production roles without that add-on. Provisioning the
-add-on is a pre-deployment prerequisite, not something the code can emulate safely.
+These are the only accepted human roles. Both can inspect the complete protected console and audit
+history; mutation permissions remain separated so one person cannot both initiate and approve a gated
+operation.
 
 ### Two-person and campaign invariants
 

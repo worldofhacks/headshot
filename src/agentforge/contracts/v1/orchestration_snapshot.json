@@ -1,0 +1,139 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "agentforge/contracts/v1/orchestration_snapshot",
+  "title": "OrchestrationSnapshot",
+  "version": "1",
+  "description": "Verified Postgres observability input to the trusted Orchestrator. Raw spans and unverified findings are not representable.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "campaign_run_id",
+    "target_ref",
+    "target_version",
+    "signal_provenance",
+    "coverage",
+    "findings",
+    "regressions",
+    "budget",
+    "queue",
+    "authorized_caps",
+    "low_signal_streak",
+    "previous_category"
+  ],
+  "properties": {
+    "schema_version": { "const": "1" },
+    "campaign_run_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "target_ref": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "target_version": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "signal_provenance": { "const": "hash_verified_postgres" },
+    "coverage": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 128,
+      "items": { "$ref": "#/$defs/coverage_signal" }
+    },
+    "findings": {
+      "type": "array",
+      "maxItems": 1000,
+      "items": { "$ref": "#/$defs/finding_signal" }
+    },
+    "regressions": {
+      "type": "array",
+      "maxItems": 1000,
+      "items": { "$ref": "#/$defs/regression_signal" }
+    },
+    "budget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cap_usd", "spent_usd"],
+      "properties": {
+        "cap_usd": { "type": "number", "exclusiveMinimum": 0 },
+        "spent_usd": { "type": "number", "minimum": 0 }
+      }
+    },
+    "queue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["depth", "backpressure_threshold"],
+      "properties": {
+        "depth": { "type": "integer", "minimum": 0 },
+        "backpressure_threshold": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "authorized_caps": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["budget_usd", "rate_per_min", "timeout_s"],
+      "properties": {
+        "budget_usd": { "type": "number", "exclusiveMinimum": 0 },
+        "rate_per_min": { "type": "integer", "minimum": 1 },
+        "timeout_s": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "low_signal_streak": { "type": "integer", "minimum": 0 },
+    "previous_category": { "type": ["string", "null"], "minLength": 1, "maxLength": 120 }
+  },
+  "$defs": {
+    "coverage_signal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "category",
+        "total_case_count",
+        "verified_attempt_count",
+        "deterministic_anchor_count"
+      ],
+      "properties": {
+        "category": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "total_case_count": { "type": "integer", "minimum": 1 },
+        "verified_attempt_count": { "type": "integer", "minimum": 0 },
+        "deterministic_anchor_count": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "finding_signal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["finding_id", "category", "severity", "status", "evidence_verified"],
+      "properties": {
+        "finding_id": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "category": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "severity": { "enum": ["low", "medium", "high", "critical"] },
+        "status": {
+          "enum": [
+            "candidate",
+            "judged",
+            "documented",
+            "approved",
+            "remediated",
+            "validated",
+            "regressed"
+          ]
+        },
+        "evidence_verified": { "const": true }
+      }
+    },
+    "regression_signal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "regression_id",
+        "finding_id",
+        "category",
+        "severity",
+        "state",
+        "evidence_verified"
+      ],
+      "properties": {
+        "regression_id": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "finding_id": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "category": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "severity": { "enum": ["low", "medium", "high", "critical"] },
+        "state": {
+          "enum": ["admitted", "passing", "failing", "regressed", "reopened"]
+        },
+        "evidence_verified": { "const": true }
+      }
+    }
+  }
+}

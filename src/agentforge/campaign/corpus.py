@@ -34,6 +34,8 @@ class CorpusUnavailable(RuntimeError):
 class AuthoredCase:
     payload: dict[str, Any]
     content_hash: str
+    source_tool: str | None = None
+    source_technique: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -213,7 +215,12 @@ def _candidate_case(
     canonical = json.dumps(
         payload, allow_nan=False, ensure_ascii=False, separators=(",", ":"), sort_keys=True
     ).encode("utf-8")
-    return AuthoredCase(payload=payload, content_hash=hashlib.sha256(canonical).hexdigest())
+    return AuthoredCase(
+        payload=payload,
+        content_hash=hashlib.sha256(canonical).hexdigest(),
+        source_tool=candidate.tool_name,
+        source_technique=candidate.technique,
+    )
 
 
 def load_full_scan_corpus(

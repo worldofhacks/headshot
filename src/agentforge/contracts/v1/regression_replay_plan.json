@@ -1,0 +1,82 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "agentforge/contracts/v1/regression_replay_plan",
+  "title": "RegressionReplayPlan",
+  "version": "1",
+  "description": "Immutable deterministic replay plan for a human-approved regression. Planning never authorizes target execution; the ordinary two-person campaign gate must bind a scope hash before replay.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "replay_id",
+    "regression_case_id",
+    "finding_id",
+    "report_id",
+    "source_case_ref",
+    "target_id",
+    "source_target_version",
+    "replay_target_version",
+    "trigger",
+    "attack_attempt",
+    "attack_sequence_sha256",
+    "required_oracle_ids",
+    "planned_repetitions",
+    "authorization_state",
+    "authorization_scope_hash",
+    "execution_state",
+    "human_approval_required"
+  ],
+  "properties": {
+    "schema_version": { "const": "1" },
+    "replay_id": { "type": "string", "pattern": "^RR-[0-9a-f]{64}$" },
+    "regression_case_id": { "type": "string", "pattern": "^RC-[0-9a-f]{64}$" },
+    "finding_id": { "type": "string", "minLength": 1, "maxLength": 160 },
+    "report_id": { "type": "string", "minLength": 1, "maxLength": 80 },
+    "source_case_ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["case_id", "case_version"],
+      "properties": {
+        "case_id": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "case_version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" }
+      }
+    },
+    "target_id": { "type": "string", "minLength": 1, "maxLength": 64 },
+    "source_target_version": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "replay_target_version": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "trigger": { "enum": ["target_version_changed", "manual_authorized_replay"] },
+    "attack_attempt": { "$ref": "#/$defs/attack_attempt" },
+    "attack_sequence_sha256": { "$ref": "#/$defs/sha256" },
+    "required_oracle_ids": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 32,
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1, "maxLength": 160 }
+    },
+    "planned_repetitions": { "type": "integer", "minimum": 2, "maximum": 20 },
+    "authorization_state": { "const": "pending_human_authorization" },
+    "authorization_scope_hash": { "type": "null" },
+    "execution_state": { "const": "blocked" },
+    "human_approval_required": { "const": true }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "attack_attempt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "case_ref", "input_sequence"],
+      "properties": {
+        "schema_version": { "const": "1" },
+        "case_ref": { "type": "string", "minLength": 1 },
+        "input_sequence": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string" }
+        },
+        "mutation_lineage": { "type": "array", "items": { "type": "string" } },
+        "category": { "type": "string" }
+      }
+    }
+  }
+}

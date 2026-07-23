@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import re
+from collections import Counter
 from collections.abc import Mapping
 from dataclasses import asdict, is_dataclass
 from enum import Enum
@@ -15,7 +16,9 @@ from urllib.parse import urlsplit
 
 from sqlalchemy import Engine, create_engine, text
 
+from agentforge.agents.runtime import AGENT_DEFINITIONS, default_assignment
 from agentforge.api.backend import ApiBackend, ApiBackendUnavailable, ApiConflict
+from agentforge.api.birdseye import build_birdseye_snapshot
 from agentforge.api.read_models import validate_ready_data
 from agentforge.api.schemas import CommandResult, EventBatch, ResourceResult
 from agentforge.auth.errors import AuthorizationError
@@ -37,6 +40,7 @@ from agentforge.policy.recorder import (
 )
 from agentforge.secrets import redact_mapping
 from agentforge.security_tools.catalog import SECURITY_TOOL_CATALOG, security_tool_records
+from agentforge.security_tools.scope import plan_tool_for_surface
 from agentforge.security_tools.workbench import (
     inspect_sanitized_exchange,
     security_workbench_records,
@@ -93,6 +97,20 @@ def _safe(value: Any) -> Any:
         configured = value.get("credential_configured")
         if isinstance(configured, bool):
             redacted["credential_configured"] = configured
+        separate_authorization = value.get("requires_separate_authorization")
+        if isinstance(separate_authorization, bool):
+            redacted["requires_separate_authorization"] = separate_authorization
+        # Aggregate model usage counters are non-secret accounting values. The generic
+        # key-hint scrubber masks every key containing "token", so restore only these
+        # explicitly typed counts after all credential-bearing structures were removed.
+        for counter_key in ("input_tokens", "output_tokens", "token_observation_count"):
+            if counter_key not in value:
+                continue
+            counter_value = value.get(counter_key)
+            if counter_value is None or (
+                isinstance(counter_value, int) and not isinstance(counter_value, bool)
+            ):
+                redacted[counter_key] = counter_value
         return {str(key): _safe(item) for key, item in redacted.items()}
     if isinstance(value, (tuple, list, set)):
         return [_safe(item) for item in value]
@@ -206,7 +224,227 @@ class PostgresApiBackend(ApiBackend):
             )
         try:
             with self._engine.connect() as connection:
-                if resource == "resilience":
+                if resource == "agents":
+                    configuration_rows = _rows(
+                        connection,
+                        "SELECT * FROM agent_configuration_versions "
+                        "WHERE organization_id = :org ORDER BY agent_role, version DESC",
+                        {"org": principal.organization_id},
+                    )
+                    configurations: dict[str, list[dict[str, Any]]] = {}
+                    for row in configuration_rows:
+                        configurations.setdefault(row["agent_role"], []).append(row)
+                    execution_rows = _rows(
+                        connection,
+                        "SELECT agent_role, count(*) AS execution_count, "
+                        "count(*) FILTER (WHERE status = 'running') AS running_count, "
+                        "count(*) FILTER (WHERE status = 'succeeded') AS succeeded_count, "
+                        "count(*) FILTER (WHERE status = 'failed') AS failed_count, "
+                        "count(*) FILTER (WHERE status = 'skipped') AS skipped_count, "
+                        "coalesce(sum(measured_cost), 0) AS measured_cost, "
+                        "sum(input_tokens) AS input_tokens, sum(output_tokens) AS output_tokens, "
+                        "count(*) FILTER (WHERE input_tokens IS NOT NULL "
+                        "OR output_tokens IS NOT NULL) AS token_observation_count, "
+                        "avg(duration_ms) FILTER (WHERE duration_ms IS NOT NULL) "
+                        "AS average_duration_ms, max(started_at) AS last_activity_at, "
+                        "(array_agg(status ORDER BY started_at DESC))[1] AS last_status, "
+                        "(array_agg(campaign_run_id ORDER BY started_at DESC))[1] "
+                        "AS last_campaign_run_id, "
+                        "(array_agg(attempt_id ORDER BY started_at DESC))[1] AS last_attempt_id "
+                        "FROM agent_executions WHERE organization_id = :org GROUP BY agent_role",
+                        {"org": principal.organization_id},
+                    )
+                    execution_by_role = {row["agent_role"]: row for row in execution_rows}
+
+                    def assignment_record(source: Mapping[str, Any]) -> dict[str, Any]:
+                        return {
+                            "role": source["agent_role"]
+                            if "agent_role" in source
+                            else source["role"],
+                            "provider": source["provider"],
+                            "model": source["model"],
+                            "execution_mode": source["execution_mode"],
+                            "activation_state": source["activation_state"],
+                            "version": source["version"],
+                            "configuration_sha256": source["configuration_sha256"],
+                            "configured_at": source.get("created_at")
+                            or source.get("configured_at"),
+                            "configured_by": source.get("actor_user_id")
+                            or source.get("configured_by"),
+                        }
+
+                    rows = []
+                    for definition in AGENT_DEFINITIONS:
+                        definition_record = definition.public_record()
+                        definition_record.pop("default_provider", None)
+                        definition_record.pop("default_model", None)
+                        definition_record.pop("default_execution_mode", None)
+                        role_configurations = configurations.get(definition.role, [])
+                        active = next(
+                            (
+                                row
+                                for row in role_configurations
+                                if row["activation_state"] == "active"
+                            ),
+                            None,
+                        )
+                        staged = next(
+                            (
+                                row
+                                for row in role_configurations
+                                if row["activation_state"] == "staged_pending_authorization"
+                            ),
+                            None,
+                        )
+                        active_assignment = (
+                            assignment_record(active)
+                            if active is not None
+                            else default_assignment(definition.role).public_record()
+                        )
+                        stats = execution_by_role.get(definition.role, {})
+                        rows.append(
+                            {
+                                **definition_record,
+                                "active_assignment": active_assignment,
+                                "staged_assignment": (
+                                    assignment_record(staged) if staged is not None else None
+                                ),
+                                "execution_count": int(stats.get("execution_count", 0)),
+                                "running_count": int(stats.get("running_count", 0)),
+                                "succeeded_count": int(stats.get("succeeded_count", 0)),
+                                "failed_count": int(stats.get("failed_count", 0)),
+                                "skipped_count": int(stats.get("skipped_count", 0)),
+                                "measured_cost": float(stats.get("measured_cost", 0.0)),
+                                "currency": "USD",
+                                "input_tokens": stats.get("input_tokens"),
+                                "output_tokens": stats.get("output_tokens"),
+                                "token_observation_count": int(
+                                    stats.get("token_observation_count", 0)
+                                ),
+                                "average_duration_ms": (
+                                    float(stats["average_duration_ms"])
+                                    if stats.get("average_duration_ms") is not None
+                                    else None
+                                ),
+                                "last_activity_at": stats.get("last_activity_at"),
+                                "last_status": stats.get("last_status"),
+                                "last_campaign_run_id": stats.get("last_campaign_run_id"),
+                                "last_attempt_id": stats.get("last_attempt_id"),
+                            }
+                        )
+                elif resource == "agent_activity":
+                    rows = _rows(
+                        connection,
+                        "SELECT execution_id, campaign_run_id, attempt_id, parent_execution_id, "
+                        "agent_role, status, provider, model, execution_mode, "
+                        "configuration_version, input_sha256, output_sha256, input_tokens, "
+                        "output_tokens, measured_cost, currency, trace_id, detail, error_code, "
+                        "started_at, finished_at, duration_ms FROM agent_executions "
+                        "WHERE organization_id = :org ORDER BY id DESC LIMIT 300",
+                        {"org": principal.organization_id},
+                    )
+                    for row in rows:
+                        row["measured_cost"] = float(row["measured_cost"] or 0.0)
+                        row["duration_ms"] = (
+                            float(row["duration_ms"]) if row["duration_ms"] is not None else None
+                        )
+                elif resource == "tooling":
+                    surface_rows = _rows(
+                        connection,
+                        "SELECT t.target_id, t.version AS target_version, t.payload AS target, "
+                        "s.surface_id, s.version AS surface_version, s.payload AS surface, "
+                        "(SELECT e.to_lifecycle FROM target_lifecycle_events e "
+                        "WHERE e.organization_id = t.organization_id "
+                        "AND e.target_id = t.target_id AND e.target_version = t.version "
+                        "ORDER BY e.id DESC LIMIT 1) AS target_lifecycle "
+                        "FROM target_definitions t JOIN attack_surface_definitions s "
+                        "ON s.organization_id = t.organization_id "
+                        "AND s.target_id = t.target_id AND s.target_version = t.version "
+                        "WHERE t.organization_id = :org ORDER BY t.target_id, s.surface_id",
+                        {"org": principal.organization_id},
+                    )
+                    attempt_rows = _rows(
+                        connection,
+                        "SELECT source_tool, count(*) AS executed_attempt_count, "
+                        "max(created_at) AS last_executed_at FROM campaign_attempts "
+                        "WHERE organization_id = :org AND source_tool IS NOT NULL "
+                        "GROUP BY source_tool",
+                        {"org": principal.organization_id},
+                    )
+                    attempt_metrics = {row["source_tool"]: row for row in attempt_rows}
+                    scan_rows = _rows(
+                        connection,
+                        "SELECT lower(r.tool_name) AS tool_id, count(DISTINCT r.run_id) "
+                        "AS recorded_scan_count, count(f.finding_id) AS recorded_finding_count, "
+                        "max(r.finished_at) AS last_executed_at FROM security_tool_runs r "
+                        "LEFT JOIN security_tool_findings f "
+                        "ON f.organization_id = r.organization_id AND f.run_id = r.run_id "
+                        "WHERE r.organization_id = :org GROUP BY lower(r.tool_name)",
+                        {"org": principal.organization_id},
+                    )
+                    scan_metrics = {row["tool_id"]: row for row in scan_rows}
+                    candidate_counts = Counter(
+                        case.source_tool
+                        for case in (self._corpus.cases if self._corpus is not None else ())
+                        if case.source_tool is not None
+                    )
+                    rows = []
+                    for configured in surface_rows:
+                        target = dict(configured["target"])
+                        surface = dict(configured["surface"])
+                        endpoint = (
+                            f"{str(target.get('base_url', '')).rstrip('/')}/"
+                            f"{str(surface.get('relative_path', '')).lstrip('/')}"
+                        )
+                        for tool in SECURITY_TOOL_CATALOG:
+                            plan = plan_tool_for_surface(
+                                tool,
+                                surface_kind=str(surface.get("kind", "")),
+                                protocol=str(surface.get("protocol", "")),
+                                method=str(surface.get("method", "")),
+                                relative_path=str(surface.get("relative_path", "")),
+                            )
+                            attempts = attempt_metrics.get(tool.tool_id, {})
+                            scans = scan_metrics.get(tool.tool_id, {})
+                            timestamps = [
+                                value
+                                for value in (
+                                    attempts.get("last_executed_at"),
+                                    scans.get("last_executed_at"),
+                                )
+                                if isinstance(value, datetime.datetime)
+                            ]
+                            rows.append(
+                                {
+                                    "tool_id": tool.tool_id,
+                                    "name": tool.name,
+                                    "version": tool.version,
+                                    "kind": tool.kind,
+                                    "availability": tool.availability,
+                                    "target_access": tool.target_access,
+                                    "target_id": configured["target_id"],
+                                    "target_version": configured["target_version"],
+                                    "target_lifecycle": configured["target_lifecycle"] or "draft",
+                                    "surface_id": configured["surface_id"],
+                                    "surface_version": configured["surface_version"],
+                                    "surface_kind": surface.get("kind"),
+                                    "endpoint": endpoint,
+                                    **plan.public_record(),
+                                    "capabilities": tool.capabilities,
+                                    "owasp_llm": tool.owasp_llm,
+                                    "owasp_web": tool.owasp_web,
+                                    "reviewed_candidate_count": candidate_counts[tool.tool_id],
+                                    "executed_attempt_count": int(
+                                        attempts.get("executed_attempt_count", 0)
+                                    ),
+                                    "recorded_scan_count": int(scans.get("recorded_scan_count", 0)),
+                                    "recorded_finding_count": int(
+                                        scans.get("recorded_finding_count", 0)
+                                    ),
+                                    "last_executed_at": max(timestamps) if timestamps else None,
+                                }
+                            )
+                elif resource == "resilience":
                     rows = _rows(
                         connection,
                         "SELECT a.attempt_id AS regression_id, "
@@ -267,6 +505,14 @@ class PostgresApiBackend(ApiBackend):
                             "published_by": "trusted-server-composition",
                         }
                     ]
+                elif resource == "birdseye":
+                    rows = [
+                        build_birdseye_snapshot(
+                            connection,
+                            organization_id=principal.organization_id,
+                            environment=self._environment,
+                        )
+                    ]
                 elif resource == "components":
                     heartbeat_at = connection.execute(text("SELECT clock_timestamp()")).scalar_one()
                     rows = [
@@ -299,23 +545,6 @@ class PostgresApiBackend(ApiBackend):
                         {"environment": self._environment},
                     )
                     rows.extend(persisted)
-                    present = {row["component_id"] for row in persisted}
-                    for component_id, name, kind in (
-                        ("runner", "Campaign runner", "worker"),
-                        ("langfuse", "Langfuse tracing", "telemetry"),
-                    ):
-                        if component_id not in present:
-                            rows.append(
-                                {
-                                    "component_id": component_id,
-                                    "name": name,
-                                    "kind": kind,
-                                    "availability": "adapter integrated, execution deferred",
-                                    "environment": self._environment,
-                                    "detail": "awaiting first private-runner heartbeat",
-                                    "heartbeat_at": heartbeat_at,
-                                }
-                            )
                     for row in rows:
                         row.setdefault("version", "unreported")
                         row.setdefault("target_access", "none")
@@ -437,12 +666,15 @@ class PostgresApiBackend(ApiBackend):
                         "f.severity AS finding_severity, f.category AS finding_category, "
                         "f.target_version AS finding_target_version, f.source_kind, "
                         "f.execution_profile AS finding_execution_profile, f.published, "
+                        "vr.report_id AS vuln_report_id, "
                         "l.evidence_content_hash, l.provenance AS linked_provenance "
                         "FROM finding f JOIN finding_evidence_links l "
                         "ON l.organization_id = f.organization_id AND l.finding_id = f.finding_id "
                         "JOIN attempt_result ar ON ar.organization_id = l.organization_id "
                         "AND ar.campaign_run_id = l.campaign_run_id "
-                        "AND ar.attempt_id = l.attempt_id WHERE "
+                        "AND ar.attempt_id = l.attempt_id LEFT JOIN vuln_reports vr "
+                        "ON vr.organization_id = f.organization_id "
+                        "AND vr.finding_id = f.finding_id WHERE "
                         + where
                         + " ORDER BY f.created_at DESC",
                         parameters,
@@ -478,7 +710,11 @@ class PostgresApiBackend(ApiBackend):
                                 "finding_id": source["linked_finding_id"],
                                 "state": "resolved"
                                 if latest == "resolved"
-                                else source["finding_state"],
+                                else (
+                                    "documented"
+                                    if source["vuln_report_id"] is not None
+                                    else source["finding_state"]
+                                ),
                                 "severity": source["finding_severity"],
                                 "category": source["finding_category"],
                                 "target_version": source["finding_target_version"],
@@ -679,6 +915,62 @@ class PostgresApiBackend(ApiBackend):
                                 "recorded_at": source["recorded_at"],
                             }
                         )
+                    agent_cost_rows = _rows(
+                        connection,
+                        "SELECT e.campaign_run_id, e.agent_role, e.provider, e.model, "
+                        "sum(e.measured_cost) AS measured_cost, e.currency, "
+                        "count(*) AS executions, "
+                        "min(e.started_at) AS started_at, max(e.finished_at) AS ended_at, "
+                        "extract(epoch FROM (max(e.finished_at) - min(e.started_at))) * 1000 "
+                        "AS duration_ms, q.scope_payload->>'execution_profile' "
+                        "AS execution_profile, "
+                        "CASE WHEN jsonb_typeof(q.scope_payload->'caps'->'budget_usd') = 'number' "
+                        "THEN (q.scope_payload->'caps'->>'budget_usd')::double precision "
+                        "ELSE NULL END AS budget_usd "
+                        "FROM agent_executions e JOIN campaign_runs r "
+                        "ON r.organization_id = e.organization_id "
+                        "AND r.run_id = e.campaign_run_id "
+                        "JOIN campaign_authorization_requests q "
+                        "ON q.organization_id = r.organization_id "
+                        "AND q.request_id = r.authorization_request_id "
+                        "WHERE e.organization_id = :org AND e.status <> 'running' "
+                        "GROUP BY e.campaign_run_id, e.agent_role, e.provider, e.model, "
+                        "e.currency, q.scope_payload ORDER BY max(e.finished_at) DESC LIMIT 400",
+                        {"org": principal.organization_id},
+                    )
+                    for source in agent_cost_rows:
+                        cost = float(source["measured_cost"] or 0.0)
+                        accounting_id = hashlib.sha256(
+                            (
+                                f"agent-cost:{source['campaign_run_id']}:"
+                                f"{source['agent_role']}:{source['provider']}:{source['model']}"
+                            ).encode()
+                        ).hexdigest()
+                        rows.append(
+                            {
+                                "accounting_id": accounting_id,
+                                "campaign_id": source["campaign_run_id"],
+                                "provider": (
+                                    f"agent:{source['agent_role']}:"
+                                    f"{source['provider']}/{source['model']}"
+                                ),
+                                "measured_cost": cost,
+                                "currency": source["currency"],
+                                "request_count": 0,
+                                "attempt_count": int(source["executions"]),
+                                "confirmed_finding_count": 0,
+                                "average_cost_per_request": 0.0,
+                                "budget_usd": source["budget_usd"],
+                                "budget_utilization": (
+                                    cost / source["budget_usd"] if source["budget_usd"] else None
+                                ),
+                                "duration_ms": float(source["duration_ms"] or 0.0),
+                                "execution_profile": source["execution_profile"],
+                                "started_at": source["started_at"],
+                                "ended_at": source["ended_at"],
+                                "recorded_at": source["ended_at"],
+                            }
+                        )
                 elif resource == "traces":
                     request_rows = _rows(
                         connection,
@@ -812,6 +1104,51 @@ class PostgresApiBackend(ApiBackend):
                                 "inspection_owasp_mappings": [],
                             }
                         )
+                    agent_rows = _rows(
+                        connection,
+                        "SELECT execution_id, trace_id, campaign_run_id, attempt_id, agent_role, "
+                        "status, provider, model, execution_mode, input_sha256, output_sha256, "
+                        "error_code, started_at, finished_at, duration_ms, measured_cost, currency "
+                        "FROM agent_executions WHERE organization_id = :org "
+                        "ORDER BY started_at DESC LIMIT 300",
+                        {"org": principal.organization_id},
+                    )
+                    for source in agent_rows:
+                        rows.append(
+                            {
+                                "request_id": source["execution_id"],
+                                "trace_id": source["trace_id"],
+                                "campaign_id": source["campaign_run_id"],
+                                "attempt_id": source["attempt_id"],
+                                "operation": f"agent.{source['agent_role']}",
+                                "provider": f"{source['provider']}/{source['model']}",
+                                "method": None,
+                                "destination_host": None,
+                                "relative_path": None,
+                                "status": source["status"],
+                                "status_code": None,
+                                "error_code": source["error_code"],
+                                "started_at": source["started_at"],
+                                "finished_at": source["finished_at"],
+                                "duration_ms": float(source["duration_ms"] or 0.0),
+                                "request_bytes": 0,
+                                "response_bytes": None,
+                                "measured_cost": float(source["measured_cost"] or 0.0),
+                                "currency": source["currency"],
+                                "langfuse_status": (
+                                    "not_applicable_deterministic"
+                                    if source["execution_mode"] == "deterministic"
+                                    else "hosted_export_not_observed"
+                                ),
+                                "request_preview": None,
+                                "response_preview": None,
+                                "request_sha256": source["input_sha256"],
+                                "response_sha256": source["output_sha256"],
+                                "inspection_flags": [],
+                                "inspection_owasp_mappings": [],
+                            }
+                        )
+                    rows.sort(key=lambda row: row["started_at"], reverse=True)
                 elif resource == "approvals":
                     rows = _rows(
                         connection,
@@ -930,7 +1267,14 @@ class PostgresApiBackend(ApiBackend):
                     row["status"] = row.get("decision") or "pending"
 
         sanitized = _safe(rows)
-        if resource in {"campaign", "evidence", "target", "finding", "configuration"}:
+        if resource in {
+            "campaign",
+            "evidence",
+            "target",
+            "finding",
+            "configuration",
+            "birdseye",
+        }:
             if not sanitized:
                 return ResourceResult.empty()
             try:
@@ -1047,6 +1391,20 @@ class PostgresApiBackend(ApiBackend):
                 return CommandResult.completed(record.decision_id, resource_id=record.finding_id)
             if command == "request_live_probe_authorization":
                 return CommandResult.unavailable("distinct_live_probe_workflow_missing")
+            if command == "configure_agent":
+                assignment = self._store.configure_agent(
+                    principal=principal,
+                    agent_role=identifiers.get("agent_role", ""),
+                    provider=str(payload["provider"]),
+                    model=str(payload["model"]),
+                    execution_mode=str(payload["execution_mode"]),
+                    rationale=str(payload["rationale"]),
+                    idempotency_key=idempotency_key,
+                )
+                return CommandResult.completed(
+                    assignment.configuration_sha256,
+                    resource_id=assignment.role,
+                )
             if command in {"validate_configuration", "publish_configuration"}:
                 return CommandResult.unavailable("configuration_snapshot_repository_missing")
             return CommandResult.unavailable("command_not_implemented")

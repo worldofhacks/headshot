@@ -3,10 +3,9 @@
 spec(M5) — ARCHITECTURE.md §2/§5, DECISIONS.md D14/D16; PRD-01.
 
 This is the ONLY live-target adapter in this wave. It is reached EXCLUSIVELY through the
-trusted Policy Gateway (``agentforge.policy.gateway``) — never directly by an agent — and it
-holds NO credential of its own: the gateway resolves a scoped :class:`Secret` by reference and
-injects it, and the adapter uses it only at the HTTPS call boundary, never logging or inlining
-it.
+trusted Policy Gateway (``agentforge.policy.gateway``) — never directly by an agent. The Runner
+injects one campaign-scoped :class:`Secret`; the adapter retains it only for that campaign, uses it
+at the HTTPS call boundary, and clears it during close without logging it.
 
 ``send()`` would make a real HTTPS request in an *authorized* live campaign, but the transport
 is fully injectable: a test drives it with a fake client (no socket), and the real client
@@ -145,6 +144,8 @@ class OpenEmrAdapter(TargetAdapter):
     allowed_content_types: tuple[str, ...] = ()
     destination_validator: Callable[[str], None] | None = field(default=None, repr=False)
     telemetry: Any | None = field(default=None, repr=False)
+    _owned_client: Any | None = field(default=None, init=False, repr=False)
+    _closed: bool = field(default=False, init=False, repr=False)
     name: str = "openemr"
 
     def __post_init__(self) -> None:
@@ -296,10 +297,25 @@ class OpenEmrAdapter(TargetAdapter):
     # ------------------------------------------------------------------ helpers
 
     def _client(self) -> Any:
-        """Return the injected client, or lazily build the real one (network path only)."""
+        """Return one campaign-persistent client (connection pool + cookie jar)."""
+        if self._closed:
+            raise AdapterError("OpenEMR adapter is closed")
         if self.client is not None:
             return self.client
-        return self.client_factory(self.timeout_seconds)
+        if self._owned_client is None:
+            self._owned_client = self.client_factory(self.timeout_seconds)
+        return self._owned_client
+
+    def close(self) -> None:
+        """Release owned transport state and the in-memory credential; safe to call twice."""
+
+        owned = self._owned_client
+        self._owned_client = None
+        self.credential = None
+        self._closed = True
+        close = getattr(owned, "close", None)
+        if callable(close):
+            close()
 
     def _build_url(self) -> str:
         """Join the configured base URL with the API path (no double slash)."""

@@ -259,6 +259,265 @@ export interface ComponentReadModel extends JsonRecord {
   heartbeat_at: string;
 }
 
+export interface AgentAssignmentReadModel extends JsonRecord {
+  role: "orchestrator" | "red_team" | "judge" | "documentation";
+  provider: string;
+  model: string;
+  execution_mode: "deterministic" | "hosted_advisory";
+  activation_state: "active" | "staged_pending_authorization";
+  version: number;
+  configuration_sha256: string;
+  configured_at: string | null;
+  configured_by: string | null;
+}
+
+export interface AgentReadModel extends JsonRecord {
+  role: "orchestrator" | "red_team" | "judge" | "documentation";
+  display_name: string;
+  responsibility: string;
+  trust_level: string;
+  target_access: string;
+  input_contract: string;
+  output_contract: string;
+  active_assignment: AgentAssignmentReadModel;
+  staged_assignment: AgentAssignmentReadModel | null;
+  execution_count: number;
+  running_count: number;
+  succeeded_count: number;
+  failed_count: number;
+  skipped_count: number;
+  measured_cost: number;
+  currency: string;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  token_observation_count: number;
+  average_duration_ms: number | null;
+  last_activity_at: string | null;
+  last_status: string | null;
+  last_campaign_run_id: string | null;
+  last_attempt_id: string | null;
+}
+
+export interface AgentActivityReadModel extends JsonRecord {
+  execution_id: string;
+  campaign_run_id: string;
+  attempt_id: string | null;
+  parent_execution_id: string | null;
+  agent_role: "orchestrator" | "red_team" | "judge" | "documentation";
+  status: "running" | "succeeded" | "failed" | "skipped";
+  provider: string;
+  model: string;
+  execution_mode: "deterministic" | "hosted_advisory";
+  configuration_version: number;
+  input_sha256: string;
+  output_sha256: string | null;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  measured_cost: number;
+  currency: string;
+  trace_id: string;
+  detail: JsonRecord;
+  error_code: string | null;
+  started_at: string;
+  finished_at: string | null;
+  duration_ms: number | null;
+}
+
+export interface ToolScopeReadModel extends JsonRecord {
+  tool_id: string;
+  name: string;
+  version: string;
+  kind: string;
+  availability: string;
+  target_access: string;
+  target_id: string;
+  target_version: string;
+  target_lifecycle: string;
+  surface_id: string;
+  surface_version: string;
+  surface_kind: string;
+  endpoint: string;
+  applicability: "in_campaign" | "companion_scan" | "platform_assurance" | "adapter_available" | "not_applicable";
+  execution_mode: string;
+  scope_reason: string;
+  requires_separate_authorization: boolean;
+  capabilities: string[];
+  owasp_llm: string[];
+  owasp_web: string[];
+  reviewed_candidate_count: number;
+  executed_attempt_count: number;
+  recorded_scan_count: number;
+  recorded_finding_count: number;
+  last_executed_at: string | null;
+}
+
+export interface BirdseyeCampaignReadModel extends JsonRecord {
+  run_id: string;
+  target_id: string;
+  target_name: string;
+  target_version: string;
+  state: "queued" | "running" | "complete" | "aborted" | "failed";
+  execution_profile: "synthetic" | "live";
+  scope_hash: string;
+  attempt_count: number;
+}
+
+export interface BirdseyeInstrumentationReadModel extends JsonRecord {
+  budget_usd: number;
+  measured_cost_usd: number;
+  budget_utilization: number;
+  requests_per_second_cap: number;
+  queue_queued: number;
+  queue_leased: number;
+  queue_dead_letter: number;
+  confirmed_count: number;
+  likely_count: number;
+  review_count: number;
+  healthy_components: number;
+  total_components: number;
+  system_state: "nominal" | "degraded" | "unavailable";
+}
+
+export interface BirdseyeSecurityPostureReadModel extends JsonRecord {
+  tested_categories: number;
+  required_categories: number;
+  verified_case_count: number;
+  held_count: number;
+  exploited_count: number;
+  review_count: number;
+  observed_hold_rate: number | null;
+  open_finding_count: number;
+  in_progress_finding_count: number;
+  resolved_finding_count: number;
+  critical_open_finding_count: number;
+  resilience_direction: "improving" | "steady" | "degrading" | "unavailable";
+  current_regression_hold_rate: number | null;
+  previous_regression_hold_rate: number | null;
+  resilience_delta: number | null;
+  cost_per_attempt_usd: number | null;
+  cost_velocity_usd_per_minute: number | null;
+  projected_cost_at_attempt_cap_usd: number | null;
+  priority_category: string | null;
+  priority_reason: string;
+  priority_source: "orchestrator_decision" | "coverage_policy" | "unavailable";
+  priority_at: string | null;
+}
+
+export interface BirdseyeCategoryOutcomeReadModel extends JsonRecord {
+  target_version: string;
+  category: string;
+  verified_case_count: number;
+  verified_attempt_count: number;
+  held_count: number;
+  exploited_count: number;
+  review_count: number;
+  last_evaluated_at: string | null;
+}
+
+export interface BirdseyeAgentActivityReadModel extends JsonRecord {
+  execution_id: string;
+  parent_execution_id: string | null;
+  agent_role: "orchestrator" | "red_team" | "judge" | "documentation";
+  status: "running" | "succeeded" | "failed" | "skipped";
+  phase: string;
+  attempt_id: string | null;
+  category: string | null;
+  verdict_state: string | null;
+  finding_id: string | null;
+  error_code: string | null;
+  started_at: string;
+  finished_at: string | null;
+  duration_ms: number | null;
+}
+
+export type BirdseyeTrustZone =
+  | "human"
+  | "untrusted"
+  | "control"
+  | "execution"
+  | "evaluation"
+  | "governance"
+  | "data"
+  | "observability"
+  | "unclassified";
+
+export type BirdseyeRuntimeState =
+  | "ready"
+  | "working"
+  | "waiting"
+  | "degraded"
+  | "error"
+  | "stale"
+  | "unavailable";
+
+export interface BirdseyeNodeReadModel extends JsonRecord {
+  component_id: string;
+  name: string;
+  kind: string;
+  trust_zone: BirdseyeTrustZone;
+  availability: string;
+  runtime_state: BirdseyeRuntimeState;
+  detail: string;
+  current_task: string;
+  heartbeat_at: string | null;
+  freshness_seconds: number | null;
+  is_fresh: boolean;
+  healthy_instances: number;
+  total_instances: number;
+  p50_latency_ms: number | null;
+  p95_latency_ms: number | null;
+  queue_depth: number | null;
+  target_access: string;
+}
+
+export interface BirdseyeEdgeReadModel extends JsonRecord {
+  edge_id: string;
+  source_component_id: string;
+  target_component_id: string;
+  contract_name: string;
+  state: "idle" | "active" | "complete" | "error" | "stale" | "unavailable";
+  attempt_id: string | null;
+  last_event_at: string | null;
+  detail: string;
+}
+
+export interface BirdseyeAttentionReadModel extends JsonRecord {
+  attention_id: string;
+  priority: number;
+  kind: "integrity" | "approval" | "finding" | "component";
+  title: string;
+  detail: string;
+  continuation: string;
+  record_type: string;
+  record_id: string;
+  route: string;
+  created_at: string;
+}
+
+export interface BirdseyeTimelineReadModel extends JsonRecord {
+  cursor: number;
+  event_type: string;
+  actor: string;
+  summary: string;
+  aggregate_type: string;
+  aggregate_id: string;
+  created_at: string;
+}
+
+export interface BirdseyeSnapshotReadModel extends JsonRecord {
+  campaign: BirdseyeCampaignReadModel | null;
+  instrumentation: BirdseyeInstrumentationReadModel;
+  security_posture: BirdseyeSecurityPostureReadModel;
+  category_outcomes: BirdseyeCategoryOutcomeReadModel[];
+  agent_activity: BirdseyeAgentActivityReadModel[];
+  nodes: BirdseyeNodeReadModel[];
+  edges: BirdseyeEdgeReadModel[];
+  attention: BirdseyeAttentionReadModel[];
+  timeline: BirdseyeTimelineReadModel[];
+  cursor: number;
+  as_of: string;
+}
+
 export interface AuditReadModel extends JsonRecord {
   cursor: number;
   event_type: string;

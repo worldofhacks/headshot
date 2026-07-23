@@ -12,7 +12,12 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { createApiClient } from "./api/client";
 import type { Principal } from "./api/contracts";
 import { RESOURCE_PATHS } from "./api/paths";
-import { decodeApprovals, decodeCampaigns, decodePrincipal } from "./api/read-models";
+import {
+  decodeApprovals,
+  decodeBirdseye,
+  decodeCampaigns,
+  decodePrincipal,
+} from "./api/read-models";
 import { useResource } from "./hooks/useResource";
 import { parseConsoleRoute, routePath, type ConsoleRoute, type ScreenName } from "./router";
 import {
@@ -23,7 +28,12 @@ import {
   SimpleResourceScreen,
   TargetsScreen,
 } from "./screens/ConsoleScreens";
-import type { ApprovalReadModel, CampaignReadModel } from "./types";
+import { AgentsScreen, ToolingScreen } from "./screens/AgentToolScreens";
+import type {
+  ApprovalReadModel,
+  BirdseyeSnapshotReadModel,
+  CampaignReadModel,
+} from "./types";
 
 const navigation: Array<{ screen: ScreenName; label: string; icon: string }> = [
   { screen: "live", label: "Live", icon: "M3 12h3.5l2.5 7 4.5-14 2.5 7H21" },
@@ -31,6 +41,8 @@ const navigation: Array<{ screen: ScreenName; label: string; icon: string }> = [
   { screen: "approvals", label: "Approvals", icon: "M4 6.5A2.5 2.5 0 0 1 6.5 4h11A2.5 2.5 0 0 1 20 6.5v11a2.5 2.5 0 0 1-2.5 2.5h-11A2.5 2.5 0 0 1 4 17.5z M8.5 12l2.5 2.5 5-5" },
   { screen: "coverage", label: "Coverage", icon: "M4 4h7v7H4z M13 4h7v7h-7z M4 13h7v7H4z M13 13h7v7h-7z" },
   { screen: "resilience", label: "Resilience", icon: "M4 17l5-5 3.5 3.5L20 8 M15 8h5v5" },
+  { screen: "agents", label: "Agents", icon: "M5 7h5 M14 7h5 M7.5 7v5 M16.5 7v5 M7.5 12h9 M12 12v5 M9 20h6 M7.5 12a2 2 0 1 0 0 4 2 2 0 0 0 0-4 M16.5 12a2 2 0 1 0 0 4 2 2 0 0 0 0-4" },
+  { screen: "tooling", label: "Tooling", icon: "M14.5 5.5a4 4 0 0 0-5 5L4 16l4 4 5.5-5.5a4 4 0 0 0 5-5l-3 3-3-3z" },
   { screen: "traces", label: "Traces", icon: "M4 6h11 M4 12h15 M4 18h8" },
   { screen: "costs", label: "Costs", icon: "M12 3v18 M16 7.5c0-1.7-1.8-3-4-3s-4 1.3-4 3 1.8 2.6 4 3 4 1.3 4 3-1.8 3-4 3-4-1.3-4-3" },
   { screen: "targets", label: "Targets", icon: "M12 3l8.5 4.5L12 12 3.5 7.5 12 3z M4 12l8 4.5 8-4.5 M4 16.5l8 4.5 8-4.5" },
@@ -122,11 +134,24 @@ function ConsoleShell({
   const [mobileMore, setMobileMore] = useState(false);
   const campaigns = useResource<CampaignReadModel[]>(client, RESOURCE_PATHS.campaigns, decodeCampaigns);
   const approvals = useResource<ApprovalReadModel[]>(client, RESOURCE_PATHS.approvals, decodeApprovals);
+  const birdseye = useResource<BirdseyeSnapshotReadModel>(
+    client,
+    RESOURCE_PATHS.birdseye,
+    decodeBirdseye,
+  );
   const activeCampaign = campaigns.result.data?.find((campaign) => campaign.state === "running")
     ?? campaigns.result.data?.find((campaign) => campaign.state === "queued")
     ?? campaigns.result.data?.[0]
     ?? null;
   const pendingApprovals = approvals.result.data?.filter((approval) => approval.status === "pending").length ?? 0;
+  const systemState = birdseye.result.data?.instrumentation.system_state ?? birdseye.result.state;
+  const serverStatus = birdseye.result.data
+    ? `${systemState} · ${new Intl.DateTimeFormat("en-US", {
+        hour: "numeric",
+        minute: "2-digit",
+        second: "2-digit",
+      }).format(new Date(birdseye.result.data.as_of))}`
+    : systemState;
   const go = (next: ConsoleRoute) => {
     setMobileMore(false);
     navigate(next);
@@ -152,6 +177,12 @@ function ConsoleShell({
     case "traces":
     case "costs":
       screen = <SimpleResourceScreen client={client} resource={route.screen} />;
+      break;
+    case "agents":
+      screen = <AgentsScreen client={client} principal={principal} />;
+      break;
+    case "tooling":
+      screen = <ToolingScreen client={client} />;
       break;
     case "targets":
       screen = <TargetsScreen {...common} />;
@@ -206,7 +237,10 @@ function ConsoleShell({
             </span>
           </div>
           <div className="topbar-actions">
-            <span className="connection-chip"><span className="status-dot live" />Live server data</span>
+            <span className={`connection-chip connection-${systemState}`}>
+              <span className={`status-dot ${systemState === "nominal" ? "live" : "idle"}`} />
+              Server snapshot · {serverStatus}
+            </span>
             <button
               type="button"
               className="icon-button approval-shortcut"

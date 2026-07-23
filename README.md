@@ -59,9 +59,8 @@ configuration, including different exact Organization IDs and authorized origins
    Accounts, and disable user-created Organizations.
 3. Require MFA for every user. Enable authenticator-app TOTP and backup codes; SMS may be offered
    but must not be the only factor.
-4. Create the four Organization roles and the custom permissions in the matrix below. Clerk's
-   production plan includes only the first two custom roles without the Enhanced B2B
-   Authentication add-on; the locked four-role design therefore requires that add-on.
+4. Create exactly the `org:operator` and `org:approver` Organization roles and assign the custom
+   permissions in the matrix below. Remove any retired or demo roles.
 5. Copy the publishable key and PEM JWT public key for each environment. Configure exact,
    non-wildcard authorized parties and the environment's exact Headshot Organization ID.
 6. Do **not** configure `CLERK_SECRET_KEY` for request authentication. It is a future-only
@@ -150,10 +149,8 @@ Frontend labels and Clerk system permissions are not backend authority.
 
 | Role | Backend-authoritative custom permissions |
 |---|---|
-| `org:observer` | `org:console:read`, `org:findings:read`, `org:evidence:read` |
-| `org:operator` | `org:console:read`, `org:findings:read`, `org:evidence:read`, `org:campaign:launch`, `org:campaign:abort`, `org:targets:manage`, `org:config:manage` |
-| `org:approver` | `org:console:read`, `org:findings:read`, `org:evidence:read`, `org:campaign:authorize`, `org:findings:approve`, `org:findings:resolve` |
-| `org:auditor` | `org:console:read`, `org:findings:read`, `org:evidence:read`, `org:audit:read` |
+| `org:operator` | `org:console:read`, `org:findings:read`, `org:evidence:read`, `org:audit:read`, `org:campaign:launch`, `org:campaign:abort`, `org:targets:manage`, `org:config:manage` |
+| `org:approver` | `org:console:read`, `org:findings:read`, `org:evidence:read`, `org:audit:read`, `org:campaign:authorize`, `org:findings:approve`, `org:findings:resolve` |
 
 A role is useful for assignment and audit display, but the backend checks the verified custom
 permission set for each operation. Client-supplied roles or permissions are ignored.
@@ -184,6 +181,12 @@ dispatch, resolves scoped credentials only at that boundary, and persists eviden
 completion. Application and database controls reject self-approval, and queue completion is never
 approval.
 
+For the Clinical Co-Pilot `/chat` surface, a live campaign pins one versioned, patient-scoped SMART
+session for its entire bounded run and reuses one HTTP client so cookies and connection state persist.
+The Runner never silently refreshes or rotates that identity: local expiry or the target's session-
+expired response hard-aborts the run before another attempt. Rotation requires a new secret-reference
+generation, target version, exact authorization scope, and distinct-person approval.
+
 The deterministic synthetic profile runs the real nine-case corpus through the queue, Runner,
 coordinator, recorder, independent Judge, findings, API, Coverage, and event repositories without a
 target/model socket. Local integration evidence proves all nine attempts and hash-verified Coverage;
@@ -201,6 +204,7 @@ authorization remain typed unavailable rather than being replaced by dummy data.
 - [Identity and access ADR](docs/adrs/0002-identity-and-access.md)
 - [Authentication security contract](docs/security/AUTHENTICATION.md)
 - [Railway deployment runbook](docs/deployment/RAILWAY.md)
+- [Clinical Co-Pilot target/session readiness](docs/target/READINESS.md)
 - [Threat model](THREAT_MODEL.md)
 - [User workflows](USERS.md)
 - [User-locked requirements matrix](docs/requirements/REQUIREMENTS_MATRIX.csv)

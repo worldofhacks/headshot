@@ -1,0 +1,144 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "agentforge/contracts/v1/regression_replay_result",
+  "title": "RegressionReplayResult",
+  "version": "1",
+  "description": "Hash- and scope-bound deterministic regression replay result. A confirmed exploit always marks reappearance and can never produce a passing result.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "result_id",
+    "replay_id",
+    "regression_case_id",
+    "campaign_run_id",
+    "authorization_scope_hash",
+    "target_id",
+    "replay_target_version",
+    "attack_sequence_sha256",
+    "planned_repetitions",
+    "observation_count",
+    "observations",
+    "state",
+    "deterministic",
+    "passes_for_right_reason",
+    "reappeared",
+    "reason_codes",
+    "evidence_references"
+  ],
+  "properties": {
+    "schema_version": { "const": "1" },
+    "result_id": { "type": "string", "pattern": "^RVR-[0-9a-f]{64}$" },
+    "replay_id": { "type": "string", "pattern": "^RR-[0-9a-f]{64}$" },
+    "regression_case_id": { "type": "string", "pattern": "^RC-[0-9a-f]{64}$" },
+    "campaign_run_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "authorization_scope_hash": { "$ref": "#/$defs/sha256" },
+    "target_id": { "type": "string", "minLength": 1, "maxLength": 64 },
+    "replay_target_version": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "attack_sequence_sha256": { "$ref": "#/$defs/sha256" },
+    "planned_repetitions": { "type": "integer", "minimum": 2, "maximum": 20 },
+    "observation_count": { "type": "integer", "minimum": 1, "maximum": 20 },
+    "observations": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 20,
+      "items": { "$ref": "#/$defs/observation" }
+    },
+    "state": { "enum": ["passing", "failing", "inconclusive"] },
+    "deterministic": { "type": "boolean" },
+    "passes_for_right_reason": { "type": "boolean" },
+    "reappeared": { "type": "boolean" },
+    "reason_codes": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 4,
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "safe_behavior_confirmed_by_required_oracles",
+          "exploit_reappeared",
+          "observation_incomplete",
+          "replay_non_deterministic",
+          "judge_error",
+          "evidence_contradictory"
+        ]
+      }
+    },
+    "evidence_references": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 20,
+      "uniqueItems": true,
+      "items": { "type": "string", "pattern": "^evidence://sha256/[0-9a-f]{64}$" }
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "state": { "const": "passing" } }, "required": ["state"] },
+      "then": {
+        "properties": {
+          "deterministic": { "const": true },
+          "passes_for_right_reason": { "const": true },
+          "reappeared": { "const": false },
+          "reason_codes": { "const": ["safe_behavior_confirmed_by_required_oracles"] }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "state": { "const": "failing" } }, "required": ["state"] },
+      "then": {
+        "properties": {
+          "deterministic": { "const": true },
+          "passes_for_right_reason": { "const": true },
+          "reappeared": { "const": true },
+          "reason_codes": { "const": ["exploit_reappeared"] }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "signal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "provenance", "hit"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "provenance": { "enum": ["code", "human"] },
+        "hit": { "type": "boolean" }
+      }
+    },
+    "observation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "attempt_id",
+        "evidence_reference",
+        "verdict_state",
+        "required_signals"
+      ],
+      "properties": {
+        "attempt_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "evidence_reference": {
+          "type": "string",
+          "pattern": "^evidence://sha256/[0-9a-f]{64}$"
+        },
+        "verdict_state": {
+          "enum": [
+            "EXPLOIT_CONFIRMED",
+            "EXPLOIT_LIKELY",
+            "NO_EXPLOIT_OBSERVED",
+            "INDETERMINATE",
+            "ERROR"
+          ]
+        },
+        "required_signals": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "items": { "$ref": "#/$defs/signal" }
+        }
+      }
+    }
+  }
+}

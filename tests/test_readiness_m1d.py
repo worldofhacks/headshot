@@ -7,8 +7,8 @@ from pathlib import Path
 from agentforge.readiness import build_readiness_check, database_schema_ready, expected_alembic_head
 
 
-def test_integrated_alembic_head_is_the_single_forward_m1d_revision() -> None:
-    assert expected_alembic_head() == "0008"
+def test_integrated_alembic_head_is_the_single_forward_revision() -> None:
+    assert expected_alembic_head() == "0012"
 
 
 def test_database_schema_ready_accepts_migrated_integrated_head(migrated_db) -> None:

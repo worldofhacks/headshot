@@ -135,6 +135,7 @@ class PolicyGateway:
         trigger: str = "direct",
         campaign_run_id: str | None = None,
         attempt_id: str | None = None,
+        organization_id: str = "",
     ) -> AttemptResult:
         """Enforce the gate, then dispatch exactly one logical attempt through the adapter.
 
@@ -176,7 +177,9 @@ class PolicyGateway:
         request_metadata = {
             "campaign_run_id": campaign_run_id or "",
             "attempt_id": attempt_id or "",
-            "organization_id": str(attack_attempt.get("organization_id", "")),
+            # Tenant context is trusted Runner metadata, not part of the untrusted, strictly
+            # versioned AttackAttempt contract.
+            "organization_id": organization_id,
             "case_id": str(attack_attempt.get("case_ref", "")),
             "attack_category": str(attack_attempt.get("category", "")),
         }

@@ -165,9 +165,18 @@ SECURITY_TOOL_CATALOG: tuple[SecurityToolDefinition, ...] = (
         target_access="exact_origin_passive",
         capabilities=("passive DAST", "HTTP hardening", "web misconfiguration", "bounded spider"),
         owasp_web=("A03:2021", "A04:2021", "A05:2021", "A10:2021"),
-        operational_scope=("isolated passive fake-target baseline",),
-        execution_evidence=("ci://security-tools/zap.json",),
-        detail="Passive-only and exact-origin checked before and after execution.",
+        operational_scope=(
+            "isolated passive fake-target baseline",
+            "separately authorized exact-origin HTTPS passive baseline",
+        ),
+        execution_evidence=(
+            "ci://security-tools/zap.json",
+            "postgres://tool_findings?tool=zap",
+        ),
+        detail=(
+            "Passive-only and exact-origin checked before and after execution. Live target scans "
+            "require their own authorization and never inherit campaign credentials."
+        ),
     ),
     SecurityToolDefinition(
         tool_id="semgrep",

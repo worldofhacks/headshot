@@ -300,14 +300,11 @@ expanded into permissions in application code.
 
 | Role | Exact custom permission assignment |
 |---|---|
-| `org:observer` | `org:console:read`, `org:findings:read`, `org:evidence:read` |
-| `org:operator` | `org:console:read`, `org:findings:read`, `org:evidence:read`, `org:campaign:launch`, `org:campaign:abort`, `org:targets:manage`, `org:config:manage` |
-| `org:approver` | `org:console:read`, `org:findings:read`, `org:evidence:read`, `org:campaign:authorize`, `org:findings:approve`, `org:findings:resolve` |
-| `org:auditor` | `org:console:read`, `org:findings:read`, `org:evidence:read`, `org:audit:read` |
+| `org:operator` | `org:console:read`, `org:findings:read`, `org:evidence:read`, `org:audit:read`, `org:campaign:launch`, `org:campaign:abort`, `org:targets:manage`, `org:config:manage` |
+| `org:approver` | `org:console:read`, `org:findings:read`, `org:evidence:read`, `org:audit:read`, `org:campaign:authorize`, `org:findings:approve`, `org:findings:resolve` |
 
-Current Clerk documentation includes only the first two custom production roles without the
-**Enhanced B2B Authentication** add-on. That add-on is therefore a provisioning prerequisite for this
-locked four-role design; missing it blocks production rather than collapsing roles.
+The two-role model is deliberate: both roles can inspect all protected operational and audit data,
+while custom mutation permissions preserve launcher/approver separation.
 **Fallback.** None that changes authority semantics. A temporarily absent role/permission denies the
 operation.
 
