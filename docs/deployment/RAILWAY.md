@@ -1,8 +1,11 @@
 # Railway deployment runbook
 
-> **Status — selected/planned, not deployed:** Railway is the locked full-platform host. No Railway
-> project, service, domain, database, deployment, rollback, or green check is asserted by this
-> document. Resource creation and live verification require an authorized human integration step.
+> **Status — provisioned baseline, release promotion pending:** the Headshot Railway project has
+> separate Staging and production environments with Web, Runner, and PostgreSQL provisioned. This
+> release adds the private Scheduler and migrations through `0013`. A provisioned resource is not
+> evidence that the current release is deployed or that a live campaign is authorized; exact
+> deployment IDs, commit, probes, schema revision, private-ingress checks, and CI results must be
+> recorded after promotion.
 
 This runbook defines the required staging and production topology and the evidence needed before a
 deployed status can be claimed.
@@ -26,14 +29,12 @@ installed wheel, `/app/alembic.ini`, the complete `/app/migrations` tree, and on
 assets under `/app/console`. Node, npm, TypeScript sources, tests, source maps, and development servers
 remain outside the runtime stage.
 
-The commands are packaging contracts, not evidence that all private runtime composition exists. At
-this integration point Runner refuses to start without the trusted credential resolver, adapter
-factory, and atomic result/queue-completion composition; Scheduler refuses to start without an
-authoritative persisted schedule repository and queue composition. Keep both services private and
-stopped until those dependencies are implemented and verified. Do not set their readiness override
-variables merely to make Railway show a running process. Runner enablement also requires a gate before
-every outbound dispatch and a bounded active-work cancellation signal; a campaign-level queue claim
-cannot provide either invariant by itself.
+The commands are packaging contracts, not deployment evidence. Runner composes the trusted credential
+resolver, adapter factory, per-dispatch Policy Gateway, bounded cancellation, and atomic
+result/queue-completion path. Scheduler writes idempotent target-version replay plans to PostgreSQL and
+heartbeats its state; every plan remains blocked on the normal human and policy authorization gates.
+Keep both services private. Do not set readiness overrides merely to make Railway show a running
+process.
 
 `VITE_CLERK_PUBLISHABLE_KEY` is the one frontend build argument. It is a public, environment-specific
 identifier, is required by every service build because all three services build the same image, and is
@@ -49,7 +50,7 @@ Create the same four-service pattern in separate Railway **staging** and **produ
 |---|---:|---|---|
 | Web | **Yes — the only public service** | PostgreSQL, runner/scheduler control surfaces where explicitly required | React console shell, FastAPI, Clerk human authentication, backend authorization, health/readiness |
 | Runner | No | PostgreSQL, approved model providers, external target only through the Policy Gateway | Claims durable jobs and executes agent/campaign work |
-| Scheduler | No | PostgreSQL | Enqueues scheduled regression/campaign jobs; never performs attack execution inline |
+| Scheduler | No | PostgreSQL | Creates target-version regression replay plans blocked on human authorization; never performs attack execution inline |
 | PostgreSQL | No | Web, runner, scheduler through Railway private networking | Jobs, checkpoints, findings, approvals, audit records, append-only evidence |
 
 External boundaries:

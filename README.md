@@ -5,10 +5,12 @@ red-teaming AI applications. Its first target is the externally deployed OpenEMR
 Co-Pilot. The target is reached over an authorized live URL; its code does not live in this
 repository.
 
-> **Delivery status — 2026-07-22:** the Clerk-backed React console, protected FastAPI `/api/v1`,
+> **Delivery status — 2026-07-23:** the Clerk-backed React console, protected FastAPI `/api/v1`,
 > organization-scoped PostgreSQL control plane, private Runner, live target adapter, and Langfuse
-> telemetry projection are deployed on Railway. Live campaigns remain bounded by persisted exact-
-> scope authorization, synthetic-only evidence, rate/budget/timeout caps, and abort controls.
+> telemetry projection have a provisioned Railway baseline. The current release adds the private
+> regression planner and migrations through `0013`; its exact deployment evidence is recorded
+> separately after promotion. Live campaigns remain bounded by persisted exact-scope authorization,
+> synthetic-only evidence, rate/budget/timeout caps, and abort controls.
 
 | Endpoint | Status |
 |---|---|
@@ -35,8 +37,9 @@ The requirements source of truth is [Week_3_AgentForge.pdf](Week_3_AgentForge.pd
 
 ## Locked Railway topology
 
-The full platform is hosted on Railway in separate staging and production environments. This
-is the target topology; it is not a claim that the services have been provisioned.
+The full platform is hosted on Railway in separate staging and production environments. Web, Runner,
+and PostgreSQL are provisioned in both environments. Scheduler is part of this release and must be
+verified as a private service during promotion.
 
 | Railway component | Network boundary | Responsibility |
 |---|---|---|
@@ -173,13 +176,14 @@ agent, runner, scheduler, model-provider, or target credentials.
 
 ## Current local availability
 
-Revision `0006` adds authoritative attempt taxonomy/provenance, verdict reasons, append-only
-finding-to-evidence links, run accounting, and append-only security-tool evidence repositories to the
-`0005` exact-scope control plane. A trusted server catalog prepares immutable campaign scopes; a private
-durable Runner claims the existing PostgreSQL queue, revalidates authorization immediately before every
-dispatch, resolves scoped credentials only at that boundary, and persists evidence before atomic job
-completion. Application and database controls reject self-approval, and queue completion is never
-approval.
+Revisions through `0013` add authoritative results, exact two-role authorization, regression replay
+planning, and four-agent runtime observability to the exact-scope control plane. A trusted server
+catalog prepares immutable campaign scopes; a private durable Runner claims the PostgreSQL queue,
+revalidates authorization immediately before every dispatch, resolves scoped credentials only at that
+boundary, and persists evidence before atomic job completion. The private Scheduler creates one
+append-only, human-authorization-blocked replay plan when a ready target version changes; it never
+executes an attack or bypasses campaign authorization. Application and database controls reject
+self-approval, and neither queue completion nor a replay plan is approval.
 
 For the Clinical Co-Pilot `/chat` surface, a live campaign pins one versioned, patient-scoped SMART
 session for its entire bounded run and reuses one HTTP client so cookies and connection state persist.
@@ -189,12 +193,13 @@ generation, target version, exact authorization scope, and distinct-person appro
 
 The deterministic synthetic profile runs the real nine-case corpus through the queue, Runner,
 coordinator, recorder, independent Judge, findings, API, Coverage, and event repositories without a
-target/model socket. Local integration evidence proves all nine attempts and hash-verified Coverage;
+target/model socket. Local integration evidence proves all attempts and hash-verified Coverage;
 this is not a deployed or live-target claim. A live run remains blocked until the exact deployed target,
 ownership authorization, synthetic fixture/canary, surface, credential reference, caps, nonce, and a
 distinct Clerk Approver are persisted and every network-free preflight gate passes. Scheduling, traces,
 immutable configuration snapshots, component heartbeats, resilience history, and live-probe
-authorization remain typed unavailable rather than being replaced by dummy data.
+authorization are projected only from durable records; unavailable observations remain explicitly
+unavailable rather than being replaced by dummy data.
 
 ## Further documentation
 

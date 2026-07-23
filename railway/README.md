@@ -22,4 +22,5 @@ deployment evidence.
 
 The private Runner is composed over the durable queue and remains fail-closed until its database,
 catalog, corpus, exact authorization, caps, and sealed credential reference all pass preflight.
-The Scheduler remains unavailable because no authoritative schedule repository is implemented.
+The private Scheduler observes ready target versions and writes idempotent, append-only regression
+replay plans that remain blocked on human authorization. It does not enqueue or execute attacks.
