@@ -4,8 +4,8 @@ Status: planner draft for adversarial review
 Planning base: `1ac3ee02be7855b638dd1fa43bb0612a3db5f025`
 Requirements authority: `Week_3_AgentForge.pdf`
 Build posture: production-grade
-Ticket namespaces: `T-F19a` through `T-F19e` (tool-plan producers) and `T-F18a` through
-`T-F18o` (console consumers and release proof)
+Ticket namespaces: `T-F19a` through `T-F19e` (tool-plan producers), `T-F19f` (authorized final
+operational runs), and `T-F18a` through `T-F18p` (console consumers and release proof)
 
 ## Outcome
 
@@ -46,12 +46,12 @@ of those landed contracts and does not duplicate their implementation scopes.
 |---|---|---|
 | PRD-21/22: complete, reproducible vulnerability reports | Finding detail exposes every required report field, evidence, trace, and validation disposition | T-F18f |
 | PRD-23/24: versioned regression and right-reason validation | Coverage & Regression distinguishes cases, attempts, verdicts, dispositions, versions, and reappearance | T-F18c |
-| PRD-25: coverage, pass/fail, resilience, findings, cost, agent order | Coverage, Birdseye, Findings, Traces, and Costs use authoritative projections | T-F18c, T-F18e, T-F18f, T-F18i, T-F18j |
+| PRD-25: coverage, pass/fail, resilience, findings, cost, agent order | Coverage, Birdseye, Findings, Traces, and Costs use authoritative projections | T-F18c, T-F18e, T-F18f, T-F18i, T-F18j, T-F18p |
 | PRD-27/USR-04/USR-07: human gates and attack authorization | Approval detail runs preflight and preserves server refusal reasons; launch requires confirmation | T-F18g |
 | OPT-12: pagination, rate limits, auth | Shared cursor/filter/retry controls and bounded collection APIs | T-F18b |
 | LEAD-03: governed tool visibility and retained evidence | Tooling is scoped to exact target/version/surface/campaign/plan/tool | T-F18d |
-| LEAD-05: durable lineage, cost, trends, reappearance | Birdseye, trace, cost, and coverage projections reconcile persisted records | T-F18c, T-F18e, T-F18i, T-F18j |
-| Full page/module inventory | Agents, Configuration, embedded Audit, route registry, and operational proof are explicit | T-F17f, T-F18m, T-F18l, T-F18n |
+| LEAD-05: durable lineage, cost, trends, reappearance | Birdseye, trace, cost, and coverage projections reconcile persisted records | T-F18c, T-F18e, T-F18i, T-F18j, T-F18p |
+| Full page/module inventory | Agents, Configuration, embedded Audit, route registry, production UI proof, and final runs are explicit | T-F17f, T-F18m, T-F18l, T-F18n, T-F19f |
 
 ## Truth invariants
 
@@ -91,8 +91,9 @@ T-F19a through T-F19e close that distinct boundary:
 3. T-F19c owns separate two-person authorization and the bounded passive ZAP broker.
 4. T-F19d fans plan items through private Runner workers, binds reviewed case hashes to authorized
    live attempts, persists artifacts/findings/errors, and reconciles every terminal state.
-5. T-F19e emits persisted campaign, attempt, tool, agent, finding, approval, and component events to
-   the authenticated stream and provides a bounded authoritative polling fallback.
+5. T-F19e instruments real control-plane, security-tool repository, outbound telemetry, and
+   scheduler writes to emit persisted campaign, attempt, tool, agent, finding, approval, and
+   component events plus a bounded authoritative polling fallback.
 
 The console consumes that immutable ScanPlan. Until T-F19e is integrated and the selected campaign
 has a plan, Tooling and Birdseye must say `blocked: scan_plan_not_persisted`; they must not synthesize
@@ -128,7 +129,7 @@ Negative tests must prove every combination in which one dimension exists and th
 
 | Global wave | Ticket | Concern | Mechanical dependencies |
 |---:|---|---|---|
-| 29 | T-F18j | Known/partial/not-observed target/provider/Birdseye cost truth | T-F17b, T-F17c |
+| 29 | T-F18j | Backend-only known/partial/not-observed accounting/Birdseye bridge | T-F17b, T-F17c |
 | 30 | T-F17e | Hosted capability/deployment gate | T-F17d, T-F18j |
 | 31 | T-F17f | Agents configured-versus-observed UI | T-F17e |
 | 32 | T-F19a | Versioned per-tool ScanPlan/persistence | T-F16f, T-F17f |
@@ -145,15 +146,17 @@ Negative tests must prove every combination in which one dimension exists and th
 | 43 | T-F18g | Command registry, preflight, reason fidelity, confirmation | T-F18b, T-F18f, T-F17f |
 | 44 | T-F18h | Canonical target identity and enabled-surface readiness | T-F18g, T-F16f |
 | 45 | T-F18i | Unified trace lineage and filters | T-F18b, T-F18h, T-F17f |
-| 46 | T-F18k | Stable Live selection and event/poll reconciliation | T-F18d, T-F18e, T-F18g, T-F18h, T-F18i, T-F18j, T-F19e |
-| 47 | T-F18m | Configuration truth and embedded Audit | T-F18k, T-F18o, T-F17f, T-F19e |
-| 48 | T-F18l | Deterministic page registry/accessibility matrix | T-F16f, T-F17f, T-F19e, T-F18a through T-F18k, T-F18m, T-F18o |
-| 49 | T-F18n | Exact-SHA authenticated production evidence | T-F16f, T-F17f, T-F19e, T-F18l |
+| 46 | T-F18p | Complete Costs API/UI/filter/stable-paging projection | T-F18j, T-F17f, T-F18b, T-F18o, T-F18i |
+| 47 | T-F18k | Stable Live selection and event/poll reconciliation | T-F18d, T-F18e, T-F18g, T-F18h, T-F18i, T-F18p, T-F19e |
+| 48 | T-F18m | Configuration truth and embedded Audit | T-F18k, T-F18o, T-F17f, T-F19e |
+| 49 | T-F18l | Deterministic page registry/accessibility matrix | T-F16f, T-F17f, T-F19e, T-F18a through T-F18k, T-F18m, T-F18o, T-F18p |
+| 50 | T-F18n | Exact-SHA authenticated production console evidence | T-F16f, T-F17f, T-F19e, T-F18l |
+| 51 | T-F19f | Separately approved final per-target 100-case/tool-plan execution | T-F16f, T-F17f, T-F19e, T-F18n |
 
-The integration branch must first contain T-F16f, T-F17f, T-F19e, and
-`docs/planning/full-console-remediation.md`. The T-F18 integration branch is then rebased once onto
-that exact commit before any T-F18 RED dispatch. This is a mechanical base gate, not a prose
-prerequisite.
+T-F18j branches from accepted T-F17b/c and is accepted before T-F17e. The later console integration
+branch must contain T-F16f, T-F17f, T-F19e, accepted T-F18j, and
+`docs/planning/full-console-remediation.md`; it is rebased once onto that exact commit before any
+T-F18a-i/k-p RED dispatch. This is a mechanical base gate, not a prose prerequisite.
 
 The sequence is intentionally conservative. `src/agentforge/api/postgres.py`,
 `src/agentforge/api/read_models.py`, `console/src/types.ts`, and
@@ -181,8 +184,9 @@ Every ticket follows the same separation of powers:
    browser tests. Integration failures become new repair tickets; the integrator does not patch.
 
 No implementation ticket may claim a live tool run, provider call, target request, deployment, or
-human approval from fixtures. T-F18n is the separate operational evidence task and remains blocked
-until its external authorities are present.
+human approval from fixtures. T-F18n owns authenticated production console evidence; T-F19f owns
+the separately approved final target runs. Both remain blocked until their external authorities are
+present.
 
 ## Release gates
 
@@ -203,17 +207,20 @@ The console branch is releasable only when:
 - the exact commit is green in GitHub and GitLab CI, deployed by an authorized owner, and verified
   through an authenticated Headshot Organization browser session.
 
-T-F18l owns only the deterministic registry/accessibility gate. T-F18n owns authenticated production
-evidence after exact-SHA dual CI, owner deployment, Headshot authentication, and all target/runtime/
-tool prerequisites. T-F18n cannot repair code; a deterministic or operational failure files a repair
-ticket and blocks release.
+T-F18l owns only `docs/evidence/console/deterministic/**`. T-F18n exclusively owns authenticated
+production console evidence under `docs/evidence/console/production/**`. T-F19f exclusively owns
+the final run package under `docs/evidence/final-target-runs/**` after exact-SHA dual CI, owner
+deployment, Headshot authentication, distinct target approvals, and all target/runtime/tool
+prerequisites. Operational tickets cannot repair code; a failure files a repair ticket and blocks
+release.
 
 ## External prerequisites and blockers
 
 - T-F16f must land the canonical target surface fanout before T-F19a.
 - T-F17f must land provider-confirmed model, request, prompt, token, cost, and Agents UI truth before
   T-F19a and every shared projection/UI consumer.
-- T-F19e must land the complete per-tool plan/fanout/event chain before T-F18 RED begins.
+- T-F19e must land the complete per-tool plan/fanout/event chain before downstream T-F18a-i/k-p RED
+  begins.
 - A distinct Headshot Approver is still required for each live campaign. Console UX cannot waive the
   two-person invariant.
 - Authenticated production browser access is required for the final visual/interaction pass.

@@ -1,4 +1,5 @@
 # T-F18j Code review — gpt-5.6-sol / ultra
-Review accounting identity, Decimal/currency handling, observed-vs-unknown semantics, reconciliation,
-filters, and PRD prohibition on tokens-times-N. Do not edit. Write
+Review backend accounting identity, Decimal/currency handling, full/partial/not-observed semantics,
+Birdseye/campaign reconciliation, no double counting, and the prohibition on tokens-times-N. Reject
+later Costs UI/filter/paging scope. Do not edit. Write
 `.tdd-swarm/reports/T-F18j-code-review.md`; return verdict with file:line evidence.

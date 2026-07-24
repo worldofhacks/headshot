@@ -2,7 +2,7 @@
 id: T-F18n
 title: Record authenticated exact-SHA production console evidence
 status: backlog
-wave: 49
+wave: 50
 depends_on: [T-F16f, T-F17f, T-F19e, T-F18l]
 branch: ticket/T-F18n-production-console-evidence
 file_scopes:

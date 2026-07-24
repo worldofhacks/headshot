@@ -145,8 +145,10 @@ provider-confirmed execution must be labeled **configured, not observed**.
 ### Traces and Costs
 
 - Include agent/provider calls rather than filtering them out.
-- Reconcile target physical requests, provider calls, tokens, measured cost, and authorization caps.
-- Add bounded pagination and filters.
+- T-F18j first preserves known/partial/not-observed accounting across backend campaign and Birdseye
+  projections before hosted deployment.
+- T-F18p later reconciles target physical requests, provider calls, tokens, measured cost, and
+  authorization caps in Costs with bounded database pagination and filters.
 
 ### Configuration and Audit
 
@@ -172,7 +174,7 @@ Execute T-F16a through T-F16f from `docs/planning/final-target-adapters.md`.
 
 ### Wave B — Hosted four-role runtime
 
-Execute T-F17a through T-F17c, then T-F18j, then T-F17d through T-F17f from
+Execute T-F17a through T-F17d, then the backend-only T-F18j bridge, then T-F17e/f from
 `docs/planning/agent-runtime-provenance.md`. T-F18j is the accounting/Birdseye bridge that prevents
 unknown hosted usage from becoming zero before the deployment and Agents projection land.
 
@@ -182,11 +184,12 @@ Execute T-F19a through T-F19e from `docs/planning/console-pages-remediation.md`.
 
 ### Wave D — Console information architecture
 
-Execute T-F18a through T-F18o from `docs/planning/console-pages-remediation.md`.
+Execute T-F18a through T-F18p from `docs/planning/console-pages-remediation.md`.
 
 ### Wave E — Final evidence
 
-For each final chat target, run sequentially:
+Execute T-F18n for authenticated exact-SHA production console evidence, then T-F19f for the
+separately approved final runs. T-F19f executes each final chat target sequentially:
 
 - one target worker;
 - no more than three total workers;

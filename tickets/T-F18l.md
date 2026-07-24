@@ -2,15 +2,15 @@
 id: T-F18l
 title: Gate every console page with a deterministic route and accessibility manifest
 status: backlog
-wave: 48
-depends_on: [T-F16f, T-F17f, T-F19e, T-F18a, T-F18b, T-F18c, T-F18d, T-F18e, T-F18f, T-F18g, T-F18h, T-F18i, T-F18j, T-F18k, T-F18m, T-F18o]
+wave: 49
+depends_on: [T-F16f, T-F17f, T-F19e, T-F18a, T-F18b, T-F18c, T-F18d, T-F18e, T-F18f, T-F18g, T-F18h, T-F18i, T-F18j, T-F18k, T-F18m, T-F18o, T-F18p]
 branch: ticket/T-F18l-console-release-audit
 file_scopes:
   - console/src/page-registry.ts
   - console/src/App.tsx
   - console/scripts/check-page-registry.mjs
   - console/package.json
-  - docs/evidence/console/**
+  - docs/evidence/console/deterministic/**
 test_scopes:
   - console/tests/page-registry.test.ts
   - console/tests/production-policy.test.ts

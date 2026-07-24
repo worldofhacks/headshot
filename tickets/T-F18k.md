@@ -2,8 +2,8 @@
 id: T-F18k
 title: Stabilize Live selection and target event-driven reconciliation
 status: backlog
-wave: 46
-depends_on: [T-F18d, T-F18e, T-F18g, T-F18h, T-F18i, T-F18j, T-F19e]
+wave: 47
+depends_on: [T-F18d, T-F18e, T-F18g, T-F18h, T-F18i, T-F18p, T-F19e]
 branch: ticket/T-F18k-live-event-reconciliation
 file_scopes:
   - console/src/App.tsx

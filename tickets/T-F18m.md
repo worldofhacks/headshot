@@ -2,7 +2,7 @@
 id: T-F18m
 title: Make Configuration and embedded Audit truthful
 status: backlog
-wave: 47
+wave: 48
 depends_on: [T-F18k, T-F18o, T-F17f, T-F19e]
 branch: ticket/T-F18m-config-audit-truth
 file_scopes:

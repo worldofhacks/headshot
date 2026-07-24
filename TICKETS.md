@@ -161,14 +161,17 @@ branch after T-F16f/T-F17f and before T-F19a. Shared file scopes serialize by th
 | 43 | T-F18g | Exhaustive material-command confirmation | T-F18b, T-F18f, T-F17f |
 | 44 | T-F18h | Canonical target/readiness truth | T-F18g, T-F16f |
 | 45 | T-F18i | Unified trace lineage | T-F18b, T-F18h, T-F17f |
-| 46 | T-F18k | Durable Live selection and refresh | T-F18d/e/g/h/i/j, T-F19e |
-| 47 | T-F18m | Configuration plus embedded Audit | T-F18k, T-F18o, T-F17f, T-F19e |
-| 48 | T-F18l | Deterministic route/accessibility manifest | all deterministic predecessors |
-| 49 | T-F18n | Authenticated exact-SHA production evidence | T-F16f, T-F17f, T-F19e, T-F18l |
+| 46 | T-F18p | Full Costs UI, filters, and stable DB paging | T-F18j, T-F17f, T-F18b, T-F18o, T-F18i |
+| 47 | T-F18k | Durable Live selection and refresh | T-F18d/e/g/h/i/p, T-F19e |
+| 48 | T-F18m | Configuration plus embedded Audit | T-F18k, T-F18o, T-F17f, T-F19e |
+| 49 | T-F18l | Deterministic route/accessibility manifest | all deterministic predecessors |
+| 50 | T-F18n | Authenticated exact-SHA production evidence | T-F16f, T-F17f, T-F19e, T-F18l |
+| 51 | T-F19f | Separately approved per-target 100-case/tool-plan runs | T-F16f, T-F17f, T-F19e, T-F18n |
 
-T-F18j intentionally lands between T-F17c and T-F17e so unknown hosted usage cannot be coerced to
-zero in the deployment path. T-F18n is operational and uses execute/evidence/security review rather
-than RED/GREEN; it may truthfully remain `BLOCKED` when owner grants or authentication are absent.
+T-F18j is an early backend-only bridge between T-F17c and T-F17e so unknown hosted usage cannot be
+coerced to zero in the deployment path. T-F18p owns the later Costs UI/filter/paging after T-F17f,
+T-F18b/o, and T-F18i. T-F18n and T-F19f are operational and use execute/evidence/security review
+rather than RED/GREEN; either may truthfully remain `BLOCKED` when owner grants are absent.
 
 [locked-decision] Coverage stays and is renamed **Coverage & Regression**. The standalone
 Resilience page/navigation is removed, while `/resilience` temporarily replace-redirects to
