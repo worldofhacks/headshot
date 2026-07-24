@@ -1,0 +1,25 @@
+{
+  "capture_run_id": "judge-calibration-20260724",
+  "executions": {
+    "failed": 0,
+    "finished": 54,
+    "physical_attempts_total": 54,
+    "started": 54,
+    "succeeded": 54
+  },
+  "ledger": {
+    "measured_usd": "0.75823375",
+    "physical_calls": 54,
+    "unresolved_exposure_usd": "0.00"
+  },
+  "sample_count": 54,
+  "slice_ids": [
+    "GT-SLICE-M11-DS",
+    "GT-SLICE-M11-DX",
+    "GT-SLICE-M11-IR",
+    "GT-SLICE-M11-PI",
+    "GT-SLICE-M11-SC",
+    "GT-SLICE-M11-TM"
+  ],
+  "trace_id_derivation": "agentforge.correlation.campaign_trace_id('<capture_run_id>:<label_id>') — the platform's W3C-compatible correlation id. This offline capture does not export to Langfuse, so this is NOT a Langfuse trace id."
+}

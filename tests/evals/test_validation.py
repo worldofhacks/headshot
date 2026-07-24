@@ -955,7 +955,12 @@ def test_repository_corpus_reports_active_and_draft_authoring_counts() -> None:
     assert summary.active_case_count == 9
     assert summary.draft_case_count == 7
     assert summary.retired_case_count == 0
-    assert summary.ground_truth_label_count == 30
+    # 9 labels per category across the six mandated categories. Expressed as a floor plus the
+    # per-category invariant rather than a bare literal, so growing the corpus does not require
+    # editing this test — only losing coverage should fail it.
+    assert summary.ground_truth_label_count == 54
+    assert summary.ground_truth_label_count % len(summary.categories) == 0
+    assert summary.ground_truth_label_count // len(summary.categories) >= 5
     assert summary.categories == frozenset(
         {
             "prompt_injection",

@@ -292,6 +292,12 @@ def _resolve(
     return Secret(credential)
 
 
+def _token_capacity(call_capacity: int) -> int:
+    """Per-role token budget in whole calls, with headroom for reserve-then-settle accounting."""
+
+    return min(max(call_capacity, 1) + 2, _GLOBAL_MAX_CALLS)
+
+
 def _configuration(*, call_capacity: int) -> HostedConfigurationSet:
     """Build the frozen four-role set. Only the Judge role is ever invoked here.
 
@@ -316,9 +322,15 @@ def _configuration(*, call_capacity: int) -> HostedConfigurationSet:
             prices=_PRICES[role],
             limits=HostedLimits(
                 max_calls=(max(call_capacity, 1) if role == "judge" else 1),
-                max_input_tokens=_JUDGE_CALL_BOUNDS.input_tokens * max(call_capacity, 1),
-                max_output_tokens=_JUDGE_CALL_BOUNDS.output_tokens * max(call_capacity, 1),
-                max_reasoning_tokens=_JUDGE_CALL_BOUNDS.reasoning_tokens * max(call_capacity, 1),
+                # The ledger RESERVES the full per-call upper bound before each request and only
+                # settles down to measured usage afterwards, so a budget sized to exactly
+                # bounds * capacity sits on the boundary and can exhaust on the final sample.
+                # Two calls of headroom keeps the cap meaningful without making it decorative.
+                max_input_tokens=_JUDGE_CALL_BOUNDS.input_tokens * _token_capacity(call_capacity),
+                max_output_tokens=_JUDGE_CALL_BOUNDS.output_tokens * _token_capacity(call_capacity),
+                max_reasoning_tokens=(
+                    _JUDGE_CALL_BOUNDS.reasoning_tokens * _token_capacity(call_capacity)
+                ),
                 max_usd=_ROLE_MAX_USD[role],
                 max_retries=1,
                 max_requests_per_second=Decimal("0.5"),

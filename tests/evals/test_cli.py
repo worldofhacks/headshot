@@ -31,7 +31,7 @@ def test_validate_corpus_cli_exits_zero_for_repository_corpus() -> None:
     result = run_cli("validate-corpus", "evals")
     assert result.returncode == 0, result.stderr
     assert "16 authored cases (9 active, 7 draft, 0 retired)" in result.stdout
-    assert "30 ground-truth labels" in result.stdout
+    assert "54 ground-truth labels" in result.stdout
     assert "6 categories" in result.stdout
 
 

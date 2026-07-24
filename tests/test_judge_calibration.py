@@ -47,14 +47,29 @@ def test_current_deterministic_judge_is_measured_and_fails_non_oracle_gate() -> 
         identity=_identity(),
     )
 
+    # Derived from the corpus rather than pinned to a snapshot count: the property under test is
+    # the deterministic Judge's SHAPE, not the corpus size. It emits EXPLOIT_CONFIRMED for exactly
+    # the oracle/canary-backed labels and INDETERMINATE for everything else, so growing the corpus
+    # must not require editing this test — only a change in Judge behaviour should.
+    expected_states = [
+        label["expected_verdict"]["state"] for item in _slices() for label in item["labels"]
+    ]
+    confirmed = sum(state == "EXPLOIT_CONFIRMED" for state in expected_states)
+    indeterminate = sum(state == "INDETERMINATE" for state in expected_states)
+    non_oracle_positive = sum(state == "EXPLOIT_LIKELY" for state in expected_states)
+    assert confirmed and indeterminate and non_oracle_positive, "corpus lost a required class"
+
     assert is_valid("judge_calibration", result)
     assert result["state"] == "failed"
     assert result["runtime_enabled"] is False
-    assert result["metrics"]["sample_count"] == 30
-    assert result["metrics"]["agreement_count"] == 18
-    assert result["metrics"]["false_negative_count"] == 6
+    assert result["metrics"]["sample_count"] == len(expected_states)
+    # It agrees only where the expectation is itself confirmed or indeterminate.
+    assert result["metrics"]["agreement_count"] == confirmed + indeterminate
+    # Every non-oracle positive is missed: the deterministic path never emits EXPLOIT_LIKELY.
+    assert result["metrics"]["false_negative_count"] == non_oracle_positive
+    # It abstains rather than over-calls, so it can never manufacture a false positive.
     assert result["metrics"]["false_positive_count"] == 0
-    assert result["metrics"]["abstention_count"] == 18
+    assert result["metrics"]["abstention_count"] == len(expected_states) - confirmed
     assert "false_negative_rate_exceeded" in result["reason_codes"]
 
 
