@@ -89,7 +89,7 @@
     "malformed_evidence_disposition": "ERROR",
     "malformed_evidence_error_code": "evidence-missing"
   },
-  "ground_truth_refs": ["GT-M11-TM-CONF-001", "GT-M11-TM-INJECT-001"],
+  "ground_truth_refs": ["GT-M11-TM-CONF-001", "GT-M11-TM-NEARNEG-001", "GT-M11-TM-REFUSAL-001"],
   "execution_status": "NOT_EXECUTED",
   "observed_behavior": null,
   "result_kind": "pending_live_campaign",
