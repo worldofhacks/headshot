@@ -12,6 +12,7 @@ provider never opens its own network exit.
 
 from __future__ import annotations
 
+import json
 import socket
 from decimal import Decimal
 
@@ -23,7 +24,9 @@ from agentforge.agents.red_team.hosted_generation import (
     RedTeamRoleIdentity,
     TracedHostedRedTeamProvider,
     TracedRedTeamGenerationError,
+    build_generation_messages,
     require_red_team_subcap,
+    variants_output_schema,
 )
 from agentforge.agents.red_team.providers import ProviderExhaustedError
 from agentforge.providers.openrouter import (
@@ -190,6 +193,75 @@ def test_provider_error_is_recorded_failed_then_reraised() -> None:
     assert lifecycle.finished[0]["error_code"] == "hosted-provider-unavailable"
 
 
+def test_finish_failure_on_success_path_is_a_typed_terminal_record_error() -> None:
+    # If the terminal SUCCESS finish itself fails, the generation must not be returned as if it were
+    # durably recorded. Surface a typed terminal-record error (mirrors the four-role runtime
+    # success-finish guard, hosted_runtime.py:359-372) so a lost durable/Langfuse record is loud and
+    # the red_team execution fails uniformly with the other three roles.
+    transport = _FakeTransport(result=_result(["cont-a"]))
+    lifecycle = _FinishRaisingLifecycle()
+    with pytest.raises(TracedRedTeamGenerationError, match="terminally recorded"):
+        _provider(transport, lifecycle).generate(SEED, count=1, category="prompt_injection")
+    # The success finish was attempted (status=succeeded) before the terminal-record error surfaced.
+    assert lifecycle.finished[0]["status"] == "succeeded"
+
+
+def test_lineage_threads_the_parent_request_id_for_the_uniform_four_agent_chain() -> None:
+    # The other three roles thread the parent's provider request id into their lineage
+    # (hosted_runtime.py:345 — red_team's parent_request_id is the orchestrator's request id). The
+    # traced red_team lineage must carry it identically so the four-agent request chain is uniform,
+    # not silently dropped to None.
+    transport = _FakeTransport(result=_result(["cont-a", "cont-b"]))
+    lifecycle = _FakeLifecycle()
+    provider = TracedHostedRedTeamProvider(
+        transport=transport,
+        lifecycle=lifecycle,
+        role_identity=ROLE,
+        configuration_sha256=CONFIG_SHA,
+        generation_policy_sha256=POLICY_SHA,
+        call_bounds=BOUNDS,
+        parent_execution_id="exec-orchestrator-9",
+        parent_request_id="or-req-orchestrator",
+    )
+    provider.generate(SEED, count=2, category="prompt_injection")
+    lineage = lifecycle.finished[0]["lineage"]
+    assert lineage.parent_request_id == "or-req-orchestrator"
+    assert lineage.parent_execution_id == "exec-orchestrator-9"
+
+
+def test_generation_refuses_when_lifecycle_returns_no_execution_identity() -> None:
+    # A missing execution identity means the generation could never be traced/recorded. Refuse
+    # LOUDLY and BEFORE the qwen call — never emit an untraceable, cost-incurring generation.
+    transport = _FakeTransport(result=_result(["cont-a"]))
+    lifecycle = _FakeLifecycle(execution_id="")
+    with pytest.raises(TracedRedTeamGenerationError, match="identity"):
+        _provider(transport, lifecycle).generate(SEED, count=1, category="prompt_injection")
+    assert transport.calls == [], "no qwen call may be made without a recordable execution identity"
+
+
+class _FinishRaisingLifecycle(_FakeLifecycle):
+    """A lifecycle whose terminal ``finish`` itself fails — the durable record could not write."""
+
+    def finish(self, **kwargs) -> None:
+        super().finish(**kwargs)
+        raise RuntimeError("durable finish write failed")
+
+
+def test_finish_failure_on_error_path_does_not_mask_the_original_provider_error() -> None:
+    # If the terminal failed-finish ITSELF raises, the original provider error must not be silently
+    # replaced by the lifecycle write error. Mirrors the four-role runtime guard
+    # (hosted_runtime.py:413-426): raise a typed terminal-record error whose __cause__ preserves the
+    # ROOT provider failure, so the incident stays diagnosable across all four agents uniformly.
+    transport = _FakeTransport(error=HostedProviderError("upstream unavailable"))
+    lifecycle = _FinishRaisingLifecycle()
+    with pytest.raises(TracedRedTeamGenerationError) as excinfo:
+        _provider(transport, lifecycle).generate(SEED, count=1, category="prompt_injection")
+    assert isinstance(excinfo.value.__cause__, HostedProviderError)
+    assert excinfo.value.__cause__.code == "hosted-provider-unavailable"
+    # The failed finish was attempted (not skipped) before the terminal-record error surfaced.
+    assert lifecycle.finished[0]["status"] == "failed"
+
+
 def test_short_generation_fails_loudly() -> None:
     # The model returned fewer usable variants than requested -> loud, not a silent short return.
     transport = _FakeTransport(result=_result(["only-one"]))
@@ -272,6 +344,23 @@ def test_require_red_team_subcap_rejects_a_cap_above_one_dollar() -> None:
         require_red_team_subcap(_StubConfig(Decimal("1.5")))
 
 
+def test_require_red_team_subcap_rejects_a_nonpositive_cap_with_a_clear_reason() -> None:
+    # A zero/negative subcap is not "over the ceiling" — it is an invalid, unusable cap. The refusal
+    # must say so plainly (a security-critical cost control must be diagnosable), not mislabel it as
+    # exceeding the ceiling.
+    with pytest.raises(TracedRedTeamGenerationError, match="positive"):
+        require_red_team_subcap(_StubConfig(Decimal("0")))
+    with pytest.raises(TracedRedTeamGenerationError, match="positive"):
+        require_red_team_subcap(_StubConfig(Decimal("-0.10")))
+
+
+def test_require_red_team_subcap_is_free_of_binary_float_drift() -> None:
+    # A float-typed cap must not smuggle binary representation drift into a $-denominated cost cap:
+    # Decimal(0.10) is 0.1000000000000000055..., which would make an intended $0.10 cap fractionally
+    # wrong. Coercion through str keeps the cap exactly the decimal the operator authorized.
+    assert require_red_team_subcap(_StubConfig(0.10)) == Decimal("0.10")
+
+
 def test_generate_traced_returns_cost_and_token_metadata_for_the_recorder() -> None:
     # The composition root (runner) records via the store seam and needs measured_cost + tokens.
     transport = _FakeTransport(result=_result(["cont-a", "cont-b"]))
@@ -313,6 +402,80 @@ def test_generate_traced_surfaces_short_generation_to_the_composition_root() -> 
     with pytest.raises(ProviderExhaustedError):
         _provider(transport, lifecycle).generate_traced(SEED, count=3, category="prompt_injection")
     assert lifecycle.started == [] and lifecycle.finished == []
+
+
+def test_all_four_call_bounds_are_transmitted_to_the_transport() -> None:
+    # The shared ledger caps cost via the bounds passed to the transport. All four must flow (not
+    # just max_output_tokens) so the Red Team generation stays inside the kill switch.
+    transport = _FakeTransport(result=_result(["cont-a", "cont-b"]))
+    _provider(transport, _FakeLifecycle()).generate(SEED, count=2, category="prompt_injection")
+    call = transport.calls[0]
+    assert call["input_tokens_upper_bound"] == BOUNDS.input_tokens
+    assert call["max_output_tokens"] == BOUNDS.output_tokens
+    assert call["max_reasoning_tokens"] == BOUNDS.reasoning_tokens
+    assert call["timeout_seconds"] == BOUNDS.timeout_seconds
+
+
+def test_variants_output_schema_pins_exactly_count_and_rejects_out_of_bounds() -> None:
+    schema = variants_output_schema(3)
+    variants = schema["properties"]["variants"]
+    assert variants["minItems"] == 3 and variants["maxItems"] == 3
+    assert variants["items"] == {"type": "string", "minLength": 1}
+    assert schema["additionalProperties"] is False
+    for bad in (0, -1, 17, True):
+        with pytest.raises(TracedRedTeamGenerationError, match="out of bounds"):
+            variants_output_schema(bad)
+
+
+def test_generation_messages_are_untrusted_proposed_input_only_no_secret() -> None:
+    # The prompt must instruct the UNTRUSTED generator to emit proposed input only (never a verdict
+    # or credential), carry the seed's own turns as context, and request EXACTLY `count` variants as
+    # strict JSON. No secret/credential/session id may ride in the prompt.
+    system, user = build_generation_messages(SEED, 2, "prompt_injection")
+    assert system["role"] == "system" and user["role"] == "user"
+    assert "UNTRUSTED" in system["content"]
+    assert "exactly 2" in system["content"]
+    assert "never a verdict, credential" in system["content"]
+    payload = json.loads(user["content"])
+    assert payload == {
+        "category": "prompt_injection",
+        "count": 2,
+        "seed_case_ref": SEED["case_ref"],
+        "seed_turns": SEED["input_sequence"],
+    }
+
+
+def test_untyped_transport_failure_records_the_typed_fallback_error_code() -> None:
+    # A provider failure with no `.code` (an unexpected error) must still close the execution with a
+    # typed fallback code, never an empty/None error_code, so the recorder always has a reason.
+    transport = _FakeTransport(error=RuntimeError("unexpected upstream shape"))
+    lifecycle = _FakeLifecycle()
+    with pytest.raises(RuntimeError):
+        _provider(transport, lifecycle).generate(SEED, count=1, category="prompt_injection")
+    finish = lifecycle.finished[0]
+    assert finish["status"] == "failed"
+    assert finish["error_code"] == "red-team-generation-failed"
+
+
+def test_construction_refuses_an_uncallable_transport_or_lifecycle() -> None:
+    with pytest.raises(TracedRedTeamGenerationError, match="transport"):
+        TracedHostedRedTeamProvider(
+            transport=object(),
+            lifecycle=_FakeLifecycle(),
+            role_identity=ROLE,
+            configuration_sha256=CONFIG_SHA,
+            generation_policy_sha256=POLICY_SHA,
+            call_bounds=BOUNDS,
+        )
+    with pytest.raises(TracedRedTeamGenerationError, match="lifecycle"):
+        TracedHostedRedTeamProvider(
+            transport=_FakeTransport(result=_result(["x"])),
+            lifecycle=object(),
+            role_identity=ROLE,
+            configuration_sha256=CONFIG_SHA,
+            generation_policy_sha256=POLICY_SHA,
+            call_bounds=BOUNDS,
+        )
 
 
 def test_provider_opens_no_socket(monkeypatch: pytest.MonkeyPatch) -> None:

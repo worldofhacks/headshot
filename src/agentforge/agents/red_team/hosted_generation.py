@@ -98,10 +98,16 @@ def require_red_team_subcap(
     """
     try:
         role = next(item for item in configuration.roles if item.role == "red_team")
-        subcap = Decimal(role.limits.max_usd)
+        # Coerce through str so a float-typed cap cannot smuggle binary representation drift into a
+        # $-denominated cost control (Decimal(0.10) != 0.10); the cap stays exactly what was set.
+        subcap = Decimal(str(role.limits.max_usd))
     except (StopIteration, AttributeError, ArithmeticError, TypeError, ValueError) as exc:
         raise TracedRedTeamGenerationError("red_team role subcap is unavailable") from exc
-    if subcap <= 0 or subcap > ceiling_usd:
+    if subcap <= 0:
+        raise TracedRedTeamGenerationError(
+            f"red_team measured-spend subcap {subcap} must be a positive amount"
+        )
+    if subcap > ceiling_usd:
         raise TracedRedTeamGenerationError(
             f"red_team measured-spend subcap {subcap} exceeds the authorized ceiling {ceiling_usd}"
         )
@@ -177,6 +183,7 @@ class TracedHostedRedTeamProvider:
         generation_policy_sha256: str,
         call_bounds: HostedCallBounds,
         parent_execution_id: str | None = None,
+        parent_request_id: str | None = None,
     ) -> None:
         if not callable(getattr(transport, "invoke", None)):
             raise TracedRedTeamGenerationError("hosted transport is unavailable")
@@ -191,6 +198,10 @@ class TracedHostedRedTeamProvider:
         self._generation_policy_sha256 = generation_policy_sha256
         self._call_bounds = call_bounds
         self._parent_execution_id = parent_execution_id
+        # The parent's provider request id (e.g. the orchestrator's), threaded into the lineage
+        # exactly as the four-role runtime does (hosted_runtime.py:345) so the four-agent request
+        # chain is uniform — never silently dropped to None.
+        self._parent_request_id = parent_request_id
 
     def _invoke_transport(self, seed: dict[str, Any], count: int, category: str) -> Any:
         """The raw traced qwen call through the shared transport (role='red_team'), unrecorded."""
@@ -267,20 +278,31 @@ class TracedHostedRedTeamProvider:
             error_code = getattr(exc, "code", None)
             if not isinstance(error_code, str) or not error_code:
                 error_code = "red-team-generation-failed"
-            self._lifecycle.finish(
-                execution_id=execution_id,
-                status="failed",
-                output_payload={"status": "failed"},
-                lineage=None,
-                error_code=error_code,
-            )
+            try:
+                self._lifecycle.finish(
+                    execution_id=execution_id,
+                    status="failed",
+                    output_payload={"status": "failed"},
+                    lineage=None,
+                    error_code=error_code,
+                )
+            except Exception as lifecycle_exc:
+                # The durable/Langfuse write of the failed finish ITSELF failed. Do not let that
+                # replace the root cause: raise a typed terminal-record error whose __cause__ is the
+                # ORIGINAL provider failure (preserving its .code), mirroring the four-role runtime
+                # guard (hosted_runtime.py:413-426) so all four agents fail uniformly.
+                failure = TracedRedTeamGenerationError(
+                    "traced red_team generation failure could not be terminally recorded"
+                )
+                failure.add_note(f"lifecycle failure type: {type(lifecycle_exc).__name__}")
+                raise failure from exc
             raise
 
         record = HostedExecutionLineage(
             execution_id=execution_id,
             parent_execution_id=self._parent_execution_id,
             role="red_team",
-            parent_request_id=None,
+            parent_request_id=self._parent_request_id,
             requested_model=result.requested_model,
             returned_model=result.returned_model,
             upstream_provider=result.upstream_provider,
@@ -294,13 +316,24 @@ class TracedHostedRedTeamProvider:
             generation_policy_sha256=result.generation_policy_sha256,
             physical_attempts=result.physical_attempts,
         )
-        self._lifecycle.finish(
-            execution_id=execution_id,
-            status="succeeded",
-            output_payload=result.output,
-            lineage=record,
-            error_code=None,
-        )
+        try:
+            self._lifecycle.finish(
+                execution_id=execution_id,
+                status="succeeded",
+                output_payload=result.output,
+                lineage=record,
+                error_code=None,
+            )
+        except Exception as lifecycle_exc:
+            # The terminal SUCCESS write itself failed — a real, cost-incurred qwen generation whose
+            # durable/Langfuse record was lost. Do not return it as if recorded: raise a typed
+            # terminal-record error (mirrors hosted_runtime.py:359-372) so the loss is loud and the
+            # red_team execution fails uniformly with the other three roles.
+            failure = TracedRedTeamGenerationError(
+                "traced red_team generation result could not be terminally recorded"
+            )
+            failure.add_note(f"lifecycle failure type: {type(lifecycle_exc).__name__}")
+            raise failure from lifecycle_exc
         return variants
 
 
