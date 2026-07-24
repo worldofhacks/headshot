@@ -1,57 +1,63 @@
-# T-F17b Test Design Re-review
+# T-F17b Final Test Design Review
 
 Status: `DONE`
 
-Verdict: `CHANGES_REQUIRED`
+Verdict: `PASS`
 
-Freeze verdict: `NOT_FROZEN`
+Freeze verdict: `FROZEN`
 
-Reviewed commit: `990b0c3d0da3e02b86ee0e877d7d1787f079ebe6`
+Reviewed commit: `38219747238377b283cedfe80f9a14a2ae7661f2`
 
-Reviewed candidate identity:
+Frozen test identity:
 
 - `tests/test_provider_call_lineage.py`
-  - SHA-256: `eec8dc7f30aa71735ed877c63a504abb553a6ae6b8b8089ceda869e45c669503`
-  - Git blob: `0ff845a2e3bcf2016155770c1660cfc6f623224c`
+  - SHA-256: `717ec3e316becc39bf3d5f02cdd1ad6970c3cc6c1f54815b23fa05b20afa8f8b`
+  - Git blob: `a4f2e3964771a80b5da6bb34fdf7860e2e0a3838`
 
-This identity records the repaired candidate only. The test remains unfrozen and must not be handed
-to an Implementation Agent until the Important finding below is repaired and independently
-re-reviewed.
+The Implementation Agent must preserve this exact test identity. Any test change invalidates this
+freeze and requires a new independent test-design review.
 
-## Finding
+## Findings
 
-### Important — the atomicity probe requires one private SQL mutation order
+No Critical, Important, or Minor findings.
 
-The repaired rollback test requires the terminal event to exist before the logical execution
-UPDATE. Its trigger raises SQLSTATE `23503` when no event is visible
-(`tests/test_provider_call_lineage.py:698-706`), then the assertion requires SQLSTATE `23514`
-(`tests/test_provider_call_lineage.py:723-728`). A correct implementation that updates the logical
-row first and inserts the event second in the same transaction is atomic under AC-7, but this test
-rejects it solely because of statement order. That contradicts the Test Agent report's claim that
-the contract does not prescribe private SQL statement shape.
+## Final atomicity repair
 
-Replace this order-dependent assertion with complementary transaction-failure probes that permit
-either valid ordering. For example, make the logical UPDATE fail unconditionally and assert no
-event survives, then make the event INSERT fail and assert no logical transition survives. Together
-those probes catch split transactions whether an implementation is event-first or logical-first,
-without selecting either implementation.
+The two AC-7 trigger cases at `tests/test_provider_call_lineage.py:666-750` are complementary and
+do not prescribe private statement order:
 
-## Prior Important findings
+- the logical-target case makes the `agent_executions` UPDATE fail. An event-first implementation
+  must roll back its earlier event INSERT, while a logical-first implementation fails before its
+  later event write;
+- the event-target case makes the `provider_call_events` INSERT fail. A logical-first
+  implementation must roll back its earlier logical UPDATE, while an event-first implementation
+  fails before its later logical write.
 
-- **AC-2 durable failure records — closed.** All six required failure classes now pass through
-  `finish_physical_attempt`, are read directly from PostgreSQL, and assert exact status, typed
-  error, identity, nullable usage, and nullable cost state. The durable `invalid_usage` case also
-  proves physical `invalid` plus SQL null.
-- **AC-7 final failure and atomicity — partially closed.** The ordinary `final=True`
-  `terminal_failure` case now proves the failed logical terminal state, source event id, nullable
-  cost, and one durable event. The rollback half remains overconstrained as described above.
-- **Event ownership and cardinality — closed.** Schema inspection requires the composite
-  `(organization_id, invocation_id)` event FK and a one-event-per-invocation uniqueness invariant.
-  Direct SQL separately exercises duplicate terminal facts and cross-organization reattribution
-  with otherwise-valid attribution values.
-- **Recovered unknown cost — closed.** Crash recovery now requires logical
-  `measured_cost IS NULL`, `cost_measurement_state = 'not_observed'`, and the exact recovered source
-  event id.
+Both cases require the committed pre-call invocation to remain, the terminal event count to be zero,
+and the logical execution to remain exactly `running` with no error, finish time, or source event id.
+Therefore either valid same-transaction ordering passes, while an event-first or logical-first
+split-transaction implementation leaves a partial durable state in one of the two probes and fails.
+The successful final-terminal-failure case separately proves that, without injection, both writes
+occur and produce the required failed logical state and exact source event id.
+
+## Previous repair preservation
+
+- **AC-2 durable failure records:** all six required failure classes round-trip through
+  `finish_physical_attempt` and PostgreSQL with exact status, bounded typed error, observed identity
+  shape, nullable usage, and nullable cost. Durable invalid usage proves `invalid` plus SQL null.
+- **AC-7 final failure:** ordinary `final=True` terminal failure writes exactly one event and
+  terminalizes the logical row as failed with nullable/not-observed cost and its exact source id.
+- **Event ownership and cardinality:** schema inspection and direct SQL require the composite
+  organization/invocation FK, one terminal event per invocation, and rejection of duplicate and
+  cross-organization terminal facts.
+- **Recovered unknown cost:** crash recovery requires logical nullable/not-observed cost and the
+  exact recovered source event id, with one event and no network call.
+
+The remaining AC-1 through AC-8 coverage from the prior reviews is unchanged: immutable provider
+identity and usage facts, committed per-retry contexts, append-only role grants, isolated migration
+round-trip and indexes, hostile-content rejection, exact replay/conflict behavior, crash-to-unknown
+reconciliation, closed Decimal cost states, source-id accounting, and historical-zero
+reclassification.
 
 ## Independent evidence
 
@@ -61,7 +67,7 @@ Focused RED:
 <venv-python> -m pytest -o addopts='' tests/test_provider_call_lineage.py -q --tb=short
 ```
 
-Result: `28 failed` in `1.52s`. Twenty-five cases fail only at the explicit missing-lineage-module
+Result: `29 failed` in `1.46s`. Twenty-six cases fail only at the explicit missing-lineage-module
 assertion and three fail only at the explicit missing-lineage-tables assertion. Collection,
 PostgreSQL connectivity, fixtures, and migration setup remain healthy.
 
@@ -72,7 +78,7 @@ Preserved full baseline:
   --ignore=tests/test_provider_call_lineage.py -q
 ```
 
-Result: `1125 passed, 3 skipped` in `27.69s`.
+Result: `1125 passed, 3 skipped` in `27.10s`.
 
 Preserved migration/role/hosted/store slice:
 
@@ -82,7 +88,7 @@ Preserved migration/role/hosted/store slice:
   tests/test_hosted_configuration.py tests/test_postgres_api_m1d.py -q
 ```
 
-Result: `40 passed` in `2.28s`.
+Result: `40 passed` in `2.10s`.
 
 Static and hygiene evidence:
 
@@ -90,10 +96,10 @@ Static and hygiene evidence:
 - Ruff check: pass.
 - Ruff format check: pass.
 - Python compilation: pass.
-- Diff check from repair base `0bb876fdbc8008d1dd511e1c3624e2701a013ef7`: pass.
+- Diff check from final repair base `a1e2777118c930c7ddfdf35fd684248d2250c330`: pass.
 - Secret scan: `secret scan clean (845 files)`.
-- Gitleaks over `0bb876f..990b0c3`: one commit scanned, no leaks found.
-- Repair diff is limited to `tests/test_provider_call_lineage.py` and the Test Agent report.
+- Gitleaks over `a1e2777..3821974`: one commit scanned, no leaks found.
+- Final repair diff is limited to `tests/test_provider_call_lineage.py` and the Test Agent report.
 - No product, migration, provider, target, credential, configuration, or deployment file changed.
 
-Final severity: Critical `0`; Important `1`; Minor `0`.
+Final severity: Critical `0`; Important `0`; Minor `0`.
