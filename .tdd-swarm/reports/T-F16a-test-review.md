@@ -1,10 +1,12 @@
-# T-F16a Test Review
+# T-F16a Test Review — Attempt 2
 
 Status: `BLOCKED(TEST_CHANGES_REQUIRED)`
 
 Freeze verdict: `NOT FROZEN`
 
-Review attempt: `1/3`
+Review attempt: `2/3`
+
+Re-review commit: `6d77eb6fb93c4aa720831bdca179e89d9326a921`
 
 ## Provenance
 
@@ -119,3 +121,57 @@ substring presence.
 
 The RED failures have correct feature-missing causality, but the Important coverage defects above
 must be closed and independently re-reviewed before the test contract can be frozen.
+
+## Attempt 2 re-review
+
+The repair closes Important findings 1, 2, and 6. It adds the requested Week 1 and staged-version
+chains, evidence auth/field attacks, synthetic/legacy controls, old-scope rejection, and stronger
+migration assertions. Findings 3, 4, and 5 are materially improved but are not yet clean enough to
+freeze.
+
+### Remaining Important 1 — The cross-surface duplicate test is RED for an error-message mismatch
+
+`tests/test_final_target_surface_policy.py:1125-1141` expects a duplicate/fixture-specific message
+from `TrustedTargetCatalog.from_environment`. Against the locked product baseline, the catalog
+already raises `TargetCatalogError`; the test fails only because the existing generic message does
+not match the regex. Error-message specificity is not part of AC-3, and this failure does not prove
+the missing duplicate-ref behavior.
+
+Required change: first load an otherwise-identical valid v2.1 control through the shared canonical
+catalog helper, then submit the duplicate-ref mutation and assert typed fail-closed rejection.
+Do not require human-readable error text unless a typed diagnostic code is added to the contract.
+
+### Remaining Important 2 — Intake's second state-changing upload can still receive retries
+
+`tests/test_final_target_surface_policy.py:1185-1212` hostile-tests only the five lab operations.
+The intake `duplicate_check` operation is a second multipart `POST /documents`, but no negative case
+sets its retry count above zero. A lazy implementation can special-case the lab `upload` operation,
+allow retries for intake `duplicate_check`, and pass all 101 tests.
+
+Required change: parameterize the document retry-ceiling test by surface and operation, including
+both intake operations with a self-consistently rederived physical maximum.
+
+### Remaining Important 3 — Valid early definition rejection is treated as a test failure
+
+`tests/test_final_target_surface_policy.py:1320-1389` sends method, path, and adapter-profile drift
+through `_parse_canonical_surface`, whose helper calls `pytest.fail` on `DefinitionError`. AC-5
+allows any drift to fail before secret/fixture/adapter side effects; a correct implementation may
+reject a profile-invalid method, path, or adapter profile while constructing the definition. The
+test instead requires those hostile policies to be accepted before registry rejection.
+
+Required change: treat `DefinitionError` as a valid early fail-closed outcome with zero side effects.
+For facts that remain structurally valid, continue through registry resolution and assert the three
+independent probes remain untouched.
+
+## Attempt 2 verification
+
+- Focused RED -> exit `1`; `101` failed, `0` passed, `0` collection/setup errors.
+- Representative causality sample confirmed missing v2 behavior, accepted target-wide fallback,
+  and absent migration note. The cross-surface duplicate case alone failed on the unrequired regex.
+- Scoped baseline -> exit `0`; `79` passed.
+- Ruff check/format, secret scan, and diff check -> exit `0`.
+- Scoped product files remain byte-identical to `1ac3ee0`.
+- No network/client/credential/fixture access was introduced.
+- Required wrapper remains unavailable at this dependency base and exits `127`.
+
+Freeze remains blocked until the three Important test-design defects above are repaired.
