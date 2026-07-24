@@ -193,7 +193,7 @@ class TracedHostedRedTeamProvider:
         self._parent_execution_id = parent_execution_id
 
     def _invoke_transport(self, seed: dict[str, Any], count: int, category: str) -> Any:
-        """The raw traced qwen call through the shared transport as the red_team role (unrecorded)."""
+        """The raw traced qwen call through the shared transport (role='red_team'), unrecorded."""
         return self._transport.invoke(
             role="red_team",
             messages=build_generation_messages(seed, count, category),
@@ -231,8 +231,8 @@ class TracedHostedRedTeamProvider:
     def generate(self, seed: dict[str, Any], *, count: int, category: str) -> list[dict[str, Any]]:
         """Generate ``count`` variant continuations as one SELF-RECORDED traced red_team execution.
 
-        Drop-in for ``mutation.mutate(..., provider=...)``: it owns the start/invoke/finish steps and
-        emits the identical :class:`HostedExecutionLineage`.
+        Drop-in for ``mutation.mutate(..., provider=...)``: it owns the start/invoke/finish steps
+        and emits the identical :class:`HostedExecutionLineage`.
         """
         execution_id = self._lifecycle.start(
             role="red_team",

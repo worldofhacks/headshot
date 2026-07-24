@@ -26,10 +26,14 @@ const trace = (overrides: Partial<TraceReadModel> = {}): TraceReadModel => ({
   request_bytes: 100,
   response_bytes: 200,
   measured_cost: 0.01,
+  accounting_status: "measured",
   currency: "USD",
   input_tokens: null,
   output_tokens: null,
+  p50_duration_ms: null,
+  p95_duration_ms: null,
   langfuse_status: "exported",
+  langfuse_verified_at: "2026-07-22T00:00:01Z",
   request_preview: '{"turns":["synthetic"]}',
   response_preview: '{"answer":"safe"}',
   request_sha256: "a".repeat(64),
@@ -50,7 +54,7 @@ describe("observability metrics", () => {
   it("summarizes physical request rows without double-counting campaign traces", () => {
     const summary = summarizeTraces([
       trace(),
-      trace({ request_id: "request-2", trace_id: "trace-2", duration_ms: 300, status: "failed", response_bytes: null, measured_cost: 0.02, langfuse_status: "error" }),
+      trace({ request_id: "request-2", trace_id: "trace-2", duration_ms: 300, status: "failed", response_bytes: null, measured_cost: 0.02, langfuse_status: "queued", langfuse_verified_at: null }),
       trace({ request_id: null, trace_id: "campaign-trace", operation: "campaign.run", duration_ms: 9_999, measured_cost: 9 }),
     ]);
 

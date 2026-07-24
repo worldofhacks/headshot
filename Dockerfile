@@ -61,6 +61,7 @@ COPY alembic.ini /app/alembic.ini
 COPY migrations /app/migrations
 COPY evals /app/evals
 COPY security-tools/reviewed /app/security-tools/reviewed
+COPY --chown=app:app scripts/verify_langfuse_campaign.py /app/scripts/verify_langfuse_campaign.py
 
 # Only compiled, production console assets cross the Node/runtime boundary.
 COPY --from=console-build --chown=app:app /build/console/dist /app/console

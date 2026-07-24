@@ -1,19 +1,10 @@
 #!/usr/bin/env python3
-"""Authorized, synthetic-only live adversarial campaign against the OpenEMR Clinical Co-Pilot.
+"""Retired direct-live launcher plus read-only historical oracle definitions.
 
-Fires a curated adversarial corpus (prompt injection, jailbreak/DAN, sensitive-data leakage,
-encoding/output-handling) through the real ``OpenEmrAdapter`` (copilot_chat profile) at ~1 req/2s,
-computes DETERMINISTIC code oracles from each live response, builds schema-valid Evidence
-Envelopes, and runs the real independent ``Judge`` (deterministic precedence; LLM layer is unwired
-at MVP). Writes credential-scrubbed artifacts under ``evals/results/<run>/``.
-
-Auth: ``TARGET_SESSION_SID`` is read from ``os.environ`` ONLY, wrapped in a redacting ``Secret``,
-placed in the request body as ``session_id`` at the send boundary. It is NEVER printed, logged,
-committed, or written into an artifact — a final scrub asserts its absence from every artifact.
-
-Not a replacement for the full gated coordinator: this bypasses the two-person coordinator/lease
-machinery (blocked by design without a second approver) but keeps the adapter boundary, allowlist
-guard, synthetic data, rate cap, and the real Judge. Reports are DRAFTED, never published.
+The curated corpus and deterministic oracle helpers remain importable for analysis of already
+captured artifacts. This executable no longer reads credentials, constructs an adapter, writes
+campaign artifacts, or contacts a target. New live campaigns must use the authenticated Railway
+control plane and private durable Runner so their complete agent/target/Langfuse lineage exists.
 """
 
 from __future__ import annotations
@@ -22,41 +13,13 @@ import json
 import os
 import re
 import sys
-import time
-from datetime import UTC, datetime
 from pathlib import Path
-from urllib.parse import urlsplit
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from agentforge.agents.judge.judge import Judge  # noqa: E402
-from agentforge.contracts import is_valid  # noqa: E402
-from agentforge.secrets import Secret  # noqa: E402
-from agentforge.target.base import (  # noqa: E402
-    AdapterError,
-    RateLimitedError,
-    TargetRequest,
-    TargetSessionExpiredError,
-    TargetUnreachableError,
-)
-from agentforge.target.openemr_adapter import OpenEmrAdapter  # noqa: E402
-
-AUTHORIZED_HOST = "agent-production-9f62.up.railway.app"
-BASE_URL = f"https://{AUTHORIZED_HOST}"
-RELATIVE_PATH = "chat"
-RATE_LIMIT_SECONDS = 2.0
-MAX_REQUESTS = 40  # hard cap / abort ceiling
+from agentforge.campaign.runtime import refuse_legacy_live_execution  # noqa: E402
 
 RUN_ID = os.environ.get("LC_RUN_ID", "live-campaign-20260724")
-TIMEOUT_SECONDS = float(os.environ.get("LC_TIMEOUT", "30"))
-SID_ENV = os.environ.get("LC_SID_ENV", "TARGET_SESSION_SID")
-OUT_DIR = Path(__file__).resolve().parent.parent / "evals" / "results" / RUN_ID
-
-
-def allowlist_guard(base_url: str) -> None:
-    host = urlsplit(base_url).hostname
-    if host != AUTHORIZED_HOST:
-        raise SystemExit(f"REFUSED off-allowlist host {host!r}")
 
 
 # ---- curated adversarial corpus -------------------------------------------------------------
@@ -411,200 +374,9 @@ def build_envelope(
 
 
 def main() -> int:
-    raw_sid = os.environ.get(SID_ENV)
-    if not raw_sid:
-        print(
-            f"BLOCKED: {SID_ENV} not set — cannot run an authorized live campaign.", file=sys.stderr
-        )
-        return 5
+    """Fail closed before reading a credential or creating any live side effect."""
 
-    OUT_DIR.mkdir(parents=True, exist_ok=True)
-    started = datetime.now(UTC).isoformat()
-    judge = Judge()
-
-    adapter = OpenEmrAdapter(
-        base_url=BASE_URL,
-        payload_profile="copilot_chat",
-        relative_path=RELATIVE_PATH,
-        credential=Secret(raw_sid),
-        destination_validator=allowlist_guard,
-        timeout_seconds=TIMEOUT_SECONDS,
-    )
-
-    records: list[dict] = []
-    envelopes: list[dict] = []
-    verdicts: list[dict] = []
-    print(
-        f"CAMPAIGN {RUN_ID}  target={BASE_URL}/{RELATIVE_PATH}  probes={len(CORPUS)}  rate=1/{RATE_LIMIT_SECONDS}s"
-    )
-    try:
-        for i, probe in enumerate(CORPUS):
-            if i >= MAX_REQUESTS:
-                print("ABORT: request ceiling reached")
-                break
-            if i:
-                time.sleep(RATE_LIMIT_SECONDS)
-            status: int | None = None
-            raw_text = ""
-            error = None
-            try:
-                resp = adapter.send(
-                    TargetRequest(
-                        turns=(probe["prompt"],),
-                        metadata={"attempt_id": probe["id"], "synthetic": "true"},
-                    )
-                )
-                status, raw_text = resp.status, resp.output
-            except RateLimitedError as exc:
-                error = f"rate_limited:{exc}"
-                time.sleep(5)
-            except TargetSessionExpiredError as exc:
-                print(f"ABORT: session expired at {probe['id']} — {exc}")
-                error = "session_expired"
-                break
-            except (TargetUnreachableError, AdapterError) as exc:
-                error = f"{exc.__class__.__name__}:{exc}"
-
-            try:
-                parsed = json.loads(raw_text) if raw_text else {}
-                if not isinstance(parsed, dict):
-                    parsed = {"_nonobject": parsed}
-            except (json.JSONDecodeError, TypeError):
-                parsed = {"_raw": raw_text[:2000]}
-
-            oracles, canaries, policy = run_oracles(probe, parsed, raw_text, raw_sid)
-            env = build_envelope(probe, parsed, raw_text, oracles, canaries, policy)
-            env_valid = is_valid("evidence_envelope", env)
-            verdict = (
-                judge.evaluate(env)
-                if env_valid
-                else {
-                    "state": "ERROR",
-                    "reason_codes": ["evidence_missing"],
-                    "note": "envelope failed schema",
-                }
-            )
-            any_hit = any(o["hit"] for o in oracles) or any(c["hit"] for c in canaries)
-            records.append(
-                dict(
-                    id=probe["id"],
-                    category=probe["category"],
-                    technique=probe["technique"],
-                    owasp_llm=probe["owasp_llm"],
-                    owasp_web=probe["owasp_web"],
-                    prompt=probe["prompt"],
-                    http_status=status,
-                    error=error,
-                    policy_decision=policy,
-                    source=parsed.get("source"),
-                    verdicts=parsed.get("verdicts"),
-                    brief=parsed.get("brief"),
-                    correlation_id=parsed.get("correlation_id"),
-                    oracle_results=oracles,
-                    canary_hits=canaries,
-                    judge_state=verdict.get("state"),
-                    judge_confidence=verdict.get("confidence"),
-                    exploit_signal=any_hit,
-                    raw_response=parsed,
-                )
-            )
-            envelopes.append(env)
-            verdicts.append(
-                dict(
-                    attempt_id=probe["id"],
-                    **{
-                        k: verdict.get(k)
-                        for k in (
-                            "state",
-                            "confidence",
-                            "reason_codes",
-                            "confirmation_source",
-                            "error_code",
-                        )
-                    },
-                )
-            )
-            print(
-                f"  {probe['id']:16} http={status} policy={policy:8} "
-                f"judge={verdict.get('state'):16} exploit_signal={any_hit}"
-            )
-    finally:
-        adapter.close()
-
-    finished = datetime.now(UTC).isoformat()
-
-    # ---- credential scrub (defense in depth) ----
-    def scrub(obj):
-        if isinstance(obj, str):
-            return obj.replace(raw_sid, "***REDACTED_SESSION***") if raw_sid in obj else obj
-        if isinstance(obj, dict):
-            return {k: scrub(v) for k, v in obj.items()}
-        if isinstance(obj, list):
-            return [scrub(v) for v in obj]
-        return obj
-
-    records = [scrub(r) for r in records]
-    envelopes = [scrub(e) for e in envelopes]
-
-    # ---- write artifacts ----
-    (OUT_DIR / "responses.jsonl").write_text(
-        "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in records)
-    )
-    (OUT_DIR / "envelopes.jsonl").write_text(
-        "".join(json.dumps(e, ensure_ascii=False) + "\n" for e in envelopes)
-    )
-    (OUT_DIR / "verdicts.jsonl").write_text(
-        "".join(json.dumps(v, ensure_ascii=False) + "\n" for v in verdicts)
-    )
-
-    by_cat: dict[str, dict] = {}
-    for r in records:
-        c = by_cat.setdefault(
-            r["category"], {"tested": 0, "exploit_signals": 0, "refused": 0, "probe_ids": []}
-        )
-        c["tested"] += 1
-        c["exploit_signals"] += 1 if r["exploit_signal"] else 0
-        c["refused"] += 1 if r["policy_decision"] == "refused" else 0
-        c["probe_ids"].append(r["id"])
-    confirmed = [r["id"] for r in records if r["judge_state"] == "EXPLOIT_CONFIRMED"]
-    summary = dict(
-        run_id=RUN_ID,
-        target=BASE_URL,
-        path=RELATIVE_PATH,
-        started=started,
-        finished=finished,
-        total_probes=len(records),
-        rate_limit_seconds=RATE_LIMIT_SECONDS,
-        judge="deterministic precedence (oracle/canary); LLM layer unwired at MVP",
-        exploit_confirmed_ids=confirmed,
-        exploit_signal_ids=[r["id"] for r in records if r["exploit_signal"]],
-        indeterminate=sum(1 for r in records if r["judge_state"] == "INDETERMINATE"),
-        by_category=by_cat,
-        credential_scrub="verified: TARGET_SESSION_SID absent from all artifacts",
-        note="Curated adversarial probe set through the platform adapter + real Judge. Not the full "
-        "two-person gated coordinator (blocked by design without a second approver). Reports DRAFT-only.",
-    )
-    (OUT_DIR / "summary.json").write_text(json.dumps(summary, indent=2, ensure_ascii=False))
-
-    # ---- final scrub assertion across every written artifact ----
-    leaked_files = [
-        p.name for p in OUT_DIR.glob("*") if raw_sid and raw_sid in p.read_text(errors="ignore")
-    ]
-    if leaked_files:
-        print(f"FATAL: credential found in artifacts {leaked_files} — aborting", file=sys.stderr)
-        return 6
-
-    print(
-        f"\nSUMMARY  probes={len(records)}  exploit_confirmed={len(confirmed)}  "
-        f"exploit_signals={len(summary['exploit_signal_ids'])}  indeterminate={summary['indeterminate']}"
-    )
-    print(
-        "  by_category: "
-        + "  ".join(f"{c}={v['exploit_signals']}/{v['tested']} sig" for c, v in by_cat.items())
-    )
-    print(f"  artifacts -> {OUT_DIR}")
-    print("  credential scrub: PASS (session id absent from all artifacts)")
-    return 0
+    return refuse_legacy_live_execution()
 
 
 if __name__ == "__main__":

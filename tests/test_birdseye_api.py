@@ -89,11 +89,13 @@ def test_birdseye_is_registry_derived_and_omits_missing_components(
         "agent:documentation",
     }
     assert nodes["runner"]["target_access"] == "policy-gated"
+    assert nodes["runner"]["accounting_status"] is None
     assert nodes["runner"]["is_fresh"] is True
     assert nodes["agent:judge"]["heartbeat_at"] is None
     assert nodes["agent:judge"]["availability"] == "runtime execution not observed"
     assert nodes["agent:judge"]["runtime_state"] == "unavailable"
     assert nodes["agent:judge"]["healthy_instances"] == 0
+    assert nodes["agent:judge"]["accounting_status"] == "not_applicable"
     assert nodes["agent:judge"]["current_task"].startswith("Configured; runtime execution")
     assert result.data["instrumentation"]["system_state"] == "degraded"
     assert "langfuse" not in nodes
@@ -264,6 +266,26 @@ def test_birdseye_projects_security_outcomes_and_recorded_agent_causality(
             ),
             {"org": organization_id, "run": run_id},
         )
+        connection.execute(
+            text(
+                "INSERT INTO outbound_http_requests "
+                "(request_id, organization_id, campaign_run_id, attempt_id, trace_id, "
+                "operation, provider, method, destination_host, relative_path, request_payload, "
+                "response_payload, status, status_code, request_bytes, response_bytes, "
+                "duration_ms, measured_cost, langfuse_status, started_at, finished_at) VALUES "
+                "('birdseye-target-request', :org, :run, :attempt, :trace, "
+                "'target.chat', 'openemr-live', 'POST', 'authorized.example', '/api/chat', "
+                "'{}'::jsonb, '{}', 'succeeded', 200, 2, 2, 50, 0.25, 'queued', "
+                "clock_timestamp() - INTERVAL '8 seconds', "
+                "clock_timestamp() - INTERVAL '7 seconds')"
+            ),
+            {
+                "org": organization_id,
+                "run": run_id,
+                "attempt": attempt_id,
+                "trace": "f" * 32,
+            },
+        )
         orchestration = {
             "directive": {
                 "category": "prompt_injection",
@@ -320,11 +342,14 @@ def test_birdseye_projects_security_outcomes_and_recorded_agent_causality(
                     "parent_execution_id, agent_role, status, provider, model, execution_mode, "
                     "configuration_version, input_sha256, output_sha256, input_tokens, "
                     "output_tokens, measured_cost, "
-                    "trace_id, langfuse_status, detail, started_at, finished_at, "
+                    "trace_id, langfuse_status, langfuse_verified_at, detail, started_at, "
+                    "finished_at, "
                     "duration_ms) VALUES "
                     "(:execution, :org, :run, :attempt, :parent, :role, 'succeeded', "
                     "'headshot', 'fixture-engine-v1', 'deterministic', 1, :input_hash, "
-                    ":output_hash, :input_tokens, :output_tokens, :cost, :trace, 'exported', "
+                    ":output_hash, :input_tokens, :output_tokens, :cost, :trace, "
+                    ":langfuse_status, CASE WHEN :langfuse_verified "
+                    "THEN clock_timestamp() ELSE NULL END, "
                     '\'{"phase":"recorded_fixture"}\'::jsonb, '
                     "clock_timestamp() - (:offset + 2) * INTERVAL '1 second', "
                     "clock_timestamp() - (:offset + 1) * INTERVAL '1 second', :duration_ms)"
@@ -344,12 +369,15 @@ def test_birdseye_projects_security_outcomes_and_recorded_agent_causality(
                     "input_tokens": offset * 10,
                     "output_tokens": offset * 2,
                     "cost": cost,
+                    "langfuse_status": "queued" if role == "orchestrator" else "exported",
+                    "langfuse_verified": role != "orchestrator",
                 },
             )
         connection.execute(
             text(
-                "UPDATE agent_executions SET langfuse_status = 'queued' "
-                "WHERE execution_id = 'birdseye-exec-orchestrator'"
+                "UPDATE agent_executions SET execution_mode = 'hosted_advisory', "
+                "input_tokens = NULL, output_tokens = NULL "
+                "WHERE execution_id = 'birdseye-exec-judge'"
             )
         )
         connection.execute(
@@ -395,14 +423,74 @@ def test_birdseye_projects_security_outcomes_and_recorded_agent_causality(
     assert nodes["agent:orchestrator"]["p50_latency_ms"] == 12.0
     assert nodes["agent:red_team"]["p95_latency_ms"] == 120.0
     assert nodes["agent:judge"]["measured_cost_usd"] == 0.0
+    assert nodes["agent:judge"]["accounting_status"] == "unavailable"
     assert nodes["agent:documentation"]["measured_cost_usd"] == 0.01
+    assert nodes["agent:documentation"]["accounting_status"] == "measured"
     assert nodes["agent:documentation"]["execution_count"] == 1
     assert nodes["agent:documentation"]["input_tokens"] == 40
     assert nodes["agent:documentation"]["output_tokens"] == 8
     assert nodes["agent:documentation"]["token_observation_count"] == 1
     assert nodes["agent:documentation"]["langfuse_queued_count"] == 0
     assert nodes["agent:documentation"]["langfuse_exported_count"] == 1
+    assert nodes["agent:documentation"]["langfuse_verified_count"] == 1
+    assert nodes["agent:documentation"]["last_langfuse_verified_at"] is not None
     assert nodes["agent:orchestrator"]["langfuse_queued_count"] == 1
     assert nodes["agent:orchestrator"]["langfuse_exported_count"] == 0
+    assert nodes["agent:orchestrator"]["langfuse_verified_count"] == 0
+    assert nodes["agent:orchestrator"]["last_langfuse_verified_at"] is None
     assert nodes["agent:documentation"]["langfuse_status"] == "exported"
-    assert nodes["langfuse"]["queue_depth"] == 1
+    assert nodes["langfuse"]["queue_depth"] == 2
+    edges = {edge["edge_id"]: edge for edge in snapshot["edges"]}
+    assert edges["runner-to-langfuse"]["state"] == "active"
+
+    with migrated_db.begin() as connection:
+        connection.execute(
+            text(
+                "UPDATE agent_executions SET langfuse_status = 'exported', "
+                "langfuse_verified_at = clock_timestamp() "
+                "WHERE organization_id = :org AND campaign_run_id = :run"
+            ),
+            {"org": organization_id, "run": run_id},
+        )
+    with migrated_db.connect() as connection:
+        request_pending_snapshot = build_birdseye_snapshot(
+            connection,
+            organization_id=organization_id,
+            environment="local",
+        )
+    request_pending_edges = {edge["edge_id"]: edge for edge in request_pending_snapshot["edges"]}
+    request_pending_nodes = {
+        node["component_id"]: node for node in request_pending_snapshot["nodes"]
+    }
+    assert request_pending_edges["runner-to-langfuse"]["state"] == "active"
+    assert (
+        "4 remotely verified; 1 awaiting exact query-back"
+        in request_pending_edges["runner-to-langfuse"]["detail"]
+    )
+    assert request_pending_nodes["langfuse"]["current_task"].startswith(
+        "Awaiting exact remote verification"
+    )
+
+    with migrated_db.begin() as connection:
+        connection.execute(
+            text(
+                "UPDATE outbound_http_requests SET langfuse_status = 'exported', "
+                "langfuse_verified_at = clock_timestamp() "
+                "WHERE organization_id = :org AND campaign_run_id = :run"
+            ),
+            {"org": organization_id, "run": run_id},
+        )
+    with migrated_db.connect() as connection:
+        verified_snapshot = build_birdseye_snapshot(
+            connection,
+            organization_id=organization_id,
+            environment="local",
+        )
+    verified_edges = {edge["edge_id"]: edge for edge in verified_snapshot["edges"]}
+    verified_nodes = {node["component_id"]: node for node in verified_snapshot["nodes"]}
+    assert verified_edges["runner-to-langfuse"]["state"] == "complete"
+    assert (
+        "5 remotely verified; 0 awaiting exact query-back"
+        in verified_edges["runner-to-langfuse"]["detail"]
+    )
+    assert verified_nodes["langfuse"]["current_task"].startswith("Remote query-back verified")

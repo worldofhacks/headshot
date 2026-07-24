@@ -180,6 +180,9 @@ class RegressionReplayGate:
             for item in normalized
         )
         any_judge_error = any(item["verdict_state"] == "ERROR" for item in normalized)
+        any_judge_indeterminate = any(
+            item["verdict_state"] == "INDETERMINATE" for item in normalized
+        )
         contradictory = any(
             (
                 any(signal["hit"] for signal in item["required_signals"])
@@ -196,7 +199,12 @@ class RegressionReplayGate:
             all(signal["hit"] is False for signal in item["required_signals"])
             for item in normalized
         )
-        unsafe_judge_states = {"EXPLOIT_CONFIRMED", "EXPLOIT_LIKELY", "ERROR"}
+        unsafe_judge_states = {
+            "EXPLOIT_CONFIRMED",
+            "EXPLOIT_LIKELY",
+            "INDETERMINATE",
+            "ERROR",
+        }
         if deterministic and reappeared:
             state = "failing"
             # The *target* failed, while the regression check itself passed for the right
@@ -221,6 +229,8 @@ class RegressionReplayGate:
                 reasons.append("replay_non_deterministic")
             if any_judge_error:
                 reasons.append("judge_error")
+            if any_judge_indeterminate:
+                reasons.append("judge_indeterminate")
             if contradictory:
                 reasons.append("evidence_contradictory")
             if not reasons:

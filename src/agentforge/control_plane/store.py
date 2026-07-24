@@ -1874,6 +1874,83 @@ class ControlPlaneStore:
             )
             return execution_id
 
+    def bind_agent_execution_attempt(
+        self,
+        *,
+        execution_id: str,
+        run_id: str,
+        attempt_id: str,
+    ) -> None:
+        """Bind an in-flight agent to the durable attempt selected during that execution.
+
+        Red Team must begin before it can select a case, while the attempt identity is derived
+        only after that exact authorized case is selected. This one-way binding closes that
+        chronology gap without inventing an attempt up front or rewriting terminal history.
+        """
+
+        if not isinstance(execution_id, str) or not execution_id:
+            raise InvalidControlPlaneInput("agent execution identity is invalid")
+        if not isinstance(attempt_id, str) or not attempt_id:
+            raise InvalidControlPlaneInput("attempt identity is invalid")
+        with self._engine.begin() as connection:
+            row = (
+                connection.execute(
+                    text(
+                        "SELECT e.organization_id, e.campaign_run_id, e.attempt_id, "
+                        "e.agent_role, e.status, (a.attempt_id IS NOT NULL) AS attempt_exists "
+                        "FROM agent_executions e LEFT JOIN campaign_attempts a "
+                        "ON a.organization_id = e.organization_id "
+                        "AND a.run_id = e.campaign_run_id AND a.attempt_id = :attempt_id "
+                        "WHERE e.execution_id = :execution_id FOR UPDATE OF e"
+                    ),
+                    {
+                        "execution_id": execution_id,
+                        "attempt_id": attempt_id,
+                    },
+                )
+                .mappings()
+                .one_or_none()
+            )
+            if row is None:
+                raise RecordNotFoundError("agent execution does not exist")
+            if row["campaign_run_id"] != run_id or not row["attempt_exists"]:
+                raise InvalidControlPlaneInput(
+                    "agent execution and attempt must belong to the same campaign"
+                )
+            if row["agent_role"] != "red_team":
+                raise InvalidControlPlaneInput(
+                    "only the selecting Red Team execution may bind a derived attempt"
+                )
+            if row["status"] != "running":
+                raise RecordConflictError("only a running agent execution may bind an attempt")
+            if row["attempt_id"] not in {None, attempt_id}:
+                raise RecordConflictError("agent execution is already bound to another attempt")
+            connection.execute(
+                text(
+                    "UPDATE agent_executions SET attempt_id = :attempt_id "
+                    "WHERE execution_id = :execution_id"
+                ),
+                {
+                    "execution_id": execution_id,
+                    "attempt_id": attempt_id,
+                },
+            )
+            self._audit(
+                connection,
+                row["organization_id"],
+                "agent.attempt_bound",
+                "agent_execution",
+                execution_id,
+                None,
+                {
+                    "campaign_run_id": run_id,
+                    "attempt_id": attempt_id,
+                    "agent_role": row["agent_role"],
+                },
+                actor_user_id="agent:red_team",
+                actor_session_id="runner:system",
+            )
+
     def finish_agent_execution(
         self,
         *,
@@ -2261,45 +2338,11 @@ class ControlPlaneStore:
                     "evidence_verified": True,
                 }
 
-            regression_rows = (
-                connection.execute(
-                    text(
-                        "SELECT ar.*, rc.regression_case_id, rc.state AS regression_state, "
-                        "f.finding_id AS linked_finding_id, f.category AS finding_category, "
-                        "f.severity AS finding_severity FROM regression_case rc "
-                        "JOIN finding f ON f.finding_id = rc.finding_id "
-                        "JOIN finding_evidence_links l ON l.organization_id = f.organization_id "
-                        "AND l.finding_id = f.finding_id JOIN attempt_result ar "
-                        "ON ar.organization_id = l.organization_id "
-                        "AND ar.campaign_run_id = l.campaign_run_id "
-                        "AND ar.attempt_id = l.attempt_id "
-                        "WHERE f.organization_id = :org AND ar.target_id = :target "
-                        "AND ar.target_version = :version"
-                    ),
-                    {
-                        "org": organization_id,
-                        "target": scope.target_id,
-                        "version": scope.target_version,
-                    },
-                )
-                .mappings()
-                .all()
-            )
-            for row in regression_rows:
-                category = row["finding_category"]
-                if category not in case_counts or not self._orchestration_evidence_verified(
-                    recorder, row
-                ):
-                    continue
-                regression_id = row["regression_case_id"]
-                regressions[regression_id] = {
-                    "regression_id": regression_id,
-                    "finding_id": row["linked_finding_id"],
-                    "category": category,
-                    "severity": row["finding_severity"],
-                    "state": row["regression_state"],
-                    "evidence_verified": True,
-                }
+            # The legacy ``regression_case`` row has no replay-result or authorization lineage.
+            # It must never be promoted into an evidence-verified Orchestrator signal. The
+            # versioned replay tables become eligible here only after an exact persisted replay
+            # manifest is bound into campaign authorization and the result writer independently
+            # verifies every observation. Until then, regression signals fail closed as empty.
 
             spent = connection.execute(
                 text(
@@ -2467,19 +2510,24 @@ class ControlPlaneStore:
         organization_id: str,
         report: Mapping[str, Any],
         regression_disposition: Mapping[str, Any],
+        reproduction_plan: Mapping[str, Any],
     ) -> tuple[str, str]:
-        """Atomically persist a confirmed finding's report draft and regression disposition.
+        """Persist a report, pending disposition, and blocked reproduction trigger atomically.
 
-        This boundary revalidates both contracts and their evidence lineage.  It accepts no
-        published report and no claimed human approval; those remain separate authenticated
-        commands.  Identical retries are idempotent, while any immutable-content drift fails.
+        This boundary revalidates all three contracts and their evidence lineage.  The replay
+        plan remains execution-blocked and has no authorization scope; it is durable work to be
+        reviewed and authorized, never authority to contact a target.  This method accepts no
+        published report and no claimed human approval.  Identical retries are idempotent, while
+        any immutable-content drift fails.
         """
 
         report_payload = dict(report)
         disposition_payload = dict(regression_disposition)
+        plan_payload = dict(reproduction_plan)
         try:
             validate_contract("vuln_report", report_payload)
             validate_contract("regression_disposition", disposition_payload)
+            validate_contract("regression_replay_plan", plan_payload)
         except Exception as exc:
             raise InvalidControlPlaneInput(
                 f"documentation outcome fails its published contract: {exc}"
@@ -2496,9 +2544,28 @@ class ControlPlaneStore:
             raise AuthorizationDeniedError(
                 "regression admission requires a separately bound human approval command"
             )
+        if (
+            disposition_payload["state"] != "pending_deterministic_reproduction"
+            or plan_payload["trigger"] != "deterministic_reproduction"
+            or plan_payload["authorization_state"] != "pending_human_authorization"
+            or plan_payload["authorization_scope_hash"] is not None
+            or plan_payload["execution_state"] != "blocked"
+        ):
+            raise AuthorizationDeniedError(
+                "documentation may only schedule an execution-blocked deterministic reproduction"
+            )
+        for key in ("finding_id", "report_id"):
+            if (
+                plan_payload[key] != report_payload[key]
+                or plan_payload[key] != disposition_payload[key]
+            ):
+                raise InvalidControlPlaneInput(
+                    "reproduction plan does not match documentation lineage"
+                )
 
         report_id = str(report_payload["report_id"])
         disposition_id = str(disposition_payload["disposition_id"])
+        replay_id = str(plan_payload["replay_id"])
         finding_id = str(report_payload["finding_id"])
         run_id = str(report_payload["campaign_run_id"])
         attempt_id = str(report_payload["attempt_id"])
@@ -2508,11 +2575,21 @@ class ControlPlaneStore:
                 connection.execute(
                     text(
                         "SELECT f.severity, f.category, l.evidence_content_hash, v.state, "
-                        "a.case_id FROM finding f JOIN finding_evidence_links l "
+                        "v.confirmation_source, a.case_id, ar.attack_attempt, q.scope_payload "
+                        "FROM finding f JOIN finding_evidence_links l "
                         "ON l.organization_id = f.organization_id "
                         "AND l.finding_id = f.finding_id JOIN verdict v ON v.id = l.verdict_id "
                         "JOIN campaign_attempts a ON a.organization_id = l.organization_id "
                         "AND a.run_id = l.campaign_run_id AND a.attempt_id = l.attempt_id "
+                        "JOIN attempt_result ar ON ar.organization_id = l.organization_id "
+                        "AND ar.campaign_run_id = l.campaign_run_id "
+                        "AND ar.attempt_id = l.attempt_id JOIN campaign_runs cr "
+                        "ON cr.organization_id = l.organization_id "
+                        "AND cr.run_id = l.campaign_run_id "
+                        "JOIN campaign_authorization_requests q "
+                        "ON q.organization_id = cr.organization_id "
+                        "AND q.request_id = cr.authorization_request_id "
+                        "AND q.scope_hash = cr.scope_hash "
                         "WHERE f.organization_id = :org AND f.finding_id = :finding "
                         "AND l.campaign_run_id = :run_id AND l.attempt_id = :attempt_id"
                     ),
@@ -2540,6 +2617,37 @@ class ControlPlaneStore:
                 raise AuthorizationDeniedError(
                     "documentation taxonomy or evidence reference does not match the finding"
                 )
+            scope_payload = dict(lineage["scope_payload"])
+            if (
+                plan_payload["source_case_ref"]["case_id"] != lineage["case_id"]
+                or plan_payload["attack_attempt"] != dict(lineage["attack_attempt"])
+                or plan_payload["target_id"] != scope_payload.get("target_id")
+                or plan_payload["source_target_version"] != scope_payload.get("target_version")
+                or plan_payload["replay_target_version"] != scope_payload.get("target_version")
+            ):
+                raise AuthorizationDeniedError(
+                    "reproduction plan differs from the authorization-bound source attempt"
+                )
+            expected_attack_hash = hashlib.sha256(
+                json.dumps(
+                    plan_payload["attack_attempt"]["input_sequence"],
+                    allow_nan=False,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                    sort_keys=True,
+                ).encode("utf-8")
+            ).hexdigest()
+            if plan_payload["attack_sequence_sha256"] != expected_attack_hash:
+                raise AuthorizationDeniedError("reproduction attack sequence integrity failed")
+            # AttemptResult v1 does not persist the trusted signal identifier. The exact ID is
+            # carried from the just-evaluated coordinator outcome into this still-blocked plan,
+            # while the durable verdict independently proves only its oracle/canary class. A
+            # future result writer must fail closed until exact signal IDs and replay-manifest
+            # authorization are durable; this planning write grants no execution authority.
+            if lineage["confirmation_source"] not in {"oracle", "canary"}:
+                raise AuthorizationDeniedError(
+                    "reproduction plan is not bound to the persisted deterministic source"
+                )
 
             existing_report = connection.execute(
                 text(
@@ -2555,6 +2663,19 @@ class ControlPlaneStore:
                 ),
                 {"org": organization_id, "disposition": disposition_id},
             ).scalar_one_or_none()
+            existing_plan = (
+                connection.execute(
+                    text(
+                        "SELECT replay_id, disposition_id, contract_payload "
+                        "FROM regression_replay_plans WHERE organization_id = :org "
+                        "AND report_id = :report "
+                        "AND contract_payload->>'trigger' = 'deterministic_reproduction'"
+                    ),
+                    {"org": organization_id, "report": report_id},
+                )
+                .mappings()
+                .one_or_none()
+            )
             if existing_report is not None or existing_disposition is not None:
                 if (
                     existing_report is None
@@ -2565,46 +2686,78 @@ class ControlPlaneStore:
                     raise RecordConflictError(
                         "immutable documentation outcome differs from its existing record"
                     )
+            else:
+                connection.execute(
+                    text(
+                        "INSERT INTO vuln_reports "
+                        "(organization_id, report_id, finding_id, campaign_run_id, attempt_id, "
+                        "reproduction_sha256, status, publication_state, contract_payload) VALUES "
+                        "(:org, :report, :finding, :run_id, :attempt_id, :reproduction, :status, "
+                        ":publication, CAST(:payload AS jsonb))"
+                    ),
+                    {
+                        "org": organization_id,
+                        "report": report_id,
+                        "finding": finding_id,
+                        "run_id": run_id,
+                        "attempt_id": attempt_id,
+                        "reproduction": report_payload["reproduction_sha256"],
+                        "status": report_payload["status"],
+                        "publication": report_payload["publication_state"],
+                        "payload": canonical_json(report_payload),
+                    },
+                )
+                connection.execute(
+                    text(
+                        "INSERT INTO regression_dispositions "
+                        "(organization_id, disposition_id, finding_id, report_id, campaign_run_id, "
+                        "attempt_id, state, admitted, contract_payload) VALUES "
+                        "(:org, :disposition, :finding, :report, :run_id, :attempt_id, :state, "
+                        ":admitted, CAST(:payload AS jsonb))"
+                    ),
+                    {
+                        "org": organization_id,
+                        "disposition": disposition_id,
+                        "finding": finding_id,
+                        "report": report_id,
+                        "run_id": run_id,
+                        "attempt_id": attempt_id,
+                        "state": disposition_payload["state"],
+                        "admitted": disposition_payload["admitted"],
+                        "payload": canonical_json(disposition_payload),
+                    },
+                )
+            if existing_plan is not None:
+                if (
+                    existing_plan["replay_id"] != replay_id
+                    or existing_plan["disposition_id"] != disposition_id
+                    or dict(existing_plan["contract_payload"]) != plan_payload
+                ):
+                    raise RecordConflictError(
+                        "immutable reproduction plan differs from its existing record"
+                    )
                 return report_id, disposition_id
-
             connection.execute(
                 text(
-                    "INSERT INTO vuln_reports "
-                    "(organization_id, report_id, finding_id, campaign_run_id, attempt_id, "
-                    "reproduction_sha256, status, publication_state, contract_payload) VALUES "
-                    "(:org, :report, :finding, :run_id, :attempt_id, :reproduction, :status, "
-                    ":publication, CAST(:payload AS jsonb))"
+                    "INSERT INTO regression_replay_plans "
+                    "(organization_id, replay_id, regression_case_id, finding_id, report_id, "
+                    "disposition_id, target_id, source_target_version, replay_target_version, "
+                    "attack_sequence_sha256, contract_payload) VALUES "
+                    "(:org, :replay, :case, :finding, :report, :disposition, :target, "
+                    ":source_version, :replay_version, :attack_hash, CAST(:payload AS jsonb))"
                 ),
                 {
                     "org": organization_id,
-                    "report": report_id,
+                    "replay": replay_id,
+                    "case": plan_payload["regression_case_id"],
                     "finding": finding_id,
-                    "run_id": run_id,
-                    "attempt_id": attempt_id,
-                    "reproduction": report_payload["reproduction_sha256"],
-                    "status": report_payload["status"],
-                    "publication": report_payload["publication_state"],
-                    "payload": canonical_json(report_payload),
-                },
-            )
-            connection.execute(
-                text(
-                    "INSERT INTO regression_dispositions "
-                    "(organization_id, disposition_id, finding_id, report_id, campaign_run_id, "
-                    "attempt_id, state, admitted, contract_payload) VALUES "
-                    "(:org, :disposition, :finding, :report, :run_id, :attempt_id, :state, "
-                    ":admitted, CAST(:payload AS jsonb))"
-                ),
-                {
-                    "org": organization_id,
+                    "report": report_id,
                     "disposition": disposition_id,
-                    "finding": finding_id,
-                    "report": report_id,
-                    "run_id": run_id,
-                    "attempt_id": attempt_id,
-                    "state": disposition_payload["state"],
-                    "admitted": disposition_payload["admitted"],
-                    "payload": canonical_json(disposition_payload),
+                    "target": plan_payload["target_id"],
+                    "source_version": plan_payload["source_target_version"],
+                    "replay_version": plan_payload["replay_target_version"],
+                    "attack_hash": plan_payload["attack_sequence_sha256"],
+                    "payload": canonical_json(plan_payload),
                 },
             )
             self._audit(
@@ -2619,6 +2772,8 @@ class ControlPlaneStore:
                     "publication_state": report_payload["publication_state"],
                     "regression_disposition_id": disposition_id,
                     "regression_state": disposition_payload["state"],
+                    "reproduction_replay_id": replay_id,
+                    "reproduction_execution_state": plan_payload["execution_state"],
                     "admitted": False,
                 },
                 actor_user_id="agent:documentation",

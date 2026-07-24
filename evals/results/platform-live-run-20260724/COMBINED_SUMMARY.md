@@ -71,8 +71,14 @@ no unapproved publication/remediation.**
 - Evidence rows in Postgres `attempt_result` (re-read + hash-verified). SIDs never persisted to disk.
 
 ## Reproduce
+
+The former `scripts/platform_live_run.py` command is retained only as a fail-closed historical
+marker and must not be rerun. It bypassed the current durable agent/Langfuse ledger. Reproduction now
+requires a newly authorized campaign launched through the authenticated Railway control plane,
+executed by the private durable Runner, followed by:
+
 ```bash
-set -a; . ./.env.campaign; set +a
-export DATABASE_URL="postgresql://agentforge:local_dev_only@127.0.0.1:5432/agentforge_platform"
-LC_CAMPAIGN_RUN_ID=platform-live-YYYYMMDD-week1 .venv/bin/python scripts/platform_live_run.py
+python scripts/verify_langfuse_campaign.py \
+  --campaign-run-id <completed-live-run-id> \
+  --expected-environment production
 ```

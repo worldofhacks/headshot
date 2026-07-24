@@ -64,6 +64,42 @@ const liveObservations = (traces: TraceReadModel[]) =>
 const traceIdentity = (trace: TraceReadModel) =>
   trace.request_id ?? trace.execution_id ?? trace.trace_id;
 
+const langfuseDeliveryLabel = (trace: TraceReadModel) => {
+  if (trace.langfuse_verified_at !== null) {
+    return `observed · ${time(trace.langfuse_verified_at)}`;
+  }
+  return trace.langfuse_status === "queued"
+    ? "awaiting remote verification"
+    : trace.langfuse_status.replaceAll("_", " ");
+};
+
+const traceCostValue = (trace: TraceReadModel) =>
+  trace.accounting_status === "unavailable" ? "Unavailable" : money(trace.measured_cost);
+
+const roleLatencyValue = (
+  p50DurationMs: number | null,
+  p95DurationMs: number | null,
+) => (
+  p50DurationMs === null || p95DurationMs === null
+    ? "No completed execution yet"
+    : `${duration(p50DurationMs)} / ${duration(p95DurationMs)}`
+);
+
+const costValue = (record: CostReadModel) => {
+  if (record.accounting_status === "unavailable") return "Unavailable";
+  if (record.accounting_status === "partial") return `${money(record.measured_cost)} known`;
+  return money(record.measured_cost);
+};
+
+const costRoleLatencyValue = (
+  record: CostReadModel,
+  latency: "p50_duration_ms" | "p95_duration_ms",
+) => {
+  if (record.agent_role === null) return "Not applicable";
+  const value = record[latency];
+  return value === null ? "Unavailable" : duration(value);
+};
+
 export interface TraceSummary {
   requestCount: number;
   averageLatencyMs: number;
@@ -80,7 +116,7 @@ export const summarizeTraces = (traces: TraceReadModel[]): TraceSummary => {
     trace.duration_ms === null ? [] : [trace.duration_ms]
   ));
   const succeeded = requests.filter((trace) => trace.status === "succeeded").length;
-  const exported = requests.filter((trace) => trace.langfuse_status === "exported").length;
+  const verified = requests.filter((trace) => trace.langfuse_verified_at !== null).length;
   return {
     requestCount: requests.length,
     averageLatencyMs: requests.length ? sum(latencies) / requests.length : 0,
@@ -88,7 +124,7 @@ export const summarizeTraces = (traces: TraceReadModel[]): TraceSummary => {
     totalCost: sum(requests.map((trace) => trace.measured_cost)),
     totalBytes: sum(requests.map((trace) => trace.request_bytes + (trace.response_bytes ?? 0))),
     successRate: requests.length ? succeeded / requests.length : 0,
-    langfuseCoverage: requests.length ? exported / requests.length : 0,
+    langfuseCoverage: requests.length ? verified / requests.length : 0,
   };
 };
 
@@ -152,19 +188,27 @@ function TraceDetails({ trace }: { trace: TraceReadModel }) {
       <dl className="detail-grid trace-detail-grid">
         <div><dt>Latency</dt><dd className="mono">{trace.duration_ms === null ? "Running" : duration(trace.duration_ms)}</dd></div>
         <div><dt>HTTP status</dt><dd className="mono">{isAgent ? "Not applicable" : trace.status_code ?? "—"}</dd></div>
-        <div><dt>Measured cost</dt><dd className="mono">{money(trace.measured_cost)}</dd></div>
+        <div><dt>Measured cost</dt><dd className="mono">{traceCostValue(trace)}</dd></div>
+        {isAgent && (
+          <div>
+            <dt>Campaign role p50 / p95</dt>
+            <dd className="mono">
+              {roleLatencyValue(trace.p50_duration_ms, trace.p95_duration_ms)}
+            </dd>
+          </div>
+        )}
         <div><dt>Request bytes</dt><dd className="mono">{isAgent ? "Not applicable" : bytes(trace.request_bytes)}</dd></div>
         <div><dt>Response bytes</dt><dd className="mono">{isAgent ? "Not applicable" : trace.response_bytes === null ? "—" : bytes(trace.response_bytes)}</dd></div>
-        <div><dt>Langfuse</dt><dd className="mono">{trace.langfuse_status}</dd></div>
+        <div><dt>Langfuse delivery</dt><dd className="mono">{langfuseDeliveryLabel(trace)}</dd></div>
         <div><dt>Campaign</dt><dd className="mono" title={trace.campaign_id}>{shortId(trace.campaign_id)}</dd></div>
         <div><dt>Attempt</dt><dd className="mono" title={trace.attempt_id ?? undefined}>{shortId(trace.attempt_id)}</dd></div>
         <div><dt>Request</dt><dd className="mono" title={trace.request_id ?? undefined}>{shortId(trace.request_id)}</dd></div>
         {isAgent && <div><dt>Agent execution</dt><dd className="mono" title={trace.execution_id ?? undefined}>{shortId(trace.execution_id)}</dd></div>}
         {isAgent && <div><dt>Parent execution</dt><dd className="mono" title={trace.parent_execution_id ?? undefined}>{shortId(trace.parent_execution_id)}</dd></div>}
-        {isAgent && <div><dt>Input / output tokens</dt><dd className="mono">{trace.input_tokens === null && trace.output_tokens === null ? "Not observed" : `${count(trace.input_tokens ?? 0)} / ${count(trace.output_tokens ?? 0)}`}</dd></div>}
+        {isAgent && <div><dt>Input / output tokens</dt><dd className="mono">{trace.input_tokens === null && trace.output_tokens === null ? "Not reported by engine" : `${count(trace.input_tokens ?? 0)} / ${count(trace.output_tokens ?? 0)}`}</dd></div>}
       </dl>
       <div className="correlation-chain" aria-label="Observation correlation chain">
-        <span>Campaign</span><i>→</i><span>Attempt</span><i>→</i><span>{isAgent ? "Agent execution" : "Request"}</span><i>→</i><span>Langfuse trace</span>
+        <span>Campaign</span><i>→</i><span>Attempt</span><i>→</i><span>{isAgent ? "Agent execution" : "Request"}</span><i>→</i><span>Langfuse delivery</span>
       </div>
       {(trace.inspection_flags.length > 0 || trace.inspection_owasp_mappings.length > 0) && (
         <TagMatrix groups={[
@@ -199,7 +243,7 @@ function TraceDashboard({ traces }: { traces: TraceReadModel[] }) {
     observations[0] ? traceIdentity(observations[0]) : null,
   );
   const selected = observations.find((trace) => traceIdentity(trace) === selectedId) ?? observations[0];
-  const exported = observations.filter((trace) => trace.langfuse_status === "exported").length;
+  const verified = observations.filter((trace) => trace.langfuse_verified_at !== null).length;
   const queued = observations.filter((trace) => trace.langfuse_status === "queued").length;
   const failed = observations.filter((trace) => trace.langfuse_status === "error").length;
   const disabled = observations.filter((trace) => trace.langfuse_status === "disabled").length;
@@ -207,18 +251,27 @@ function TraceDashboard({ traces }: { traces: TraceReadModel[] }) {
     (trace) => trace.langfuse_status === "not_attempted",
   ).length;
   const observationCost = sum(observations.map((trace) => trace.measured_cost));
+  const unavailableAccounting = observations.filter(
+    (trace) => trace.accounting_status === "unavailable",
+  ).length;
   const observationLatencies = observations.flatMap((trace) => (
     trace.duration_ms === null ? [] : [trace.duration_ms]
   ));
-  const exportCoverage = observations.length ? exported / observations.length : 0;
+  const verifiedCoverage = observations.length ? verified / observations.length : 0;
 
   return (
     <>
       <MetricStrip label="Observability summary" values={[
-        { label: "Observed work", value: count(observations.length), note: `${count(requests.length)} requests · ${count(agents.length)} agent executions` },
+        { label: "Durable work", value: count(observations.length), note: `${count(requests.length)} requests · ${count(agents.length)} agent executions` },
         { label: "Execution latency", value: duration(observationLatencies.length ? sum(observationLatencies) / observationLatencies.length : 0), note: `p95 ${duration(percentile(observationLatencies, 0.95))}` },
-        { label: "Measured trace cost", value: money(observationCost), note: `${bytes(summary.totalBytes)} target traffic` },
-        { label: "Langfuse submitted", value: percent(exportCoverage), note: `${count(exported)} of ${count(observations.length)} observations` },
+        {
+          label: "Known trace cost",
+          value: unavailableAccounting > 0 ? `${money(observationCost)} known` : money(observationCost),
+          note: unavailableAccounting > 0
+            ? `${unavailableAccounting} observation(s) lack provider accounting`
+            : `${bytes(summary.totalBytes)} target traffic`,
+        },
+        { label: "Langfuse observed", value: percent(verifiedCoverage), note: `${count(verified)} of ${count(observations.length)} query-back verified` },
       ]} />
       <div className="panel-grid observability-grid">
         <Panel title="Latency timeline" meta={`${count(observations.length)} requests + agents`} eyebrow="MEASURED TELEMETRY">
@@ -226,13 +279,13 @@ function TraceDashboard({ traces }: { traces: TraceReadModel[] }) {
         </Panel>
         <Panel title="Langfuse delivery" meta="durable ledger reconciliation" eyebrow="MEASURED TELEMETRY">
           <DistributionBars rows={[
-            { label: "Submitted", value: exported, display: count(exported), tone: "success" },
-            { label: "Queued", value: queued, display: count(queued), tone: "queued" },
+            { label: "Observed", value: verified, display: count(verified), tone: "success" },
+            { label: "Awaiting remote verification", value: queued, display: count(queued), tone: "queued" },
             { label: "Export error", value: failed, display: count(failed), tone: "failure" },
             { label: "Not configured", value: disabled, display: count(disabled) },
             { label: "Not attempted", value: notAttempted, display: count(notAttempted) },
           ]} />
-          <p className="data-note">PostgreSQL remains authoritative. Submitted means the SDK flush completed; Langfuse query visibility can lag ingestion and is verified by the live query-back check.</p>
+          <p className="data-note">PostgreSQL remains authoritative. Queued observations await exact remote query-back and do not assert remote acceptance. Observed means the live Langfuse query-back check found the exact remote record and atomically persisted its verified delivery state.</p>
         </Panel>
       </div>
       <div className="panel-grid trace-explorer-grid">
@@ -249,7 +302,7 @@ function TraceDashboard({ traces }: { traces: TraceReadModel[] }) {
                 <span className={`status-dot ${trace.status === "succeeded" ? "live" : "idle"}`} />
                 <span><strong className="mono">{shortId(trace.trace_id)}</strong><small>{trace.operation} · {time(trace.started_at)}</small></span>
                 <span className="mono">{trace.duration_ms === null ? "running" : duration(trace.duration_ms)}</span>
-                <span className="mono">{compactMoney(trace.measured_cost)}</span>
+                <span className="mono">{trace.accounting_status === "unavailable" ? "unavailable" : compactMoney(trace.measured_cost)}</span>
               </button>
             ))}
           </div>
@@ -274,7 +327,7 @@ function CostBars({ costs }: { costs: CostReadModel[] }) {
         <div className="cost-bar-row" key={record.accounting_id}>
           <div className="cost-bar-label">
             <span className="mono" title={record.campaign_id}>{record.agent_role?.replace("_", " ") ?? shortId(record.campaign_id)}</span>
-            <strong className="mono">{money(record.measured_cost)}</strong>
+            <strong className="mono">{costValue(record)}</strong>
           </div>
           <div className="cost-bar-track">
             <span className="cost-budget" style={{ width: `${((record.budget_usd ?? record.measured_cost) / maximum) * 100}%` }} />
@@ -291,7 +344,7 @@ function CostTable({ costs }: { costs: CostReadModel[] }) {
   return (
     <div className="table-scroll" tabIndex={0}>
       <table className="record-table cost-table" aria-label="Campaign and agent accounting records">
-        <thead><tr><th>Campaign</th><th>Source</th><th>Profile</th><th>Requests</th><th>Executions</th><th>Attempts</th><th>Observed tokens</th><th>Cost / request</th><th>Total</th><th>Run time</th></tr></thead>
+        <thead><tr><th>Campaign</th><th>Source</th><th>Profile</th><th>Requests</th><th>Executions</th><th>Attempts</th><th>Confirmed findings</th><th>Observed tokens</th><th>Role p50</th><th>Role p95</th><th>Cost / request</th><th>Total</th><th>Run time</th></tr></thead>
         <tbody>
           {costs.map((record) => (
             <tr key={record.accounting_id}>
@@ -301,9 +354,12 @@ function CostTable({ costs }: { costs: CostReadModel[] }) {
               <td className="mono">{count(record.request_count)}</td>
               <td className="mono">{count(record.execution_count)}</td>
               <td className="mono">{count(record.attempt_count)}</td>
-              <td className="mono">{record.token_observation_count > 0 ? count((record.input_tokens ?? 0) + (record.output_tokens ?? 0)) : "Not observed"}</td>
+              <td className="mono">{count(record.confirmed_finding_count)}</td>
+              <td className="mono">{record.token_observation_count > 0 ? count((record.input_tokens ?? 0) + (record.output_tokens ?? 0)) : "Not reported by engine"}</td>
+              <td className="mono">{costRoleLatencyValue(record, "p50_duration_ms")}</td>
+              <td className="mono">{costRoleLatencyValue(record, "p95_duration_ms")}</td>
               <td className="mono">{record.agent_role ? "Not applicable" : money(record.average_cost_per_request)}</td>
-              <td className="mono">{money(record.measured_cost)}</td>
+              <td className="mono">{costValue(record)}</td>
               <td className="mono">{duration(record.duration_ms)}</td>
             </tr>
           ))}
@@ -324,6 +380,9 @@ function CostDashboard({ costs, traces, traceState }: { costs: CostReadModel[]; 
   const campaignCosts = costs.filter((record) => record.record_kind === "campaign");
   const campaignSpend = sum(campaignCosts.map((record) => record.measured_cost));
   const totalRequests = sum(campaignCosts.map((record) => record.request_count));
+  const confirmedFindings = sum(
+    campaignCosts.map((record) => record.confirmed_finding_count),
+  );
   const campaignBudgets = new Map<string, number>();
   for (const record of costs) {
     if (record.budget_usd !== null) {
@@ -338,15 +397,25 @@ function CostDashboard({ costs, traces, traceState }: { costs: CostReadModel[]; 
   const requestLedger = physicalRequests(traces);
   const agentCosts = costs.filter((record) => record.record_kind === "agent");
   const agentSpend = sum(agentCosts.map((record) => record.measured_cost));
+  const incompleteAgentAccounting = agentCosts.filter(
+    (record) => ["partial", "unavailable"].includes(record.accounting_status),
+  ).length;
   const requestCost = sum(requestLedger.map((trace) => trace.measured_cost));
   const reconciliationDelta = campaignSpend - requestCost;
 
   return (
     <>
       <MetricStrip label="Cost summary" values={[
-        { label: "Total measured spend", value: money(totalCost), note: `${money(campaignSpend)} campaign + ${money(agentSpend)} agents` },
+        { label: "Known measured spend", value: incompleteAgentAccounting ? `${money(totalCost)} known` : money(totalCost), note: `${money(campaignSpend)} campaign + ${money(agentSpend)} agents` },
         { label: "Physical request spend", value: money(requestCost), note: `${count(totalRequests)} requests accounted` },
-        { label: "Individual agent spend", value: money(agentSpend), note: `${count(agentCosts.length)} role-level records` },
+        { label: "Confirmed findings", value: count(confirmedFindings), note: "Campaign summary ledger" },
+        {
+          label: "Individual agent spend",
+          value: incompleteAgentAccounting ? `${money(agentSpend)} known` : money(agentSpend),
+          note: incompleteAgentAccounting
+            ? `${incompleteAgentAccounting} record(s) have incomplete provider accounting`
+            : `${count(agentCosts.length)} role-level records`,
+        },
         { label: "Approved budget used", value: totalBudget ? percent(budgetedSpend / totalBudget) : "—", note: totalBudget ? `${money(budgetedSpend)} of ${money(totalBudget)}` : "No budget projection available" },
       ]} />
       <div className="panel-grid observability-grid">
@@ -357,7 +426,7 @@ function CostDashboard({ costs, traces, traceState }: { costs: CostReadModel[]; 
         <Panel title="Loaded trace sample" meta="summary ledger vs newest trace rows" eyebrow="MEASURED TELEMETRY">
           <div className="reconciliation-grid">
             <div><span>Campaign summaries</span><strong className="mono">{money(campaignSpend)}</strong></div>
-            <div><span>Agent execution ledger</span><strong className="mono">{money(agentSpend)}</strong></div>
+            <div><span>Agent execution ledger</span><strong className="mono">{incompleteAgentAccounting ? `${money(agentSpend)} known` : money(agentSpend)}</strong></div>
             <div><span>Loaded request traces</span><strong className="mono">{money(requestCost)}</strong></div>
             <div><span>Summary minus loaded sample</span><strong className="mono">{money(reconciliationDelta)}</strong></div>
             <div><span>Trace projection</span><strong className="mono">{traceState}</strong></div>
@@ -370,7 +439,7 @@ function CostDashboard({ costs, traces, traceState }: { costs: CostReadModel[]; 
       </Panel>
       <StateNotice
         state="empty"
-        detail="Langfuse receives explicit per-agent cost details and provider usage when available. Deterministic agents record an observed $0.00; black-box target requests never use a synthetic tokens × rate estimate."
+        detail="Langfuse receives explicit per-agent cost details and provider usage when available. Deterministic agents record a measured $0.00; black-box target requests never use a synthetic tokens × rate estimate."
       />
     </>
   );
@@ -380,7 +449,7 @@ export function TracesScreen({ client }: { client: ApiClient }) {
   const traces = useResource<TraceReadModel[]>(client, RESOURCE_PATHS.traces, decodeTraces);
   return (
     <div className="screen-stack">
-      <ScreenHeading title="Traces" detail="Every agent execution and physical target request is correlated across campaign, attempt, durable ledger and Langfuse." eyebrow="HEADSHOT OBSERVABILITY" />
+      <ScreenHeading title="Traces" detail="A bounded newest-first drill-in of recent agent executions and physical target requests, correlated across campaign, attempt, durable ledger and Langfuse with PostgreSQL-backed canonical-role latency and spend." eyebrow="HEADSHOT OBSERVABILITY" />
       <ResourceView result={traces.result} emptyLabel="No request or agent telemetry has been recorded yet.">
         {(data) => <TraceDashboard traces={data} />}
       </ResourceView>
@@ -393,7 +462,7 @@ export function CostsScreen({ client }: { client: ApiClient }) {
   const traces = useResource<TraceReadModel[]>(client, RESOURCE_PATHS.traces, decodeTraces);
   return (
     <div className="screen-stack">
-      <ScreenHeading title="Costs" detail="Measured campaign spend, approved budget utilization, request economics and ledger reconciliation—without token-cost estimates." eyebrow="HEADSHOT OBSERVABILITY" />
+      <ScreenHeading title="Costs" detail="Measured campaign and agent spend, canonical-role p50/p95 latency, approved budget utilization and ledger reconciliation—without token-cost estimates." eyebrow="HEADSHOT OBSERVABILITY" />
       <ResourceView result={costs.result} emptyLabel="No measured campaign accounting records are available.">
         {(data) => <CostDashboard costs={data} traces={traceData(traces.result)} traceState={traces.result.state} />}
       </ResourceView>

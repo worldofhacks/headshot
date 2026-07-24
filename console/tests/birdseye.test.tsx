@@ -101,6 +101,7 @@ const snapshot: BirdseyeSnapshotReadModel = {
       p95_latency_ms: null,
       execution_count: null,
       measured_cost_usd: null,
+      accounting_status: null,
       currency: null,
       input_tokens: null,
       output_tokens: null,
@@ -110,6 +111,8 @@ const snapshot: BirdseyeSnapshotReadModel = {
       langfuse_queued_count: null,
       langfuse_exported_count: null,
       langfuse_error_count: null,
+      langfuse_verified_count: null,
+      last_langfuse_verified_at: null,
       langfuse_status: null,
       queue_depth: null,
       target_access: "none",
@@ -132,6 +135,7 @@ const snapshot: BirdseyeSnapshotReadModel = {
       p95_latency_ms: 40,
       execution_count: null,
       measured_cost_usd: null,
+      accounting_status: null,
       currency: null,
       input_tokens: null,
       output_tokens: null,
@@ -141,6 +145,8 @@ const snapshot: BirdseyeSnapshotReadModel = {
       langfuse_queued_count: null,
       langfuse_exported_count: null,
       langfuse_error_count: null,
+      langfuse_verified_count: null,
+      last_langfuse_verified_at: null,
       langfuse_status: null,
       queue_depth: 3,
       target_access: "policy-gated",
@@ -163,15 +169,18 @@ const snapshot: BirdseyeSnapshotReadModel = {
       p95_latency_ms: 280,
       execution_count: 4,
       measured_cost_usd: 0.04,
+      accounting_status: "measured",
       currency: "USD",
       input_tokens: 120,
       output_tokens: 36,
       token_observation_count: 4,
       langfuse_not_attempted_count: 0,
       langfuse_disabled_count: 0,
-      langfuse_queued_count: 0,
-      langfuse_exported_count: 4,
+      langfuse_queued_count: 1,
+      langfuse_exported_count: 3,
       langfuse_error_count: 0,
+      langfuse_verified_count: 3,
+      last_langfuse_verified_at: at,
       langfuse_status: "exported",
       queue_depth: null,
       target_access: "policy-gated-through-runner",
@@ -234,15 +243,42 @@ describe("Birdseye", () => {
     expect(screen.getByText("18.0 ms / 40.0 ms")).toBeTruthy();
     expect(screen.getByText("policy-gated")).toBeTruthy();
 
-    fireEvent.click(screen.getByRole("button", { name: /Red Team/ }));
+    const redTeamNodes = screen.getAllByRole("button", { name: /Red Team/ });
+    fireEvent.click(redTeamNodes[redTeamNodes.length - 1]);
     expect(screen.getByText("125.0 ms / 280.0 ms")).toBeTruthy();
     expect(screen.getByText("$0.0400")).toBeTruthy();
     expect(screen.getByText("120 / 36 · 4 observation(s)")).toBeTruthy();
-    expect(screen.getByText("4 submitted")).toBeTruthy();
+    expect(screen.getByText("3 observed · 1 awaiting remote verification")).toBeTruthy();
+    expect(screen.getByText("Last Langfuse query-back")).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", {
       name: /Campaign authorization requires a decision/,
     }));
     expect(openAttention).toHaveBeenCalledWith(snapshot.attention[0]);
+  });
+
+  it("does not render unavailable hosted accounting as zero spend", () => {
+    const agent = snapshot.nodes[2];
+    const unavailable = {
+      ...agent,
+      detail: "openrouter/hosted-model · hosted_advisory",
+      measured_cost_usd: 0,
+      accounting_status: "unavailable" as const,
+      input_tokens: null,
+      output_tokens: null,
+      token_observation_count: 0,
+    };
+    render(
+      <Birdseye
+        snapshot={{ ...snapshot, nodes: [unavailable] }}
+        stream={{ state: "ready", data: [], cursor: 9 }}
+        onOpenAttention={vi.fn()}
+      />,
+    );
+
+    const unavailableRedTeamNodes = screen.getAllByRole("button", { name: /Red Team/ });
+    fireEvent.click(unavailableRedTeamNodes[unavailableRedTeamNodes.length - 1]);
+    expect(screen.getByText("Unavailable")).toBeTruthy();
+    expect(screen.queryByText("$0.0000")).toBeNull();
   });
 });

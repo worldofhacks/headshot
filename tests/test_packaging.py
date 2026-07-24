@@ -190,7 +190,7 @@ def test_wheel_installed_outside_repo_validates_corpus(tmp_path):
     # Copy ONLY the corpus DATA into the temp dir. The schemas are intentionally NOT copied —
     # they must be resolved from the installed package.
     corpus_dir = tmp_path / "corpus"
-    for subdir in ("seeds", "ground-truth", "fixtures"):
+    for subdir in ("seeds", "drafts", "ground-truth", "fixtures"):
         shutil.copytree(_CORPUS_ROOT / subdir, corpus_dir / subdir)
 
     # Run the installed console from a CWD outside the repo.

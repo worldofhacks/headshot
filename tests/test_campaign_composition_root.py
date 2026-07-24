@@ -1,18 +1,9 @@
-"""Composition-root integration tests — the ACTUAL ``python -m agentforge.campaign run …`` command.
+"""Legacy campaign entry-point tests.
 
-Anchors: M11-coordinator composition root (``agentforge.campaign.__main__`` + ``runtime.py``). The
-rest of the campaign suite drives the injection-driven ``cli.main`` in-process with fakes; NONE of
-it invokes the real module entry, so a non-runnable entry (the old ``exit 2`` guard that built no
-dependencies) sailed through CI green. These tests close that gap by launching the documented
-command as a SUBPROCESS and asserting it is genuinely runnable — it constructs its real production
-dependencies (a real engine, a real live-adapter factory, a real clock, real accounting) and reaches
-the fail-closed AUTHORIZATION gate — rather than refusing for want of an injected wiring.
-
-**No network, by construction.** Every case here drives the command down a PRE-DISPATCH path: with
-no authorization the coordinator BLOCKS at the authorization gate (step 1) — before the credential
-is resolved, before the gateway dispatches, before the lazy adapter/engine ever open a socket. The
-real target is never contacted. A missing ``DATABASE_URL`` fails even earlier, at composition. So
-the command runs for real, yet no socket to the target or the DB is ever opened.
+The actual ``python -m agentforge.campaign run …`` command must refuse before reading local run
+inputs, credentials, database configuration, or constructing a target adapter. ``scope`` remains a
+network-free authorization-request authoring command. The private durable Railway Runner is the
+only operational live executor.
 """
 
 from __future__ import annotations
@@ -97,16 +88,9 @@ def _repo_root() -> Path:
     return Path(__file__).resolve().parent.parent
 
 
-def test_run_command_composes_real_deps_and_reaches_the_authorization_gate(tmp_path: Path) -> None:
-    """The documented command is RUNNABLE: it builds its real production dependencies and reaches
-    the fail-closed AUTHORIZATION gate, refusing (exit 1) because no grant was supplied — NOT exit 2
-    for want of an injected wiring.
+def test_run_command_refuses_before_runtime_composition(tmp_path: Path) -> None:
+    """Even a present database URL cannot reactivate the retired direct-live path."""
 
-    This is the proof the composition root exists: previously ``python -m agentforge.campaign``
-    exited 2 unconditionally (it constructed nothing). Now it composes the engine + live-adapter
-    factory + clock + accounting and runs the coordinator, which blocks at the authorization gate.
-    No network is opened — the block precedes any dispatch.
-    """
     binding, caps = _write_run_inputs(tmp_path)
     env = {"DATABASE_URL": _PRESENT_DATABASE_URL}
     completed = subprocess.run(
@@ -119,29 +103,21 @@ def test_run_command_composes_real_deps_and_reaches_the_authorization_gate(tmp_p
     )
 
     stderr = completed.stderr.lower()
-    # It is RUNNABLE and GATED: a fail-closed authorization refusal (exit 1), not the old
-    # "not wired" exit 2, and not a crash.
-    assert completed.returncode == 1, (
-        f"expected a fail-closed authorization refusal (exit 1); got {completed.returncode}. "
+    assert completed.returncode == 2, (
+        f"expected a fail-closed retired-entry refusal (exit 2); got {completed.returncode}. "
         f"stderr={completed.stderr!r}"
     )
-    assert "refused" in stderr
-    assert "authoriz" in stderr  # blocked at the authorization gate
-    # The OLD non-runnable guard message must be GONE — the entry no longer refuses to wire itself.
-    assert "requires an explicit authorized wiring" not in stderr
-    # Nothing dispatched: no run-config manifest is written for a run refused at the gate.
+    assert "legacy live execution is disabled" in stderr
+    assert "durablecampaignrunner" in stderr
+    assert "langfuse" in stderr
     assert not (tmp_path / "runs").exists() or not any((tmp_path / "runs").rglob("config.json"))
 
 
-def test_run_command_missing_database_url_is_a_fail_closed_operational_error(
+def test_run_command_does_not_inspect_database_configuration(
     tmp_path: Path,
 ) -> None:
-    """A missing ``DATABASE_URL`` fails closed at COMPOSITION with a typed operational error (exit
-    2) and a legible message — the bounded run never launches against an unspecified evidence store.
+    """The same refusal occurs without ``DATABASE_URL`` because no runtime is composed."""
 
-    This is distinct from the authorization refusal above (exit 1): the composition root refuses to
-    build a runtime it cannot specify, rather than silently defaulting to some database.
-    """
     binding, caps = _write_run_inputs(tmp_path)
     completed = subprocess.run(
         _run_argv(binding, caps, tmp_path / "runs"),
@@ -153,12 +129,13 @@ def test_run_command_missing_database_url_is_a_fail_closed_operational_error(
     )
 
     assert completed.returncode == 2, (
-        f"expected an operational error (exit 2) for a missing DATABASE_URL; "
+        f"expected a retired-entry refusal (exit 2); "
         f"got {completed.returncode}. stderr={completed.stderr!r}"
     )
     stderr = completed.stderr.lower()
     assert "operational-error" in stderr
-    assert "database_url" in stderr
+    assert "legacy live execution is disabled" in stderr
+    assert "database_url" not in stderr
 
 
 def test_scope_command_runs_without_a_database_url(tmp_path: Path) -> None:

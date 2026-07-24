@@ -1,4 +1,4 @@
-"""agentforge.campaign — the minimal SECURE live-path coordinator + authorized bounded-run CLI.
+"""Secure campaign-coordinator primitives used by the private durable Runner.
 
 M11-coordinator. This package binds the landed platform components (M4 PolicyGateway +
 ExecutionRecorder, M5 OpenEmrAdapter, M8 seed_replay, M9 Judge / EvidenceEnvelope / CanaryOracle,
@@ -16,6 +16,10 @@ never imported at package import time, never constructed under test. Credentials
 :class:`~agentforge.secrets.Secret` ONLY at the verified dispatch boundary, via
 :meth:`~agentforge.config.Settings.resolve_target_credential` (O1). Manifests are immutable,
 content-hashed, and redacted.
+
+The former local-file bounded-run CLI is retired. Operational live execution enters through the
+authenticated Railway control plane and durable queue so agent, target-request, cost, and Langfuse
+telemetry cannot be bypassed.
 """
 
 from __future__ import annotations

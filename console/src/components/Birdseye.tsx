@@ -50,14 +50,35 @@ const age = (seconds: number | null) => {
   return `${Math.round(seconds / 3_600)}h`;
 };
 
-const latency = (value: number | null) =>
-  value === null ? "Not observed" : `${value.toFixed(1)} ms`;
+const latencySummary = (node: BirdseyeNodeReadModel) => {
+  if (node.p50_latency_ms !== null && node.p95_latency_ms !== null) {
+    return `${node.p50_latency_ms.toFixed(1)} ms / ${node.p95_latency_ms.toFixed(1)} ms`;
+  }
+  if (node.kind.startsWith("agent:")) {
+    if (node.execution_count === 0) return "Not yet executed";
+    if (node.runtime_state === "working") return "No completed execution yet";
+    return "Unavailable";
+  }
+  return "Not observed";
+};
+
+const agentSpend = (node: BirdseyeNodeReadModel) => {
+  if (node.accounting_status === "unavailable") return "Unavailable";
+  if (node.accounting_status === "partial") {
+    return `${money(node.measured_cost_usd ?? 0)} known`;
+  }
+  if (node.accounting_status === "not_applicable" || node.measured_cost_usd === null) {
+    return "Not applicable";
+  }
+  return money(node.measured_cost_usd);
+};
 
 const langfuseDelivery = (node: BirdseyeNodeReadModel) => {
-  if (node.execution_count === null || node.execution_count === 0) return "Not observed";
+  if (node.execution_count === null || node.execution_count === 0) return "No executions";
+  const verified = node.langfuse_verified_count ?? 0;
   const states = [
-    ["submitted", node.langfuse_exported_count],
-    ["queued", node.langfuse_queued_count],
+    ["observed", verified],
+    ["awaiting remote verification", node.langfuse_queued_count],
     ["error", node.langfuse_error_count],
     ["disabled", node.langfuse_disabled_count],
     ["not attempted", node.langfuse_not_attempted_count],
@@ -515,20 +536,13 @@ function NodeInspector({ node }: { node: BirdseyeNodeReadModel | null }) {
           <dd className="mono">{node.healthy_instances}/{node.total_instances}</dd>
         </div>
         <div>
-          <dt>p50 / p95</dt>
-          <dd className="mono">
-            {latency(node.p50_latency_ms)} / {latency(node.p95_latency_ms)}
-          </dd>
+          <dt>{node.kind.startsWith("agent:") ? "Campaign p50 / p95" : "p50 / p95"}</dt>
+          <dd className="mono">{latencySummary(node)}</dd>
         </div>
         {node.execution_count !== null && (
           <>
-            <div><dt>Observed executions</dt><dd className="mono">{count(node.execution_count)}</dd></div>
-            <div>
-              <dt>Measured agent spend</dt>
-              <dd className="mono">
-                {node.measured_cost_usd === null ? "Not observed" : money(node.measured_cost_usd)}
-              </dd>
-            </div>
+            <div><dt>Campaign executions</dt><dd className="mono">{count(node.execution_count)}</dd></div>
+            <div><dt>Campaign known spend</dt><dd className="mono">{agentSpend(node)}</dd></div>
             <div>
               <dt>Input / output tokens</dt>
               <dd className="mono">
@@ -540,6 +554,14 @@ function NodeInspector({ node }: { node: BirdseyeNodeReadModel | null }) {
             <div>
               <dt>Langfuse delivery</dt>
               <dd className="mono">{langfuseDelivery(node)}</dd>
+            </div>
+            <div>
+              <dt>Last Langfuse query-back</dt>
+              <dd className="mono">
+                {node.last_langfuse_verified_at
+                  ? time(node.last_langfuse_verified_at)
+                  : "Not yet observed remotely"}
+              </dd>
             </div>
           </>
         )}

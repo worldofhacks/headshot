@@ -163,7 +163,7 @@ function CampaignAttempts({
                   { key: "ordinal", label: "Ordinal", mono: true },
                   { key: "case_id", label: "Case", mono: true },
                   { key: "verdict", label: "Server verdict" },
-                  { key: "executed_at", label: "Executed", mono: true },
+                  { key: "executed_at", label: "Executed", mono: true, timestamp: true },
                 ]}
                 onSelect={(record) => {
                   const attemptId = identity(record, ["attempt_id"]);
@@ -401,7 +401,7 @@ export function LiveScreen({ client, principal, entityId, getToken }: ScreenProp
                 { key: "state", label: "State" },
                 { key: "scope_hash", label: "Operation hash", mono: true },
                 { key: "attempt_count", label: "Attempts", mono: true },
-                { key: "created_at", label: "Created", mono: true },
+                { key: "created_at", label: "Created", mono: true, timestamp: true },
               ]}
               onSelect={setSelectedCampaign}
             />
@@ -459,7 +459,7 @@ export function LiveScreen({ client, principal, entityId, getToken }: ScreenProp
                   { key: "kind", label: "Kind" },
                   { key: "availability", label: "Server state" },
                   { key: "detail", label: "Evidence" },
-                  { key: "heartbeat_at", label: "Heartbeat", mono: true },
+                  { key: "heartbeat_at", label: "Heartbeat", mono: true, timestamp: true },
                 ]}
               />
             )}
@@ -552,7 +552,7 @@ function VerificationChain({
         <div>
           <p className="field-label">Input sequence · identifiers redacted</p>
           {verification.input_sequence.map((turn, index) => (
-            <AdversarialText key={`${index}:${turn}`}>{`${index + 1}. ${turn}`}</AdversarialText>
+            <AdversarialText key={index}>{`${index + 1}. ${turn}`}</AdversarialText>
           ))}
         </div>
       )}
@@ -583,7 +583,12 @@ function VerificationChain({
               "state",
               "confidence",
               "confirmation_source",
+              "oracle_refs",
+              "canary_refs",
               "reason_codes",
+              "rationale",
+              "rationale_availability",
+              "rationale_detail",
               "error_code",
             ]}
           />
@@ -594,7 +599,7 @@ function VerificationChain({
           <p className="field-label">Minimal reproduction · draft only</p>
           <ol>
             {verification.minimal_reproduction.map((step, index) => (
-              <li key={`${index}:${step}`}><AdversarialText>{step}</AdversarialText></li>
+              <li key={index}><AdversarialText>{step}</AdversarialText></li>
             ))}
           </ol>
         </div>
@@ -692,7 +697,7 @@ function FindingDetail({
                     { key: "decision", label: "Decision" },
                     { key: "actor_user_id", label: "Actor", mono: true },
                     { key: "rationale", label: "Rationale" },
-                    { key: "created_at", label: "Occurred", mono: true },
+                    { key: "created_at", label: "Occurred", mono: true, timestamp: true },
                   ]}
                 />
               </div>
@@ -760,16 +765,17 @@ export function FindingsScreen({ client, principal, entityId }: ScreenProps) {
         {(data) => {
           const elevated = data.filter((finding) => ["critical", "high"].includes(finding.severity.toLowerCase())).length;
           const published = data.filter((finding) => isPublished(finding.publication_status)).length;
+          const categories = data.map((finding) => finding.category ?? "unavailable");
           const integrityVerified = data.filter(
             (finding) => finding.evidence_integrity === "verified",
           ).length;
           return (
             <>
               <MetricStrip label="Finding summary" values={[
-                { label: "Persisted findings", value: count(data.length), note: `${unique(data.map((finding) => finding.category)).length} categories` },
+                { label: "Persisted findings", value: count(data.length), note: `${unique(categories).length} category labels` },
                 { label: "Critical / high", value: count(elevated), note: `${percent(data.length ? elevated / data.length : 0)} of register` },
                 { label: "Published after approval", value: count(published), note: `${data.length - published} draft, gated, or withheld` },
-                { label: "Evidence verified", value: `${integrityVerified}/${data.length}`, note: "server integrity state" },
+                { label: "Evidence verified", value: `${integrityVerified}/${data.length}`, note: "record or artifact binding" },
               ]} />
               <div className="panel-grid analytical-grid">
                 <Panel title="Risk distribution" meta="server severity" eyebrow="FINDING POSTURE">
@@ -784,7 +790,7 @@ export function FindingsScreen({ client, principal, entityId }: ScreenProps) {
               </div>
               <Panel title="Taxonomy and provenance" meta="normalized evidence" eyebrow="FINDING POSTURE">
                 <TagMatrix groups={[
-                  { label: "Categories", values: unique(data.map((finding) => finding.category)) },
+                  { label: "Categories", values: unique(categories) },
                   { label: "Sources", values: unique(data.map((finding) => finding.source_kind)) },
                   { label: "Provenance", values: unique(data.map((finding) => finding.evidence_provenance)) },
                   { label: "Execution profiles", values: unique(data.map((finding) => finding.execution_profile)) },
@@ -937,7 +943,7 @@ export function ApprovalsScreen({ client, principal, entityId }: ScreenProps) {
                     { key: "target_id", label: "Target", mono: true },
                     { key: "scope_hash", label: "Operation hash", mono: true },
                     { key: "launcher_user_id", label: "Launcher", mono: true },
-                    { key: "expires_at", label: "Expires", mono: true },
+                    { key: "expires_at", label: "Expires", mono: true, timestamp: true },
                   ]}
                   onSelect={(record) => {
                     const id = identity(record, ["request_id", "approval_id"]);
@@ -1176,10 +1182,18 @@ function TargetManagement({
   // caps or a nonce. The nonce is freshly generated per mount (unused → replay-safe); every
   // field stays editable, and the server still validates caps against the target's ceiling.
   const [runNonce, setRunNonce] = useState(() => `live-${globalThis.crypto.randomUUID()}`);
-  const [budgetUsd, setBudgetUsd] = useState("1");
-  const [maxAttempts, setMaxAttempts] = useState(() => String(template?.case_count ?? 9));
-  const [requestsPerSecond, setRequestsPerSecond] = useState("1");
-  const [timeoutSeconds, setTimeoutSeconds] = useState("900");
+  const [budgetUsd, setBudgetUsd] = useState(
+    () => template ? String(template.maximum_caps.budget_usd) : "",
+  );
+  const [maxAttempts, setMaxAttempts] = useState(
+    () => template ? String(template.case_count) : "",
+  );
+  const [requestsPerSecond, setRequestsPerSecond] = useState(
+    () => template ? String(template.maximum_caps.target_requests_per_second) : "",
+  );
+  const [timeoutSeconds, setTimeoutSeconds] = useState(
+    () => template ? String(template.maximum_caps.run_timeout_seconds) : "",
+  );
   const parsedCaps = {
     budget_usd: Number(budgetUsd),
     max_attempts_per_run: Number(maxAttempts),
@@ -1387,6 +1401,7 @@ export function TargetsScreen({ client, principal }: ScreenProps) {
       </Panel>
       {selected && (
         <TargetManagement
+          key={`${selected.target_id}:${selected.version}`}
           client={client}
           principal={principal}
           selected={selected}
@@ -1433,7 +1448,7 @@ function AuditHistory({ client }: { client: ApiClient }) {
                 { key: "event_type", label: "Event" },
                 { key: "actor_user_id", label: "Actor", mono: true },
                 { key: "aggregate_id", label: "Resource", mono: true },
-                { key: "created_at", label: "Occurred", mono: true },
+                { key: "created_at", label: "Occurred", mono: true, timestamp: true },
               ]}
             />
           </div>

@@ -110,6 +110,34 @@ const nullableNumber = (value: JsonRecord, key: string, name: string): number | 
   return number(value, key, name);
 };
 
+const nullableNonnegativeInteger = (
+  value: JsonRecord,
+  key: string,
+  name: string,
+): number | null => {
+  if (value[key] === null) return null;
+  return number(value, key, name, { integer: true, minimum: 0 });
+};
+
+const validateTokenObservation = (
+  inputTokens: number | null,
+  outputTokens: number | null,
+  observationCount: number,
+  name: string,
+): void => {
+  if (
+    (observationCount === 0 && (inputTokens !== null || outputTokens !== null)) ||
+    (observationCount > 0 && inputTokens === null && outputTokens === null)
+  ) {
+    invalid(name);
+  }
+};
+
+const sha256 = (value: JsonRecord, key: string, name: string): string => {
+  const candidate = string(value, key, name);
+  return /^[0-9a-f]{64}$/.test(candidate) ? candidate : invalid(name);
+};
+
 const boolean = (value: JsonRecord, key: string, name: string): boolean => {
   const candidate = value[key];
   if (typeof candidate !== "boolean") return invalid(name);
@@ -186,11 +214,19 @@ const decodeCaps = (value: unknown): SafetyCapsReadModel => {
     "max_attempts_per_run",
     "target_requests_per_second",
     "run_timeout_seconds",
+    "logical_case_limit",
+    "physical_request_limit",
+    "target_retries_per_turn",
   ], name);
   number(result, "budget_usd", name);
   number(result, "max_attempts_per_run", name, { integer: true });
   number(result, "target_requests_per_second", name);
   number(result, "run_timeout_seconds", name);
+  for (const key of ["logical_case_limit", "physical_request_limit"]) {
+    const value = nullableNonnegativeInteger(result, key, name);
+    if (value === 0) invalid(name);
+  }
+  nullableNonnegativeInteger(result, "target_retries_per_turn", name);
   return result as SafetyCapsReadModel;
 };
 
@@ -518,6 +554,11 @@ const decodeFindingVerification = (value: unknown): FindingVerificationReadModel
       "confidence",
       "reason_codes",
       "confirmation_source",
+      "oracle_refs",
+      "canary_refs",
+      "rationale",
+      "rationale_availability",
+      "rationale_detail",
       "error_code",
     ], "Judge basis");
     string(judge, "state", "Judge basis");
@@ -526,12 +567,17 @@ const decodeFindingVerification = (value: unknown): FindingVerificationReadModel
       invalid("Judge basis");
     }
     stringArray(judge, "reason_codes", "Judge basis");
+    stringArray(judge, "oracle_refs", "Judge basis");
+    stringArray(judge, "canary_refs", "Judge basis");
     nullableLiteral(
       judge,
       "confirmation_source",
       ["oracle", "canary", "calibrated_model", "human"],
       "Judge basis",
     );
+    nullableString(judge, "rationale", "Judge basis");
+    literal(judge, "rationale_availability", ["unavailable"], "Judge basis");
+    string(judge, "rationale_detail", "Judge basis");
     nullableString(judge, "error_code", "Judge basis");
   }
   const regression = nullableObject(result, "regression", name);
@@ -569,18 +615,30 @@ const decodeFindingRecord = (
     "finding_id",
     "state",
     "severity",
-    "category",
-    "target_version",
     "publication_status",
     "source_kind",
     "evidence_provenance",
-    "evidence_content_hash",
   ]) {
     string(result, key, name);
   }
+  nullableString(result, "category", name);
+  nullableString(result, "target_version", name);
+  const evidenceContentHash = nullableString(result, "evidence_content_hash", name);
   nullableString(result, "campaign_run_id", name);
   nullableString(result, "attempt_id", name);
-  literal(result, "evidence_integrity", ["verified"], name);
+  const evidenceIntegrity = literal(
+    result,
+    "evidence_integrity",
+    ["verified", "unavailable"],
+    name,
+  );
+  if (
+    (evidenceIntegrity === "verified" &&
+      (evidenceContentHash === null || !/^[0-9a-f]{64}$/.test(evidenceContentHash))) ||
+    (evidenceIntegrity === "unavailable" && evidenceContentHash !== null)
+  ) {
+    invalid(name);
+  }
   literal(result, "execution_profile", ["synthetic", "live"], name);
   result.history = records(result.history, "finding history", decodeFindingHistory);
   if (detail) result.verification = decodeFindingVerification(result.verification);
@@ -748,10 +806,14 @@ const decodeTrace = (value: unknown): TraceReadModel => {
     "request_bytes",
     "response_bytes",
     "measured_cost",
+    "accounting_status",
     "currency",
     "input_tokens",
     "output_tokens",
+    "p50_duration_ms",
+    "p95_duration_ms",
     "langfuse_status",
+    "langfuse_verified_at",
     "request_preview",
     "response_preview",
     "request_sha256",
@@ -759,7 +821,21 @@ const decodeTrace = (value: unknown): TraceReadModel => {
     "inspection_flags",
     "inspection_owasp_mappings",
   ], name);
-  for (const key of ["trace_id", "campaign_id", "operation", "provider", "status", "currency", "langfuse_status"]) string(result, key, name);
+  for (const key of ["trace_id", "campaign_id", "operation", "provider", "status", "currency"]) string(result, key, name);
+  const langfuseVerifiedAt = nullableTimestamp(result, "langfuse_verified_at", name);
+  literal(
+    result,
+    "langfuse_status",
+    [
+      "not_attempted",
+      "disabled",
+      "queued",
+      "exported",
+      "error",
+      "historical_not_instrumented",
+    ],
+    name,
+  );
   nullableLiteral(result, "agent_role", agentRoles, name);
   nullableLiteral(result, "execution_mode", ["deterministic", "hosted_advisory"], name);
   for (const key of ["request_id", "execution_id", "parent_execution_id", "attempt_id", "method", "destination_host", "relative_path", "error_code", "request_preview", "response_preview", "request_sha256", "response_sha256"]) nullableString(result, key, name);
@@ -770,8 +846,45 @@ const decodeTrace = (value: unknown): TraceReadModel => {
   number(result, "request_bytes", name, { integer: true, minimum: 0 });
   if (result.response_bytes !== null) number(result, "response_bytes", name, { integer: true, minimum: 0 });
   number(result, "measured_cost", name, { minimum: 0 });
+  const accountingStatus = literal(
+    result,
+    "accounting_status",
+    ["measured", "unavailable"],
+    name,
+  );
   nullableNumber(result, "input_tokens", name);
   nullableNumber(result, "output_tokens", name);
+  const p50Duration = nullableNumber(result, "p50_duration_ms", name);
+  const p95Duration = nullableNumber(result, "p95_duration_ms", name);
+  if (
+    (p50Duration !== null && p50Duration < 0) ||
+    (p95Duration !== null && p95Duration < 0)
+  ) {
+    invalid(name);
+  }
+  if (result.agent_role === null && (p50Duration !== null || p95Duration !== null)) {
+    invalid(name);
+  }
+  if ((p50Duration === null) !== (p95Duration === null)) invalid(name);
+  if (p50Duration !== null && p95Duration !== null && p50Duration > p95Duration) {
+    invalid(name);
+  }
+  if (
+    result.agent_role !== null &&
+    result.finished_at !== null &&
+    (p50Duration === null || p95Duration === null)
+  ) {
+    invalid(name);
+  }
+  if (
+    accountingStatus === "unavailable" &&
+    (result.measured_cost !== 0 ||
+      result.input_tokens !== null ||
+      result.output_tokens !== null)
+  ) {
+    invalid(name);
+  }
+  if ((result.langfuse_status === "exported") !== (langfuseVerifiedAt !== null)) invalid(name);
   stringArray(result, "inspection_flags", name);
   stringArray(result, "inspection_owasp_mappings", name);
   return result as TraceReadModel;
@@ -790,6 +903,7 @@ const decodeCost = (value: unknown): CostReadModel => {
     "agent_role",
     "record_kind",
     "measured_cost",
+    "accounting_status",
     "currency",
     "request_count",
     "execution_count",
@@ -799,6 +913,8 @@ const decodeCost = (value: unknown): CostReadModel => {
     "input_tokens",
     "output_tokens",
     "token_observation_count",
+    "p50_duration_ms",
+    "p95_duration_ms",
     "budget_usd",
     "budget_utilization",
     "duration_ms",
@@ -813,14 +929,59 @@ const decodeCost = (value: unknown): CostReadModel => {
   nullableLiteral(result, "agent_role", agentRoles, name);
   literal(result, "record_kind", ["campaign", "agent"], name);
   number(result, "measured_cost", name, { minimum: 0 });
+  const accountingStatus = literal(
+    result,
+    "accounting_status",
+    ["not_applicable", "measured", "partial", "unavailable"],
+    name,
+  );
   number(result, "request_count", name, { integer: true, minimum: 0 });
-  number(result, "execution_count", name, { integer: true, minimum: 0 });
+  const executionCount = number(
+    result,
+    "execution_count",
+    name,
+    { integer: true, minimum: 0 },
+  );
   number(result, "attempt_count", name, { integer: true, minimum: 0 });
   number(result, "confirmed_finding_count", name, { integer: true, minimum: 0 });
   number(result, "average_cost_per_request", name, { minimum: 0 });
-  nullableNumber(result, "input_tokens", name);
-  nullableNumber(result, "output_tokens", name);
-  number(result, "token_observation_count", name, { integer: true, minimum: 0 });
+  const inputTokens = nullableNonnegativeInteger(result, "input_tokens", name);
+  const outputTokens = nullableNonnegativeInteger(result, "output_tokens", name);
+  const tokenObservationCount = number(
+    result,
+    "token_observation_count",
+    name,
+    { integer: true, minimum: 0 },
+  );
+  validateTokenObservation(inputTokens, outputTokens, tokenObservationCount, name);
+  const p50Duration = nullableNumber(result, "p50_duration_ms", name);
+  const p95Duration = nullableNumber(result, "p95_duration_ms", name);
+  if (
+    (p50Duration !== null && p50Duration < 0) ||
+    (p95Duration !== null && p95Duration < 0) ||
+    (result.record_kind === "campaign" &&
+      (p50Duration !== null || p95Duration !== null)) ||
+    (result.record_kind === "agent" &&
+      ((executionCount === 0 &&
+        (p50Duration !== null || p95Duration !== null)) ||
+        (executionCount > 0 &&
+          (p50Duration === null || p95Duration === null)))) ||
+    (p50Duration !== null && p95Duration !== null && p50Duration > p95Duration)
+  ) {
+    invalid(name);
+  }
+  if (
+    ["partial", "unavailable"].includes(accountingStatus) &&
+    result.record_kind !== "agent"
+  ) {
+    invalid(name);
+  }
+  if (
+    accountingStatus === "unavailable" &&
+    (result.measured_cost !== 0 || tokenObservationCount !== 0)
+  ) {
+    invalid(name);
+  }
   nullableNumber(result, "budget_usd", name);
   nullableNumber(result, "budget_utilization", name);
   number(result, "duration_ms", name, { minimum: 0 });
@@ -1007,11 +1168,12 @@ const decodeAgentAssignment = (value: unknown): AgentAssignmentReadModel => {
   for (const key of [
     "provider",
     "model",
-    "resolved_model",
     "configuration_sha256",
   ]) string(result, key, name);
+  const resolvedModel = nullableString(result, "resolved_model", name);
+  const upstreamProvider = nullableString(result, "upstream_provider", name);
+  if ((resolvedModel === null) !== (upstreamProvider === null)) invalid(name);
   for (const key of [
-    "upstream_provider",
     "prompt_sha256",
     "prompt_version",
   ]) nullableString(result, key, name);
@@ -1042,6 +1204,7 @@ const decodeAgent = (value: unknown): AgentReadModel => {
     "failed_count",
     "skipped_count",
     "measured_cost",
+    "accounting_status",
     "currency",
     "input_tokens",
     "output_tokens",
@@ -1054,6 +1217,8 @@ const decodeAgent = (value: unknown): AgentReadModel => {
     "langfuse_queued_count",
     "langfuse_exported_count",
     "langfuse_error_count",
+    "langfuse_verified_count",
+    "last_langfuse_verified_at",
     "last_activity_at",
     "last_status",
     "last_campaign_run_id",
@@ -1073,7 +1238,7 @@ const decodeAgent = (value: unknown): AgentReadModel => {
   result.staged_assignment = result.staged_assignment === null
     ? null
     : decodeAgentAssignment(result.staged_assignment);
-  for (const key of [
+  const counters = Object.fromEntries([
     "execution_count",
     "running_count",
     "succeeded_count",
@@ -1085,13 +1250,79 @@ const decodeAgent = (value: unknown): AgentReadModel => {
     "langfuse_queued_count",
     "langfuse_exported_count",
     "langfuse_error_count",
-  ]) number(result, key, name, { integer: true, minimum: 0 });
+    "langfuse_verified_count",
+  ].map((key) => [
+    key,
+    number(result, key, name, { integer: true, minimum: 0 }),
+  ]));
   number(result, "measured_cost", name, { minimum: 0 });
-  nullableNumber(result, "input_tokens", name);
-  nullableNumber(result, "output_tokens", name);
-  nullableNumber(result, "average_duration_ms", name);
-  nullableNumber(result, "p50_duration_ms", name);
-  nullableNumber(result, "p95_duration_ms", name);
+  const accountingStatus = literal(
+    result,
+    "accounting_status",
+    ["not_applicable", "measured", "partial", "unavailable"],
+    name,
+  );
+  const inputTokens = nullableNonnegativeInteger(result, "input_tokens", name);
+  const outputTokens = nullableNonnegativeInteger(result, "output_tokens", name);
+  const averageDuration = nullableNumber(result, "average_duration_ms", name);
+  const p50Duration = nullableNumber(result, "p50_duration_ms", name);
+  const p95Duration = nullableNumber(result, "p95_duration_ms", name);
+  if (
+    [averageDuration, p50Duration, p95Duration].some(
+      (duration) => duration !== null && duration < 0,
+    )
+  ) {
+    invalid(name);
+  }
+  const executionCount = counters.execution_count;
+  const completedCount = (
+    counters.succeeded_count +
+    counters.failed_count +
+    counters.skipped_count
+  );
+  if (counters.running_count + completedCount !== executionCount) invalid(name);
+  if (
+    counters.langfuse_not_attempted_count +
+    counters.langfuse_disabled_count +
+    counters.langfuse_queued_count +
+    counters.langfuse_exported_count +
+    counters.langfuse_error_count !== executionCount
+  ) {
+    invalid(name);
+  }
+  if (counters.token_observation_count > executionCount) invalid(name);
+  if (counters.langfuse_verified_count !== counters.langfuse_exported_count) invalid(name);
+  const lastLangfuseVerifiedAt = nullableTimestamp(
+    result,
+    "last_langfuse_verified_at",
+    name,
+  );
+  if (
+    (counters.langfuse_verified_count === 0) !==
+    (lastLangfuseVerifiedAt === null)
+  ) {
+    invalid(name);
+  }
+  if ((executionCount === 0) !== (accountingStatus === "not_applicable")) invalid(name);
+  if (
+    accountingStatus === "unavailable" &&
+    (result.measured_cost !== 0 || counters.token_observation_count !== 0)
+  ) {
+    invalid(name);
+  }
+  validateTokenObservation(
+    inputTokens,
+    outputTokens,
+    counters.token_observation_count,
+    name,
+  );
+  const latencyValues = [averageDuration, p50Duration, p95Duration];
+  if (
+    (completedCount > 0 && latencyValues.some((duration) => duration === null)) ||
+    (completedCount === 0 && latencyValues.some((duration) => duration !== null))
+  ) {
+    invalid(name);
+  }
   nullableTimestamp(result, "last_activity_at", name);
   nullableString(result, "last_status", name);
   nullableString(result, "last_campaign_run_id", name);
@@ -1137,9 +1368,11 @@ const decodeAgentActivityRecord = (value: unknown): AgentActivityReadModel => {
     "input_tokens",
     "output_tokens",
     "measured_cost",
+    "accounting_status",
     "currency",
     "trace_id",
     "langfuse_status",
+    "langfuse_verified_at",
     "detail",
     "error_code",
     "started_at",
@@ -1151,11 +1384,11 @@ const decodeAgentActivityRecord = (value: unknown): AgentActivityReadModel => {
     "campaign_run_id",
     "provider",
     "model",
-    "input_sha256",
     "currency",
     "trace_id",
     "langfuse_status",
   ]) string(result, key, name);
+  sha256(result, "input_sha256", name);
   for (const key of [
     "attempt_id",
     "parent_execution_id",
@@ -1171,14 +1404,45 @@ const decodeAgentActivityRecord = (value: unknown): AgentActivityReadModel => {
     ["not_attempted", "disabled", "queued", "exported", "error"],
     name,
   );
+  const langfuseVerifiedAt = nullableTimestamp(result, "langfuse_verified_at", name);
+  if ((result.langfuse_status === "exported") !== (langfuseVerifiedAt !== null)) invalid(name);
   number(result, "configuration_version", name, { integer: true, minimum: 1 });
-  nullableNumber(result, "input_tokens", name);
-  nullableNumber(result, "output_tokens", name);
+  nullableNonnegativeInteger(result, "input_tokens", name);
+  nullableNonnegativeInteger(result, "output_tokens", name);
   number(result, "measured_cost", name, { minimum: 0 });
+  literal(result, "accounting_status", ["measured", "unavailable"], name);
+  const providerAccountingComplete =
+    result.input_tokens !== null && result.output_tokens !== null;
+  const expectedAccountingStatus =
+    result.execution_mode === "deterministic" || providerAccountingComplete
+      ? "measured"
+      : "unavailable";
+  if (result.accounting_status !== expectedAccountingStatus) invalid(name);
+  if (
+    result.accounting_status === "unavailable" &&
+    (result.measured_cost !== 0 ||
+      (result.input_tokens !== null && result.input_tokens !== 0) ||
+      (result.output_tokens !== null && result.output_tokens !== 0))
+  ) {
+    invalid(name);
+  }
   object(result, "detail", name);
   timestamp(result, "started_at", name);
-  nullableTimestamp(result, "finished_at", name);
-  nullableNumber(result, "duration_ms", name);
+  const finishedAt = nullableTimestamp(result, "finished_at", name);
+  const duration = nullableNumber(result, "duration_ms", name);
+  if (duration !== null && duration < 0) invalid(name);
+  const outputSha256 = result.output_sha256;
+  if (outputSha256 !== null && !/^[0-9a-f]{64}$/.test(outputSha256 as string)) {
+    invalid(name);
+  }
+  if (
+    (result.status === "running" &&
+      (outputSha256 !== null || finishedAt !== null || duration !== null)) ||
+    (result.status !== "running" &&
+      (outputSha256 === null || finishedAt === null || duration === null))
+  ) {
+    invalid(name);
+  }
   return result as AgentActivityReadModel;
 };
 
@@ -1214,6 +1478,9 @@ const decodeToolScope = (value: unknown): ToolScopeReadModel => {
     "recorded_scan_count",
     "recorded_finding_count",
     "last_executed_at",
+    "runtime_state",
+    "evidenced_finding_count",
+    "last_error_code",
   ], name);
   for (const key of [
     "tool_id",
@@ -1246,8 +1513,11 @@ const decodeToolScope = (value: unknown): ToolScopeReadModel => {
     "executed_attempt_count",
     "recorded_scan_count",
     "recorded_finding_count",
+    "evidenced_finding_count",
   ]) number(result, key, name, { integer: true, minimum: 0 });
+  literal(result, "runtime_state", ["idle", "running", "evidenced", "error"], name);
   nullableTimestamp(result, "last_executed_at", name);
+  nullableString(result, "last_error_code", name);
   return result as ToolScopeReadModel;
 };
 
@@ -1461,8 +1731,16 @@ const decodeBirdseyeAgentActivity = (
   ], name);
   literal(result, "status", ["running", "succeeded", "failed", "skipped"], name);
   timestamp(result, "started_at", name);
-  nullableTimestamp(result, "finished_at", name);
-  if (result.duration_ms !== null) number(result, "duration_ms", name, { minimum: 0 });
+  const finishedAt = nullableTimestamp(result, "finished_at", name);
+  const duration = result.duration_ms === null
+    ? null
+    : number(result, "duration_ms", name, { minimum: 0 });
+  if (
+    (result.status === "running" && (finishedAt !== null || duration !== null)) ||
+    (result.status !== "running" && (finishedAt === null || duration === null))
+  ) {
+    invalid(name);
+  }
   return result as BirdseyeAgentActivityReadModel;
 };
 
@@ -1487,6 +1765,7 @@ const decodeBirdseyeNode = (value: unknown): BirdseyeNodeReadModel => {
     "p95_latency_ms",
     "execution_count",
     "measured_cost_usd",
+    "accounting_status",
     "currency",
     "input_tokens",
     "output_tokens",
@@ -1496,6 +1775,8 @@ const decodeBirdseyeNode = (value: unknown): BirdseyeNodeReadModel => {
     "langfuse_queued_count",
     "langfuse_exported_count",
     "langfuse_error_count",
+    "langfuse_verified_count",
+    "last_langfuse_verified_at",
     "langfuse_status",
     "queue_depth",
     "target_access",
@@ -1538,31 +1819,123 @@ const decodeBirdseyeNode = (value: unknown): BirdseyeNodeReadModel => {
   boolean(result, "is_fresh", name);
   number(result, "healthy_instances", name, { integer: true, minimum: 0 });
   number(result, "total_instances", name, { integer: true, minimum: 1 });
-  for (const key of ["p50_latency_ms", "p95_latency_ms"]) {
-    if (result[key] !== null) number(result, key, name, { minimum: 0 });
-  }
-  if (result.execution_count !== null) {
-    number(result, "execution_count", name, { integer: true, minimum: 0 });
-  }
-  if (result.measured_cost_usd !== null) {
-    number(result, "measured_cost_usd", name, { minimum: 0 });
-  }
-  nullableString(result, "currency", name);
-  for (const key of [
-    "input_tokens",
-    "output_tokens",
+  const p50Latency = result.p50_latency_ms === null
+    ? null
+    : number(result, "p50_latency_ms", name, { minimum: 0 });
+  const p95Latency = result.p95_latency_ms === null
+    ? null
+    : number(result, "p95_latency_ms", name, { minimum: 0 });
+  const executionCount = nullableNonnegativeInteger(result, "execution_count", name);
+  const measuredCost = result.measured_cost_usd === null
+    ? null
+    : number(result, "measured_cost_usd", name, { minimum: 0 });
+  const accountingStatus = nullableLiteral(
+    result,
+    "accounting_status",
+    ["not_applicable", "measured", "partial", "unavailable"],
+    name,
+  );
+  const currency = nullableString(result, "currency", name);
+  const inputTokens = nullableNonnegativeInteger(result, "input_tokens", name);
+  const outputTokens = nullableNonnegativeInteger(result, "output_tokens", name);
+  const tokenObservationCount = nullableNonnegativeInteger(
+    result,
     "token_observation_count",
-    "langfuse_not_attempted_count",
-    "langfuse_disabled_count",
-    "langfuse_queued_count",
-    "langfuse_exported_count",
-    "langfuse_error_count",
-  ]) {
-    if (result[key] !== null) {
-      number(result, key, name, { integer: true, minimum: 0 });
+    name,
+  );
+  const deliveryCounts = [
+    nullableNonnegativeInteger(result, "langfuse_not_attempted_count", name),
+    nullableNonnegativeInteger(result, "langfuse_disabled_count", name),
+    nullableNonnegativeInteger(result, "langfuse_queued_count", name),
+    nullableNonnegativeInteger(result, "langfuse_exported_count", name),
+    nullableNonnegativeInteger(result, "langfuse_error_count", name),
+  ];
+  const langfuseVerifiedCount = nullableNonnegativeInteger(
+    result,
+    "langfuse_verified_count",
+    name,
+  );
+  const lastLangfuseVerifiedAt = nullableTimestamp(
+    result,
+    "last_langfuse_verified_at",
+    name,
+  );
+  const langfuseStatus = nullableLiteral(
+    result,
+    "langfuse_status",
+    ["not_attempted", "disabled", "queued", "exported", "error"],
+    name,
+  );
+  const isAgentNode = (result.kind as string).startsWith("agent:");
+  if (!isAgentNode) {
+    if (
+      [
+        executionCount,
+        measuredCost,
+        accountingStatus,
+        currency,
+        inputTokens,
+        outputTokens,
+        tokenObservationCount,
+        ...deliveryCounts,
+        langfuseVerifiedCount,
+        lastLangfuseVerifiedAt,
+        langfuseStatus,
+      ].some((metric) => metric !== null)
+    ) {
+      invalid(name);
+    }
+  } else {
+    if (
+      executionCount === null ||
+      tokenObservationCount === null ||
+      deliveryCounts.some((count) => count === null) ||
+      langfuseVerifiedCount === null ||
+      accountingStatus === null
+    ) {
+      invalid(name);
+    }
+    const agentExecutionCount = executionCount as number;
+    const agentTokenObservationCount = tokenObservationCount as number;
+    const agentLangfuseVerifiedCount = langfuseVerifiedCount as number;
+    const completeDeliveryCounts = deliveryCounts as number[];
+    const exportedCount = completeDeliveryCounts[3];
+    if (
+      completeDeliveryCounts.reduce((total, count) => total + count, 0) !==
+        agentExecutionCount ||
+      agentTokenObservationCount > agentExecutionCount ||
+      agentLangfuseVerifiedCount !== exportedCount ||
+      ((agentLangfuseVerifiedCount === 0) !== (lastLangfuseVerifiedAt === null)) ||
+      ((agentExecutionCount === 0) !== (accountingStatus === "not_applicable")) ||
+      (accountingStatus === "unavailable" &&
+        (measuredCost !== 0 || agentTokenObservationCount !== 0))
+    ) {
+      invalid(name);
+    }
+    validateTokenObservation(
+      inputTokens,
+      outputTokens,
+      agentTokenObservationCount,
+      name,
+    );
+    if (
+      (p50Latency === null) !== (p95Latency === null) ||
+      (agentExecutionCount === 0 && (p50Latency !== null || p95Latency !== null)) ||
+      (agentExecutionCount > 0 &&
+        ["ready", "error", "waiting"].includes(result.runtime_state as string) &&
+        (p50Latency === null || p95Latency === null))
+    ) {
+      invalid(name);
+    }
+    if (
+      (agentExecutionCount === 0 &&
+        (measuredCost !== null || currency !== null || langfuseStatus !== null)) ||
+      (agentExecutionCount > 0 &&
+        (measuredCost === null || currency === null || langfuseStatus === null))
+    ) {
+      invalid(name);
     }
   }
-  nullableString(result, "langfuse_status", name);
   if (result.queue_depth !== null) {
     number(result, "queue_depth", name, { integer: true, minimum: 0 });
   }

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime
 import hashlib
 import json
 from typing import Any
@@ -10,15 +11,16 @@ from fastapi.testclient import TestClient
 from sqlalchemy import Engine, text
 
 from agentforge.agents.hosted_prompts import hosted_prompt
-from agentforge.api.postgres import PostgresApiBackend, _safe
+from agentforge.api.postgres import PostgresApiBackend, _redact_evidence_display, _safe
 from agentforge.auth.config import ClerkAuthConfig
 from agentforge.auth.dependencies import get_clerk_auth_config, require_authenticated
 from agentforge.auth.principal import Principal
 from agentforge.campaign.corpus import load_full_scan_corpus
 from agentforge.control_plane import ControlPlaneStore
 from agentforge.correlation import campaign_trace_id
+from agentforge.policy.recorder import ExecutionRecorder
 from agentforge.security_tools.repository import SecurityToolEvidenceRepository
-from agentforge.target.spec import TargetLifecycle
+from agentforge.target.spec import SafetyCaps, TargetLifecycle
 from agentforge.web import WebSecurityConfig, create_web_app
 
 ORIGIN = "https://staging.headshot.example"
@@ -207,6 +209,110 @@ def _seed_ready_target(engine: Engine, principal: Principal) -> None:
         )
 
 
+def _seed_second_ready_target(engine: Engine, principal: Principal) -> None:
+    store = ControlPlaneStore(engine, environment="staging")
+    backend = PostgresApiBackend(engine, environment="staging")
+    target_payload = _target_payload()
+    target_payload.update(
+        {
+            "target_id": "copilot-api-b",
+            "name": "Clinical Co-Pilot secondary staging entry",
+            "base_url": "https://target-b.example.test/openemr",
+            "allowlisted_hosts": ["target-b.example.test"],
+            "credential_ref": "secretref://staging/copilot-api-b",
+        }
+    )
+    surface_payload = _surface_payload()
+    surface_payload.update({"surface_id": "chat-api-b"})
+    store.register_target(
+        principal=principal,
+        target=backend._target(target_payload),
+        idempotency_key="server-catalog-target-b-0001",
+    )
+    store.register_surface(
+        principal=principal,
+        surface=backend._surface("copilot-api-b", surface_payload),
+        idempotency_key="server-catalog-surface-b-0001",
+    )
+    for lifecycle in (TargetLifecycle.VALIDATING, TargetLifecycle.READY):
+        store.transition_target(
+            principal=principal,
+            target_id="copilot-api-b",
+            version="1.0.0",
+            lifecycle=lifecycle,
+            idempotency_key=f"server-catalog-lifecycle-b-{lifecycle.value}-0001",
+        )
+
+
+def _seed_scheduled_tool_attempt(
+    engine: Engine,
+    launcher: Principal,
+    *,
+    target_id: str = "copilot-api",
+    surface_id: str = "chat-api",
+) -> tuple[Any, Any, Any]:
+    store = ControlPlaneStore(engine, environment="staging")
+    scope = store.build_scope(
+        principal=launcher,
+        target_id=target_id,
+        target_version="1.0.0",
+        surface_id=surface_id,
+        surface_version="1.0.0",
+        corpus_hash="c" * 64,
+        caps=SafetyCaps(
+            budget_usd=2.0,
+            max_attempts_per_run=3,
+            target_requests_per_second=1.0,
+            run_timeout_seconds=120.0,
+        ),
+        run_nonce=f"tooling-scheduled-{target_id}-0001",
+    )
+    request = store.request_campaign_authorization(
+        principal=launcher,
+        scope=scope,
+        expires_at=datetime.datetime.now(datetime.UTC) + datetime.timedelta(minutes=10),
+        idempotency_key=f"tooling-request-{target_id}-0001",
+    )
+    store.decide_campaign_authorization(
+        principal=_principal(APPROVER_ID, "org:campaign:authorize"),
+        request_id=request.request_id,
+        decision="approved",
+        idempotency_key=f"tooling-approve-{target_id}-0001",
+    )
+    run = store.launch_campaign(
+        principal=launcher,
+        request_id=request.request_id,
+        idempotency_key=f"tooling-launch-{target_id}-0001",
+    )
+    attempt = store.ensure_campaign_attempt(
+        run_id=run.run_id,
+        ordinal=0,
+        case_id=f"tooling-{target_id}-garak-case",
+        case_content_hash="d" * 64,
+        category="prompt_injection",
+        severity="low",
+        attack_class="boundary",
+        owasp_mappings=[
+            {
+                "framework": "OWASP LLM",
+                "version": "2025",
+                "id": "LLM01",
+                "name": "Prompt Injection",
+            }
+        ],
+        fixture_provenance={
+            "classification": "synthetic",
+            "fixture_id": "tooling-read-model-fixture",
+            "fixture_version": "1.0.0",
+            "source": "hand_authored",
+            "contains_real_phi": False,
+        },
+        source_tool="garak",
+        source_technique="scheduled-only-probe",
+    )
+    return run, attempt, scope
+
+
 def test_security_tool_catalog_is_exposed_with_truthful_scope_and_no_target_access(
     migrated_db: Engine,
 ) -> None:
@@ -273,7 +379,7 @@ def test_agent_models_and_tool_scope_are_real_configurable_projections(
     }
     for row in agents.json()["data"]:
         assignment = row["active_assignment"]
-        assert assignment["resolved_model"] == assignment["model"]
+        assert assignment["resolved_model"] is None
         assert assignment["upstream_provider"] is None
         assert assignment["prompt_sha256"] is None
         assert assignment["prompt_version"] is None
@@ -283,6 +389,9 @@ def test_agent_models_and_tool_scope_are_real_configurable_projections(
     assert tool_rows["pyrit"]["reviewed_candidate_count"] == 3
     assert tool_rows["zap"]["applicability"] == "companion_scan"
     assert tool_rows["semgrep"]["applicability"] == "platform_assurance"
+    assert all(row["runtime_state"] == "idle" for row in tool_rows.values())
+    assert all(row["evidenced_finding_count"] == 0 for row in tool_rows.values())
+    assert all(row["last_error_code"] is None for row in tool_rows.values())
 
     per_role = client.post(
         "/api/v1/agents/red_team/configuration",
@@ -318,6 +427,27 @@ def test_agent_models_and_tool_scope_are_real_configurable_projections(
     assert all(
         role["provider_reference_bound"] is True for role in projection.json()["data"]["roles"]
     )
+    staged_agents_response = client.get("/api/v1/agents")
+    staged_agents = {row["role"]: row for row in staged_agents_response.json()["data"]}
+    staged_red_team = staged_agents["red_team"]["staged_assignment"]
+    assert staged_red_team["provider"] == "openrouter"
+    assert staged_red_team["model"] == "qwen/qwen3.5-397b-a17b"
+    assert staged_red_team["resolved_model"] is None
+    assert staged_red_team["upstream_provider"] is None
+    assert staged_red_team["prompt_sha256"] == hosted_prompt("red_team").prompt_sha256
+    assert staged_red_team["prompt_version"] == hosted_prompt("red_team").version
+    assert staged_red_team["configuration_sha256"] == configuration_sha256
+    assert "system_prompt" not in staged_agents_response.text
+
+    prompt = client.get("/api/v1/agents/red_team/prompt")
+    assert prompt.status_code == 200
+    assert prompt.json()["state"] == "ready"
+    assert prompt.json()["data"] == {
+        "role": "red_team",
+        "prompt_version": hosted_prompt("red_team").version,
+        "prompt_sha256": hosted_prompt("red_team").prompt_sha256,
+        "system_prompt": hosted_prompt("red_team").system_prompt,
+    }
     preflight = client.get(f"/api/v1/hosted-configuration-sets/{configuration_sha256}/preflight")
     assert preflight.status_code == 200
     assert preflight.json()["state"] == "degraded"
@@ -337,6 +467,179 @@ def test_agent_models_and_tool_scope_are_real_configurable_projections(
     )
     assert rejected.status_code == 503
     assert rejected.json()["reason_code"] == "atomic_hosted_configuration_set_required"
+
+
+def test_tooling_does_not_count_scheduled_attempt_without_authoritative_result(
+    migrated_db: Engine,
+) -> None:
+    _clean(migrated_db)
+    launcher = _principal(
+        LAUNCHER_ID,
+        "org:console:read",
+        "org:campaign:launch",
+        "org:targets:manage",
+    )
+    _seed_ready_target(migrated_db, launcher)
+    _seed_scheduled_tool_attempt(migrated_db, launcher)
+
+    result = PostgresApiBackend(
+        migrated_db,
+        environment="staging",
+        corpus=load_full_scan_corpus(),
+    ).read("tooling", launcher)
+
+    assert result.state == "ready"
+    garak = next(
+        row
+        for row in result.data
+        if row["tool_id"] == "garak"
+        and row["target_id"] == "copilot-api"
+        and row["surface_id"] == "chat-api"
+    )
+    assert garak["executed_attempt_count"] == 0
+    assert garak["last_executed_at"] is None
+    assert garak["runtime_state"] == "idle"
+
+
+def test_tooling_evidence_is_isolated_by_target_and_surface(
+    migrated_db: Engine,
+) -> None:
+    _clean(migrated_db)
+    launcher = _principal(
+        LAUNCHER_ID,
+        "org:console:read",
+        "org:campaign:launch",
+        "org:targets:manage",
+    )
+    _seed_ready_target(migrated_db, launcher)
+    _seed_second_ready_target(migrated_db, launcher)
+    run, attempt, scope = _seed_scheduled_tool_attempt(migrated_db, launcher)
+    executed_at = "2026-07-24T12:00:00+00:00"
+    with migrated_db.begin() as connection:
+        ExecutionRecorder().record(
+            {
+                "schema_version": "1",
+                "campaign_run_id": run.run_id,
+                "attempt_id": attempt.attempt_id,
+                "campaign_id": run.run_id,
+                "target_id": scope.target_id,
+                "target_version": scope.target_version,
+                "attack_attempt": {
+                    "schema_version": "1",
+                    "case_ref": "tooling-copilot-api-garak-case",
+                    "input_sequence": ["Use the reviewed synthetic tooling fixture."],
+                    "category": "prompt_injection",
+                },
+                "request_transcript": {"turns": ["Use the reviewed synthetic tooling fixture."]},
+                "response_transcript": "Synthetic tooling response.",
+                "policy_decision_id": "tooling-policy-decision-0001",
+                "executed_at": executed_at,
+                "trace_id": None,
+                "correlation_id": run.run_id,
+                "recorder_identity": "recorder@1",
+                "recorder_version": "1",
+                "organization_id": ORG_ID,
+                "surface_id": scope.surface_id,
+                "surface_version": scope.surface_version,
+                "authorization_scope_hash": run.scope_hash,
+                "execution_profile": "live",
+                "evidence_provenance": "live_target",
+            },
+            connection,
+        )
+
+    raw_artifact = b'{"scan":"synthetic"}'
+    artifact_sha256 = hashlib.sha256(raw_artifact).hexdigest()
+    scan_run = {
+        "schema_version": "1",
+        "run_id": "zap-tooling-scope-0001",
+        "tool_name": "zap",
+        "tool_version": "2.17.0",
+        "configuration_sha256": "e" * 64,
+        "run_nonce": "zap-tooling-scope-nonce-0001",
+        "target_id": "copilot-api",
+        "surface_id": "chat-api",
+        "scan_provenance": "live_target",
+        "status": "completed",
+        "started_at": executed_at,
+        "finished_at": executed_at,
+        "artifact_sha256": artifact_sha256,
+    }
+    scan_finding = {
+        "schema_version": "1",
+        "finding_id": "zap:toolingscope000000000001",
+        "tool_name": scan_run["tool_name"],
+        "tool_version": scan_run["tool_version"],
+        "configuration_sha256": scan_run["configuration_sha256"],
+        "run_id": scan_run["run_id"],
+        "run_nonce": scan_run["run_nonce"],
+        "target_id": scan_run["target_id"],
+        "surface_id": scan_run["surface_id"],
+        "scan_provenance": scan_run["scan_provenance"],
+        "observed_at": executed_at,
+        "raw_artifact_sha256": artifact_sha256,
+        "owasp_mappings": ["A05:2021"],
+        "severity": "low",
+        "confidence": 0.9,
+        "reproduction_evidence": {
+            "summary": "Synthetic scoped ZAP observation",
+            "artifact_locator": "docs/evidence/zap/tooling-scope.json#finding=0",
+        },
+        "validation_state": "unvalidated",
+        "disposition": "validate",
+        "human_publication_state": "blocked_pending_human_approval",
+        "source_kind": "security_tool",
+        "evidence_provenance": "scan_only",
+    }
+    SecurityToolEvidenceRepository(migrated_db).ingest(
+        organization_id=ORG_ID,
+        run=scan_run,
+        artifact={
+            "schema_version": "1",
+            "artifact_id": "artifact-zap-tooling-scope-0001",
+            "run_id": scan_run["run_id"],
+            "tool_name": scan_run["tool_name"],
+            "tool_version": scan_run["tool_version"],
+            "media_type": "application/json",
+            "sha256": artifact_sha256,
+            "sanitized": True,
+            "byte_length": len(raw_artifact),
+            "created_at": executed_at,
+            "artifact_locator": "docs/evidence/zap/tooling-scope.json",
+        },
+        sanitized_artifact=raw_artifact,
+        findings=[scan_finding],
+    )
+
+    result = PostgresApiBackend(
+        migrated_db,
+        environment="staging",
+        corpus=load_full_scan_corpus(),
+    ).read("tooling", launcher)
+
+    assert result.state == "ready"
+    rows = {(row["tool_id"], row["target_id"], row["surface_id"]): row for row in result.data}
+    garak_a = rows[("garak", "copilot-api", "chat-api")]
+    garak_b = rows[("garak", "copilot-api-b", "chat-api-b")]
+    assert garak_a["executed_attempt_count"] == 1
+    assert garak_a["runtime_state"] == "evidenced"
+    assert garak_a["last_executed_at"] is not None
+    assert garak_b["executed_attempt_count"] == 0
+    assert garak_b["runtime_state"] == "idle"
+    assert garak_b["last_executed_at"] is None
+
+    zap_a = rows[("zap", "copilot-api", "chat-api")]
+    zap_b = rows[("zap", "copilot-api-b", "chat-api-b")]
+    assert zap_a["recorded_scan_count"] == 1
+    assert zap_a["recorded_finding_count"] == 1
+    assert zap_a["evidenced_finding_count"] == 1
+    assert zap_a["runtime_state"] == "evidenced"
+    assert zap_a["last_executed_at"] is not None
+    assert zap_b["recorded_scan_count"] == 0
+    assert zap_b["recorded_finding_count"] == 0
+    assert zap_b["evidenced_finding_count"] == 0
+    assert zap_b["runtime_state"] == "idle"
+    assert zap_b["last_executed_at"] is None
 
 
 def test_live_security_tool_findings_are_projected_into_the_console_register(
@@ -418,8 +721,8 @@ def test_live_security_tool_findings_are_projected_into_the_console_register(
             "finding_id": finding["finding_id"],
             "state": "unvalidated",
             "severity": "low",
-            "category": "X-Content-Type-Options Header Missing",
-            "target_version": "openemr-copilot",
+            "category": None,
+            "target_version": None,
             "publication_status": "blocked_pending_human_approval",
             "evidence_integrity": "verified",
             "source_kind": "security_tool",
@@ -431,6 +734,27 @@ def test_live_security_tool_findings_are_projected_into_the_console_register(
             "history": [],
         }
     ]
+
+    with migrated_db.begin() as connection:
+        connection.execute(text("SET LOCAL session_replication_role = replica"))
+        connection.execute(
+            text(
+                "UPDATE scan_artifacts SET sanitized_payload = :payload "
+                "WHERE organization_id = :org AND artifact_id = :artifact"
+            ),
+            {
+                "payload": b'{"site":{}}',
+                "org": ORG_ID,
+                "artifact": artifact["artifact_id"],
+            },
+        )
+
+    tampered = PostgresApiBackend(migrated_db, environment="staging").read(
+        "findings", _principal(LAUNCHER_ID, "org:findings:read")
+    )
+    assert tampered.state == "ready"
+    assert tampered.data[0]["evidence_integrity"] == "unavailable"
+    assert tampered.data[0]["evidence_content_hash"] is None
 
 
 def test_exact_scope_two_person_flow_reaches_persistence_but_not_unwired_runner(
@@ -759,6 +1083,181 @@ def test_recursive_output_redaction_covers_headers_cookies_tokens_and_credential
     assert "secretref://" not in rendered
 
 
+def test_evidence_display_redacts_session_and_patient_identifiers_recursively() -> None:
+    unsafe = {
+        "session_id": "sess_raw-must-not-render",
+        "patient": {
+            "patient_id": "SYNTH-PATIENT-RAW-001",
+            "note": (
+                "SID=sess_raw-must-not-render; bare sess_unlabeled-private-001; "
+                "MRN=MRN-0001; patient name: Synthetic Example; "
+                "phone: (555) 010-1234; DOB 2000-01-02; "
+                "address: 10 Example Street; patient@example.test; SSN 123-45-6789"
+            ),
+        },
+    }
+
+    rendered = json.dumps(_redact_evidence_display(unsafe), sort_keys=True)
+
+    for forbidden in (
+        "sess_raw-must-not-render",
+        "SYNTH-PATIENT-RAW-001",
+        "MRN-0001",
+        "sess_unlabeled-private-001",
+        "Synthetic Example",
+        "(555) 010-1234",
+        "2000-01-02",
+        "10 Example Street",
+        "patient@example.test",
+        "123-45-6789",
+    ):
+        assert forbidden not in rendered
+
+
+def test_attempt_evidence_is_verified_before_redaction_and_fails_closed_on_tamper(
+    migrated_db: Engine,
+) -> None:
+    _clean(migrated_db)
+    viewer = _principal(
+        LAUNCHER_ID,
+        "org:console:read",
+        "org:evidence:read",
+        "org:campaign:launch",
+        "org:targets:manage",
+    )
+    _seed_ready_target(migrated_db, viewer)
+    run, attempt, scope = _seed_scheduled_tool_attempt(migrated_db, viewer)
+    fields = {
+        "schema_version": "1",
+        "campaign_run_id": run.run_id,
+        "attempt_id": attempt.attempt_id,
+        "campaign_id": run.run_id,
+        "target_id": scope.target_id,
+        "target_version": scope.target_version,
+        "attack_attempt": {
+            "input_sequence": ["Review SYNTH-PATIENT-RAW-001 for patient name: Synthetic Example"],
+            "patient_id": "SYNTH-PATIENT-RAW-001",
+        },
+        "request_transcript": {
+            "session_id": "sess_raw-must-not-render",
+            "message": (
+                "bare sess_unlabeled-private-001; MRN=MRN-0001; "
+                "phone: 555-010-1234; patient@example.test"
+            ),
+        },
+        "response_transcript": (
+            "SID=sess_raw-must-not-render; DOB 2000-01-02; "
+            "address: 10 Example Street; SSN 123-45-6789"
+        ),
+        "policy_decision_id": "policy-evidence-read-0001",
+        "executed_at": "2026-07-24T12:00:00+00:00",
+        "trace_id": None,
+        "correlation_id": run.run_id,
+        "recorder_identity": "recorder@1",
+        "recorder_version": "1",
+        "organization_id": ORG_ID,
+        "surface_id": scope.surface_id,
+        "surface_version": scope.surface_version,
+        "authorization_scope_hash": run.scope_hash,
+        "execution_profile": "synthetic",
+        "evidence_provenance": "synthetic_offline",
+    }
+    with migrated_db.begin() as connection:
+        ExecutionRecorder().record(fields, connection)
+        connection.execute(
+            text(
+                "INSERT INTO verdict "
+                "(state, confidence, campaign_run_id, attempt_id, organization_id, "
+                "reason_codes, confirmation_source) VALUES "
+                "('EXPLOIT_CONFIRMED', 1.0, :run, :attempt, :org, "
+                "'[\"oracle_confirmed\"]'::jsonb, 'oracle')"
+            ),
+            {"org": ORG_ID, "run": run.run_id, "attempt": attempt.attempt_id},
+        )
+
+    client = TestClient(_app(migrated_db, viewer))
+    response = client.get(f"/api/v1/attempts/{attempt.attempt_id}/evidence")
+
+    assert response.status_code == 200
+    assert response.json()["state"] == "ready", response.text
+    assert response.json()["data"]["verdict"] == "EXPLOIT_CONFIRMED"
+    assert response.json()["data"]["confidence"] == 1.0
+    rendered = response.text
+    for forbidden in (
+        "sess_raw-must-not-render",
+        "sess_unlabeled-private-001",
+        "SYNTH-PATIENT-RAW-001",
+        "MRN-0001",
+        "Synthetic Example",
+        "555-010-1234",
+        "2000-01-02",
+        "10 Example Street",
+        "patient@example.test",
+        "123-45-6789",
+    ):
+        assert forbidden not in rendered
+    assert "REDACTED" in rendered
+
+    with migrated_db.begin() as connection:
+        connection.execute(text("SET LOCAL session_replication_role = replica"))
+        connection.execute(
+            text(
+                "UPDATE verdict SET reason_codes = '[]'::jsonb "
+                "WHERE organization_id = :org AND campaign_run_id = :run "
+                "AND attempt_id = :attempt"
+            ),
+            {"org": ORG_ID, "run": run.run_id, "attempt": attempt.attempt_id},
+        )
+
+    invalid_verdict = client.get(f"/api/v1/attempts/{attempt.attempt_id}/evidence")
+    assert invalid_verdict.status_code == 200
+    assert invalid_verdict.json()["state"] == "unavailable"
+    assert invalid_verdict.json()["reason_code"] == "verdict_integrity_failed"
+
+    with migrated_db.begin() as connection:
+        connection.execute(text("SET LOCAL session_replication_role = replica"))
+        connection.execute(
+            text(
+                "UPDATE attempt_result SET response_transcript = 'tampered' "
+                "WHERE organization_id = :org AND campaign_run_id = :run "
+                "AND attempt_id = :attempt"
+            ),
+            {"org": ORG_ID, "run": run.run_id, "attempt": attempt.attempt_id},
+        )
+
+    tampered = client.get(f"/api/v1/attempts/{attempt.attempt_id}/evidence")
+    assert tampered.status_code == 200
+    assert tampered.json()["state"] == "unavailable"
+    assert tampered.json()["reason_code"] == "evidence_integrity_failed"
+
+
+def test_attempt_evidence_identifier_ambiguity_fails_closed(migrated_db: Engine) -> None:
+    _clean(migrated_db)
+    viewer = _principal(
+        LAUNCHER_ID,
+        "org:console:read",
+        "org:evidence:read",
+    )
+    with migrated_db.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO attempt_result "
+                "(organization_id, campaign_run_id, attempt_id, content_hash) VALUES "
+                "(:org, 'run-ambiguous-a', 'attempt-ambiguous', :hash_a), "
+                "(:org, 'run-ambiguous-b', 'attempt-ambiguous', :hash_b)"
+            ),
+            {"org": ORG_ID, "hash_a": "a" * 64, "hash_b": "b" * 64},
+        )
+
+    response = TestClient(_app(migrated_db, viewer)).get(
+        "/api/v1/attempts/attempt-ambiguous/evidence"
+    )
+
+    assert response.status_code == 200
+    assert response.json()["state"] == "unavailable"
+    assert response.json()["reason_code"] == "attempt_evidence_identifier_ambiguous"
+
+
 def test_authoritative_coverage_is_empty_without_verified_persisted_evidence(
     migrated_db: Engine,
 ) -> None:
@@ -909,11 +1408,14 @@ def _seed_agent_observations(engine: Engine, org_id: str, run_id: str) -> None:
                     "(execution_id, organization_id, campaign_run_id, attempt_id, "
                     "parent_execution_id, agent_role, status, provider, model, execution_mode, "
                     "configuration_version, input_sha256, output_sha256, input_tokens, "
-                    "output_tokens, measured_cost, trace_id, langfuse_status, detail, "
+                    "output_tokens, measured_cost, trace_id, langfuse_status, "
+                    "langfuse_verified_at, detail, "
                     "started_at, finished_at, duration_ms) VALUES "
                     "(:execution, :org, :run, :attempt, :parent, :role, 'succeeded', "
                     "'headshot', :model, 'deterministic', 1, :input_hash, :output_hash, "
                     ":input_tokens, :output_tokens, :cost, :trace, :langfuse_status, "
+                    "CASE WHEN :langfuse_verified "
+                    "THEN TIMESTAMPTZ '2026-07-21 10:00:02+00' ELSE NULL END, "
                     "'{}'::jsonb, TIMESTAMPTZ '2026-07-21 10:00:00+00' + "
                     ":index * INTERVAL '1 second', "
                     "TIMESTAMPTZ '2026-07-21 10:00:01+00' + :index * INTERVAL '1 second', "
@@ -934,6 +1436,7 @@ def _seed_agent_observations(engine: Engine, org_id: str, run_id: str) -> None:
                     "cost": index / 100,
                     "trace": trace_id,
                     "langfuse_status": langfuse_status,
+                    "langfuse_verified": langfuse_status == "exported",
                     "index": index,
                     "duration_ms": index * 25,
                 },
@@ -951,10 +1454,11 @@ def test_agent_observability_reconciles_agents_costs_and_traces(
     client = TestClient(_app_for(migrated_db, _reader(org_id)))
 
     agents = client.get("/api/v1/agents").json()
+    activity = client.get("/api/v1/agent-activity").json()
     costs = client.get("/api/v1/costs").json()
     traces = client.get("/api/v1/traces").json()
 
-    assert agents["state"] == costs["state"] == traces["state"] == "ready"
+    assert agents["state"] == activity["state"] == costs["state"] == traces["state"] == "ready"
     agents_by_role = {row["role"]: row for row in agents["data"]}
     assert agents_by_role["orchestrator"]["p50_duration_ms"] == 25.0
     assert agents_by_role["documentation"]["p95_duration_ms"] == 100.0
@@ -964,15 +1468,20 @@ def test_agent_observability_reconciles_agents_costs_and_traces(
     assert agents_by_role["documentation"]["langfuse_disabled_count"] == 1
     assert agents_by_role["documentation"]["input_tokens"] == 400
     assert agents_by_role["documentation"]["measured_cost"] == 0.04
+    assert agents_by_role["documentation"]["accounting_status"] == "measured"
+    activity_by_role = {row["agent_role"]: row for row in activity["data"]}
+    assert activity_by_role["red_team"]["accounting_status"] == "measured"
+    assert activity_by_role["red_team"]["measured_cost"] == 0.02
 
     agent_costs = [row for row in costs["data"] if row["record_kind"] == "agent"]
     assert len(agent_costs) == 4
-    documentation_cost = next(
-        row for row in agent_costs if row["agent_role"] == "documentation"
-    )
+    documentation_cost = next(row for row in agent_costs if row["agent_role"] == "documentation")
     assert documentation_cost["measured_cost"] == 0.04
+    assert documentation_cost["accounting_status"] == "measured"
     assert documentation_cost["input_tokens"] == 400
     assert documentation_cost["output_tokens"] == 40
+    assert documentation_cost["p50_duration_ms"] == 100.0
+    assert documentation_cost["p95_duration_ms"] == 100.0
 
     agent_traces = [row for row in traces["data"] if row["agent_role"] is not None]
     assert len(agent_traces) == 4
@@ -981,7 +1490,116 @@ def test_agent_observability_reconciles_agents_costs_and_traces(
     assert red_team_trace["duration_ms"] == 50.0
     assert red_team_trace["measured_cost"] == 0.02
     assert red_team_trace["input_tokens"] == 200
+    assert red_team_trace["p50_duration_ms"] == 50.0
+    assert red_team_trace["p95_duration_ms"] == 50.0
     assert red_team_trace["langfuse_status"] == "queued"
+
+
+def test_agent_role_percentiles_use_full_tenant_campaign_ledger_before_trace_limit(
+    migrated_db: Engine,
+) -> None:
+    org_id = "org_M1dAuthoritativeRoleLatency"
+    run_id = "run-authoritative-role-latency-0001"
+    _seed_run_summary(migrated_db, org_id, run_id)
+    with migrated_db.begin() as connection:
+        connection.execute(text("SET LOCAL session_replication_role = replica"))
+        connection.execute(
+            text(
+                "INSERT INTO agent_executions "
+                "(execution_id, organization_id, campaign_run_id, agent_role, status, "
+                "provider, model, execution_mode, configuration_version, input_sha256, "
+                "output_sha256, measured_cost, trace_id, detail, started_at, finished_at, "
+                "duration_ms) "
+                "SELECT 'role-latency-' || series::text, :org, :run, 'red_team', "
+                "'succeeded', 'headshot', 'full-scan-corpus-v1', 'deterministic', 1, "
+                "repeat('a', 64), repeat('b', 64), 0, repeat('c', 32), '{}'::jsonb, "
+                "TIMESTAMPTZ '2026-07-21 10:00:00+00' + series * INTERVAL '1 second', "
+                "TIMESTAMPTZ '2026-07-21 10:00:01+00' + series * INTERVAL '1 second', "
+                "CASE WHEN series <= 100 THEN 10000 ELSE 10 END "
+                "FROM generate_series(1, 1100) AS series"
+            ),
+            {"org": org_id, "run": run_id},
+        )
+
+    client = TestClient(_app_for(migrated_db, _reader(org_id)))
+    traces = client.get("/api/v1/traces").json()
+    costs = client.get("/api/v1/costs").json()
+
+    agent_traces = [row for row in traces["data"] if row["agent_role"] == "red_team"]
+    assert len(agent_traces) == 1000
+    assert {row["p50_duration_ms"] for row in agent_traces} == {10.0}
+    assert {row["p95_duration_ms"] for row in agent_traces} == {10000.0}
+    assert all(row["duration_ms"] == 10.0 for row in agent_traces)
+
+    role_cost = next(
+        row
+        for row in costs["data"]
+        if row["record_kind"] == "agent" and row["agent_role"] == "red_team"
+    )
+    assert role_cost["execution_count"] == 1100
+    assert role_cost["p50_duration_ms"] == 10.0
+    assert role_cost["p95_duration_ms"] == 10000.0
+
+
+def test_agent_activity_exposes_row_level_hosted_accounting_status(
+    migrated_db: Engine,
+) -> None:
+    org_id = "org_M1dHostedAgentActivity"
+    run_id = "run-hosted-agent-activity-0001"
+    _seed_run_summary(migrated_db, org_id, run_id)
+    with migrated_db.begin() as connection:
+        connection.execute(text("SET LOCAL session_replication_role = replica"))
+        for index, accounting in enumerate(
+            (
+                {
+                    "execution": "hosted-agent-accounted",
+                    "role": "red_team",
+                    "input_tokens": 120,
+                    "output_tokens": 30,
+                    "cost": 0.012,
+                },
+                {
+                    "execution": "hosted-agent-unaccounted",
+                    "role": "documentation",
+                    "input_tokens": None,
+                    "output_tokens": None,
+                    "cost": 0,
+                },
+            ),
+            start=1,
+        ):
+            connection.execute(
+                text(
+                    "INSERT INTO agent_executions "
+                    "(execution_id, organization_id, campaign_run_id, agent_role, status, "
+                    "provider, model, execution_mode, configuration_version, input_sha256, "
+                    "output_sha256, input_tokens, output_tokens, measured_cost, trace_id, detail, "
+                    "started_at, finished_at, duration_ms) VALUES "
+                    "(:execution, :org, :run, :role, 'succeeded', 'openrouter', "
+                    "'provider/model', 'hosted_advisory', 1, :input_hash, :output_hash, "
+                    ":input_tokens, :output_tokens, :cost, :trace, '{}'::jsonb, "
+                    "TIMESTAMPTZ '2026-07-21 10:00:00+00' + :index * INTERVAL '1 second', "
+                    "TIMESTAMPTZ '2026-07-21 10:00:01+00' + :index * INTERVAL '1 second', 25)"
+                ),
+                {
+                    **accounting,
+                    "org": org_id,
+                    "run": run_id,
+                    "input_hash": f"{index:x}" * 64,
+                    "output_hash": f"{index + 2:x}" * 64,
+                    "trace": f"{index:x}" * 32,
+                    "index": index,
+                },
+            )
+
+    body = TestClient(_app_for(migrated_db, _reader(org_id))).get("/api/v1/agent-activity").json()
+
+    assert body["state"] == "ready"
+    activity_by_id = {row["execution_id"]: row for row in body["data"]}
+    assert activity_by_id["hosted-agent-accounted"]["accounting_status"] == "measured"
+    assert activity_by_id["hosted-agent-accounted"]["measured_cost"] == 0.012
+    assert activity_by_id["hosted-agent-unaccounted"]["accounting_status"] == "unavailable"
+    assert activity_by_id["hosted-agent-unaccounted"]["measured_cost"] == 0
 
 
 def test_costs_projection_is_empty_for_org_without_persisted_summaries(
@@ -1013,6 +1631,7 @@ def test_costs_projection_is_ready_from_persisted_run_summary(migrated_db: Engin
         "agent_role",
         "record_kind",
         "measured_cost",
+        "accounting_status",
         "currency",
         "request_count",
         "execution_count",
@@ -1022,6 +1641,8 @@ def test_costs_projection_is_ready_from_persisted_run_summary(migrated_db: Engin
         "input_tokens",
         "output_tokens",
         "token_observation_count",
+        "p50_duration_ms",
+        "p95_duration_ms",
         "budget_usd",
         "budget_utilization",
         "duration_ms",
@@ -1038,6 +1659,9 @@ def test_costs_projection_is_ready_from_persisted_run_summary(migrated_db: Engin
     # Numeric(14,6) must be projected as a JSON number, never a stringified Decimal.
     assert isinstance(row["measured_cost"], (int, float))
     assert row["measured_cost"] == 1.234567
+    assert row["accounting_status"] == "measured"
+    assert row["p50_duration_ms"] is None
+    assert row["p95_duration_ms"] is None
     assert row["currency"] == "USD"
     assert row["request_count"] == 9
     assert row["attempt_count"] == 9
@@ -1102,10 +1726,14 @@ def test_traces_projection_is_ready_from_persisted_attempt_and_verdict(
         "request_bytes",
         "response_bytes",
         "measured_cost",
+        "accounting_status",
         "currency",
         "input_tokens",
         "output_tokens",
+        "p50_duration_ms",
+        "p95_duration_ms",
         "langfuse_status",
+        "langfuse_verified_at",
         "request_preview",
         "response_preview",
         "request_sha256",
@@ -1120,10 +1748,14 @@ def test_traces_projection_is_ready_from_persisted_attempt_and_verdict(
     assert row["status"] == "NO_EXPLOIT_OBSERVED"
     # verdict.created_at (10:00:02.500) - attempt_result.executed_at (10:00:00) == 2500 ms.
     assert row["duration_ms"] == 2500.0
+    assert row["accounting_status"] == "unavailable"
+    assert row["p50_duration_ms"] is None
+    assert row["p95_duration_ms"] is None
     assert row["started_at"].startswith("2026-07-21T10:00:00")
     assert row["campaign_id"] == "run-trace-projection-0001"
     assert row["attempt_id"] == "attempt-trace-0001"
     assert row["langfuse_status"] == "historical_not_instrumented"
+    assert row["langfuse_verified_at"] is None
     assert row["request_id"] is None
     assert row["request_preview"] is None
     assert row["inspection_flags"] == []
@@ -1155,11 +1787,12 @@ def test_traces_projection_exposes_safe_physical_request_metadata(migrated_db: E
                 "campaign_run_id, attempt_id, trace_id, operation, provider, method, "
                 "destination_host, relative_path, request_payload, response_payload, status, "
                 "status_code, request_bytes, response_bytes, duration_ms, measured_cost, "
-                "currency, langfuse_status, started_at, finished_at) VALUES "
+                "currency, langfuse_status, langfuse_verified_at, started_at, finished_at) VALUES "
                 "('request-physical-0001', :org, :run, 'attempt-physical-0001', :trace, "
                 "'target.http', 'openemr', 'POST', 'target.example.test', 'chat', "
                 'CAST(\'{"turns":["synthetic"]}\' AS JSONB), \'{"answer":"safe"}\', '
                 "'succeeded', 200, 24, 17, 125.5, 0.01, 'USD', 'exported', "
+                "TIMESTAMPTZ '2026-07-21 10:00:01+00', "
                 "TIMESTAMPTZ '2026-07-21 10:00:00+00', "
                 "TIMESTAMPTZ '2026-07-21 10:00:00.1255+00')"
             ),

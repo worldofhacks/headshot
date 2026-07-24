@@ -7,6 +7,9 @@ export interface SafetyCapsReadModel extends JsonRecord {
   max_attempts_per_run: number;
   target_requests_per_second: number;
   run_timeout_seconds: number;
+  logical_case_limit: number | null;
+  physical_request_limit: number | null;
+  target_retries_per_turn: number | null;
 }
 
 export interface HostedRunBindingReadModel extends JsonRecord {
@@ -83,6 +86,8 @@ export interface EvidenceReadModel extends JsonRecord {
   content_hash: string;
   verdict: string | null;
   confidence: number | null;
+  execution_profile: "synthetic" | "live" | null;
+  evidence_provenance: "synthetic_offline" | "live_target" | "scan_only" | "simulated" | null;
 }
 
 export interface FindingHistoryReadModel extends JsonRecord {
@@ -92,22 +97,31 @@ export interface FindingHistoryReadModel extends JsonRecord {
   created_at: string;
 }
 
-export interface FindingReadModel extends JsonRecord {
+interface FindingReadModelBase extends JsonRecord {
   finding_id: string;
   state: string;
   severity: string;
-  category: string;
-  target_version: string;
+  category: string | null;
+  target_version: string | null;
   publication_status: string;
-  evidence_integrity: "verified";
   source_kind: string;
   execution_profile: "synthetic" | "live";
   evidence_provenance: string;
   campaign_run_id: string | null;
   attempt_id: string | null;
-  evidence_content_hash: string;
   history: FindingHistoryReadModel[];
 }
+
+export type FindingReadModel = FindingReadModelBase & (
+  | {
+      evidence_integrity: "verified";
+      evidence_content_hash: string;
+    }
+  | {
+      evidence_integrity: "unavailable";
+      evidence_content_hash: null;
+    }
+);
 
 export interface AttackCaseEvidenceReadModel extends JsonRecord {
   case_id: string;
@@ -124,6 +138,11 @@ export interface JudgeBasisReadModel extends JsonRecord {
   confidence: number | null;
   reason_codes: string[];
   confirmation_source: "oracle" | "canary" | "calibrated_model" | "human" | null;
+  oracle_refs: string[];
+  canary_refs: string[];
+  rationale: string | null;
+  rationale_availability: "unavailable";
+  rationale_detail: string;
   error_code: string | null;
 }
 
@@ -171,9 +190,9 @@ export interface FindingVerificationReadModel extends JsonRecord {
   redaction_state: "synthetic_identifiers_redacted";
 }
 
-export interface FindingDetailReadModel extends FindingReadModel {
+export type FindingDetailReadModel = FindingReadModel & {
   verification: FindingVerificationReadModel;
-}
+};
 
 export interface ApprovalReadModel extends AuthorizationScopeReadModel {
   request_id: string;
@@ -244,10 +263,20 @@ export interface TraceReadModel extends JsonRecord {
   request_bytes: number;
   response_bytes: number | null;
   measured_cost: number;
+  accounting_status: "measured" | "unavailable";
   currency: string;
   input_tokens: number | null;
   output_tokens: number | null;
-  langfuse_status: string;
+  p50_duration_ms: number | null;
+  p95_duration_ms: number | null;
+  langfuse_status:
+    | "not_attempted"
+    | "disabled"
+    | "queued"
+    | "exported"
+    | "error"
+    | "historical_not_instrumented";
+  langfuse_verified_at: string | null;
   request_preview: string | null;
   response_preview: string | null;
   request_sha256: string | null;
@@ -263,6 +292,7 @@ export interface CostReadModel extends JsonRecord {
   agent_role: "orchestrator" | "red_team" | "judge" | "documentation" | null;
   record_kind: "campaign" | "agent";
   measured_cost: number;
+  accounting_status: "not_applicable" | "measured" | "partial" | "unavailable";
   currency: string;
   request_count: number;
   execution_count: number;
@@ -272,6 +302,8 @@ export interface CostReadModel extends JsonRecord {
   input_tokens: number | null;
   output_tokens: number | null;
   token_observation_count: number;
+  p50_duration_ms: number | null;
+  p95_duration_ms: number | null;
   budget_usd: number | null;
   budget_utilization: number | null;
   duration_ms: number;
@@ -358,12 +390,10 @@ export interface ComponentReadModel extends JsonRecord {
   heartbeat_at: string;
 }
 
-export interface AgentAssignmentReadModel extends JsonRecord {
+interface AgentAssignmentReadModelBase extends JsonRecord {
   role: "orchestrator" | "red_team" | "judge" | "documentation";
   provider: string;
   model: string;
-  resolved_model: string;
-  upstream_provider: string | null;
   prompt_sha256: string | null;
   prompt_version: string | null;
   execution_mode: "deterministic" | "hosted_advisory";
@@ -373,6 +403,17 @@ export interface AgentAssignmentReadModel extends JsonRecord {
   configured_at: string | null;
   configured_by: string | null;
 }
+
+export type AgentAssignmentReadModel = AgentAssignmentReadModelBase & (
+  | {
+      resolved_model: string;
+      upstream_provider: string;
+    }
+  | {
+      resolved_model: null;
+      upstream_provider: null;
+    }
+);
 
 export interface AgentPromptReadModel extends JsonRecord {
   role: "orchestrator" | "red_team" | "judge" | "documentation";
@@ -397,6 +438,7 @@ export interface AgentReadModel extends JsonRecord {
   failed_count: number;
   skipped_count: number;
   measured_cost: number;
+  accounting_status: "not_applicable" | "measured" | "partial" | "unavailable";
   currency: string;
   input_tokens: number | null;
   output_tokens: number | null;
@@ -409,6 +451,8 @@ export interface AgentReadModel extends JsonRecord {
   langfuse_queued_count: number;
   langfuse_exported_count: number;
   langfuse_error_count: number;
+  langfuse_verified_count: number;
+  last_langfuse_verified_at: string | null;
   last_activity_at: string | null;
   last_status: string | null;
   last_campaign_run_id: string | null;
@@ -431,9 +475,11 @@ export interface AgentActivityReadModel extends JsonRecord {
   input_tokens: number | null;
   output_tokens: number | null;
   measured_cost: number;
+  accounting_status: "measured" | "unavailable";
   currency: string;
   trace_id: string;
   langfuse_status: "not_attempted" | "disabled" | "queued" | "exported" | "error";
+  langfuse_verified_at: string | null;
   detail: JsonRecord;
   error_code: string | null;
   started_at: string;
@@ -467,6 +513,9 @@ export interface ToolScopeReadModel extends JsonRecord {
   recorded_scan_count: number;
   recorded_finding_count: number;
   last_executed_at: string | null;
+  runtime_state: "idle" | "running" | "evidenced" | "error";
+  evidenced_finding_count: number;
+  last_error_code: string | null;
 }
 
 export interface BirdseyeCampaignReadModel extends JsonRecord {
@@ -587,6 +636,7 @@ export interface BirdseyeNodeReadModel extends JsonRecord {
   p95_latency_ms: number | null;
   execution_count: number | null;
   measured_cost_usd: number | null;
+  accounting_status: "not_applicable" | "measured" | "partial" | "unavailable" | null;
   currency: string | null;
   input_tokens: number | null;
   output_tokens: number | null;
@@ -596,6 +646,8 @@ export interface BirdseyeNodeReadModel extends JsonRecord {
   langfuse_queued_count: number | null;
   langfuse_exported_count: number | null;
   langfuse_error_count: number | null;
+  langfuse_verified_count: number | null;
+  last_langfuse_verified_at: string | null;
   langfuse_status: string | null;
   queue_depth: number | null;
   target_access: string;

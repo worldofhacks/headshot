@@ -46,6 +46,21 @@ _STATUS_VALUES = {
     "evaluated and rejected",
     "blocked pending authorization",
 }
+_REQUEST_METADATA_ALLOWLIST = frozenset(
+    {
+        "organization_id",
+        "campaign_run_id",
+        "attempt_id",
+        "red_team_execution_id",
+        "case_id",
+        "attack_category",
+        "target_id",
+        "target_version",
+        "surface_id",
+        "surface_version",
+        "execution_profile",
+    }
+)
 
 
 def _sanitize_text(value: str, redactions: tuple[str, ...]) -> str:
@@ -101,6 +116,7 @@ class _LangfuseBridge:
             and base.hostname
             and not base.username
             and not base.password
+            and base.path in {"", "/"}
             and not base.query
             and not base.fragment
         )
@@ -128,11 +144,15 @@ class _LangfuseBridge:
         request_payload: dict[str, Any],
         metadata: dict[str, Any],
         measured_cost: float,
+        parent_observation_id: str | None = None,
     ) -> tuple[Any, Any] | None:
         if not self.configured():
             return None
+        trace_context = {"trace_id": trace_id}
+        if parent_observation_id is not None:
+            trace_context["parent_span_id"] = parent_observation_id
         manager = self._client().start_as_current_observation(
-            trace_context={"trace_id": trace_id},
+            trace_context=trace_context,
             as_type="generation",
             name="target-http-request",
             model=model,
@@ -305,7 +325,9 @@ class _RequestHandle:
     request_id: str
     trace_id: str
     started_monotonic: float
+    measured_cost: float
     redactions: tuple[str, ...]
+    metadata: dict[str, Any]
     langfuse_state: tuple[Any, Any] | None
     langfuse_status: str
     finished: bool = field(default=False, init=False)
@@ -330,26 +352,30 @@ class _RequestHandle:
         terminal_status = "failed" if error_code else "succeeded"
         langfuse_status = self.langfuse_status
         persisted = True
+        canonical_duration_ms = duration_ms
         try:
             with self.owner.engine.begin() as connection:
-                connection.execute(
-                    text(
-                        "UPDATE outbound_http_requests SET status = :status, "
-                        "status_code = :status_code, error_code = :error_code, "
-                        "response_payload = :response, response_bytes = :response_bytes, "
-                        "duration_ms = :duration, langfuse_status = :langfuse_status, "
-                        "finished_at = clock_timestamp() WHERE request_id = :request_id"
-                    ),
-                    {
-                        "status": terminal_status,
-                        "status_code": status_code,
-                        "error_code": error_code,
-                        "response": sanitized_response,
-                        "response_bytes": response_bytes,
-                        "duration": duration_ms,
-                        "langfuse_status": langfuse_status,
-                        "request_id": self.request_id,
-                    },
+                canonical_duration_ms = float(
+                    connection.execute(
+                        text(
+                            "UPDATE outbound_http_requests SET status = :status, "
+                            "status_code = :status_code, error_code = :error_code, "
+                            "response_payload = :response, response_bytes = :response_bytes, "
+                            "duration_ms = :duration, langfuse_status = :langfuse_status, "
+                            "finished_at = clock_timestamp() WHERE request_id = :request_id "
+                            "RETURNING duration_ms"
+                        ),
+                        {
+                            "status": terminal_status,
+                            "status_code": status_code,
+                            "error_code": error_code,
+                            "response": sanitized_response,
+                            "response_bytes": response_bytes,
+                            "duration": duration_ms,
+                            "langfuse_status": langfuse_status,
+                            "request_id": self.request_id,
+                        },
+                    ).scalar_one()
                 )
         except Exception:
             # The target call already happened. Never turn a telemetry completion failure into a
@@ -358,10 +384,19 @@ class _RequestHandle:
             _logger.warning("outbound telemetry completion persistence failed")
 
         metadata = {
+            **self.metadata,
             "http.status_code": status_code,
             "http.response.body.size": response_bytes,
+            "http.response.body.sha256": (
+                hashlib.sha256(sanitized_response.encode("utf-8")).hexdigest()
+                if sanitized_response is not None
+                else None
+            ),
             "transport.status": terminal_status,
-            "duration_ms": duration_ms,
+            # PostgreSQL Numeric columns are the authoritative accounting representation. Use
+            # the value returned after persistence so Langfuse query-back compares the same
+            # rounded value rather than the pre-write floating-point measurement.
+            "duration_ms": canonical_duration_ms,
             "request_id": self.request_id,
             "error_code": error_code,
             "ledger.persisted": persisted,
@@ -380,7 +415,7 @@ class _RequestHandle:
                 output=langfuse_output,
                 metadata=metadata,
                 error_code=error_code if persisted else "telemetry_persistence_failed",
-                measured_cost=self.owner.per_request_cost_usd,
+                measured_cost=self.measured_cost,
             )
         except Exception:
             _logger.warning("Langfuse observation completion failed")
@@ -441,6 +476,8 @@ class OutboundHttpTelemetry:
         self._pending_agent_finishes: dict[str, _PendingAgentFinish] = {}
         self._agent_observation_ids: dict[str, str] = {}
         self._agent_campaign_ids: dict[str, str] = {}
+        self._agent_attempt_ids: dict[str, str | None] = {}
+        self._agent_roles: dict[str, str] = {}
         self._last_connection_check = 0.0
 
     def begin(
@@ -452,10 +489,15 @@ class OutboundHttpTelemetry:
         provider: str,
         redactions: tuple[str, ...] = (),
     ) -> _RequestHandle:
-        metadata = {str(key): str(value) for key, value in request.metadata.items()}
+        metadata = {
+            str(key): str(value)
+            for key, value in request.metadata.items()
+            if str(key) in _REQUEST_METADATA_ALLOWLIST
+        }
         organization_id = metadata.get("organization_id", "")
         campaign_run_id = metadata.get("campaign_run_id", "")
         attempt_id = metadata.get("attempt_id", "")
+        red_team_execution_id = metadata.get("red_team_execution_id", "")
         if not organization_id or not campaign_run_id or not attempt_id:
             raise RuntimeError("outbound telemetry correlation context is incomplete")
         parsed = urlsplit(url)
@@ -466,36 +508,78 @@ class OutboundHttpTelemetry:
         request_sha256 = hashlib.sha256(encoded).hexdigest()
         configured = self.langfuse.configured()
         with self.engine.begin() as connection:
-            connection.execute(
-                text(
-                    "INSERT INTO outbound_http_requests "
-                    "(request_id, organization_id, campaign_run_id, attempt_id, trace_id, "
-                    "operation, provider, method, destination_host, relative_path, "
-                    "request_payload, request_bytes, measured_cost, langfuse_status) VALUES "
-                    "(:request_id, :org, :run_id, :attempt_id, :trace_id, 'target.http', "
-                    ":provider, :method, :host, :path, CAST(:payload AS JSONB), :request_bytes, "
-                    ":cost, :langfuse_status)"
-                ),
-                {
-                    "request_id": request_id,
-                    "org": organization_id,
-                    "run_id": campaign_run_id,
-                    "attempt_id": attempt_id,
-                    "trace_id": trace_id,
-                    "provider": provider,
-                    "method": method,
-                    "host": parsed.netloc,
-                    "path": parsed.path.lstrip("/"),
-                    "payload": encoded.decode("utf-8"),
-                    "request_bytes": len(encoded),
-                    "cost": self.per_request_cost_usd,
-                    "langfuse_status": "queued" if configured else "disabled",
-                },
+            measured_cost = float(
+                connection.execute(
+                    text(
+                        "INSERT INTO outbound_http_requests "
+                        "(request_id, organization_id, campaign_run_id, attempt_id, trace_id, "
+                        "operation, provider, method, destination_host, relative_path, "
+                        "request_payload, request_bytes, measured_cost, langfuse_status) VALUES "
+                        "(:request_id, :org, :run_id, :attempt_id, :trace_id, 'target.http', "
+                        ":provider, :method, :host, :path, CAST(:payload AS JSONB), "
+                        ":request_bytes, :cost, :langfuse_status) RETURNING measured_cost"
+                    ),
+                    {
+                        "request_id": request_id,
+                        "org": organization_id,
+                        "run_id": campaign_run_id,
+                        "attempt_id": attempt_id,
+                        "trace_id": trace_id,
+                        "provider": provider,
+                        "method": method,
+                        "host": parsed.netloc,
+                        "path": parsed.path.lstrip("/"),
+                        "payload": encoded.decode("utf-8"),
+                        "request_bytes": len(encoded),
+                        "cost": self.per_request_cost_usd,
+                        "langfuse_status": "queued" if configured else "disabled",
+                    },
+                ).scalar_one()
             )
 
         langfuse_state = None
         langfuse_status = "queued" if configured else "disabled"
-        if configured:
+        parent_observation_id: str | None = None
+        if red_team_execution_id:
+            same_attempt_parent = (
+                self._agent_campaign_ids.get(red_team_execution_id) == campaign_run_id
+                and self._agent_attempt_ids.get(red_team_execution_id) == attempt_id
+                and self._agent_roles.get(red_team_execution_id) == "red_team"
+            )
+            parent_observation_id = (
+                self._agent_observation_ids.get(red_team_execution_id)
+                if same_attempt_parent
+                else None
+            )
+            if parent_observation_id is None and configured:
+                # Correlation projection must never change or retry target traffic. Keep the
+                # durable request, skip an incorrectly rooted external observation, and make the
+                # acceptance verifier reject the campaign.
+                langfuse_status = "error"
+                with contextlib.suppress(Exception), self.engine.begin() as connection:
+                    connection.execute(
+                        text(
+                            "UPDATE outbound_http_requests SET langfuse_status = 'error' "
+                            "WHERE request_id = :request_id"
+                        ),
+                        {"request_id": request_id},
+                    )
+        langfuse_metadata = _sanitize(
+            {
+                **metadata,
+                "deployment.environment": self.environment,
+                "target.provider": provider,
+                "http.method": method,
+                "http.request.body.size": len(encoded),
+                "http.request.body.sha256": request_sha256,
+                "server.address": parsed.hostname,
+                "url.path": parsed.path,
+                "cost.usd": measured_cost,
+                "request_id": request_id,
+            },
+            redactions,
+        )
+        if configured and langfuse_status == "queued":
             try:
                 langfuse_state = self.langfuse.start(
                     trace_id=trace_id,
@@ -505,18 +589,9 @@ class OutboundHttpTelemetry:
                         "sha256": request_sha256,
                         "bytes": len(encoded),
                     },
-                    metadata={
-                        **metadata,
-                        "deployment.environment": self.environment,
-                        "target.provider": provider,
-                        "http.method": method,
-                        "http.request.body.size": len(encoded),
-                        "http.request.body.sha256": request_sha256,
-                        "server.address": parsed.hostname,
-                        "url.path": parsed.path,
-                        "cost.usd": self.per_request_cost_usd,
-                    },
-                    measured_cost=self.per_request_cost_usd,
+                    metadata=langfuse_metadata,
+                    measured_cost=measured_cost,
+                    parent_observation_id=parent_observation_id,
                 )
             except Exception:
                 _logger.warning("Langfuse observation start failed")
@@ -535,7 +610,9 @@ class OutboundHttpTelemetry:
             request_id=request_id,
             trace_id=trace_id,
             started_monotonic=self.monotonic(),
+            measured_cost=measured_cost,
             redactions=redactions,
+            metadata=dict(langfuse_metadata),
             langfuse_state=langfuse_state,
             langfuse_status=langfuse_status,
         )
@@ -581,19 +658,21 @@ class OutboundHttpTelemetry:
 
         metadata = _sanitize(
             {
-            "deployment.environment": self.environment,
-            "organization_id": str(row["organization_id"]),
-            "campaign_run_id": str(row["campaign_run_id"]),
-            "attempt_id": (str(row["attempt_id"]) if row["attempt_id"] is not None else None),
-            "parent_execution_id": (
-                str(row["parent_execution_id"]) if row["parent_execution_id"] is not None else None
-            ),
-            "agent.execution_id": execution_id,
-            "agent.role": str(row["agent_role"]),
-            "agent.provider": str(row["provider"]),
-            "agent.model": str(row["model"]),
-            "agent.execution_mode": str(row["execution_mode"]),
-            "agent.input_sha256": str(row["input_sha256"]),
+                "deployment.environment": self.environment,
+                "organization_id": str(row["organization_id"]),
+                "campaign_run_id": str(row["campaign_run_id"]),
+                "attempt_id": (str(row["attempt_id"]) if row["attempt_id"] is not None else None),
+                "parent_execution_id": (
+                    str(row["parent_execution_id"])
+                    if row["parent_execution_id"] is not None
+                    else None
+                ),
+                "agent.execution_id": execution_id,
+                "agent.role": str(row["agent_role"]),
+                "agent.provider": str(row["provider"]),
+                "agent.model": str(row["model"]),
+                "agent.execution_mode": str(row["execution_mode"]),
+                "agent.input_sha256": str(row["input_sha256"]),
             },
             redactions,
         )
@@ -634,6 +713,10 @@ class OutboundHttpTelemetry:
         if langfuse_state is not None:
             self._agent_observation_ids[execution_id] = langfuse_state[3]
             self._agent_campaign_ids[execution_id] = str(row["campaign_run_id"])
+            self._agent_attempt_ids[execution_id] = (
+                str(row["attempt_id"]) if row["attempt_id"] is not None else None
+            )
+            self._agent_roles[execution_id] = str(row["agent_role"])
         self._agent_handles[execution_id] = _AgentHandle(
             execution_id=execution_id,
             campaign_run_id=str(row["campaign_run_id"]),
@@ -643,6 +726,16 @@ class OutboundHttpTelemetry:
             metadata=dict(metadata),
             langfuse_state=langfuse_state,
         )
+
+    def bind_agent_attempt(self, *, execution_id: str, attempt_id: str) -> None:
+        """Update in-process projection metadata after durable Red Team attempt binding."""
+
+        handle = self._agent_handles.get(execution_id)
+        if handle is None:
+            return
+        handle.metadata["attempt_id"] = attempt_id
+        if execution_id in self._agent_observation_ids:
+            self._agent_attempt_ids[execution_id] = attempt_id
 
     def finish_agent(
         self,
@@ -770,6 +863,8 @@ class OutboundHttpTelemetry:
                 continue
             self._agent_campaign_ids.pop(execution_id, None)
             self._agent_observation_ids.pop(execution_id, None)
+            self._agent_attempt_ids.pop(execution_id, None)
+            self._agent_roles.pop(execution_id, None)
 
     def flush(self) -> None:
         self._drain_pending_agent_finishes()
@@ -781,36 +876,35 @@ class OutboundHttpTelemetry:
             self.langfuse.flush()
         except Exception:
             _logger.warning("Langfuse flush failed")
-            status = "error"
+            try:
+                with self.engine.begin() as connection:
+                    if request_ids:
+                        connection.execute(
+                            text(
+                                "UPDATE outbound_http_requests SET langfuse_status = 'error' "
+                                "WHERE request_id = ANY(:request_ids) "
+                                "AND langfuse_status = 'queued'"
+                            ),
+                            {"request_ids": list(request_ids)},
+                        )
+                    if agent_execution_ids:
+                        connection.execute(
+                            text(
+                                "UPDATE agent_executions SET langfuse_status = 'error' "
+                                "WHERE execution_id = ANY(:execution_ids) "
+                                "AND langfuse_status = 'queued'"
+                            ),
+                            {"execution_ids": list(agent_execution_ids)},
+                        )
+            except Exception:
+                # Retain the identifiers until the durable failure state can be reconciled.
+                _logger.warning("Langfuse delivery failure persistence failed")
+                return
         else:
-            status = "exported"
-        try:
-            with self.engine.begin() as connection:
-                if request_ids:
-                    connection.execute(
-                        text(
-                            "UPDATE outbound_http_requests SET langfuse_status = :status "
-                            "WHERE request_id = ANY(:request_ids) AND langfuse_status = 'queued'"
-                        ),
-                        {"status": status, "request_ids": list(request_ids)},
-                    )
-                if agent_execution_ids:
-                    connection.execute(
-                        text(
-                            "UPDATE agent_executions SET langfuse_status = :status "
-                            "WHERE execution_id = ANY(:execution_ids) "
-                            "AND langfuse_status = 'queued'"
-                        ),
-                        {
-                            "status": status,
-                            "execution_ids": list(agent_execution_ids),
-                        },
-                    )
-        except Exception:
-            # Keep the identifiers in memory. The SDK flush may already have succeeded, but
-            # retrying its empty queue is safer than losing durable delivery reconciliation.
-            _logger.warning("Langfuse delivery status persistence failed")
-            return
+            # A non-raising SDK flush is only a local checkpoint. Langfuse/OTel can report
+            # exporter failures without raising here, so durable rows remain queued until the
+            # exact remote observations are queried back and recorded by the verifier.
+            _logger.debug("Langfuse flush completed; remote query-back verification is pending")
         self._queued_request_ids.difference_update(request_ids)
         self._queued_agent_execution_ids.difference_update(agent_execution_ids)
 

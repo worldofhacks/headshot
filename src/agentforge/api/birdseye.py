@@ -198,7 +198,10 @@ def build_birdseye_snapshot(
             connection,
             "SELECT count(*) FILTER (WHERE langfuse_status = 'queued') AS export_queued, "
             "count(*) FILTER (WHERE langfuse_status = 'error') AS export_error, "
+            "count(*) FILTER (WHERE langfuse_status = 'disabled') AS export_disabled, "
             "count(*) FILTER (WHERE langfuse_status = 'exported') AS export_complete, "
+            "count(*) FILTER (WHERE langfuse_verified_at IS NOT NULL) AS verified_count, "
+            "max(langfuse_verified_at) AS last_verified_at, "
             "coalesce(sum(measured_cost), 0) AS measured_cost, "
             "percentile_cont(0.5) WITHIN GROUP (ORDER BY duration_ms) "
             "FILTER (WHERE duration_ms IS NOT NULL) AS p50_ms, "
@@ -731,6 +734,11 @@ def build_birdseye_snapshot(
         "sum(input_tokens) AS input_tokens, sum(output_tokens) AS output_tokens, "
         "count(*) FILTER (WHERE input_tokens IS NOT NULL OR output_tokens IS NOT NULL) "
         "AS token_observation_count, "
+        "count(*) FILTER (WHERE execution_mode = 'hosted_advisory') "
+        "AS hosted_execution_count, "
+        "count(*) FILTER (WHERE execution_mode = 'hosted_advisory' "
+        "AND input_tokens IS NOT NULL AND output_tokens IS NOT NULL) "
+        "AS hosted_accounted_count, "
         "percentile_cont(0.5) WITHIN GROUP (ORDER BY duration_ms) "
         "FILTER (WHERE duration_ms IS NOT NULL) AS p50_ms, "
         "percentile_cont(0.95) WITHIN GROUP (ORDER BY duration_ms) "
@@ -741,6 +749,8 @@ def build_birdseye_snapshot(
         "count(*) FILTER (WHERE langfuse_status = 'exported') AS export_count, "
         "count(*) FILTER (WHERE langfuse_status = 'queued') AS export_queued, "
         "count(*) FILTER (WHERE langfuse_status = 'error') AS export_errors, "
+        "count(*) FILTER (WHERE langfuse_verified_at IS NOT NULL) AS verified_count, "
+        "max(langfuse_verified_at) AS last_verified_at, "
         "max(finished_at) AS last_activity_at "
         "FROM agent_executions WHERE organization_id = :org "
         "AND (CAST(:run_id AS varchar) IS NULL OR campaign_run_id = :run_id) "
@@ -750,8 +760,28 @@ def build_birdseye_snapshot(
     agent_metrics_by_role = {str(metric["agent_role"]): metric for metric in agent_metric_rows}
     agent_export_queued = sum(int(metric.get("export_queued") or 0) for metric in agent_metric_rows)
     agent_export_errors = sum(int(metric.get("export_errors") or 0) for metric in agent_metric_rows)
-    agent_export_complete = sum(
-        int(metric.get("export_count") or 0) for metric in agent_metric_rows
+    agent_export_disabled = sum(
+        int(metric.get("export_disabled") or 0) for metric in agent_metric_rows
+    )
+    agent_export_not_attempted = sum(
+        int(metric.get("export_not_attempted") or 0) for metric in agent_metric_rows
+    )
+    agent_verified_count = sum(
+        int(metric.get("verified_count") or 0) for metric in agent_metric_rows
+    )
+    agent_last_verified_at = max(
+        (
+            metric["last_verified_at"]
+            for metric in agent_metric_rows
+            if metric.get("last_verified_at") is not None
+        ),
+        default=None,
+    )
+    observed_observation_count = (
+        int(request_metrics.get("verified_count") or 0) + agent_verified_count
+    )
+    awaiting_verification_count = (
+        int(request_metrics.get("export_queued") or 0) + agent_export_queued
     )
     agent_export_activity = max(
         (
@@ -769,6 +799,17 @@ def build_birdseye_snapshot(
             assignment = configuration
         execution = execution_by_role.get(definition.role)
         metrics = agent_metrics_by_role.get(definition.role, {})
+        execution_count = int(metrics.get("execution_count", 0))
+        hosted_execution_count = int(metrics.get("hosted_execution_count", 0))
+        hosted_accounted_count = int(metrics.get("hosted_accounted_count", 0))
+        if execution_count == 0:
+            accounting_status = "not_applicable"
+        elif hosted_execution_count == 0 or hosted_accounted_count == hosted_execution_count:
+            accounting_status = "measured"
+        elif hosted_accounted_count == 0 and hosted_execution_count == execution_count:
+            accounting_status = "unavailable"
+        else:
+            accounting_status = "partial"
         component_rows.append(
             {
                 "component_id": f"agent:{definition.role}",
@@ -798,13 +839,12 @@ def build_birdseye_snapshot(
                 "agent_langfuse_status": (
                     execution.get("langfuse_status") if execution is not None else None
                 ),
-                "agent_execution_count": int(metrics.get("execution_count", 0)),
+                "agent_execution_count": execution_count,
                 "agent_measured_cost": float(metrics.get("measured_cost", 0.0)),
+                "agent_accounting_status": accounting_status,
                 "agent_input_tokens": metrics.get("input_tokens"),
                 "agent_output_tokens": metrics.get("output_tokens"),
-                "agent_token_observation_count": int(
-                    metrics.get("token_observation_count", 0)
-                ),
+                "agent_token_observation_count": int(metrics.get("token_observation_count", 0)),
                 "agent_p50_ms": metrics.get("p50_ms"),
                 "agent_p95_ms": metrics.get("p95_ms"),
                 "agent_export_not_attempted": int(metrics.get("export_not_attempted", 0)),
@@ -812,6 +852,8 @@ def build_birdseye_snapshot(
                 "agent_export_queued": int(metrics.get("export_queued", 0)),
                 "agent_export_count": int(metrics.get("export_count", 0)),
                 "agent_export_errors": int(metrics.get("export_errors", 0)),
+                "agent_verified_count": int(metrics.get("verified_count", 0)),
+                "agent_last_verified_at": metrics.get("last_verified_at"),
             }
         )
 
@@ -856,11 +898,15 @@ def build_birdseye_snapshot(
                 else (f"Awaiting {queue_queued} queued job(s)" if queue_queued else "Queue clear")
             )
         elif component_id == "langfuse":
-            export_queued = int(request_metrics.get("export_queued") or 0) + agent_export_queued
             task = (
-                f"Exporting {export_queued} queued observation(s)"
-                if export_queued
-                else "Telemetry export queue clear"
+                f"Awaiting exact remote verification for {awaiting_verification_count} "
+                "observation(s)"
+                if awaiting_verification_count
+                else (
+                    f"Remote query-back verified {observed_observation_count} observation(s)"
+                    if observed_observation_count
+                    else "Telemetry verification queue clear"
+                )
             )
         else:
             task = str(component["detail"])
@@ -909,6 +955,11 @@ def build_birdseye_snapshot(
                     if component.get("agent_role") and int(component["agent_execution_count"]) > 0
                     else None
                 ),
+                "accounting_status": (
+                    str(component["agent_accounting_status"])
+                    if component.get("agent_role")
+                    else None
+                ),
                 "currency": (
                     "USD"
                     if component.get("agent_role") and int(component["agent_execution_count"]) > 0
@@ -937,22 +988,22 @@ def build_birdseye_snapshot(
                     else None
                 ),
                 "langfuse_disabled_count": (
-                    int(component["agent_export_disabled"])
-                    if component.get("agent_role")
-                    else None
+                    int(component["agent_export_disabled"]) if component.get("agent_role") else None
                 ),
                 "langfuse_queued_count": (
-                    int(component["agent_export_queued"])
-                    if component.get("agent_role")
-                    else None
+                    int(component["agent_export_queued"]) if component.get("agent_role") else None
                 ),
                 "langfuse_exported_count": (
                     int(component["agent_export_count"]) if component.get("agent_role") else None
                 ),
                 "langfuse_error_count": (
-                    int(component["agent_export_errors"])
-                    if component.get("agent_role")
-                    else None
+                    int(component["agent_export_errors"]) if component.get("agent_role") else None
+                ),
+                "langfuse_verified_count": (
+                    int(component["agent_verified_count"]) if component.get("agent_role") else None
+                ),
+                "last_langfuse_verified_at": (
+                    component["agent_last_verified_at"] if component.get("agent_role") else None
                 ),
                 "langfuse_status": (
                     str(component["agent_langfuse_status"])
@@ -1040,17 +1091,30 @@ def build_birdseye_snapshot(
                 "active"
                 if int(request_metrics.get("export_queued") or 0) + agent_export_queued
                 else (
-                    "complete"
-                    if int(request_metrics.get("export_complete") or 0) + agent_export_complete
-                    else "idle"
+                    "unavailable"
+                    if int(request_metrics.get("export_disabled") or 0)
+                    + agent_export_disabled
+                    + agent_export_not_attempted
+                    else ("complete" if observed_observation_count else "idle")
                 )
             )
         ),
-        "Fail-soft export; PostgreSQL remains authoritative",
+        (
+            f"{observed_observation_count} remotely verified; "
+            f"{awaiting_verification_count} awaiting exact query-back; "
+            "PostgreSQL remains authoritative"
+            if observed_observation_count or awaiting_verification_count
+            else "Fail-soft export; PostgreSQL remains authoritative"
+        ),
         at=max(
             (
                 value
-                for value in (request_metrics.get("last_activity_at"), agent_export_activity)
+                for value in (
+                    request_metrics.get("last_activity_at"),
+                    agent_export_activity,
+                    request_metrics.get("last_verified_at"),
+                    agent_last_verified_at,
+                )
                 if value is not None
             ),
             default=None,

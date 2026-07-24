@@ -5,6 +5,7 @@ import { createApiClient } from "../src/api/client";
 import {
   decodeApprovals,
   decodeApprovalDetail,
+  decodeAgentActivity,
   decodeAgentPrompt,
   decodeAgents,
   decodeAttempts,
@@ -20,6 +21,7 @@ import {
   decodePrincipal,
   decodeReports,
   decodeTargets,
+  decodeTooling,
   decodeTraces,
 } from "../src/api/read-models";
 import { useResource } from "../src/hooks/useResource";
@@ -30,6 +32,9 @@ const caps = {
   max_attempts_per_run: 2,
   target_requests_per_second: 0.5,
   run_timeout_seconds: 60,
+  logical_case_limit: null,
+  physical_request_limit: null,
+  target_retries_per_turn: null,
 };
 const scope = {
   target_id: "target-1",
@@ -66,7 +71,7 @@ const finding = {
   evidence_provenance: "synthetic_offline",
   campaign_run_id: "run-1",
   attempt_id: "attempt-1",
-  evidence_content_hash: "content-1",
+  evidence_content_hash: "c".repeat(64),
   history: [{ decision: "confirmed", actor_user_id: "user-1", rationale: "evidence", created_at: at }],
 };
 const verification = {
@@ -96,6 +101,11 @@ const verification = {
     confidence: 1,
     reason_codes: ["canary_hit"],
     confirmation_source: "canary",
+    oracle_refs: ["oracle://synthetic/case-1"],
+    canary_refs: ["canary://synthetic/case-1"],
+    rationale: null,
+    rationale_availability: "unavailable",
+    rationale_detail: "This contract stores typed reason codes.",
     error_code: null,
   },
   report_id: "report-1",
@@ -201,12 +211,12 @@ const validResources: Array<[string, (value: unknown) => unknown, unknown]> = [
   [
     "traces",
     decodeTraces,
-    [{ request_id: "request-1", execution_id: null, parent_execution_id: null, trace_id: "trace-1", campaign_id: "run-1", attempt_id: "attempt-1", operation: "target.http", provider: "openemr", agent_role: null, execution_mode: null, method: "POST", destination_host: "target.invalid", relative_path: "chat", status: "succeeded", status_code: 200, error_code: null, started_at: at, finished_at: "2026-07-21T00:00:00.012Z", duration_ms: 12.5, request_bytes: 25, response_bytes: 50, measured_cost: 0.01, currency: "USD", input_tokens: null, output_tokens: null, langfuse_status: "exported", request_preview: '{"turns":["synthetic"]}', response_preview: '{"answer":"safe"}', request_sha256: "a".repeat(64), response_sha256: "b".repeat(64), inspection_flags: [], inspection_owasp_mappings: [] }],
+    [{ request_id: "request-1", execution_id: null, parent_execution_id: null, trace_id: "trace-1", campaign_id: "run-1", attempt_id: "attempt-1", operation: "target.http", provider: "openemr", agent_role: null, execution_mode: null, method: "POST", destination_host: "target.invalid", relative_path: "chat", status: "succeeded", status_code: 200, error_code: null, started_at: at, finished_at: "2026-07-21T00:00:00.012Z", duration_ms: 12.5, request_bytes: 25, response_bytes: 50, measured_cost: 0.01, accounting_status: "measured", currency: "USD", input_tokens: null, output_tokens: null, p50_duration_ms: null, p95_duration_ms: null, langfuse_status: "queued", langfuse_verified_at: null, request_preview: '{"turns":["synthetic"]}', response_preview: '{"answer":"safe"}', request_sha256: "a".repeat(64), response_sha256: "b".repeat(64), inspection_flags: [], inspection_owasp_mappings: [] }],
   ],
   [
     "costs",
     decodeCosts,
-    [{ accounting_id: "accounting-1", campaign_id: "run-1", provider: "provider", agent_role: null, record_kind: "campaign", measured_cost: 0.25, currency: "USD", request_count: 5, execution_count: 0, attempt_count: 5, confirmed_finding_count: 1, average_cost_per_request: 0.05, input_tokens: null, output_tokens: null, token_observation_count: 0, budget_usd: 1, budget_utilization: 0.25, duration_ms: 2500, execution_profile: "live", started_at: at, ended_at: "2026-07-21T00:00:02.500Z", recorded_at: at }],
+    [{ accounting_id: "accounting-1", campaign_id: "run-1", provider: "provider", agent_role: null, record_kind: "campaign", measured_cost: 0.25, accounting_status: "measured", currency: "USD", request_count: 5, execution_count: 0, attempt_count: 5, confirmed_finding_count: 1, average_cost_per_request: 0.05, input_tokens: null, output_tokens: null, token_observation_count: 0, p50_duration_ms: null, p95_duration_ms: null, budget_usd: 1, budget_utilization: 0.25, duration_ms: 2500, execution_profile: "live", started_at: at, ended_at: "2026-07-21T00:00:02.500Z", recorded_at: at }],
   ],
   [
     "targets and surfaces",
@@ -224,6 +234,40 @@ const validResources: Array<[string, (value: unknown) => unknown, unknown]> = [
     [{ component_id: "runner-1", name: "runner", kind: "runner", availability: "operational and evidenced", environment: "staging", detail: "private worker heartbeat", version: "1", target_access: "none", capabilities: [], owasp_llm: [], owasp_web: [], operational_scope: [], adapter_only_scope: [], execution_evidence: [], heartbeat_at: at }],
   ],
   [
+    "tooling",
+    decodeTooling,
+    [{
+      tool_id: "promptfoo",
+      name: "Promptfoo",
+      version: "1",
+      kind: "llm-eval",
+      availability: "operational and evidenced",
+      target_access: "policy_gateway_only",
+      target_id: "target-1",
+      target_version: "1.0.0",
+      target_lifecycle: "ready",
+      surface_id: "surface-1",
+      surface_version: "1.0.0",
+      surface_kind: "chat",
+      endpoint: "https://target.invalid/api",
+      applicability: "in_campaign",
+      execution_mode: "reviewed candidates through policy gateway",
+      scope_reason: "The case is inside the authorized corpus.",
+      requires_separate_authorization: false,
+      capabilities: ["prompt injection"],
+      owasp_llm: ["LLM01:2025"],
+      owasp_web: ["A03:2021"],
+      reviewed_candidate_count: 1,
+      executed_attempt_count: 1,
+      recorded_scan_count: 0,
+      recorded_finding_count: 1,
+      last_executed_at: at,
+      runtime_state: "evidenced",
+      evidenced_finding_count: 1,
+      last_error_code: null,
+    }],
+  ],
+  [
     "agents",
     decodeAgents,
     [{
@@ -238,7 +282,7 @@ const validResources: Array<[string, (value: unknown) => unknown, unknown]> = [
         role: "orchestrator",
         provider: "headshot",
         model: "coverage-governor-v1",
-        resolved_model: "coverage-governor-v1",
+        resolved_model: null,
         upstream_provider: null,
         prompt_sha256: "d".repeat(64),
         prompt_version: "1",
@@ -256,6 +300,7 @@ const validResources: Array<[string, (value: unknown) => unknown, unknown]> = [
       failed_count: 0,
       skipped_count: 0,
       measured_cost: 0,
+      accounting_status: "measured",
       currency: "USD",
       input_tokens: null,
       output_tokens: null,
@@ -268,6 +313,8 @@ const validResources: Array<[string, (value: unknown) => unknown, unknown]> = [
       langfuse_queued_count: 0,
       langfuse_exported_count: 1,
       langfuse_error_count: 0,
+      langfuse_verified_count: 1,
+      last_langfuse_verified_at: at,
       last_activity_at: at,
       last_status: "succeeded",
       last_campaign_run_id: "run-1",
@@ -371,6 +418,7 @@ const validResources: Array<[string, (value: unknown) => unknown, unknown]> = [
         p95_latency_ms: 25,
         execution_count: null,
         measured_cost_usd: null,
+        accounting_status: null,
         currency: null,
         input_tokens: null,
         output_tokens: null,
@@ -380,6 +428,8 @@ const validResources: Array<[string, (value: unknown) => unknown, unknown]> = [
         langfuse_queued_count: null,
         langfuse_exported_count: null,
         langfuse_error_count: null,
+        langfuse_verified_count: null,
+        last_langfuse_verified_at: null,
         langfuse_status: null,
         queue_depth: 2,
         target_access: "policy-gated",
@@ -426,6 +476,22 @@ const validResources: Array<[string, (value: unknown) => unknown, unknown]> = [
   ],
 ];
 
+const arrayFixtureRecord = (name: string): Record<string, unknown> => {
+  const fixture = validResources.find(([candidate]) => candidate === name)?.[2];
+  if (!Array.isArray(fixture) || fixture.length === 0) {
+    throw new Error(`Missing array fixture: ${name}`);
+  }
+  return structuredClone(fixture[0]) as Record<string, unknown>;
+};
+
+const objectFixture = (name: string): Record<string, unknown> => {
+  const fixture = validResources.find(([candidate]) => candidate === name)?.[2];
+  if (fixture === null || Array.isArray(fixture) || typeof fixture !== "object") {
+    throw new Error(`Missing object fixture: ${name}`);
+  }
+  return structuredClone(fixture) as Record<string, unknown>;
+};
+
 describe("v1 read-model decoders", () => {
   it.each(validResources)("accepts the explicit %s contract", (_name, decode, value) => {
     expect(decode(value)).toEqual(value);
@@ -434,6 +500,31 @@ describe("v1 read-model decoders", () => {
   it.each(validResources)("rejects malformed ready %s data", (_name, decode, value) => {
     const malformed = Array.isArray(value) ? [{ unexpected: true }] : { unexpected: true };
     expect(() => decode(malformed)).toThrow("Invalid");
+  });
+
+  it("accepts an unavailable security-tool artifact binding without invented labels", () => {
+    const unverifiedToolFinding = {
+      ...finding,
+      source_kind: "security_tool",
+      category: null,
+      target_version: null,
+      evidence_integrity: "unavailable",
+      evidence_content_hash: null,
+      campaign_run_id: null,
+      attempt_id: null,
+      evidence_provenance: "scan_only",
+    };
+
+    expect(decodeFindings([unverifiedToolFinding])).toEqual([unverifiedToolFinding]);
+  });
+
+  it.each([
+    ["verified without a hash", { evidence_integrity: "verified", evidence_content_hash: null }],
+    ["verified with a short hash", { evidence_integrity: "verified", evidence_content_hash: "abc" }],
+    ["verified with uppercase hex", { evidence_integrity: "verified", evidence_content_hash: "A".repeat(64) }],
+    ["unavailable with a hash", { evidence_integrity: "unavailable", evidence_content_hash: "a".repeat(64) }],
+  ])("rejects a finding that is %s", (_label, binding) => {
+    expect(() => decodeFindings([{ ...finding, ...binding }])).toThrow("Invalid finding read model");
   });
 
   it("decodes a non-null hosted campaign binding without weakening exact keys", () => {
@@ -517,5 +608,378 @@ describe("v1 read-model decoders", () => {
     await waitFor(() => expect(result.current.result.state).toBe("unavailable"));
     expect(result.current.result.reason_code).toBe("repository_missing");
     expect(decode).not.toHaveBeenCalled();
+  });
+
+  it("reconciles cost token observations while allowing one-sided provider usage", () => {
+    const cost = arrayFixtureRecord("costs");
+    const oneSided = {
+      ...cost,
+      input_tokens: 120,
+      output_tokens: null,
+      token_observation_count: 1,
+    };
+
+    expect(decodeCosts([oneSided])).toEqual([oneSided]);
+    expect(() => decodeCosts([{
+      ...cost,
+      input_tokens: 120,
+      token_observation_count: 0,
+    }])).toThrow("Invalid cost read model");
+    expect(() => decodeCosts([{
+      ...cost,
+      input_tokens: null,
+      output_tokens: null,
+      token_observation_count: 1,
+    }])).toThrow("Invalid cost read model");
+  });
+
+  it("requires authoritative paired role latency only for completed agent costs", () => {
+    const campaign = arrayFixtureRecord("costs");
+    const agent = {
+      ...campaign,
+      accounting_id: "agent-cost-1",
+      provider: "agent:red_team:headshot/full-scan-corpus-v1",
+      agent_role: "red_team",
+      record_kind: "agent",
+      request_count: 0,
+      execution_count: 1,
+      attempt_count: 1,
+      confirmed_finding_count: 0,
+      average_cost_per_request: 0,
+      budget_usd: null,
+      budget_utilization: null,
+      p50_duration_ms: 10,
+      p95_duration_ms: 20,
+    };
+
+    expect(decodeCosts([agent])).toEqual([agent]);
+    for (const malformed of [
+      { ...campaign, p50_duration_ms: 10, p95_duration_ms: 20 },
+      { ...agent, p95_duration_ms: null },
+      { ...agent, p50_duration_ms: 30 },
+      { ...agent, execution_count: 0 },
+    ]) {
+      expect(() => decodeCosts([malformed])).toThrow("Invalid cost read model");
+    }
+  });
+
+  it("only treats query-back verified Langfuse records as remotely observed", () => {
+    const trace = arrayFixtureRecord("traces");
+    const observed = { ...trace, langfuse_status: "exported", langfuse_verified_at: at };
+    const historical = { ...trace, langfuse_status: "historical_not_instrumented" };
+
+    expect(decodeTraces([trace])).toEqual([trace]);
+    expect(decodeTraces([observed])).toEqual([observed]);
+    expect(decodeTraces([historical])).toEqual([historical]);
+    expect(() => decodeTraces([{
+      ...trace,
+      langfuse_status: "exported",
+    }])).toThrow("Invalid trace read model");
+    expect(() => decodeTraces([{
+      ...observed,
+      langfuse_status: "error",
+    }])).toThrow("Invalid trace read model");
+  });
+
+  it("accepts server-projected role latency only on agent traces", () => {
+    const physical = arrayFixtureRecord("traces");
+    const agent = {
+      ...physical,
+      request_id: null,
+      execution_id: "execution-1",
+      agent_role: "red_team",
+      execution_mode: "deterministic",
+      method: null,
+      destination_host: null,
+      relative_path: null,
+      status_code: null,
+      request_bytes: 0,
+      response_bytes: null,
+      p50_duration_ms: 10,
+      p95_duration_ms: 20,
+    };
+
+    expect(decodeTraces([agent])).toEqual([agent]);
+    for (const malformed of [
+      { ...physical, p50_duration_ms: 10, p95_duration_ms: 20 },
+      { ...agent, p95_duration_ms: null },
+      { ...agent, p50_duration_ms: 30 },
+    ]) {
+      expect(() => decodeTraces([malformed])).toThrow("Invalid trace read model");
+    }
+  });
+
+  it("reconciles aggregate agent execution, delivery, token, and latency metrics", () => {
+    const agent = arrayFixtureRecord("agents");
+    const oneSidedTokens = {
+      ...agent,
+      input_tokens: null,
+      output_tokens: 30,
+      token_observation_count: 1,
+    };
+    const runningOnly = {
+      ...agent,
+      execution_count: 1,
+      running_count: 1,
+      succeeded_count: 0,
+      average_duration_ms: null,
+      p50_duration_ms: null,
+      p95_duration_ms: null,
+      langfuse_queued_count: 1,
+      langfuse_exported_count: 0,
+      langfuse_verified_count: 0,
+      last_langfuse_verified_at: null,
+      last_status: "running",
+    };
+
+    expect(decodeAgents([oneSidedTokens])).toEqual([oneSidedTokens]);
+    expect(decodeAgents([runningOnly])).toEqual([runningOnly]);
+    for (const malformed of [
+      { ...agent, running_count: 1 },
+      { ...agent, langfuse_error_count: 1 },
+      { ...agent, token_observation_count: 1 },
+      { ...agent, p95_duration_ms: null },
+      { ...agent, langfuse_verified_count: 2 },
+      { ...agent, last_langfuse_verified_at: null },
+      { ...runningOnly, p50_duration_ms: 5 },
+    ]) {
+      expect(() => decodeAgents([malformed])).toThrow("Invalid agent read model");
+    }
+  });
+
+  it("accepts an unavailable or durably observed provider-served model identity", () => {
+    const agent = arrayFixtureRecord("agents");
+    const assignment = agent.active_assignment;
+    if (assignment === null || typeof assignment !== "object" || Array.isArray(assignment)) {
+      throw new Error("Missing active assignment fixture");
+    }
+    const observed = {
+      ...agent,
+      active_assignment: {
+        ...assignment,
+        resolved_model: "anthropic/claude-opus-4.8",
+        upstream_provider: "Anthropic",
+      },
+    };
+
+    expect(decodeAgents([agent])).toEqual([agent]);
+    expect(decodeAgents([observed])).toEqual([observed]);
+    for (const partialOrMalformed of [
+      { ...assignment, resolved_model: "anthropic/claude-opus-4.8", upstream_provider: null },
+      { ...assignment, resolved_model: null, upstream_provider: "Anthropic" },
+      { ...assignment, resolved_model: 42, upstream_provider: null },
+    ]) {
+      expect(() => decodeAgents([{
+        ...agent,
+        active_assignment: partialOrMalformed,
+      }])).toThrow("Invalid agent assignment read model");
+    }
+  });
+
+  it("enforces running and terminal agent activity shapes", () => {
+    const terminal = {
+      execution_id: "execution-1",
+      campaign_run_id: "run-1",
+      attempt_id: null,
+      parent_execution_id: null,
+      agent_role: "orchestrator",
+      status: "succeeded",
+      provider: "headshot",
+      model: "coverage-governor-v1",
+      execution_mode: "deterministic",
+      configuration_version: 1,
+      input_sha256: "a".repeat(64),
+      output_sha256: "b".repeat(64),
+      input_tokens: null,
+      output_tokens: null,
+      measured_cost: 0,
+      accounting_status: "measured",
+      currency: "USD",
+      trace_id: "trace-1",
+      langfuse_status: "exported",
+      langfuse_verified_at: at,
+      detail: {},
+      error_code: null,
+      started_at: at,
+      finished_at: at,
+      duration_ms: 5,
+    };
+    const running = {
+      ...terminal,
+      status: "running",
+      output_sha256: null,
+      finished_at: null,
+      duration_ms: null,
+      langfuse_status: "queued",
+      langfuse_verified_at: null,
+    };
+    const hostedMeasured = {
+      ...terminal,
+      execution_mode: "hosted_advisory",
+      input_tokens: 100,
+      output_tokens: 20,
+      measured_cost: 0.01,
+    };
+    const hostedUnavailable = {
+      ...terminal,
+      execution_mode: "hosted_advisory",
+      accounting_status: "unavailable",
+    };
+
+    expect(decodeAgentActivity([terminal])).toEqual([terminal]);
+    expect(decodeAgentActivity([running])).toEqual([running]);
+    expect(decodeAgentActivity([hostedMeasured])).toEqual([hostedMeasured]);
+    expect(decodeAgentActivity([hostedUnavailable])).toEqual([hostedUnavailable]);
+    for (const malformed of [
+      { ...running, finished_at: at },
+      { ...terminal, output_sha256: null },
+      { ...terminal, output_sha256: "not-a-sha256" },
+      { ...terminal, duration_ms: null },
+      { ...running, langfuse_verified_at: at },
+      { ...terminal, accounting_status: "unavailable" },
+      { ...hostedUnavailable, accounting_status: "measured" },
+      { ...hostedUnavailable, input_tokens: 1 },
+      { ...hostedUnavailable, measured_cost: 0.01 },
+    ]) {
+      expect(() => decodeAgentActivity([malformed])).toThrow(
+        "Invalid agent activity read model",
+      );
+    }
+  });
+
+  it("requires internally consistent observability on Birdseye agent nodes", () => {
+    const snapshot = objectFixture("Birdseye snapshot");
+    const existingNode = (
+      snapshot.nodes as Array<Record<string, unknown>>
+    )[0];
+    const agentNode = {
+      ...existingNode,
+      component_id: "agent:judge",
+      name: "Judge",
+      kind: "agent:judge",
+      trust_zone: "evaluation",
+      runtime_state: "ready",
+      current_task: "Latest execution succeeded",
+      p50_latency_ms: 5,
+      p95_latency_ms: 8,
+      execution_count: 1,
+      measured_cost_usd: 0,
+      accounting_status: "measured",
+      currency: "USD",
+      input_tokens: 25,
+      output_tokens: null,
+      token_observation_count: 1,
+      langfuse_not_attempted_count: 0,
+      langfuse_disabled_count: 0,
+      langfuse_queued_count: 0,
+      langfuse_exported_count: 1,
+      langfuse_error_count: 0,
+      langfuse_verified_count: 1,
+      last_langfuse_verified_at: at,
+      langfuse_status: "exported",
+      queue_depth: null,
+    };
+    const unobservedAgentNode = {
+      ...agentNode,
+      runtime_state: "unavailable",
+      p50_latency_ms: null,
+      p95_latency_ms: null,
+      execution_count: 0,
+      measured_cost_usd: null,
+      accounting_status: "not_applicable",
+      currency: null,
+      input_tokens: null,
+      output_tokens: null,
+      token_observation_count: 0,
+      langfuse_exported_count: 0,
+      langfuse_verified_count: 0,
+      last_langfuse_verified_at: null,
+      langfuse_status: null,
+    };
+    const staleRunningAgentNode = {
+      ...agentNode,
+      runtime_state: "stale",
+      current_task: "Running judge campaign work",
+      p50_latency_ms: null,
+      p95_latency_ms: null,
+    };
+    const unavailableAccountingAgentNode = {
+      ...agentNode,
+      measured_cost_usd: 0,
+      accounting_status: "unavailable",
+      input_tokens: null,
+      output_tokens: null,
+      token_observation_count: 0,
+    };
+
+    expect(decodeBirdseye({ ...snapshot, nodes: [agentNode] })).toEqual({
+      ...snapshot,
+      nodes: [agentNode],
+    });
+    expect(decodeBirdseye({ ...snapshot, nodes: [unobservedAgentNode] })).toEqual({
+      ...snapshot,
+      nodes: [unobservedAgentNode],
+    });
+    expect(decodeBirdseye({ ...snapshot, nodes: [staleRunningAgentNode] })).toEqual({
+      ...snapshot,
+      nodes: [staleRunningAgentNode],
+    });
+    expect(decodeBirdseye({
+      ...snapshot,
+      nodes: [unavailableAccountingAgentNode],
+    })).toEqual({
+      ...snapshot,
+      nodes: [unavailableAccountingAgentNode],
+    });
+    for (const malformedNode of [
+      { ...agentNode, execution_count: null },
+      { ...agentNode, langfuse_error_count: 1 },
+      { ...agentNode, token_observation_count: 0 },
+      { ...agentNode, measured_cost_usd: null },
+      { ...agentNode, p95_latency_ms: null },
+      { ...agentNode, langfuse_verified_count: 2 },
+      { ...agentNode, last_langfuse_verified_at: null },
+      { ...agentNode, accounting_status: "not_applicable" },
+      { ...agentNode, accounting_status: "unavailable" },
+    ]) {
+      expect(() => decodeBirdseye({
+        ...snapshot,
+        nodes: [malformedNode],
+      })).toThrow("Invalid Birdseye node read model");
+    }
+  });
+
+  it("keeps agent-only observability null on non-agent Birdseye nodes", () => {
+    const snapshot = objectFixture("Birdseye snapshot");
+    const existingNode = (
+      snapshot.nodes as Array<Record<string, unknown>>
+    )[0];
+
+    expect(() => decodeBirdseye({
+      ...snapshot,
+      nodes: [{ ...existingNode, execution_count: 0 }],
+    })).toThrow("Invalid Birdseye node read model");
+  });
+
+  it("enforces running and terminal Birdseye agent activity timing", () => {
+    const snapshot = objectFixture("Birdseye snapshot");
+    const terminal = (
+      snapshot.agent_activity as Array<Record<string, unknown>>
+    )[0];
+    const running = {
+      ...terminal,
+      status: "running",
+      finished_at: null,
+      duration_ms: null,
+    };
+
+    expect(decodeBirdseye({ ...snapshot, agent_activity: [running] })).toEqual({
+      ...snapshot,
+      agent_activity: [running],
+    });
+    expect(() => decodeBirdseye({
+      ...snapshot,
+      agent_activity: [{ ...terminal, duration_ms: null }],
+    })).toThrow("Invalid Birdseye agent activity read model");
   });
 });

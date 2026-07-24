@@ -77,9 +77,7 @@ def _observation(run_id: str, index: int, *, hit: bool) -> ReplayObservation:
         "attempt_id": attempt_id,
         "state": state,
         "confidence": 1.0 if hit else 0.0,
-        "reason_codes": [
-            "oracle_confirmed" if hit else "non_oracle_uncalibrated_indeterminate"
-        ],
+        "reason_codes": ["oracle_confirmed" if hit else "non_oracle_uncalibrated_indeterminate"],
     }
     if hit:
         verdict["confirmation_source"] = "oracle"
@@ -139,8 +137,7 @@ def test_full_lifecycle_requires_reproduction_then_approval_and_emits_alert() ->
         campaign_run_id="authorized-reproduction-run",
         authorization_scope_hash="b" * 64,
         observations=tuple(
-            _observation("authorized-reproduction-run", index, hit=True)
-            for index in range(1, 3)
+            _observation("authorized-reproduction-run", index, hit=True) for index in range(1, 3)
         ),
     )
     blocked = lifecycle.admission_after_reproduction(
@@ -242,8 +239,7 @@ def test_admission_rejects_a_reproduction_result_with_different_lineage() -> Non
         campaign_run_id="authorized-reproduction-run",
         authorization_scope_hash="b" * 64,
         observations=tuple(
-            _observation("authorized-reproduction-run", index, hit=True)
-            for index in range(1, 3)
+            _observation("authorized-reproduction-run", index, hit=True) for index in range(1, 3)
         ),
     )
     forged = copy.deepcopy(result)

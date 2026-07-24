@@ -140,10 +140,43 @@ def test_happy_dispatch_reaches_the_fake_once(monkeypatch: pytest.MonkeyPatch) -
 
     Baseline behavior only — every other test pins an abort/deny/error edge.
     """
-    adapter = FakeTargetAdapter()
+
+    class CapturingAdapter(FakeTargetAdapter):
+        request: TargetRequest | None = None
+
+        def send(self, request: TargetRequest):
+            self.request = request
+            return super().send(request)
+
+    adapter = CapturingAdapter()
     gw = _gateway(adapter=adapter)
-    result = gw.execute(_attack_attempt(("ping",)), _policy())
+    result = gw.execute(
+        _attack_attempt(("ping",)),
+        _policy(),
+        campaign_run_id="run-live",
+        attempt_id="attempt-live",
+        organization_id="org-live",
+        target_version="target-v1",
+        surface_id="copilot",
+        surface_version="surface-v1",
+        execution_profile="live",
+        red_team_execution_id="red-team-execution-live",
+    )
     assert len(adapter.calls) == 1  # exactly one dispatch reached the adapter
+    assert adapter.request is not None
+    assert adapter.request.metadata == {
+        "campaign_run_id": "run-live",
+        "attempt_id": "attempt-live",
+        "organization_id": "org-live",
+        "case_id": "case-1",
+        "attack_category": "prompt_injection",
+        "target_id": "fake",
+        "target_version": "target-v1",
+        "surface_id": "copilot",
+        "surface_version": "surface-v1",
+        "execution_profile": "live",
+        "red_team_execution_id": "red-team-execution-live",
+    }
     # The gateway returns the authoritative evidence with a canonical hash + fresh run nonce.
     assert result.campaign_run_id
     assert result.content_hash

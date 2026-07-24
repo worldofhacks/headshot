@@ -38,6 +38,21 @@ const PRODUCTION_BOUNDARY = [
 
 const FORBIDDEN = [...PRODUCT_COUPLING, ...PRODUCTION_BOUNDARY];
 
+function isRequiredReportContractField(file, line, pattern) {
+  if (pattern.source !== "clinical") return false;
+  const path = relative(ROOT, file);
+  if (path === "src/api/read-models.ts") {
+    return /^\s*"clinical_impact",\s*$/.test(line);
+  }
+  if (path === "src/types.ts") {
+    return /^\s*clinical_impact:\s*string;\s*$/.test(line);
+  }
+  if (path === "src/screens/ConsoleScreens.tsx") {
+    return /^\s*\["Clinical impact",\s*selected\.clinical_impact\],\s*$/.test(line);
+  }
+  return false;
+}
+
 function collect(dir, out) {
   for (const name of readdirSync(dir)) {
     if (SKIP_DIRS.has(name)) continue;
@@ -71,7 +86,7 @@ for (const file of files) {
   const lines = text.split(/\n/);
   for (const re of FORBIDDEN) {
     lines.forEach((ln, i) => {
-      if (re.test(ln)) {
+      if (re.test(ln) && !isRequiredReportContractField(file, ln, re)) {
         failures++;
         console.error(`FORBIDDEN ${re} — ${relative(ROOT, file)}:${i + 1}: ${ln.trim().slice(0, 110)}`);
       }

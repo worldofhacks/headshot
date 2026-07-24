@@ -1,16 +1,37 @@
 """Explicit v1 read contracts for authoritative console projections.
 
-Only models backed by the integrated PostgreSQL schema are decoded as ready today. Models
-whose repositories are still absent document the v1 boundary without manufacturing rows;
-their endpoints return a typed ``unavailable`` envelope until those repositories exist.
+Every adapter registered below has a concrete PostgreSQL or code-owned projection. Reads fail
+closed as typed ``unavailable`` results when a query, integrity check, or strict schema check
+cannot be satisfied; they never manufacture placeholder rows.
 """
 
 from __future__ import annotations
 
 import datetime
-from typing import Any, Literal
+from typing import Any, Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
+
+_LANGFUSE_DELIVERY_STATES = (
+    "not_attempted",
+    "disabled",
+    "queued",
+    "exported",
+    "error",
+)
+
+
+def _validate_token_observation(
+    *,
+    input_tokens: int | None,
+    output_tokens: int | None,
+    observation_count: int,
+    label: str,
+) -> None:
+    if observation_count == 0 and (input_tokens is not None or output_tokens is not None):
+        raise ValueError(f"{label} token totals require an observation")
+    if observation_count > 0 and input_tokens is None and output_tokens is None:
+        raise ValueError(f"{label} token observation requires a reported total")
 
 
 class _ReadModel(BaseModel):
@@ -29,6 +50,9 @@ class SafetyCapsReadModel(_ReadModel):
     max_attempts_per_run: int
     target_requests_per_second: float
     run_timeout_seconds: float
+    logical_case_limit: int | None = Field(default=None, gt=0)
+    physical_request_limit: int | None = Field(default=None, gt=0)
+    target_retries_per_turn: int | None = Field(default=None, ge=0)
 
 
 class HostedRunBindingReadModel(_ReadModel):
@@ -201,17 +225,33 @@ class FindingReadModel(_ReadModel):
     finding_id: str
     state: str
     severity: str
-    category: str
-    target_version: str
+    category: str | None
+    target_version: str | None
     publication_status: str
-    evidence_integrity: Literal["verified"]
+    evidence_integrity: Literal["verified", "unavailable"]
     source_kind: str
     execution_profile: Literal["synthetic", "live"]
     evidence_provenance: str
     campaign_run_id: str | None
     attempt_id: str | None
-    evidence_content_hash: str
+    evidence_content_hash: str | None
     history: tuple[FindingHistoryReadModel, ...]
+
+    @model_validator(mode="after")
+    def validate_evidence_integrity_binding(self) -> Self:
+        content_hash = self.evidence_content_hash
+        if self.evidence_integrity == "verified":
+            if (
+                content_hash is None
+                or len(content_hash) != 64
+                or any(character not in "0123456789abcdef" for character in content_hash)
+            ):
+                raise ValueError(
+                    "verified finding evidence requires a lowercase SHA-256 content hash"
+                )
+        elif content_hash is not None:
+            raise ValueError("unavailable finding evidence cannot include a content hash")
+        return self
 
 
 class AttackCaseEvidenceReadModel(_ReadModel):
@@ -229,6 +269,11 @@ class JudgeBasisReadModel(_ReadModel):
     confidence: float | None = Field(default=None, ge=0, le=1)
     reason_codes: tuple[str, ...]
     confirmation_source: Literal["oracle", "canary", "calibrated_model", "human"] | None = None
+    oracle_refs: tuple[str, ...]
+    canary_refs: tuple[str, ...]
+    rationale: str | None = None
+    rationale_availability: Literal["unavailable"]
+    rationale_detail: str
     error_code: str | None = None
 
 
@@ -366,16 +411,56 @@ class TraceReadModel(_ReadModel):
     request_bytes: int = Field(ge=0)
     response_bytes: int | None = Field(default=None, ge=0)
     measured_cost: float = Field(ge=0)
+    accounting_status: Literal["measured", "unavailable"]
     currency: str
     input_tokens: int | None = Field(default=None, ge=0)
     output_tokens: int | None = Field(default=None, ge=0)
-    langfuse_status: str
+    p50_duration_ms: float | None = Field(default=None, ge=0)
+    p95_duration_ms: float | None = Field(default=None, ge=0)
+    langfuse_status: Literal[
+        "not_attempted",
+        "disabled",
+        "queued",
+        "exported",
+        "error",
+        "historical_not_instrumented",
+    ]
+    langfuse_verified_at: datetime.datetime | None = None
     request_preview: str | None
     response_preview: str | None
     request_sha256: str | None
     response_sha256: str | None
     inspection_flags: list[str]
     inspection_owasp_mappings: list[str]
+
+    @model_validator(mode="after")
+    def validate_accounting_status(self) -> Self:
+        if self.accounting_status == "unavailable" and (
+            self.measured_cost != 0
+            or self.input_tokens is not None
+            or self.output_tokens is not None
+        ):
+            raise ValueError("unavailable trace accounting cannot contain measured values")
+        if (self.langfuse_status == "exported") != (self.langfuse_verified_at is not None):
+            raise ValueError("exported trace delivery requires exact Langfuse query-back proof")
+        role_latencies = (self.p50_duration_ms, self.p95_duration_ms)
+        if self.agent_role is None and any(value is not None for value in role_latencies):
+            raise ValueError("non-agent traces cannot contain agent role latency percentiles")
+        if (self.p50_duration_ms is None) != (self.p95_duration_ms is None):
+            raise ValueError("agent role latency percentiles must be recorded together")
+        if (
+            self.p50_duration_ms is not None
+            and self.p95_duration_ms is not None
+            and self.p50_duration_ms > self.p95_duration_ms
+        ):
+            raise ValueError("agent role p50 latency cannot exceed p95 latency")
+        if (
+            self.agent_role is not None
+            and self.finished_at is not None
+            and any(value is None for value in role_latencies)
+        ):
+            raise ValueError("terminal agent traces require role latency percentiles")
+        return self
 
 
 class CostReadModel(_ReadModel):
@@ -385,6 +470,7 @@ class CostReadModel(_ReadModel):
     agent_role: Literal["orchestrator", "red_team", "judge", "documentation"] | None = None
     record_kind: Literal["campaign", "agent"]
     measured_cost: float = Field(ge=0)
+    accounting_status: Literal["not_applicable", "measured", "partial", "unavailable"]
     currency: str
     request_count: int = Field(ge=0)
     execution_count: int = Field(ge=0)
@@ -394,6 +480,8 @@ class CostReadModel(_ReadModel):
     input_tokens: int | None = Field(default=None, ge=0)
     output_tokens: int | None = Field(default=None, ge=0)
     token_observation_count: int = Field(ge=0)
+    p50_duration_ms: float | None = Field(default=None, ge=0)
+    p95_duration_ms: float | None = Field(default=None, ge=0)
     budget_usd: float | None = Field(default=None, ge=0)
     budget_utilization: float | None = Field(default=None, ge=0)
     duration_ms: float = Field(ge=0)
@@ -401,6 +489,38 @@ class CostReadModel(_ReadModel):
     started_at: datetime.datetime
     ended_at: datetime.datetime
     recorded_at: datetime.datetime
+
+    @model_validator(mode="after")
+    def validate_observed_accounting(self) -> Self:
+        _validate_token_observation(
+            input_tokens=self.input_tokens,
+            output_tokens=self.output_tokens,
+            observation_count=self.token_observation_count,
+            label="cost",
+        )
+        if (self.record_kind == "agent") != (self.agent_role is not None):
+            raise ValueError("agent cost records require exactly one agent role")
+        if self.accounting_status in {"partial", "unavailable"} and self.record_kind != "agent":
+            raise ValueError("partial accounting states apply only to agent cost records")
+        if self.accounting_status == "unavailable" and (
+            self.measured_cost != 0 or self.token_observation_count != 0
+        ):
+            raise ValueError("unavailable agent accounting cannot contain measured values")
+        role_latencies = (self.p50_duration_ms, self.p95_duration_ms)
+        if self.record_kind == "campaign" and any(value is not None for value in role_latencies):
+            raise ValueError("campaign cost records cannot contain agent role percentiles")
+        if self.record_kind == "agent":
+            if self.execution_count == 0 and any(value is not None for value in role_latencies):
+                raise ValueError("agent cost latency percentiles require a completed execution")
+            if self.execution_count > 0 and any(value is None for value in role_latencies):
+                raise ValueError("completed agent cost records require role latency percentiles")
+        if (
+            self.p50_duration_ms is not None
+            and self.p95_duration_ms is not None
+            and self.p50_duration_ms > self.p95_duration_ms
+        ):
+            raise ValueError("agent role p50 latency cannot exceed p95 latency")
+        return self
 
 
 class ConfigurationReadModel(_ReadModel):
@@ -439,7 +559,7 @@ class AgentAssignmentReadModel(_ReadModel):
     role: str
     provider: str
     model: str
-    resolved_model: str
+    resolved_model: str | None
     upstream_provider: str | None = None
     prompt_sha256: str | None = None
     prompt_version: str | None = None
@@ -449,6 +569,14 @@ class AgentAssignmentReadModel(_ReadModel):
     configuration_sha256: str
     configured_at: datetime.datetime | None = None
     configured_by: str | None = None
+
+    @model_validator(mode="after")
+    def validate_served_identity_binding(self) -> Self:
+        if (self.resolved_model is None) != (self.upstream_provider is None):
+            raise ValueError(
+                "provider-served model and upstream provider must be recorded together"
+            )
+        return self
 
 
 class AgentReadModel(_ReadModel):
@@ -467,6 +595,7 @@ class AgentReadModel(_ReadModel):
     failed_count: int = Field(ge=0)
     skipped_count: int = Field(ge=0)
     measured_cost: float = Field(ge=0)
+    accounting_status: Literal["not_applicable", "measured", "partial", "unavailable"]
     currency: str
     input_tokens: int | None = Field(default=None, ge=0)
     output_tokens: int | None = Field(default=None, ge=0)
@@ -479,10 +608,54 @@ class AgentReadModel(_ReadModel):
     langfuse_queued_count: int = Field(ge=0)
     langfuse_exported_count: int = Field(ge=0)
     langfuse_error_count: int = Field(ge=0)
+    langfuse_verified_count: int = Field(ge=0)
+    last_langfuse_verified_at: datetime.datetime | None = None
     last_activity_at: datetime.datetime | None = None
     last_status: str | None = None
     last_campaign_run_id: str | None = None
     last_attempt_id: str | None = None
+
+    @model_validator(mode="after")
+    def validate_observed_execution_totals(self) -> Self:
+        status_total = (
+            self.running_count + self.succeeded_count + self.failed_count + self.skipped_count
+        )
+        if status_total != self.execution_count:
+            raise ValueError("agent status counts do not reconcile to execution_count")
+        delivery_total = sum(
+            getattr(self, f"langfuse_{state}_count") for state in _LANGFUSE_DELIVERY_STATES
+        )
+        if delivery_total != self.execution_count:
+            raise ValueError("agent Langfuse counts do not reconcile to execution_count")
+        if self.langfuse_verified_count != self.langfuse_exported_count:
+            raise ValueError("exported Langfuse executions must equal remotely verified executions")
+        if (self.langfuse_verified_count == 0) != (self.last_langfuse_verified_at is None):
+            raise ValueError("agent Langfuse verification time must match verified executions")
+        _validate_token_observation(
+            input_tokens=self.input_tokens,
+            output_tokens=self.output_tokens,
+            observation_count=self.token_observation_count,
+            label="agent",
+        )
+        if self.token_observation_count > self.execution_count:
+            raise ValueError("agent token observations cannot exceed executions")
+        if (self.execution_count == 0) != (self.accounting_status == "not_applicable"):
+            raise ValueError("agent accounting applicability must match execution_count")
+        if self.accounting_status == "unavailable" and (
+            self.measured_cost != 0 or self.token_observation_count != 0
+        ):
+            raise ValueError("unavailable agent accounting cannot contain measured values")
+        completed_count = status_total - self.running_count
+        latency_values = (
+            self.average_duration_ms,
+            self.p50_duration_ms,
+            self.p95_duration_ms,
+        )
+        if completed_count > 0 and any(value is None for value in latency_values):
+            raise ValueError("completed agent executions require latency percentiles")
+        if completed_count == 0 and any(value is not None for value in latency_values):
+            raise ValueError("agent latency percentiles require a completed execution")
+        return self
 
 
 class AgentPromptReadModel(_ReadModel):
@@ -508,14 +681,43 @@ class AgentActivityReadModel(_ReadModel):
     input_tokens: int | None = Field(default=None, ge=0)
     output_tokens: int | None = Field(default=None, ge=0)
     measured_cost: float = Field(ge=0)
+    accounting_status: Literal["measured", "unavailable"]
     currency: str
     trace_id: str
     langfuse_status: Literal["not_attempted", "disabled", "queued", "exported", "error"]
+    langfuse_verified_at: datetime.datetime | None = None
     detail: dict[str, Any]
     error_code: str | None = None
     started_at: datetime.datetime
     finished_at: datetime.datetime | None = None
     duration_ms: float | None = Field(default=None, ge=0)
+
+    @model_validator(mode="after")
+    def validate_terminal_shape(self) -> Self:
+        terminal_values = (self.output_sha256, self.finished_at, self.duration_ms)
+        if self.status == "running" and any(value is not None for value in terminal_values):
+            raise ValueError("running agent activity cannot contain terminal fields")
+        if self.status != "running" and any(value is None for value in terminal_values):
+            raise ValueError("terminal agent activity requires output, finish time, and duration")
+        provider_accounting_complete = (
+            self.input_tokens is not None and self.output_tokens is not None
+        )
+        expected_accounting_status = (
+            "measured"
+            if self.execution_mode == "deterministic" or provider_accounting_complete
+            else "unavailable"
+        )
+        if self.accounting_status != expected_accounting_status:
+            raise ValueError("agent activity accounting status contradicts its execution record")
+        if self.accounting_status == "unavailable" and (
+            self.measured_cost != 0
+            or (self.input_tokens or 0) != 0
+            or (self.output_tokens or 0) != 0
+        ):
+            raise ValueError("unavailable agent activity accounting cannot contain measured values")
+        if (self.langfuse_status == "exported") != (self.langfuse_verified_at is not None):
+            raise ValueError("exported agent activity requires exact Langfuse query-back proof")
+        return self
 
 
 class ToolScopeReadModel(_ReadModel):
@@ -550,9 +752,8 @@ class ToolScopeReadModel(_ReadModel):
     recorded_scan_count: int = Field(ge=0)
     recorded_finding_count: int = Field(ge=0)
     last_executed_at: datetime.datetime | None = None
-    # Per-tool execution evidence + runtime state (Task 4, emitted by the security-tools lane via
-    # agentforge.security_tools.tool_runtime.ToolExecutionEvidence.to_tool_scope_fields()). Additive
-    # with defaults so the read model stays valid until the postgres population is wired (Codex).
+    # Per-tool execution evidence + runtime state, projected from authoritative attempts,
+    # security-tool runs, findings, and typed execution errors.
     runtime_state: Literal["idle", "running", "evidenced", "error"] = "idle"
     evidenced_finding_count: int = Field(default=0, ge=0)
     last_error_code: str | None = None
@@ -674,6 +875,7 @@ class BirdseyeNodeReadModel(_ReadModel):
     p95_latency_ms: float | None = Field(default=None, ge=0)
     execution_count: int | None = Field(default=None, ge=0)
     measured_cost_usd: float | None = Field(default=None, ge=0)
+    accounting_status: Literal["not_applicable", "measured", "partial", "unavailable"] | None = None
     currency: str | None = None
     input_tokens: int | None = Field(default=None, ge=0)
     output_tokens: int | None = Field(default=None, ge=0)
@@ -683,9 +885,77 @@ class BirdseyeNodeReadModel(_ReadModel):
     langfuse_queued_count: int | None = Field(default=None, ge=0)
     langfuse_exported_count: int | None = Field(default=None, ge=0)
     langfuse_error_count: int | None = Field(default=None, ge=0)
-    langfuse_status: str | None = None
+    langfuse_verified_count: int | None = Field(default=None, ge=0)
+    last_langfuse_verified_at: datetime.datetime | None = None
+    langfuse_status: Literal["not_attempted", "disabled", "queued", "exported", "error"] | None = (
+        None
+    )
     queue_depth: int | None = Field(default=None, ge=0)
     target_access: str
+
+    @model_validator(mode="after")
+    def validate_agent_observability(self) -> Self:
+        if not self.kind.startswith("agent:"):
+            if self.accounting_status is not None:
+                raise ValueError("non-agent nodes cannot claim agent accounting status")
+            return self
+        if self.execution_count is None or self.token_observation_count is None:
+            raise ValueError("agent nodes require execution and token observation counts")
+        delivery_counts = (
+            self.langfuse_not_attempted_count,
+            self.langfuse_disabled_count,
+            self.langfuse_queued_count,
+            self.langfuse_exported_count,
+            self.langfuse_error_count,
+        )
+        if any(value is None for value in delivery_counts):
+            raise ValueError("agent nodes require complete Langfuse delivery counts")
+        if sum(value for value in delivery_counts if value is not None) != self.execution_count:
+            raise ValueError("agent node Langfuse counts do not reconcile to execution_count")
+        if self.langfuse_verified_count is None:
+            raise ValueError("agent nodes require a Langfuse verification count")
+        if self.langfuse_verified_count != (self.langfuse_exported_count or 0):
+            raise ValueError("exported Langfuse executions must equal remotely verified executions")
+        if (self.langfuse_verified_count == 0) != (self.last_langfuse_verified_at is None):
+            raise ValueError("agent node Langfuse verification time must match verified executions")
+        _validate_token_observation(
+            input_tokens=self.input_tokens,
+            output_tokens=self.output_tokens,
+            observation_count=self.token_observation_count,
+            label="agent node",
+        )
+        if self.token_observation_count > self.execution_count:
+            raise ValueError("agent node token observations cannot exceed executions")
+        latency_values = (self.p50_latency_ms, self.p95_latency_ms)
+        if (self.p50_latency_ms is None) != (self.p95_latency_ms is None):
+            raise ValueError("agent node latency percentiles must be reported together")
+        if self.execution_count == 0 and any(value is not None for value in latency_values):
+            raise ValueError("unexecuted agent nodes cannot have latency percentiles")
+        if (
+            self.execution_count > 0
+            and self.runtime_state in {"ready", "error", "waiting"}
+            and any(value is None for value in latency_values)
+        ):
+            raise ValueError("terminal agent nodes require latency percentiles")
+        if self.execution_count == 0:
+            if self.accounting_status != "not_applicable":
+                raise ValueError("unexecuted agent nodes require not-applicable accounting")
+            if self.measured_cost_usd is not None or self.currency is not None:
+                raise ValueError("unexecuted agent nodes cannot claim observed cost")
+            if self.langfuse_status is not None:
+                raise ValueError("unexecuted agent nodes cannot have a latest Langfuse state")
+        else:
+            if self.accounting_status in {None, "not_applicable"}:
+                raise ValueError("executed agent nodes require an applicable accounting state")
+            if self.measured_cost_usd is None or self.currency is None:
+                raise ValueError("executed agent nodes require observed cost and currency")
+            if self.langfuse_status is None:
+                raise ValueError("executed agent nodes require a latest Langfuse state")
+            if self.accounting_status == "unavailable" and (
+                self.measured_cost_usd != 0 or self.token_observation_count != 0
+            ):
+                raise ValueError("unavailable agent accounting cannot contain measured values")
+        return self
 
 
 class BirdseyeEdgeReadModel(_ReadModel):
@@ -781,6 +1051,7 @@ __all__ = [
     "ApprovalDetailReadModel",
     "AgentActivityReadModel",
     "AgentAssignmentReadModel",
+    "AgentPromptReadModel",
     "AgentReadModel",
     "AttemptReadModel",
     "AuditReadModel",

@@ -1499,6 +1499,9 @@ class AgentExecution(Base):
     langfuse_status: Mapped[str] = mapped_column(
         String(16), nullable=False, server_default="not_attempted"
     )
+    langfuse_verified_at: Mapped[datetime.datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
     detail: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
     error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
     started_at: Mapped[datetime.datetime] = mapped_column(
@@ -1544,6 +1547,11 @@ class AgentExecution(Base):
         CheckConstraint(
             "langfuse_status IN ('not_attempted','disabled','queued','exported','error')",
             name="agent_execution_langfuse_status",
+        ),
+        CheckConstraint(
+            "(langfuse_status = 'exported' AND langfuse_verified_at IS NOT NULL) OR "
+            "(langfuse_status <> 'exported' AND langfuse_verified_at IS NULL)",
+            name="agent_execution_langfuse_verification",
         ),
         CheckConstraint(
             "jsonb_typeof(detail) = 'object'",

@@ -47,7 +47,9 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "validate-corpus":
             summary = validate_corpus(args.root)
             print(
-                f"valid corpus: {summary.case_count} cases, "
+                f"valid corpus: {summary.case_count} authored cases "
+                f"({summary.active_case_count} active, {summary.draft_case_count} draft, "
+                f"{summary.retired_case_count} retired), "
                 f"{summary.ground_truth_label_count} ground-truth labels, "
                 f"{len(summary.categories)} categories, {summary.fixture_count} fixtures"
             )

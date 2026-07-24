@@ -27,9 +27,10 @@ out-of-band/browser-specific tools:
 The public Configuration screen renders this same server-owned map. The Traces screen exposes
 organization-scoped target and agent observations: bounded request/response previews stay in
 PostgreSQL, while the console also shows content hashes, per-role p50/p95 latency, measured agent
-spend, tokens, Langfuse submission status, and deterministic passive signals. A submitted status is
-not treated as proof of remote visibility; deployed acceptance uses the authenticated Langfuse
-query-back verifier. Signals are not findings and cannot replace the independent Judge.
+spend, tokens, Langfuse delivery proof, and deterministic passive signals. Queued observations are
+shown as awaiting remote verification; only the authenticated exact query-back verifier can
+atomically mark them exported/observed. Signals are not findings and cannot replace the independent
+Judge.
 
 ## Authorization and evidence invariants
 

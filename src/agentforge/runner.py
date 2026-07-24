@@ -47,7 +47,7 @@ from agentforge.policy.scoped_credentials import (
     SealedEnvironmentCredentialResolver,
 )
 from agentforge.readiness import expected_alembic_head
-from agentforge.regression import RegressionAdmissionGate
+from agentforge.regression import RegressionAdmissionGate, RegressionLifecycle
 from agentforge.storage.queue import JobRecord, LogicalQueue, PostgresJobQueue
 from agentforge.target.cassette_adapter import SyntheticCassetteAdapter
 from agentforge.target.catalog import SYNTHETIC_TARGET_ID, CatalogEntry, TrustedTargetCatalog
@@ -353,6 +353,7 @@ class DurableCampaignRunner:
         self.orchestrator = Orchestrator()
         self.red_team = SeedReplayRedTeam()
         self.regression_admission = RegressionAdmissionGate()
+        self.regression_lifecycle = RegressionLifecycle()
         self.telemetry = telemetry or OutboundHttpTelemetry(
             engine,
             environment=environment,
@@ -390,6 +391,47 @@ class DurableCampaignRunner:
                 self.telemetry.flush()
             with contextlib.suppress(Exception):
                 self.telemetry.heartbeat()
+
+    def _bind_agent_execution_attempt(
+        self,
+        *,
+        execution_id: str,
+        run_id: str,
+        attempt_id: str,
+    ) -> None:
+        """Bind the selecting Red Team execution once its durable attempt exists."""
+
+        self.store.bind_agent_execution_attempt(
+            execution_id=execution_id,
+            run_id=run_id,
+            attempt_id=attempt_id,
+        )
+        binder = getattr(self.telemetry, "bind_agent_attempt", None)
+        if callable(binder):
+            with contextlib.suppress(Exception):
+                binder(execution_id=execution_id, attempt_id=attempt_id)
+
+    def _fail_agent_execution_preserving_error(
+        self,
+        *,
+        primary_error: Exception,
+        **values: Any,
+    ) -> None:
+        """Best-effort terminalize a started agent without replacing its primary failure.
+
+        The durable start precedes all agent work. Any later application failure must therefore
+        attempt a matching terminal write, but a second failure in that accounting path must not
+        hide the error that actually stopped the campaign. Keep the latter as the raised exception
+        and attach only a bounded type-level note for diagnosis.
+        """
+
+        try:
+            self._finish_agent_execution(**values)
+        except Exception as finalization_error:
+            primary_error.add_note(
+                "agent execution terminal finalization also failed "
+                f"({type(finalization_error).__name__})"
+            )
 
     def preflight(self, job: JobRecord) -> tuple[PreflightReport, PreparedRun | None]:
         """Report every blocker without constructing an adapter or opening a target socket."""
@@ -680,87 +722,90 @@ class DurableCampaignRunner:
                 parent_execution_id=latest_terminal_execution,
                 detail={"phase": "coverage_governance"},
             )
+            orchestrator_failure_code = "orchestrator_execution_failed"
+            orchestrator_failure_output: dict[str, Any] = {"cycle": orchestration_cycle}
             try:
-                decision = self.orchestrator.decide(snapshot)
-            except OrchestratorHalt as exc:
-                self._finish_agent_execution(
-                    execution_id=orchestrator_execution,
-                    status="failed",
-                    output_payload={"cycle": orchestration_cycle, "halt_code": exc.code},
-                    error_code=exc.code,
-                    detail={"phase": "coverage_governance"},
-                )
-                raise CampaignAbort(
-                    f"Orchestrator halted before dispatch: {exc.code}", code=exc.code
-                ) from exc
-            except Exception as exc:
-                self._finish_agent_execution(
-                    execution_id=orchestrator_execution,
-                    status="failed",
-                    output_payload={"cycle": orchestration_cycle},
-                    error_code="orchestrator_execution_failed",
-                    detail={"phase": "coverage_governance"},
-                )
-                raise CampaignAbort(
-                    "Orchestrator could not select authorized work",
-                    code="orchestrator_execution_failed",
-                ) from exc
+                try:
+                    decision = self.orchestrator.decide(snapshot)
+                except OrchestratorHalt as exc:
+                    orchestrator_failure_code = exc.code
+                    orchestrator_failure_output["halt_code"] = exc.code
+                    raise CampaignAbort(
+                        f"Orchestrator halted before dispatch: {exc.code}", code=exc.code
+                    ) from exc
+                except Exception as exc:
+                    raise CampaignAbort(
+                        "Orchestrator could not select authorized work",
+                        code="orchestrator_execution_failed",
+                    ) from exc
 
-            directive = dict(decision.directive)
-            priority_reason = decision.priority_reason
-            remaining_categories = {verified_case_payload(case)["category"] for case in remaining}
-            if directive["category"] not in remaining_categories:
-                coverage = {row["category"]: row for row in snapshot["coverage"]}
-                selected_category = min(
-                    remaining_categories,
-                    key=lambda category: (
-                        coverage[category]["verified_attempt_count"]
-                        / coverage[category]["total_case_count"],
-                        coverage[category]["verified_attempt_count"],
-                        category,
-                    ),
-                )
-                directive["category"] = selected_category
-                directive["coverage_goal"] = (
-                    f"authorized corpus redirect: execute remaining {selected_category} "
-                    "coverage after the higher-priority category was exhausted"
-                )
-                directive["mutation_policy"] = "redirect_to_remaining_authorized_case"
-                priority_reason = f"{priority_reason}_exhausted_redirect"
-            if prepared.corpus.corpus_id == LIVE_100_CORPUS_ID:
-                next_category = verified_case_payload(remaining[0])["category"]
-                if directive["category"] != next_category:
-                    directive["category"] = next_category
-                    directive["coverage_goal"] = (
-                        "execute the next instance in the exact authorized manifest order"
+                directive = dict(decision.directive)
+                priority_reason = decision.priority_reason
+                remaining_categories = {
+                    verified_case_payload(case)["category"] for case in remaining
+                }
+                if directive["category"] not in remaining_categories:
+                    coverage = {row["category"]: row for row in snapshot["coverage"]}
+                    selected_category = min(
+                        remaining_categories,
+                        key=lambda category: (
+                            coverage[category]["verified_attempt_count"]
+                            / coverage[category]["total_case_count"],
+                            coverage[category]["verified_attempt_count"],
+                            category,
+                        ),
                     )
-                    directive["mutation_policy"] = "preserve_authorized_manifest_order"
-                    priority_reason = f"{priority_reason}_manifest_order"
+                    directive["category"] = selected_category
+                    directive["coverage_goal"] = (
+                        f"authorized corpus redirect: execute remaining {selected_category} "
+                        "coverage after the higher-priority category was exhausted"
+                    )
+                    directive["mutation_policy"] = "redirect_to_remaining_authorized_case"
+                    priority_reason = f"{priority_reason}_exhausted_redirect"
+                if prepared.corpus.corpus_id == LIVE_100_CORPUS_ID:
+                    next_category = verified_case_payload(remaining[0])["category"]
+                    if directive["category"] != next_category:
+                        directive["category"] = next_category
+                        directive["coverage_goal"] = (
+                            "execute the next instance in the exact authorized manifest order"
+                        )
+                        directive["mutation_policy"] = "preserve_authorized_manifest_order"
+                        priority_reason = f"{priority_reason}_manifest_order"
 
-            self._finish_agent_execution(
-                execution_id=orchestrator_execution,
-                status="succeeded",
-                output_payload={
-                    "cycle": orchestration_cycle,
-                    "category": directive["category"],
-                    "priority_reason": priority_reason,
-                    "signal_sha256": decision.signal_sha256,
-                    "remaining_case_count": len(remaining),
-                },
-                detail={
-                    "phase": "coverage_governance",
-                    "regression_trigger_count": len(decision.regression_triggers),
-                },
-            )
-            if not first_decision_recorded:
-                self.store.record_orchestration_decision(
-                    run_id=authorized.run.run_id,
-                    directive=directive,
-                    signal_sha256=decision.signal_sha256,
-                    priority_reason=priority_reason,
-                    regression_triggers=decision.regression_triggers,
+                if not first_decision_recorded:
+                    self.store.record_orchestration_decision(
+                        run_id=authorized.run.run_id,
+                        directive=directive,
+                        signal_sha256=decision.signal_sha256,
+                        priority_reason=priority_reason,
+                        regression_triggers=decision.regression_triggers,
+                    )
+                    first_decision_recorded = True
+                self._finish_agent_execution(
+                    execution_id=orchestrator_execution,
+                    status="succeeded",
+                    output_payload={
+                        "cycle": orchestration_cycle,
+                        "category": directive["category"],
+                        "priority_reason": priority_reason,
+                        "signal_sha256": decision.signal_sha256,
+                        "remaining_case_count": len(remaining),
+                    },
+                    detail={
+                        "phase": "coverage_governance",
+                        "regression_trigger_count": len(decision.regression_triggers),
+                    },
                 )
-                first_decision_recorded = True
+            except Exception as exc:
+                self._fail_agent_execution_preserving_error(
+                    primary_error=exc,
+                    execution_id=orchestrator_execution,
+                    status="failed",
+                    output_payload=orchestrator_failure_output,
+                    error_code=orchestrator_failure_code,
+                    detail={"phase": "coverage_governance"},
+                )
+                raise
 
             red_team_execution = self._start_agent_execution(
                 run_id=authorized.run.run_id,
@@ -774,55 +819,66 @@ class DurableCampaignRunner:
                 parent_execution_id=orchestrator_execution,
                 detail={"phase": "authorized_case_selection"},
             )
+            red_team_failure_code = "red_team_execution_failed"
             try:
-                proposals = self.red_team.propose(
-                    cases=[verified_case_payload(case) for case in remaining],
-                    directive=directive,
+                try:
+                    proposals = self.red_team.propose(
+                        cases=[verified_case_payload(case) for case in remaining],
+                        directive=directive,
+                    )
+                    case, proposal = _select_authorized_proposal(
+                        remaining,
+                        proposals,
+                        corpus_id=prepared.corpus.corpus_id,
+                    )
+                except Exception as exc:
+                    red_team_failure_code = "red_team_proposal_failed"
+                    raise CampaignAbort(
+                        "Red Team could not select an exact authorized case",
+                        code="red_team_proposal_failed",
+                    ) from exc
+
+                payload = verified_case_payload(case)
+                attempt = self.store.ensure_campaign_attempt(
+                    run_id=job.campaign_run_id,
+                    ordinal=next_ordinal,
+                    case_id=payload["case_id"],
+                    case_content_hash=case.content_hash,
+                    category=payload["category"],
+                    severity=payload["severity"]["rating"],
+                    attack_class=payload["test_design"]["classification"],
+                    owasp_mappings=payload["owasp"],
+                    fixture_provenance=payload["fixture_provenance"],
+                    source_tool=case.source_tool,
+                    source_technique=case.source_technique,
                 )
-                case, proposal = _select_authorized_proposal(
-                    remaining,
-                    proposals,
-                    corpus_id=prepared.corpus.corpus_id,
+                self._bind_agent_execution_attempt(
+                    execution_id=red_team_execution,
+                    run_id=authorized.run.run_id,
+                    attempt_id=attempt.attempt_id,
+                )
+                self._finish_agent_execution(
+                    execution_id=red_team_execution,
+                    status="succeeded",
+                    output_payload={
+                        "cycle": orchestration_cycle,
+                        "case_ref": payload["case_id"],
+                        "category": payload["category"],
+                        "source_tool": case.source_tool or "headshot-authored",
+                        "proposal_count_considered": len(proposals),
+                    },
+                    detail={"phase": "authorized_case_selection"},
                 )
             except Exception as exc:
-                self._finish_agent_execution(
+                self._fail_agent_execution_preserving_error(
+                    primary_error=exc,
                     execution_id=red_team_execution,
                     status="failed",
                     output_payload={"cycle": orchestration_cycle},
-                    error_code="red_team_proposal_failed",
+                    error_code=red_team_failure_code,
                     detail={"phase": "authorized_case_selection"},
                 )
-                raise CampaignAbort(
-                    "Red Team could not select an exact authorized case",
-                    code="red_team_proposal_failed",
-                ) from exc
-
-            payload = verified_case_payload(case)
-            attempt = self.store.ensure_campaign_attempt(
-                run_id=job.campaign_run_id,
-                ordinal=next_ordinal,
-                case_id=payload["case_id"],
-                case_content_hash=case.content_hash,
-                category=payload["category"],
-                severity=payload["severity"]["rating"],
-                attack_class=payload["test_design"]["classification"],
-                owasp_mappings=payload["owasp"],
-                fixture_provenance=payload["fixture_provenance"],
-                source_tool=case.source_tool,
-                source_technique=case.source_technique,
-            )
-            self._finish_agent_execution(
-                execution_id=red_team_execution,
-                status="succeeded",
-                output_payload={
-                    "cycle": orchestration_cycle,
-                    "case_ref": payload["case_id"],
-                    "category": payload["category"],
-                    "source_tool": case.source_tool or "headshot-authored",
-                    "proposal_count_considered": len(proposals),
-                },
-                detail={"phase": "authorized_case_selection"},
-            )
+                raise
             orchestration_cycle += 1
             next_ordinal += 1
             return case, proposal, attempt, red_team_execution
@@ -961,6 +1017,7 @@ class DurableCampaignRunner:
                 dispatch_payload,
                 attack_attempt=proposal,
                 attempt_id=attempt.attempt_id,
+                red_team_execution_id=current_red_team_execution,
             )
             if not outcome.integrity_ok:
                 raise CampaignAbort("evidence integrity failed", code="evidence_integrity_failed")
@@ -982,7 +1039,10 @@ class DurableCampaignRunner:
                     },
                     attempt_id=attempt.attempt_id,
                     parent_execution_id=judge_executions.get(attempt.attempt_id),
-                    detail={"phase": "draft_and_regression_admission"},
+                    detail={
+                        "phase": "draft_and_regression_admission",
+                        "finding_id": finding_id,
+                    },
                 )
                 try:
                     report = self.documentation.draft(
@@ -1008,10 +1068,31 @@ class DurableCampaignRunner:
                         passes_for_right_reason=False,
                         human_approved=False,
                     )
+                    oracle_id = outcome.oracle_signal.get("id")
+                    if (
+                        outcome.oracle_signal.get("hit") is not True
+                        or outcome.oracle_signal.get("provenance") != "code"
+                        or not isinstance(oracle_id, str)
+                        or not oracle_id
+                    ):
+                        raise CampaignAbort(
+                            "confirmed finding lacks a deterministic trusted signal",
+                            code="regression_reproduction_signal_missing",
+                        )
+                    reproduction_plan = self.regression_lifecycle.plan_reproduction(
+                        pending_disposition=disposition,
+                        report=report,
+                        attack_attempt=proposal,
+                        source_case_version=str(dispatch_payload["case_version"]),
+                        target_id=scope.target_id,
+                        target_version=scope.target_version,
+                        required_oracle_ids=(oracle_id,),
+                    )
                     self.store.record_documentation_outcome(
                         organization_id=authorized.run.organization_id,
                         report=report,
                         regression_disposition=disposition,
+                        reproduction_plan=reproduction_plan,
                     )
                 except Exception:
                     self._finish_agent_execution(
@@ -1033,6 +1114,7 @@ class DurableCampaignRunner:
                         "finding_id": finding_id,
                         "report_id": report["report_id"],
                         "regression_disposition_id": disposition["disposition_id"],
+                        "regression_replay_id": reproduction_plan["replay_id"],
                         "publication_state": "blocked_pending_human_approval",
                     },
                     detail={"phase": "draft_and_regression_admission"},
@@ -1199,19 +1281,25 @@ def main(argv: list[str] | None = None) -> int:
     stop = threading.Event()
     for signum in (signal.SIGTERM, signal.SIGINT):
         signal.signal(signum, lambda *_args: stop.set())
-    while not stop.is_set():
+    try:
+        while not stop.is_set():
+            with contextlib.suppress(Exception):
+                runner.telemetry.heartbeat()
+            try:
+                worked = runner.run_once(worker_id=_worker_id())
+            except DispatchUnavailable:
+                worked = True
+            if args.once:
+                break
+            if not worked:
+                # Retry terminal ledger reads and queued delivery reconciliation even while the
+                # campaign queue is idle.
+                with contextlib.suppress(Exception):
+                    runner.telemetry.flush()
+                stop.wait(_DEFAULT_POLL_SECONDS)
+    finally:
         with contextlib.suppress(Exception):
-            runner.telemetry.heartbeat()
-        try:
-            worked = runner.run_once(worker_id=_worker_id())
-        except DispatchUnavailable:
-            worked = True
-        if args.once:
-            return 0
-        if not worked:
-            stop.wait(_DEFAULT_POLL_SECONDS)
-    with contextlib.suppress(Exception):
-        runner.telemetry.shutdown()
+            runner.telemetry.shutdown()
     return 0
 
 

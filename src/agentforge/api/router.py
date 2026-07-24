@@ -350,7 +350,11 @@ def approvals(request: Request, principal: ConsolePrincipal) -> JSONResponse:
 
 
 @router.get("/approvals/{request_id}")
-def approval(request: Request, request_id: str, principal: EvidencePrincipal) -> JSONResponse:
+def approval(
+    request: Request,
+    request_id: str,
+    principal: FindingEvidencePrincipal,
+) -> JSONResponse:
     return _read(request, "approval", principal, {"request_id": request_id})
 
 

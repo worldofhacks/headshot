@@ -5,9 +5,11 @@ import type { Principal } from "../api/contracts";
 import { COMMAND_PATHS, RESOURCE_PATHS } from "../api/paths";
 import {
   decodeAgentActivity,
+  decodeAgentPrompt,
   decodeAgents,
   decodeTooling,
 } from "../api/read-models";
+import { AdversarialText } from "../components/AdversarialText";
 import {
   count,
   MetricStrip,
@@ -25,6 +27,7 @@ import { useResource } from "../hooks/useResource";
 import {
   PERMISSIONS,
   type AgentActivityReadModel,
+  type AgentPromptReadModel,
   type AgentReadModel,
   type ToolScopeReadModel,
 } from "../types";
@@ -44,10 +47,10 @@ const statusTone = (status: string): "success" | "failure" | "queued" =>
   status === "failed" ? "failure" : status === "running" ? "queued" : "success";
 
 const langfuseDelivery = (agent: AgentReadModel): string => {
-  if (agent.execution_count === 0) return "not observed";
+  if (agent.execution_count === 0) return "no executions";
   const states = [
-    ["submitted", agent.langfuse_exported_count],
-    ["queued", agent.langfuse_queued_count],
+    ["observed", agent.langfuse_verified_count],
+    ["awaiting remote verification", agent.langfuse_queued_count],
     ["error", agent.langfuse_error_count],
     ["disabled", agent.langfuse_disabled_count],
     ["not attempted", agent.langfuse_not_attempted_count],
@@ -57,6 +60,59 @@ const langfuseDelivery = (agent: AgentReadModel): string => {
     .map(([label, value]) => `${value} ${label}`)
     .join(" · ");
 };
+
+const langfuseDeliveryState = (activity: AgentActivityReadModel) => {
+  if (activity.langfuse_verified_at !== null) {
+    return `observed · ${time(activity.langfuse_verified_at)}`;
+  }
+  return activity.langfuse_status === "queued"
+    ? "awaiting remote verification"
+    : activity.langfuse_status.replaceAll("_", " ");
+};
+
+const accountingValue = (agent: AgentReadModel) => {
+  if (agent.accounting_status === "unavailable") return "unavailable";
+  if (agent.accounting_status === "partial") return `${money(agent.measured_cost)} known · partial`;
+  return money(agent.measured_cost);
+};
+
+const activityAccountingValue = (activity: AgentActivityReadModel) =>
+  activity.accounting_status === "unavailable"
+    ? "unavailable"
+    : money(activity.measured_cost);
+
+function AgentPromptPanel({
+  client,
+  role,
+}: {
+  client: ApiClient;
+  role: AgentRole;
+}) {
+  const prompt = useResource<AgentPromptReadModel>(
+    client,
+    RESOURCE_PATHS.agentPrompt(role),
+    decodeAgentPrompt,
+  );
+
+  return (
+    <Panel title="System prompt" meta="CONFIG_MANAGE only" eyebrow="SERVER-OWNED PROMPT">
+      <ResourceView
+        result={prompt.result}
+        emptyLabel="No server-owned prompt is registered for this role."
+      >
+        {(data) => (
+          <>
+            <dl className="agent-ledger-summary">
+              <div><dt>Version</dt><dd className="mono">{data.prompt_version}</dd></div>
+              <div><dt>SHA-256</dt><dd className="mono">{data.prompt_sha256}</dd></div>
+            </dl>
+            <AdversarialText>{data.system_prompt}</AdversarialText>
+          </>
+        )}
+      </ResourceView>
+    </Panel>
+  );
+}
 
 export function AgentsScreen({
   client,
@@ -99,6 +155,9 @@ export function AgentsScreen({
       0,
     ),
     tokenObservations: records.reduce((sum, agent) => sum + agent.token_observation_count, 0),
+    incompleteAccounting: records.filter(
+      (agent) => ["partial", "unavailable"].includes(agent.accounting_status),
+    ).length,
   }), [records]);
   const selectedActivity = activities.filter((row) => row.agent_role === selectedRole);
   const hostedEligible = selectedRole === "red_team" || selectedRole === "documentation";
@@ -127,7 +186,13 @@ export function AgentsScreen({
           <MetricStrip label="Agent execution summary" values={[
             { label: "Role boundaries", value: `${records.length}/4`, note: "Orchestrator · Red Team · Judge · Documentation" },
             { label: "Real executions", value: count(totals.executions), note: `${totals.running} currently running` },
-            { label: "Measured agent cost", value: money(totals.cost), note: "Zero is valid for deterministic local engines" },
+            {
+              label: "Known agent cost",
+              value: totals.incompleteAccounting > 0 ? `${money(totals.cost)} known` : money(totals.cost),
+              note: totals.incompleteAccounting > 0
+                ? `${totals.incompleteAccounting} role(s) have incomplete provider accounting`
+                : "Zero is valid for deterministic local engines",
+            },
             {
               label: "Token observations",
               value: count(totals.observedTokens),
@@ -164,7 +229,7 @@ export function AgentsScreen({
                         <strong>{agent.display_name}</strong>
                         <small className="mono">{state}</small>
                       </span>
-                      <span>{agent.active_assignment.model}</span>
+                      <span>{agent.active_assignment.model} · configured</span>
                       <small>{count(agent.execution_count)} executions · {agent.trust_level}</small>
                     </button>
                   </div>
@@ -196,18 +261,34 @@ export function AgentsScreen({
                 { label: "Output contract", values: [selected.output_contract] },
               ]} />
               <dl className="agent-ledger-summary">
-                <div><dt>Engine</dt><dd className="mono">{selected.active_assignment.provider}/{selected.active_assignment.model}</dd></div>
-                <div><dt>p50 / p95 latency</dt><dd className="mono">{selected.p50_duration_ms === null || selected.p95_duration_ms === null ? "not observed" : `${selected.p50_duration_ms.toFixed(1)} / ${selected.p95_duration_ms.toFixed(1)} ms`}</dd></div>
-                <div><dt>Measured cost</dt><dd className="mono">{money(selected.measured_cost)}</dd></div>
+                <div><dt>Configured model</dt><dd className="mono">{selected.active_assignment.model}</dd></div>
+                <div><dt>Configured provider</dt><dd className="mono">{selected.active_assignment.provider}</dd></div>
+                <div><dt>Provider-served model</dt><dd className="mono">{selected.active_assignment.resolved_model ?? "unavailable — not durably recorded"}</dd></div>
+                <div><dt>Provider-served upstream</dt><dd className="mono">{selected.active_assignment.upstream_provider ?? "unavailable — not durably recorded"}</dd></div>
+                <div><dt>Prompt version</dt><dd className="mono">{selected.active_assignment.prompt_version ?? "not applicable"}</dd></div>
+                <div><dt>Prompt SHA-256</dt><dd className="mono">{selected.active_assignment.prompt_sha256 ?? "not applicable"}</dd></div>
+                <div><dt>Role-history p50 / p95 latency</dt><dd className="mono">{selected.p50_duration_ms === null || selected.p95_duration_ms === null ? "not yet executed" : `${selected.p50_duration_ms.toFixed(1)} / ${selected.p95_duration_ms.toFixed(1)} ms`}</dd></div>
+                <div><dt>Role-history cost</dt><dd className="mono">{accountingValue(selected)}</dd></div>
                 <div><dt>Input / output tokens</dt><dd className="mono">{selected.token_observation_count > 0 ? `${count(selected.input_tokens ?? 0)} / ${count(selected.output_tokens ?? 0)} · ${selected.token_observation_count} observation(s)` : "not reported"}</dd></div>
                 <div><dt>Langfuse delivery</dt><dd className="mono">{langfuseDelivery(selected)}</dd></div>
+                <div><dt>Last Langfuse query-back</dt><dd className="mono">{selected.last_langfuse_verified_at ? time(selected.last_langfuse_verified_at) : "not yet observed remotely"}</dd></div>
                 <div><dt>Last activity</dt><dd className="mono">{selected.last_activity_at ? time(selected.last_activity_at) : "not yet executed"}</dd></div>
               </dl>
               {selected.staged_assignment && (
-                <StateNotice
-                  state="degraded"
-                  detail={`Staged ${selected.staged_assignment.provider}/${selected.staged_assignment.model}; a new corpus authorization or calibrated drafting workflow is required before activation.`}
-                />
+                <>
+                  <StateNotice
+                    state="degraded"
+                    detail={`Staged ${selected.staged_assignment.provider} configuration; it has not been activated by an exact campaign authorization.`}
+                  />
+                  <dl className="agent-ledger-summary">
+                    <div><dt>Staged configured model</dt><dd className="mono">{selected.staged_assignment.model}</dd></div>
+                    <div><dt>Staged configured provider</dt><dd className="mono">{selected.staged_assignment.provider}</dd></div>
+                    <div><dt>Provider-served model</dt><dd className="mono">{selected.staged_assignment.resolved_model ?? "unavailable — staged assignment not executed"}</dd></div>
+                    <div><dt>Provider-served upstream</dt><dd className="mono">{selected.staged_assignment.upstream_provider ?? "unavailable — staged assignment not executed"}</dd></div>
+                    <div><dt>Staged prompt version</dt><dd className="mono">{selected.staged_assignment.prompt_version ?? "unavailable"}</dd></div>
+                    <div><dt>Staged prompt SHA-256</dt><dd className="mono">{selected.staged_assignment.prompt_sha256 ?? "unavailable"}</dd></div>
+                  </dl>
+                </>
               )}
             </>
           ) : (
@@ -230,7 +311,7 @@ export function AgentsScreen({
             </select>
           </label>
           <label className="form-field">
-            Provider
+            Configured provider
             <select
               value={provider}
               disabled
@@ -246,7 +327,7 @@ export function AgentsScreen({
             </select>
           </label>
           <label className="form-field">
-            Model / engine
+            Configured model / engine
             {executionMode === "deterministic" ? (
               <select disabled value={model} onChange={(event) => setModel(event.target.value)}>
                 {deterministicModels[selectedRole].map((item) => <option key={item}>{item}</option>)}
@@ -256,7 +337,7 @@ export function AgentsScreen({
                 value={model}
                 disabled
                 onChange={(event) => setModel(event.target.value)}
-                placeholder="Provider model identifier"
+                placeholder="Configured provider model identifier"
                 autoComplete="off"
               />
             )}
@@ -296,6 +377,8 @@ export function AgentsScreen({
         </Panel>
       </div>
 
+      {canConfigure && <AgentPromptPanel client={client} role={selectedRole} />}
+
       <Panel
         title={`${selected?.display_name ?? selectedRole} activity`}
         meta={`${selectedActivity.length} linked invocations`}
@@ -305,7 +388,7 @@ export function AgentsScreen({
           <Timeline rows={selectedActivity.slice(0, 30).map((row) => ({
             id: row.execution_id,
             title: `${row.agent_role.replace("_", " ")} · ${row.status}`,
-            detail: `${shortId(row.campaign_run_id)} · ${row.model} · ${row.duration_ms === null ? "running" : `${row.duration_ms.toFixed(1)} ms`} · ${money(row.measured_cost)}`,
+            detail: `${shortId(row.campaign_run_id)} · ${row.model} · ${row.duration_ms === null ? "running" : `${row.duration_ms.toFixed(1)} ms`} · ${activityAccountingValue(row)} · ${langfuseDeliveryState(row)}`,
             at: row.started_at,
             tone: statusTone(row.status),
           }))} />
@@ -320,10 +403,14 @@ export function AgentsScreen({
         <ResourceView result={activity.result} emptyLabel="No agent activity has been recorded.">
           {(data) => (
             <RecordTable
-              data={data}
+              data={data.map((row) => ({
+                ...row,
+                measured_cost_display: activityAccountingValue(row),
+                langfuse_status: langfuseDeliveryState(row),
+              }))}
               identityKeys={["execution_id"]}
               columns={[
-                { key: "started_at", label: "Started", mono: true },
+                { key: "started_at", label: "Started", mono: true, timestamp: true },
                 { key: "agent_role", label: "Role" },
                 { key: "status", label: "Status" },
                 { key: "campaign_run_id", label: "Campaign", mono: true },
@@ -333,9 +420,11 @@ export function AgentsScreen({
                 { key: "duration_ms", label: "Latency ms", mono: true },
                 { key: "input_tokens", label: "Input tokens", mono: true },
                 { key: "output_tokens", label: "Output tokens", mono: true },
-                { key: "measured_cost", label: "Cost USD", mono: true },
+                { key: "accounting_status", label: "Accounting" },
+                { key: "measured_cost_display", label: "Cost USD", mono: true },
                 { key: "trace_id", label: "Trace", mono: true },
                 { key: "langfuse_status", label: "Langfuse", mono: true },
+                { key: "langfuse_verified_at", label: "Verified at", mono: true, timestamp: true },
               ]}
             />
           )}
@@ -361,9 +450,8 @@ export function ToolingScreen({ client }: { client: ApiClient }) {
   const effectiveScope = scope || scopes[0] || "";
   const scoped = records.filter((row) => `${row.target_id}/${row.surface_id}` === effectiveScope);
   const executable = scoped.filter((row) => row.applicability !== "not_applicable");
-  const executed = scoped.filter(
-    (row) => row.executed_attempt_count > 0 || row.recorded_scan_count > 0,
-  );
+  const evidenced = scoped.filter((row) => row.runtime_state === "evidenced");
+  const errors = scoped.filter((row) => row.runtime_state === "error");
   const candidates = scoped.reduce((sum, row) => sum + row.reviewed_candidate_count, 0);
   const findings = scoped.reduce((sum, row) => sum + row.recorded_finding_count, 0);
 
@@ -384,7 +472,7 @@ export function ToolingScreen({ client }: { client: ApiClient }) {
       )}
       <MetricStrip label="Tool execution summary" values={[
         { label: "Applicable engines", value: `${executable.length}/${scoped.length}`, note: effectiveScope || "No configured surface" },
-        { label: "Evidenced engines", value: `${executed.length}/${scoped.length}`, note: "Campaign attempts or normalized scan runs" },
+        { label: "Runtime evidence", value: `${evidenced.length}/${scoped.length}`, note: errors.length > 0 ? `${errors.length} engine(s) currently in error` : "No current tool errors" },
         { label: "Reviewed candidates", value: count(candidates), note: "Pinned into the authorized full-scan corpus" },
         { label: "Normalized findings", value: count(findings), note: "Publication remains human-gated" },
       ]} />
@@ -409,10 +497,12 @@ export function ToolingScreen({ client }: { client: ApiClient }) {
                       <dl>
                         <div><dt>Mode</dt><dd>{row.execution_mode}</dd></div>
                         <div><dt>Target access</dt><dd className="mono">{row.target_access}</dd></div>
+                        <div><dt>Runtime state</dt><dd className="mono">{row.runtime_state}</dd></div>
                         <div><dt>Reviewed cases</dt><dd className="mono">{row.reviewed_candidate_count}</dd></div>
                         <div><dt>Executed attempts</dt><dd className="mono">{row.executed_attempt_count}</dd></div>
                         <div><dt>Scan runs</dt><dd className="mono">{row.recorded_scan_count}</dd></div>
-                        <div><dt>Findings</dt><dd className="mono">{row.recorded_finding_count}</dd></div>
+                        <div><dt>Evidenced findings</dt><dd className="mono">{row.evidenced_finding_count}</dd></div>
+                        <div><dt>Last error</dt><dd className="mono">{row.last_error_code ?? "none observed"}</dd></div>
                       </dl>
                       <TagMatrix groups={[
                         { label: "Capabilities", values: row.capabilities },
@@ -443,11 +533,13 @@ export function ToolingScreen({ client }: { client: ApiClient }) {
               { key: "name", label: "Tool" },
               { key: "applicability", label: "Use on scope" },
               { key: "execution_mode", label: "Execution path" },
+              { key: "runtime_state", label: "Runtime state" },
               { key: "reviewed_candidate_count", label: "Candidates", mono: true },
               { key: "executed_attempt_count", label: "Attempts", mono: true },
               { key: "recorded_scan_count", label: "Scans", mono: true },
-              { key: "recorded_finding_count", label: "Findings", mono: true },
-              { key: "last_executed_at", label: "Last evidence", mono: true },
+              { key: "evidenced_finding_count", label: "Evidenced findings", mono: true },
+              { key: "last_error_code", label: "Last error", mono: true },
+              { key: "last_executed_at", label: "Last evidence", mono: true, timestamp: true },
             ]}
           />
         ) : (

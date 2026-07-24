@@ -176,7 +176,7 @@ def test_plan_requires_admission_exact_lineage_and_real_version_change() -> None
 
 def test_required_oracle_safe_repetitions_pass_for_the_right_reason() -> None:
     observations = tuple(
-        _observation(index, hit=False, state="INDETERMINATE") for index in range(1, 4)
+        _observation(index, hit=False, state="NO_EXPLOIT_OBSERVED") for index in range(1, 4)
     )
 
     result = RegressionReplayGate().evaluate(
@@ -191,6 +191,26 @@ def test_required_oracle_safe_repetitions_pass_for_the_right_reason() -> None:
     assert result["deterministic"] is True
     assert result["passes_for_right_reason"] is True
     assert result["reappeared"] is False
+
+
+def test_indeterminate_repetitions_never_prove_a_regression_fixed() -> None:
+    observations = tuple(
+        _observation(index, hit=False, state="INDETERMINATE") for index in range(1, 4)
+    )
+
+    result = RegressionReplayGate().evaluate(
+        plan=_plan(),
+        campaign_run_id="authorized-replay-run-1",
+        authorization_scope_hash="b" * 64,
+        observations=observations,
+    )
+
+    assert is_valid("regression_replay_result", result)
+    assert result["state"] == "inconclusive"
+    assert result["deterministic"] is True
+    assert result["passes_for_right_reason"] is False
+    assert result["reappeared"] is False
+    assert result["reason_codes"] == ["judge_indeterminate"]
 
 
 def test_confirmed_exploit_reappearance_can_never_be_downgraded() -> None:

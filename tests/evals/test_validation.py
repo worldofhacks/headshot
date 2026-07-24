@@ -948,10 +948,13 @@ def test_duplicate_diagnostics_sanitize_untrusted_case_ids() -> None:
     assert "\x1b" not in rendered
 
 
-def test_repository_corpus_is_valid_and_has_offline_mvp_counts() -> None:
+def test_repository_corpus_reports_active_and_draft_authoring_counts() -> None:
     root = Path(__file__).resolve().parents[2] / "evals"
     summary = validate_corpus(root)
     assert summary.case_count == 16
+    assert summary.active_case_count == 9
+    assert summary.draft_case_count == 7
+    assert summary.retired_case_count == 0
     assert summary.ground_truth_label_count == 30
     assert summary.categories == frozenset(
         {

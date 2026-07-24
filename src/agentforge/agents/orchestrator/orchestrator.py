@@ -202,8 +202,7 @@ class Orchestrator:
         return any(
             row["state"] in _REGRESSION_ALERT_STATES for row in snapshot["regressions"]
         ) or any(
-            row["status"] not in _CLOSED_FINDING_STATES
-            and row["severity"] in {"high", "critical"}
+            row["status"] not in _CLOSED_FINDING_STATES and row["severity"] in {"high", "critical"}
             for row in snapshot["findings"]
         )
 
@@ -212,7 +211,7 @@ class Orchestrator:
         snapshot: Mapping[str, Any],
         coverage: list[dict[str, Any]],
     ) -> bool:
-        if snapshot["findings"] or any(
+        if any(row["status"] not in _CLOSED_FINDING_STATES for row in snapshot["findings"]) or any(
             row["state"] in _REGRESSION_ALERT_STATES for row in snapshot["regressions"]
         ):
             return False

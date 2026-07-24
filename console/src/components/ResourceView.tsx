@@ -6,6 +6,7 @@ import {
   type JsonRecord,
   type ResourceResult,
 } from "../api/contracts";
+import { time } from "./Analytics";
 
 export function StateNotice({
   state,
@@ -69,6 +70,7 @@ export interface Column {
   key: string;
   label: string;
   mono?: boolean;
+  timestamp?: boolean;
 }
 
 export function RecordTable<T extends JsonRecord>({
@@ -103,7 +105,9 @@ export function RecordTable<T extends JsonRecord>({
             >
               {columns.map((column) => (
                 <td key={column.key} className={column.mono ? "mono" : undefined}>
-                  {displayValue(row[column.key])}
+                  {column.timestamp && typeof row[column.key] === "string"
+                    ? time(row[column.key] as string)
+                    : displayValue(row[column.key])}
                 </td>
               ))}
             </tr>
@@ -122,12 +126,18 @@ export function RecordDetails({ data, preferredKeys }: { data: unknown; preferre
       : null;
   if (!record) return <StateNotice state="empty" detail="No record detail was returned." />;
   const keys = preferredKeys.filter((key) => key in record);
+  const detailValue = (key: string): string => {
+    const value = record[key];
+    return key.endsWith("_at") && typeof value === "string"
+      ? time(value)
+      : displayValue(value);
+  };
   return (
     <dl className="detail-grid">
       {keys.map((key) => (
         <div key={key}>
           <dt>{key.replaceAll("_", " ")}</dt>
-          <dd className="mono">{displayValue(record[key])}</dd>
+          <dd className="mono">{detailValue(key)}</dd>
         </div>
       ))}
     </dl>

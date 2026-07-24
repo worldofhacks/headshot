@@ -20,6 +20,7 @@ from agentforge.agents.hosted import (
     HostedConfigurationSet,
     preflight_hosted_configuration_set,
 )
+from agentforge.agents.hosted_prompts import hosted_prompt
 from agentforge.agents.runtime import AGENT_DEFINITIONS, default_assignment
 from agentforge.api.backend import ApiBackend, ApiBackendUnavailable, ApiConflict
 from agentforge.api.birdseye import build_birdseye_snapshot
@@ -84,8 +85,19 @@ _DISPLAY_LABELED_IDENTIFIER = re.compile(
     r"(?i)\b(?:sid|session[_ -]?id|patient[_ -]?id|mrn|ssn|date[_ -]?of[_ -]?birth|dob)"
     r"\s*[:=]\s*[\"']?[A-Za-z0-9._:/@+-]+[\"']?"
 )
+_DISPLAY_BARE_SESSION_ID = re.compile(r"(?i)\bsess_[-A-Za-z0-9._:]+\b")
+_DISPLAY_LABELED_PHI = re.compile(
+    r"(?i)\b(?:patient[_ -]?name|full[_ -]?name|phone(?:[_ -]?number)?|"
+    r"(?:street[_ -]?)?address|date[_ -]?of[_ -]?birth|birth[_ -]?date|dob)\b"
+    r"(?:\s*[:=]\s*|\s+)"
+    r"(?:\"[^\"\r\n]*\"|'[^'\r\n]*'|[^\r\n;]+)"
+)
 _DISPLAY_EMAIL = re.compile(r"(?i)\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b")
 _DISPLAY_SSN = re.compile(r"\b\d{3}-\d{2}-\d{4}\b")
+_DISPLAY_PHONE = re.compile(
+    r"(?<![A-Za-z0-9])(?:\+?1[-.\s]?)?(?:\(\d{3}\)|\d{3})[-.\s]\d{3}[-.\s]\d{4}"
+    r"(?![A-Za-z0-9])"
+)
 _ALLOWED_LIFECYCLE_TRANSITIONS = {
     "draft": ["validating"],
     "validating": ["ready"],
@@ -97,9 +109,7 @@ _REQUIRED_WEB = frozenset({"A01", "A03", "A04", "A06", "A07", "A09", "A10"})
 _REQUIRED_LLM = frozenset({"LLM01", "LLM02", "LLM03", "LLM05", "LLM06"})
 _REQUIRED_CATEGORIES = frozenset({"prompt_injection", "data_exfiltration", "tool_misuse"})
 _RUNNER_HEARTBEAT_FRESHNESS_SECONDS = 30
-_SAFE_ACCOUNTING_COUNTERS = frozenset(
-    {"input_tokens", "output_tokens", "token_observation_count"}
-)
+_SAFE_ACCOUNTING_COUNTERS = frozenset({"input_tokens", "output_tokens", "token_observation_count"})
 
 
 def _restore_safe_accounting_counters(redacted: Any, source: Any) -> None:
@@ -107,12 +117,9 @@ def _restore_safe_accounting_counters(redacted: Any, source: Any) -> None:
 
     if isinstance(redacted, dict) and isinstance(source, Mapping):
         for key, source_value in source.items():
-            if (
-                key in _SAFE_ACCOUNTING_COUNTERS
-                and (
-                    source_value is None
-                    or (isinstance(source_value, int) and not isinstance(source_value, bool))
-                )
+            if key in _SAFE_ACCOUNTING_COUNTERS and (
+                source_value is None
+                or (isinstance(source_value, int) and not isinstance(source_value, bool))
             ):
                 redacted[key] = source_value
                 continue
@@ -190,6 +197,90 @@ def _evidence_verified(row: Mapping[str, Any]) -> bool:
     return True
 
 
+def _validated_verdict(row: Mapping[str, Any]) -> dict[str, Any] | None:
+    """Validate the separately persisted Judge record; the attempt hash does not cover it."""
+
+    if row.get("verdict_id") is None:
+        return None
+    verdict = {
+        "schema_version": "1",
+        "campaign_run_id": row.get("campaign_run_id"),
+        "attempt_id": row.get("attempt_id"),
+        "state": row.get("verdict_state"),
+        "confidence": row.get("verdict_confidence"),
+        "reason_codes": row.get("verdict_reason_codes"),
+    }
+    confirmation_source = row.get("verdict_confirmation_source")
+    if confirmation_source is not None:
+        verdict["confirmation_source"] = confirmation_source
+    error_code = row.get("verdict_error_code")
+    if error_code is not None:
+        verdict["error_code"] = error_code
+    try:
+        validate_contract("verdict", verdict)
+    except Exception as exc:
+        raise EvidenceIntegrityError("verdict contract is invalid") from exc
+    return verdict
+
+
+def _trusted_report_verdict(row: Mapping[str, Any]) -> dict[str, Any]:
+    """Require the durable deterministic Judge basis used by Documentation."""
+
+    verdict = _validated_verdict(row)
+    if verdict is None or verdict["state"] != "EXPLOIT_CONFIRMED":
+        raise EvidenceIntegrityError("report requires a confirmed verdict")
+    confirmation_source = verdict.get("confirmation_source")
+    if confirmation_source not in {"oracle", "canary"}:
+        raise EvidenceIntegrityError("report verdict source is not deterministic")
+    reference_key = (
+        "target_oracle_refs" if confirmation_source == "oracle" else "target_canary_refs"
+    )
+    references = row.get(reference_key)
+    if (
+        not isinstance(references, list)
+        or not references
+        or any(not isinstance(reference, str) or not reference for reference in references)
+    ):
+        raise EvidenceIntegrityError("report verdict lacks a durable configured basis")
+    return verdict
+
+
+def _validated_finding_lineage(row: Mapping[str, Any]) -> dict[str, Any]:
+    """Reconcile a campaign finding with its attempt, case, evidence, and Judge record."""
+
+    verdict = _validated_verdict(row)
+    if verdict is None or verdict["state"] != "EXPLOIT_CONFIRMED":
+        raise EvidenceIntegrityError("finding requires a confirmed verdict")
+    if row.get("finding_source_kind") != "campaign":
+        raise EvidenceIntegrityError("finding source kind differs from campaign lineage")
+    bindings = (
+        ("finding_target_version", "target_version"),
+        ("finding_category", "case_category"),
+        ("finding_severity", "case_severity"),
+        ("finding_execution_profile", "execution_profile"),
+        ("linked_provenance", "evidence_provenance"),
+    )
+    if any(row.get(finding_key) != row.get(source_key) for finding_key, source_key in bindings):
+        raise EvidenceIntegrityError("finding metadata differs from its authoritative lineage")
+    return verdict
+
+
+def _report_evidence_references_verified(
+    report_payload: Mapping[str, Any],
+    *,
+    content_hash: str,
+) -> bool:
+    """Accept only report references that this projection can reconcile durably."""
+
+    expected_reference = f"evidence://sha256/{content_hash}"
+    fix_validation = report_payload.get("fix_validation")
+    return (
+        report_payload.get("evidence_references") == [expected_reference]
+        and isinstance(fix_validation, Mapping)
+        and fix_validation.get("evidence_references") == []
+    )
+
+
 def _redact_evidence_display(value: Any) -> Any:
     """Redact patient/session identifiers from evidence after integrity verification."""
 
@@ -222,9 +313,12 @@ def _redact_evidence_display(value: Any) -> Any:
             )
     value = _DISPLAY_SYNTHETIC_IDENTIFIER.sub("SYNTH-PATIENT-[REDACTED]", value)
     value = _DISPLAY_SYNTHETIC_CANARY.sub("SYNTH_CANARY_[REDACTED]", value)
+    value = _DISPLAY_BARE_SESSION_ID.sub("***REDACTED_SESSION_ID***", value)
     value = _DISPLAY_LABELED_IDENTIFIER.sub("***REDACTED_IDENTIFIER***", value)
+    value = _DISPLAY_LABELED_PHI.sub("***REDACTED_PHI***", value)
     value = _DISPLAY_EMAIL.sub("***REDACTED_EMAIL***", value)
-    return _DISPLAY_SSN.sub("***REDACTED_SSN***", value)
+    value = _DISPLAY_SSN.sub("***REDACTED_SSN***", value)
+    return _DISPLAY_PHONE.sub("***REDACTED_PHONE***", value)
 
 
 def _reproduction_sha256(steps: Any) -> str | None:
@@ -237,6 +331,101 @@ def _reproduction_sha256(steps: Any) -> str | None:
         separators=(",", ":"),
     ).encode("utf-8")
     return hashlib.sha256(canonical).hexdigest()
+
+
+def _security_tool_evidence_verified(row: Mapping[str, Any]) -> bool:
+    """Reconcile one normalized tool finding with its run and sanitized artifact."""
+
+    finding = row.get("finding_payload")
+    artifact = row.get("artifact_payload")
+    artifact_bytes = row.get("artifact_bytes")
+    if (
+        not isinstance(finding, Mapping)
+        or not isinstance(artifact, Mapping)
+        or not isinstance(artifact_bytes, (bytes, bytearray, memoryview))
+        or row.get("matching_artifact_count") != 1
+    ):
+        return False
+    finding = dict(finding)
+    artifact = dict(artifact)
+    run = {
+        "schema_version": "1",
+        "run_id": row.get("run_id"),
+        "tool_name": row.get("run_tool_name"),
+        "tool_version": row.get("run_tool_version"),
+        "configuration_sha256": row.get("run_configuration_sha256"),
+        "run_nonce": row.get("run_nonce"),
+        "target_id": row.get("run_target_id"),
+        "surface_id": row.get("run_surface_id"),
+        "scan_provenance": row.get("run_scan_provenance"),
+        "status": row.get("run_status"),
+        "started_at": _safe(row.get("run_started_at")),
+        "finished_at": _safe(row.get("run_finished_at")),
+        "artifact_sha256": row.get("run_artifact_sha256"),
+    }
+    try:
+        validate_contract("tool_finding", finding)
+        validate_contract("security_tool_run", run)
+        validate_contract("scan_artifact", artifact)
+    except Exception:
+        return False
+
+    raw = bytes(artifact_bytes)
+    digest = hashlib.sha256(raw).hexdigest()
+    if (
+        len(raw) != row.get("artifact_byte_length")
+        or digest != row.get("artifact_sha256")
+        or digest != artifact.get("sha256")
+        or digest != finding.get("raw_artifact_sha256")
+        or digest != run.get("artifact_sha256")
+    ):
+        return False
+
+    finding_scalar_bindings = {
+        "finding_id": "stored_finding_id",
+        "run_id": "stored_finding_run_id",
+        "raw_artifact_sha256": "stored_finding_artifact_sha256",
+        "validation_state": "stored_finding_validation_state",
+        "human_publication_state": "stored_finding_publication_state",
+        "evidence_provenance": "stored_finding_provenance",
+    }
+    if any(
+        finding.get(payload_key) != row.get(row_key)
+        for payload_key, row_key in finding_scalar_bindings.items()
+    ):
+        return False
+
+    run_bindings = (
+        ("run_id", "run_id"),
+        ("tool_name", "run_tool_name"),
+        ("tool_version", "run_tool_version"),
+        ("configuration_sha256", "run_configuration_sha256"),
+        ("run_nonce", "run_nonce"),
+        ("target_id", "run_target_id"),
+        ("surface_id", "run_surface_id"),
+        ("scan_provenance", "run_scan_provenance"),
+    )
+    if any(finding.get(finding_key) != row.get(row_key) for finding_key, row_key in run_bindings):
+        return False
+
+    artifact_scalar_bindings = {
+        "artifact_id": "artifact_id",
+        "run_id": "artifact_run_id",
+        "sha256": "artifact_sha256",
+        "media_type": "artifact_media_type",
+        "byte_length": "artifact_byte_length",
+        "artifact_locator": "artifact_locator",
+    }
+    if any(
+        artifact.get(payload_key) != row.get(row_key)
+        for payload_key, row_key in artifact_scalar_bindings.items()
+    ):
+        return False
+    return (
+        artifact.get("run_id") == run.get("run_id")
+        and artifact.get("tool_name") == run.get("tool_name")
+        and artifact.get("tool_version") == run.get("tool_version")
+    )
 
 
 def _scope_projection(value: Any, *, target_base_url: Any = None) -> dict[str, Any]:
@@ -361,6 +550,7 @@ class PostgresApiBackend(ApiBackend):
             or not _evidence_verified(source)
         ):
             raise EvidenceIntegrityError("finding evidence cannot be verified")
+        verdict = _validated_finding_lineage(source)
         recomputed_hash = ExecutionRecorder().canonical_hash(_evidence_hash_fields(source))
         attack_attempt = source.get("attack_attempt")
         redacted_attempt = (
@@ -379,6 +569,28 @@ class PostgresApiBackend(ApiBackend):
         minimal_reproduction: list[str] = []
         reproduction_hash = None
         if isinstance(report_payload, Mapping):
+            _trusted_report_verdict(source)
+            report_payload = dict(report_payload)
+            try:
+                validate_contract("vuln_report", report_payload)
+            except Exception as exc:
+                raise EvidenceIntegrityError("finding report contract is invalid") from exc
+            if (
+                report_payload.get("report_id") != report_id
+                or report_payload.get("finding_id") != finding_id
+                or report_payload.get("campaign_run_id") != source.get("campaign_run_id")
+                or report_payload.get("attempt_id") != source.get("attempt_id")
+                or report_payload.get("source_case_id") != source.get("case_id")
+                or report_payload.get("severity") != source.get("finding_severity")
+                or report_payload.get("category") != source.get("finding_category")
+                or _reproduction_sha256(report_payload.get("minimal_reproduction"))
+                != report_payload.get("reproduction_sha256")
+                or not _report_evidence_references_verified(
+                    report_payload,
+                    content_hash=content_hash,
+                )
+            ):
+                raise EvidenceIntegrityError("finding report correlation is invalid")
             reproduction = report_payload.get("minimal_reproduction")
             if isinstance(reproduction, list) and all(
                 isinstance(item, str) for item in reproduction
@@ -387,10 +599,27 @@ class PostgresApiBackend(ApiBackend):
                     str(_redact_evidence_display(item)) for item in reproduction
                 ]
             reproduction_hash = report_payload.get("reproduction_sha256")
+        elif report_id is not None:
+            raise EvidenceIntegrityError("finding report payload is absent")
 
         regression = None
         regression_payload = source.get("regression_payload")
         if isinstance(regression_payload, Mapping):
+            regression_payload = dict(regression_payload)
+            try:
+                validate_contract("regression_disposition", regression_payload)
+            except Exception as exc:
+                raise EvidenceIntegrityError("regression contract is invalid") from exc
+            if any(
+                regression_payload.get(key) != expected
+                for key, expected in (
+                    ("finding_id", finding_id),
+                    ("report_id", report_id),
+                    ("campaign_run_id", source.get("campaign_run_id")),
+                    ("attempt_id", source.get("attempt_id")),
+                )
+            ):
+                raise EvidenceIntegrityError("regression correlation is invalid")
             regression = {
                 "disposition_id": regression_payload.get("disposition_id"),
                 "state": regression_payload.get("state"),
@@ -401,6 +630,18 @@ class PostgresApiBackend(ApiBackend):
                 "human_approved": regression_payload.get("human_approved"),
                 "admitted": regression_payload.get("admitted"),
             }
+        oracle_refs = source.get("target_oracle_refs")
+        canary_refs = source.get("target_canary_refs")
+        safe_oracle_refs = (
+            [str(_redact_evidence_display(item)) for item in oracle_refs if isinstance(item, str)]
+            if isinstance(oracle_refs, list)
+            else []
+        )
+        safe_canary_refs = (
+            [str(_redact_evidence_display(item)) for item in canary_refs if isinstance(item, str)]
+            if isinstance(canary_refs, list)
+            else []
+        )
 
         return {
             "availability": "ready",
@@ -425,11 +666,18 @@ class PostgresApiBackend(ApiBackend):
             "executed_at": source.get("executed_at"),
             "trace_id": source.get("trace_id"),
             "judge": {
-                "state": source.get("verdict_state"),
-                "confidence": source.get("verdict_confidence"),
-                "reason_codes": source.get("verdict_reason_codes") or [],
-                "confirmation_source": source.get("verdict_confirmation_source"),
-                "error_code": source.get("verdict_error_code"),
+                "state": verdict["state"],
+                "confidence": verdict["confidence"],
+                "reason_codes": verdict["reason_codes"],
+                "confirmation_source": verdict.get("confirmation_source"),
+                "oracle_refs": safe_oracle_refs,
+                "canary_refs": safe_canary_refs,
+                "rationale": None,
+                "rationale_availability": "unavailable",
+                "rationale_detail": (
+                    "This verdict contract stores typed reason codes, not free-form Judge prose."
+                ),
+                "error_code": verdict.get("error_code"),
             },
             "report_id": report_id if isinstance(report_id, str) else None,
             "minimal_reproduction": minimal_reproduction,
@@ -514,6 +762,74 @@ class PostgresApiBackend(ApiBackend):
                     configurations: dict[str, list[dict[str, Any]]] = {}
                     for row in configuration_rows:
                         configurations.setdefault(row["agent_role"], []).append(row)
+                    hosted_rows = _rows(
+                        connection,
+                        "SELECT configuration_sha256, payload, actor_user_id, created_at "
+                        "FROM hosted_configuration_sets WHERE organization_id = :org "
+                        "ORDER BY created_at DESC",
+                        {"org": principal.organization_id},
+                    )
+                    bound_hosted_rows = _rows(
+                        connection,
+                        "SELECT DISTINCT "
+                        "q.scope_payload->'hosted_run'->>'configuration_set_sha256' "
+                        "AS configuration_sha256 "
+                        "FROM campaign_runs r JOIN campaign_authorization_requests q "
+                        "ON q.organization_id = r.organization_id "
+                        "AND q.request_id = r.authorization_request_id "
+                        "AND q.scope_hash = r.scope_hash "
+                        "WHERE r.organization_id = :org "
+                        "AND q.scope_payload->'hosted_run'->>'configuration_set_sha256' "
+                        "IS NOT NULL",
+                        {"org": principal.organization_id},
+                    )
+                    bound_hosted_hashes = {
+                        row["configuration_sha256"]
+                        for row in bound_hosted_rows
+                        if isinstance(row.get("configuration_sha256"), str)
+                    }
+                    active_hosted_assignments: dict[str, dict[str, Any]] = {}
+                    staged_hosted_assignments: dict[str, dict[str, Any]] = {}
+                    for row in hosted_rows:
+                        configuration = HostedConfigurationSet.from_payload(dict(row["payload"]))
+                        if configuration.configuration_sha256 != row["configuration_sha256"]:
+                            return ResourceResult.unavailable(
+                                "hosted_configuration_integrity_failed"
+                            )
+                        activation_state = (
+                            "active"
+                            if configuration.configuration_sha256 in bound_hosted_hashes
+                            else "staged_pending_authorization"
+                        )
+                        destination = (
+                            active_hosted_assignments
+                            if activation_state == "active"
+                            else staged_hosted_assignments
+                        )
+                        for role in configuration.roles:
+                            if role.role in destination:
+                                continue
+                            prompt = hosted_prompt(role.role)
+                            if role.prompt_sha256 != prompt.prompt_sha256:
+                                return ResourceResult.unavailable("hosted_prompt_integrity_failed")
+                            destination[role.role] = {
+                                "role": role.role,
+                                "provider": role.provider,
+                                "model": role.model_id,
+                                # The configuration pins the requested model/provider, but the
+                                # provider-returned identity is not durably persisted yet. Do not
+                                # relabel configured expectations as execution evidence.
+                                "resolved_model": None,
+                                "upstream_provider": None,
+                                "prompt_sha256": prompt.prompt_sha256,
+                                "prompt_version": prompt.version,
+                                "execution_mode": "hosted_advisory",
+                                "activation_state": activation_state,
+                                "version": 1,
+                                "configuration_sha256": configuration.configuration_sha256,
+                                "configured_at": row["created_at"],
+                                "configured_by": row["actor_user_id"],
+                            }
                     execution_rows = _rows(
                         connection,
                         "SELECT agent_role, count(*) AS execution_count, "
@@ -525,6 +841,11 @@ class PostgresApiBackend(ApiBackend):
                         "sum(input_tokens) AS input_tokens, sum(output_tokens) AS output_tokens, "
                         "count(*) FILTER (WHERE input_tokens IS NOT NULL "
                         "OR output_tokens IS NOT NULL) AS token_observation_count, "
+                        "count(*) FILTER (WHERE execution_mode = 'hosted_advisory') "
+                        "AS hosted_execution_count, "
+                        "count(*) FILTER (WHERE execution_mode = 'hosted_advisory' "
+                        "AND input_tokens IS NOT NULL AND output_tokens IS NOT NULL) "
+                        "AS hosted_accounted_count, "
                         "avg(duration_ms) FILTER (WHERE duration_ms IS NOT NULL) "
                         "AS average_duration_ms, "
                         "percentile_cont(0.5) WITHIN GROUP (ORDER BY duration_ms) "
@@ -540,7 +861,11 @@ class PostgresApiBackend(ApiBackend):
                         "count(*) FILTER (WHERE langfuse_status = 'exported') "
                         "AS langfuse_exported_count, "
                         "count(*) FILTER (WHERE langfuse_status = 'error') "
-                        "AS langfuse_error_count, max(started_at) AS last_activity_at, "
+                        "AS langfuse_error_count, "
+                        "count(*) FILTER (WHERE langfuse_verified_at IS NOT NULL) "
+                        "AS langfuse_verified_count, "
+                        "max(langfuse_verified_at) AS last_langfuse_verified_at, "
+                        "max(started_at) AS last_activity_at, "
                         "(array_agg(status ORDER BY started_at DESC))[1] AS last_status, "
                         "(array_agg(campaign_run_id ORDER BY started_at DESC))[1] "
                         "AS last_campaign_run_id, "
@@ -557,7 +882,7 @@ class PostgresApiBackend(ApiBackend):
                             else source["role"],
                             "provider": source["provider"],
                             "model": source["model"],
-                            "resolved_model": source.get("resolved_model") or source["model"],
+                            "resolved_model": source.get("resolved_model"),
                             "upstream_provider": source.get("upstream_provider"),
                             # Deterministic engines have no system prompt, and a per-role staged
                             # assignment is not an activated hosted configuration set. Keep prompt
@@ -597,27 +922,44 @@ class PostgresApiBackend(ApiBackend):
                             ),
                             None,
                         )
-                        active_assignment = (
+                        active_assignment = active_hosted_assignments.get(definition.role) or (
                             assignment_record(active)
                             if active is not None
                             else assignment_record(
                                 default_assignment(definition.role).public_record()
                             )
                         )
+                        staged_assignment = staged_hosted_assignments.get(definition.role)
+                        if staged_assignment is None and staged is not None:
+                            staged_assignment = assignment_record(staged)
                         stats = execution_by_role.get(definition.role, {})
+                        execution_count = int(stats.get("execution_count", 0))
+                        hosted_execution_count = int(stats.get("hosted_execution_count", 0))
+                        hosted_accounted_count = int(stats.get("hosted_accounted_count", 0))
+                        if execution_count == 0:
+                            accounting_status = "not_applicable"
+                        elif hosted_execution_count == 0 or (
+                            hosted_accounted_count == hosted_execution_count
+                        ):
+                            accounting_status = "measured"
+                        elif hosted_accounted_count == 0 and (
+                            hosted_execution_count == execution_count
+                        ):
+                            accounting_status = "unavailable"
+                        else:
+                            accounting_status = "partial"
                         rows.append(
                             {
                                 **definition_record,
                                 "active_assignment": active_assignment,
-                                "staged_assignment": (
-                                    assignment_record(staged) if staged is not None else None
-                                ),
-                                "execution_count": int(stats.get("execution_count", 0)),
+                                "staged_assignment": staged_assignment,
+                                "execution_count": execution_count,
                                 "running_count": int(stats.get("running_count", 0)),
                                 "succeeded_count": int(stats.get("succeeded_count", 0)),
                                 "failed_count": int(stats.get("failed_count", 0)),
                                 "skipped_count": int(stats.get("skipped_count", 0)),
                                 "measured_cost": float(stats.get("measured_cost", 0.0)),
+                                "accounting_status": accounting_status,
                                 "currency": "USD",
                                 "input_tokens": stats.get("input_tokens"),
                                 "output_tokens": stats.get("output_tokens"),
@@ -648,18 +990,32 @@ class PostgresApiBackend(ApiBackend):
                                 "langfuse_disabled_count": int(
                                     stats.get("langfuse_disabled_count", 0)
                                 ),
-                                "langfuse_queued_count": int(
-                                    stats.get("langfuse_queued_count", 0)
+                                "langfuse_queued_count": int(stats.get("langfuse_queued_count", 0)),
+                                "langfuse_error_count": int(stats.get("langfuse_error_count", 0)),
+                                "langfuse_verified_count": int(
+                                    stats.get("langfuse_verified_count", 0)
                                 ),
-                                "langfuse_error_count": int(
-                                    stats.get("langfuse_error_count", 0)
-                                ),
+                                "last_langfuse_verified_at": stats.get("last_langfuse_verified_at"),
                                 "last_activity_at": stats.get("last_activity_at"),
                                 "last_status": stats.get("last_status"),
                                 "last_campaign_run_id": stats.get("last_campaign_run_id"),
                                 "last_attempt_id": stats.get("last_attempt_id"),
                             }
                         )
+                elif resource == "agent_prompt":
+                    try:
+                        prompt = hosted_prompt(identifiers.get("agent_role", ""))
+                    except ValueError:
+                        rows = []
+                    else:
+                        rows = [
+                            {
+                                "role": prompt.role,
+                                "prompt_version": prompt.version,
+                                "prompt_sha256": prompt.prompt_sha256,
+                                "system_prompt": prompt.system_prompt,
+                            }
+                        ]
                 elif resource in {
                     "hosted_configuration_set",
                     "hosted_configuration_preflight",
@@ -743,6 +1099,7 @@ class PostgresApiBackend(ApiBackend):
                         "agent_role, status, provider, model, execution_mode, "
                         "configuration_version, input_sha256, output_sha256, input_tokens, "
                         "output_tokens, measured_cost, currency, trace_id, langfuse_status, "
+                        "langfuse_verified_at, "
                         "detail, error_code, "
                         "started_at, finished_at, duration_ms FROM agent_executions "
                         "WHERE organization_id = :org ORDER BY id DESC LIMIT 1000",
@@ -750,6 +1107,14 @@ class PostgresApiBackend(ApiBackend):
                     )
                     for row in rows:
                         row["measured_cost"] = float(row["measured_cost"] or 0.0)
+                        row["accounting_status"] = (
+                            "measured"
+                            if row["execution_mode"] == "deterministic"
+                            or (
+                                row["input_tokens"] is not None and row["output_tokens"] is not None
+                            )
+                            else "unavailable"
+                        )
                         row["duration_ms"] = (
                             float(row["duration_ms"]) if row["duration_ms"] is not None else None
                         )
@@ -770,24 +1135,44 @@ class PostgresApiBackend(ApiBackend):
                     )
                     attempt_rows = _rows(
                         connection,
-                        "SELECT source_tool, count(*) AS executed_attempt_count, "
-                        "max(created_at) AS last_executed_at FROM campaign_attempts "
-                        "WHERE organization_id = :org AND source_tool IS NOT NULL "
-                        "GROUP BY source_tool",
+                        "SELECT a.source_tool AS tool_id, ar.target_id, ar.surface_id, "
+                        "count(*) AS executed_attempt_count, "
+                        "max(ar.executed_at) AS last_executed_at "
+                        "FROM campaign_attempts a JOIN attempt_result ar "
+                        "ON ar.organization_id = a.organization_id "
+                        "AND ar.campaign_run_id = a.run_id "
+                        "AND ar.attempt_id = a.attempt_id "
+                        "WHERE a.organization_id = :org AND a.source_tool IS NOT NULL "
+                        "GROUP BY a.source_tool, ar.target_id, ar.surface_id",
                         {"org": principal.organization_id},
                     )
-                    attempt_metrics = {row["source_tool"]: row for row in attempt_rows}
+                    attempt_metrics = {
+                        (row["tool_id"], row["target_id"], row["surface_id"]): row
+                        for row in attempt_rows
+                    }
                     scan_rows = _rows(
                         connection,
-                        "SELECT lower(r.tool_name) AS tool_id, count(DISTINCT r.run_id) "
-                        "AS recorded_scan_count, count(f.finding_id) AS recorded_finding_count, "
-                        "max(r.finished_at) AS last_executed_at FROM security_tool_runs r "
+                        "SELECT lower(r.tool_name) AS tool_id, r.target_id, r.surface_id, "
+                        "count(DISTINCT r.run_id) AS recorded_scan_count, "
+                        "count(DISTINCT f.finding_id) "
+                        "AS recorded_finding_count, max(r.finished_at) AS last_executed_at, "
+                        "(array_agg(r.status ORDER BY r.finished_at DESC))[1] "
+                        "AS last_run_status, "
+                        "(array_agg((SELECT e.code FROM tool_execution_errors e "
+                        "WHERE e.organization_id = r.organization_id AND e.run_id = r.run_id "
+                        "ORDER BY e.created_at DESC LIMIT 1) "
+                        "ORDER BY r.finished_at DESC))[1] AS last_error_code "
+                        "FROM security_tool_runs r "
                         "LEFT JOIN security_tool_findings f "
                         "ON f.organization_id = r.organization_id AND f.run_id = r.run_id "
-                        "WHERE r.organization_id = :org GROUP BY lower(r.tool_name)",
+                        "WHERE r.organization_id = :org "
+                        "GROUP BY lower(r.tool_name), r.target_id, r.surface_id",
                         {"org": principal.organization_id},
                     )
-                    scan_metrics = {row["tool_id"]: row for row in scan_rows}
+                    scan_metrics = {
+                        (row["tool_id"], row["target_id"], row["surface_id"]): row
+                        for row in scan_rows
+                    }
                     candidate_counts = Counter(
                         case.source_tool
                         for case in (self._corpus.cases if self._corpus is not None else ())
@@ -809,8 +1194,15 @@ class PostgresApiBackend(ApiBackend):
                                 method=str(surface.get("method", "")),
                                 relative_path=str(surface.get("relative_path", "")),
                             )
-                            attempts = attempt_metrics.get(tool.tool_id, {})
-                            scans = scan_metrics.get(tool.tool_id, {})
+                            metric_key = (
+                                tool.tool_id,
+                                configured["target_id"],
+                                configured["surface_id"],
+                            )
+                            attempts = attempt_metrics.get(metric_key, {})
+                            scans = scan_metrics.get(metric_key, {})
+                            executed_attempt_count = int(attempts.get("executed_attempt_count", 0))
+                            recorded_scan_count = int(scans.get("recorded_scan_count", 0))
                             timestamps = [
                                 value
                                 for value in (
@@ -819,6 +1211,22 @@ class PostgresApiBackend(ApiBackend):
                                 )
                                 if isinstance(value, datetime.datetime)
                             ]
+                            attempt_at = attempts.get("last_executed_at")
+                            scan_at = scans.get("last_executed_at")
+                            scan_is_latest = isinstance(scan_at, datetime.datetime) and (
+                                not isinstance(attempt_at, datetime.datetime)
+                                or scan_at >= attempt_at
+                            )
+                            last_scan_status = scans.get("last_run_status")
+                            if scan_is_latest and last_scan_status == "failed":
+                                runtime_state = "error"
+                                last_error_code = scans.get("last_error_code")
+                            elif executed_attempt_count > 0 or recorded_scan_count > 0:
+                                runtime_state = "evidenced"
+                                last_error_code = None
+                            else:
+                                runtime_state = "idle"
+                                last_error_code = None
                             rows.append(
                                 {
                                     "tool_id": tool.tool_id,
@@ -839,14 +1247,17 @@ class PostgresApiBackend(ApiBackend):
                                     "owasp_llm": tool.owasp_llm,
                                     "owasp_web": tool.owasp_web,
                                     "reviewed_candidate_count": candidate_counts[tool.tool_id],
-                                    "executed_attempt_count": int(
-                                        attempts.get("executed_attempt_count", 0)
-                                    ),
-                                    "recorded_scan_count": int(scans.get("recorded_scan_count", 0)),
+                                    "executed_attempt_count": executed_attempt_count,
+                                    "recorded_scan_count": recorded_scan_count,
                                     "recorded_finding_count": int(
                                         scans.get("recorded_finding_count", 0)
                                     ),
                                     "last_executed_at": max(timestamps) if timestamps else None,
+                                    "runtime_state": runtime_state,
+                                    "evidenced_finding_count": int(
+                                        scans.get("recorded_finding_count", 0)
+                                    ),
+                                    "last_error_code": last_error_code,
                                 }
                             )
                 elif resource == "resilience":
@@ -1048,12 +1459,12 @@ class PostgresApiBackend(ApiBackend):
                 elif resource == "evidence":
                     rows = _rows(
                         connection,
-                        "SELECT ar.campaign_run_id, ar.attempt_id, ar.target_id, "
-                        "ar.target_version, ar.surface_id, ar.surface_version, "
-                        "ar.attack_attempt, ar.request_transcript, ar.response_transcript, "
-                        "ar.policy_decision_id, ar.executed_at, ar.trace_id, ar.content_hash, "
-                        "v.state AS verdict, v.confidence, ar.execution_profile, "
-                        "ar.evidence_provenance FROM attempt_result ar "
+                        "SELECT ar.*, v.id AS verdict_id, v.state AS verdict_state, "
+                        "v.confidence AS verdict_confidence, "
+                        "v.reason_codes AS verdict_reason_codes, "
+                        "v.confirmation_source AS verdict_confirmation_source, "
+                        "v.error_code AS verdict_error_code "
+                        "FROM attempt_result ar "
                         "LEFT JOIN verdict v ON v.organization_id = ar.organization_id "
                         "AND v.campaign_run_id = ar.campaign_run_id "
                         "AND v.attempt_id = ar.attempt_id "
@@ -1063,6 +1474,47 @@ class PostgresApiBackend(ApiBackend):
                             "attempt_id": identifiers.get("attempt_id"),
                         },
                     )
+                    if len(rows) > 1:
+                        return ResourceResult.unavailable("attempt_evidence_identifier_ambiguous")
+                    if rows:
+                        source = rows[0]
+                        if not _evidence_verified(source):
+                            return ResourceResult.unavailable("evidence_integrity_failed")
+                        try:
+                            verdict = _validated_verdict(source)
+                        except EvidenceIntegrityError:
+                            return ResourceResult.unavailable("verdict_integrity_failed")
+                        rows = [
+                            {
+                                "campaign_run_id": source["campaign_run_id"],
+                                "attempt_id": source["attempt_id"],
+                                "target_id": source.get("target_id"),
+                                "target_version": source.get("target_version"),
+                                "surface_id": source.get("surface_id"),
+                                "surface_version": source.get("surface_version"),
+                                "attack_attempt": _redact_evidence_display(
+                                    source.get("attack_attempt")
+                                ),
+                                "request_transcript": _redact_evidence_display(
+                                    source.get("request_transcript")
+                                ),
+                                "response_transcript": _redact_evidence_display(
+                                    source.get("response_transcript")
+                                ),
+                                "policy_decision_id": source.get("policy_decision_id"),
+                                "executed_at": source.get("executed_at"),
+                                "trace_id": source.get("trace_id"),
+                                "content_hash": source["content_hash"],
+                                # This Judge projection is separately contract-validated. The
+                                # AttemptResult content hash authenticates only the evidence row.
+                                "verdict": verdict["state"] if verdict is not None else None,
+                                "confidence": (
+                                    verdict["confidence"] if verdict is not None else None
+                                ),
+                                "execution_profile": source.get("execution_profile"),
+                                "evidence_provenance": source.get("evidence_provenance"),
+                            }
+                        ]
                 elif resource in {"findings", "finding"}:
                     where = "f.organization_id = :org"
                     parameters = {"org": principal.organization_id}
@@ -1073,10 +1525,21 @@ class PostgresApiBackend(ApiBackend):
                         connection,
                         "SELECT ar.*, f.finding_id AS linked_finding_id, f.state AS finding_state, "
                         "f.severity AS finding_severity, f.category AS finding_category, "
-                        "f.target_version AS finding_target_version, f.source_kind, "
+                        "f.target_version AS finding_target_version, "
+                        "f.source_kind AS finding_source_kind, "
                         "f.execution_profile AS finding_execution_profile, f.published, "
                         "a.case_id, a.case_content_hash, a.category AS case_category, "
+                        "a.severity AS case_severity, "
                         "a.attack_class, a.owasp_mappings, "
+                        "(SELECT t.payload->'oracle_refs' FROM target_definitions t "
+                        "WHERE t.organization_id = ar.organization_id "
+                        "AND t.target_id = ar.target_id AND t.version = ar.target_version "
+                        "LIMIT 1) AS target_oracle_refs, "
+                        "(SELECT t.payload->'canary_refs' FROM target_definitions t "
+                        "WHERE t.organization_id = ar.organization_id "
+                        "AND t.target_id = ar.target_id AND t.version = ar.target_version "
+                        "LIMIT 1) AS target_canary_refs, "
+                        "v.id AS verdict_id, "
                         "v.state AS verdict_state, v.confidence AS verdict_confidence, "
                         "v.reason_codes AS verdict_reason_codes, "
                         "v.confirmation_source AS verdict_confirmation_source, "
@@ -1092,23 +1555,40 @@ class PostgresApiBackend(ApiBackend):
                         "JOIN campaign_attempts a ON a.organization_id = l.organization_id "
                         "AND a.run_id = l.campaign_run_id AND a.attempt_id = l.attempt_id "
                         "JOIN verdict v ON v.id = l.verdict_id "
+                        "AND v.organization_id = l.organization_id "
+                        "AND v.campaign_run_id = l.campaign_run_id "
+                        "AND v.attempt_id = l.attempt_id "
                         "LEFT JOIN vuln_reports vr "
                         "ON vr.organization_id = f.organization_id "
                         "AND vr.finding_id = f.finding_id "
+                        "AND vr.campaign_run_id = l.campaign_run_id "
+                        "AND vr.attempt_id = l.attempt_id "
                         "LEFT JOIN LATERAL (SELECT d.contract_payload "
                         "FROM regression_dispositions d "
                         "WHERE d.organization_id = f.organization_id "
                         "AND d.finding_id = f.finding_id "
+                        "AND d.report_id = vr.report_id "
+                        "AND d.campaign_run_id = l.campaign_run_id "
+                        "AND d.attempt_id = l.attempt_id "
                         "ORDER BY d.created_at DESC LIMIT 1) rd ON true WHERE "
                         + where
                         + " ORDER BY f.created_at DESC",
                         parameters,
                     )
+                    finding_link_counts = Counter(
+                        source["linked_finding_id"] for source in source_rows
+                    )
+                    if any(count != 1 for count in finding_link_counts.values()):
+                        return ResourceResult.unavailable("finding_evidence_identifier_ambiguous")
                     rows = []
                     for source in source_rows:
-                        if source["content_hash"] != source[
-                            "evidence_content_hash"
-                        ] or not _evidence_verified(source):
+                        try:
+                            if source["content_hash"] != source[
+                                "evidence_content_hash"
+                            ] or not _evidence_verified(source):
+                                raise EvidenceIntegrityError("finding evidence cannot be verified")
+                            _validated_finding_lineage(source)
+                        except EvidenceIntegrityError:
                             return ResourceResult.unavailable("finding_evidence_integrity_failed")
                         history = _rows(
                             connection,
@@ -1120,6 +1600,8 @@ class PostgresApiBackend(ApiBackend):
                                 "finding": source["linked_finding_id"],
                             },
                         )
+                        for event in history:
+                            event["rationale"] = str(_redact_evidence_display(event["rationale"]))
                         latest = history[-1]["decision"] if history else None
                         publication_status = "blocked_pending_human_approval"
                         if source["published"]:
@@ -1144,7 +1626,7 @@ class PostgresApiBackend(ApiBackend):
                             "target_version": source["finding_target_version"],
                             "publication_status": publication_status,
                             "evidence_integrity": "verified",
-                            "source_kind": source["source_kind"],
+                            "source_kind": source["finding_source_kind"],
                             "execution_profile": source["finding_execution_profile"],
                             "evidence_provenance": source["linked_provenance"],
                             "campaign_run_id": source["campaign_run_id"],
@@ -1162,21 +1644,66 @@ class PostgresApiBackend(ApiBackend):
                         tool_parameters["finding_id"] = identifiers.get("finding_id")
                     tool_rows = _rows(
                         connection,
-                        "SELECT contract_payload, raw_artifact_sha256 "
-                        "FROM security_tool_findings WHERE " + tool_where + " ORDER BY finding_id",
+                        "SELECT f.finding_id AS stored_finding_id, "
+                        "f.run_id AS stored_finding_run_id, "
+                        "f.raw_artifact_sha256 AS stored_finding_artifact_sha256, "
+                        "f.validation_state AS stored_finding_validation_state, "
+                        "f.human_publication_state AS stored_finding_publication_state, "
+                        "f.evidence_provenance AS stored_finding_provenance, "
+                        "f.contract_payload AS finding_payload, "
+                        "r.run_id, r.tool_name AS run_tool_name, "
+                        "r.tool_version AS run_tool_version, "
+                        "r.configuration_sha256 AS run_configuration_sha256, "
+                        "r.run_nonce, r.target_id AS run_target_id, "
+                        "r.surface_id AS run_surface_id, "
+                        "r.scan_provenance AS run_scan_provenance, "
+                        "r.status AS run_status, r.started_at AS run_started_at, "
+                        "r.finished_at AS run_finished_at, "
+                        "r.artifact_sha256 AS run_artifact_sha256, "
+                        "a.artifact_id, a.run_id AS artifact_run_id, "
+                        "a.sha256 AS artifact_sha256, "
+                        "a.media_type AS artifact_media_type, "
+                        "a.byte_length AS artifact_byte_length, "
+                        "a.artifact_locator, a.sanitized_payload AS artifact_bytes, "
+                        "a.contract_payload AS artifact_payload, "
+                        "(SELECT count(*) FROM scan_artifacts sa_count "
+                        "WHERE sa_count.organization_id = f.organization_id "
+                        "AND sa_count.run_id = f.run_id "
+                        "AND sa_count.sha256 = f.raw_artifact_sha256) "
+                        "AS matching_artifact_count "
+                        "FROM security_tool_findings f "
+                        "LEFT JOIN security_tool_runs r "
+                        "ON r.organization_id = f.organization_id AND r.run_id = f.run_id "
+                        "LEFT JOIN LATERAL (SELECT sa.* FROM scan_artifacts sa "
+                        "WHERE sa.organization_id = f.organization_id "
+                        "AND sa.run_id = f.run_id "
+                        "AND sa.sha256 = f.raw_artifact_sha256 "
+                        "ORDER BY sa.artifact_id LIMIT 1) a ON true WHERE "
+                        + tool_where.replace("organization_id", "f.organization_id")
+                        + " ORDER BY f.finding_id",
                         tool_parameters,
                     )
                     for source in tool_rows:
-                        payload = source["contract_payload"]
-                        reproduction = payload.get("reproduction_evidence", {})
+                        payload = source["finding_payload"]
+                        try:
+                            validate_contract("tool_finding", payload)
+                        except Exception:
+                            return ResourceResult.unavailable(
+                                "security_tool_finding_contract_invalid"
+                            )
+                        evidence_verified = _security_tool_evidence_verified(source)
                         projection = {
                             "finding_id": payload["finding_id"],
                             "state": payload["validation_state"],
                             "severity": payload["severity"],
-                            "category": reproduction.get("summary", "security tool finding"),
-                            "target_version": payload["target_id"],
+                            # ToolFinding has no normalized platform category or target-version
+                            # field. Free-form summaries and target IDs are not substitutes.
+                            "category": None,
+                            "target_version": None,
                             "publication_status": payload["human_publication_state"],
-                            "evidence_integrity": "verified",
+                            "evidence_integrity": (
+                                "verified" if evidence_verified else "unavailable"
+                            ),
                             "source_kind": payload["source_kind"],
                             "execution_profile": "live"
                             if payload["scan_provenance"] == "live_target"
@@ -1184,15 +1711,24 @@ class PostgresApiBackend(ApiBackend):
                             "evidence_provenance": payload["evidence_provenance"],
                             "campaign_run_id": None,
                             "attempt_id": None,
-                            "evidence_content_hash": source["raw_artifact_sha256"],
+                            "evidence_content_hash": (
+                                payload["raw_artifact_sha256"] if evidence_verified else None
+                            ),
                             "history": [],
                         }
                         if resource == "finding":
                             projection["verification"] = self._unavailable_verification(
                                 payload["finding_id"],
-                                reason_code="campaign_transcript_not_applicable",
+                                reason_code=(
+                                    "campaign_transcript_not_applicable"
+                                    if evidence_verified
+                                    else "security_tool_evidence_integrity_failed"
+                                ),
                             )
                         rows.append(projection)
+                    projected_finding_counts = Counter(row["finding_id"] for row in rows)
+                    if any(count != 1 for count in projected_finding_counts.values()):
+                        return ResourceResult.unavailable("finding_evidence_identifier_ambiguous")
                 elif resource in {"reports", "report"}:
                     where = "vr.organization_id = :org"
                     parameters = {"org": principal.organization_id}
@@ -1202,8 +1738,23 @@ class PostgresApiBackend(ApiBackend):
                     source_rows = _rows(
                         connection,
                         "SELECT ar.*, f.finding_id AS linked_finding_id, "
+                        "f.severity AS finding_severity, "
+                        "f.category AS finding_category, "
+                        "f.target_version AS finding_target_version, "
+                        "f.source_kind AS finding_source_kind, "
+                        "f.execution_profile AS finding_execution_profile, "
                         "a.case_id, a.case_content_hash, a.category AS case_category, "
+                        "a.severity AS case_severity, "
                         "a.attack_class, a.owasp_mappings, "
+                        "(SELECT t.payload->'oracle_refs' FROM target_definitions t "
+                        "WHERE t.organization_id = ar.organization_id "
+                        "AND t.target_id = ar.target_id AND t.version = ar.target_version "
+                        "LIMIT 1) AS target_oracle_refs, "
+                        "(SELECT t.payload->'canary_refs' FROM target_definitions t "
+                        "WHERE t.organization_id = ar.organization_id "
+                        "AND t.target_id = ar.target_id AND t.version = ar.target_version "
+                        "LIMIT 1) AS target_canary_refs, "
+                        "v.id AS verdict_id, "
                         "v.state AS verdict_state, v.confidence AS verdict_confidence, "
                         "v.reason_codes AS verdict_reason_codes, "
                         "v.confirmation_source AS verdict_confirmation_source, "
@@ -1211,18 +1762,24 @@ class PostgresApiBackend(ApiBackend):
                         "vr.report_id AS vuln_report_id, vr.contract_payload AS report_payload, "
                         "vr.created_at AS report_created_at, "
                         "rd.contract_payload AS regression_payload, "
-                        "l.evidence_content_hash "
+                        "l.evidence_content_hash, l.provenance AS linked_provenance "
                         "FROM vuln_reports vr JOIN finding f "
                         "ON f.organization_id = vr.organization_id "
                         "AND f.finding_id = vr.finding_id "
                         "JOIN finding_evidence_links l "
-                        "ON l.organization_id = f.organization_id AND l.finding_id = f.finding_id "
+                        "ON l.organization_id = f.organization_id "
+                        "AND l.finding_id = f.finding_id "
+                        "AND l.campaign_run_id = vr.campaign_run_id "
+                        "AND l.attempt_id = vr.attempt_id "
                         "JOIN attempt_result ar ON ar.organization_id = l.organization_id "
                         "AND ar.campaign_run_id = l.campaign_run_id "
                         "AND ar.attempt_id = l.attempt_id "
                         "JOIN campaign_attempts a ON a.organization_id = l.organization_id "
                         "AND a.run_id = l.campaign_run_id AND a.attempt_id = l.attempt_id "
                         "JOIN verdict v ON v.id = l.verdict_id "
+                        "AND v.organization_id = l.organization_id "
+                        "AND v.campaign_run_id = l.campaign_run_id "
+                        "AND v.attempt_id = l.attempt_id "
                         "LEFT JOIN LATERAL (SELECT d.contract_payload "
                         "FROM regression_dispositions d "
                         "WHERE d.organization_id = vr.organization_id "
@@ -1232,11 +1789,15 @@ class PostgresApiBackend(ApiBackend):
                         + " ORDER BY vr.created_at DESC",
                         parameters,
                     )
+                    report_counts = Counter(source["vuln_report_id"] for source in source_rows)
+                    if any(count != 1 for count in report_counts.values()):
+                        return ResourceResult.unavailable("report_identifier_ambiguous")
                     rows = []
                     for source in source_rows:
                         report_payload = source.get("report_payload")
                         regression_payload = source.get("regression_payload")
                         try:
+                            _trusted_report_verdict(source)
                             if not isinstance(report_payload, Mapping):
                                 raise ValueError("report payload is absent")
                             report_payload = dict(report_payload)
@@ -1249,8 +1810,10 @@ class PostgresApiBackend(ApiBackend):
                                 or report_payload.get("attempt_id") != source["attempt_id"]
                                 or _reproduction_sha256(report_payload.get("minimal_reproduction"))
                                 != report_payload.get("reproduction_sha256")
-                                or f"evidence://sha256/{source['evidence_content_hash']}"
-                                not in report_payload.get("evidence_references", [])
+                                or not _report_evidence_references_verified(
+                                    report_payload,
+                                    content_hash=source["evidence_content_hash"],
+                                )
                             ):
                                 raise ValueError("report correlation differs")
                             if regression_payload is not None:
@@ -1433,6 +1996,7 @@ class PostgresApiBackend(ApiBackend):
                                 # contract requires a JSON number, so coerce it to float here rather
                                 # than letting _safe stringify the Decimal.
                                 "measured_cost": float(cost) if cost is not None else 0.0,
+                                "accounting_status": "measured",
                                 "currency": source["currency"],
                                 "request_count": source["request_count"],
                                 "execution_count": 0,
@@ -1446,6 +2010,8 @@ class PostgresApiBackend(ApiBackend):
                                 "input_tokens": None,
                                 "output_tokens": None,
                                 "token_observation_count": 0,
+                                "p50_duration_ms": None,
+                                "p95_duration_ms": None,
                                 "budget_usd": source["budget_usd"],
                                 "budget_utilization": (
                                     float(cost) / source["budget_usd"]
@@ -1461,6 +2027,16 @@ class PostgresApiBackend(ApiBackend):
                         )
                     agent_cost_rows = _rows(
                         connection,
+                        "WITH role_metrics AS ("
+                        "SELECT organization_id, campaign_run_id, agent_role, "
+                        "percentile_cont(0.5) WITHIN GROUP (ORDER BY duration_ms) "
+                        "AS p50_duration_ms, "
+                        "percentile_cont(0.95) WITHIN GROUP (ORDER BY duration_ms) "
+                        "AS p95_duration_ms "
+                        "FROM agent_executions WHERE organization_id = :org "
+                        "AND status <> 'running' AND duration_ms IS NOT NULL "
+                        "GROUP BY organization_id, campaign_run_id, agent_role"
+                        ") "
                         "SELECT e.campaign_run_id, e.agent_role, e.provider, e.model, "
                         "e.execution_mode, "
                         "sum(e.measured_cost) AS measured_cost, e.currency, "
@@ -1470,6 +2046,10 @@ class PostgresApiBackend(ApiBackend):
                         "sum(e.output_tokens) AS output_tokens, "
                         "count(*) FILTER (WHERE e.input_tokens IS NOT NULL "
                         "OR e.output_tokens IS NOT NULL) AS token_observation_count, "
+                        "count(*) FILTER (WHERE e.input_tokens IS NOT NULL "
+                        "AND e.output_tokens IS NOT NULL) AS fully_accounted_count, "
+                        "max(m.p50_duration_ms) AS p50_duration_ms, "
+                        "max(m.p95_duration_ms) AS p95_duration_ms, "
                         "min(e.started_at) AS started_at, max(e.finished_at) AS ended_at, "
                         "extract(epoch FROM (max(e.finished_at) - min(e.started_at))) * 1000 "
                         "AS duration_ms, q.scope_payload->>'execution_profile' "
@@ -1483,6 +2063,9 @@ class PostgresApiBackend(ApiBackend):
                         "JOIN campaign_authorization_requests q "
                         "ON q.organization_id = r.organization_id "
                         "AND q.request_id = r.authorization_request_id "
+                        "JOIN role_metrics m ON m.organization_id = e.organization_id "
+                        "AND m.campaign_run_id = e.campaign_run_id "
+                        "AND m.agent_role = e.agent_role "
                         "WHERE e.organization_id = :org AND e.status <> 'running' "
                         "GROUP BY e.campaign_run_id, e.agent_role, e.provider, e.model, "
                         "e.currency, e.execution_mode, q.scope_payload "
@@ -1491,6 +2074,17 @@ class PostgresApiBackend(ApiBackend):
                     )
                     for source in agent_cost_rows:
                         cost = float(source["measured_cost"] or 0.0)
+                        execution_count = int(source["executions"])
+                        fully_accounted_count = int(source["fully_accounted_count"])
+                        if (
+                            source["execution_mode"] == "deterministic"
+                            or fully_accounted_count == execution_count
+                        ):
+                            accounting_status = "measured"
+                        elif fully_accounted_count == 0:
+                            accounting_status = "unavailable"
+                        else:
+                            accounting_status = "partial"
                         accounting_id = hashlib.sha256(
                             (
                                 f"agent-cost:{source['campaign_run_id']}:"
@@ -1509,18 +2103,21 @@ class PostgresApiBackend(ApiBackend):
                                 "agent_role": source["agent_role"],
                                 "record_kind": "agent",
                                 "measured_cost": cost,
+                                "accounting_status": accounting_status,
                                 "currency": source["currency"],
                                 # Agent executions are logical spans, not physical provider
                                 # requests. Until provider request IDs are durably correlated,
                                 # never infer a request count from execution count.
                                 "request_count": 0,
-                                "execution_count": int(source["executions"]),
+                                "execution_count": execution_count,
                                 "attempt_count": int(source["attempt_count"]),
                                 "confirmed_finding_count": 0,
                                 "average_cost_per_request": 0.0,
                                 "input_tokens": source["input_tokens"],
                                 "output_tokens": source["output_tokens"],
                                 "token_observation_count": int(source["token_observation_count"]),
+                                "p50_duration_ms": float(source["p50_duration_ms"]),
+                                "p95_duration_ms": float(source["p95_duration_ms"]),
                                 "budget_usd": None,
                                 "budget_utilization": None,
                                 "duration_ms": float(source["duration_ms"] or 0.0),
@@ -1537,7 +2134,7 @@ class PostgresApiBackend(ApiBackend):
                         "operation, provider, method, destination_host, relative_path, status, "
                         "status_code, error_code, started_at, finished_at, duration_ms, "
                         "request_bytes, response_bytes, measured_cost, currency, langfuse_status, "
-                        "request_payload, response_payload "
+                        "langfuse_verified_at, request_payload, response_payload "
                         "FROM outbound_http_requests WHERE organization_id = :org "
                         "AND finished_at IS NOT NULL ORDER BY started_at DESC LIMIT 200",
                         {"org": principal.organization_id},
@@ -1566,8 +2163,11 @@ class PostgresApiBackend(ApiBackend):
                                 "execution_mode": None,
                                 "input_tokens": None,
                                 "output_tokens": None,
+                                "p50_duration_ms": None,
+                                "p95_duration_ms": None,
                                 "duration_ms": duration_ms,
                                 "measured_cost": float(source["measured_cost"] or 0.0),
+                                "accounting_status": "measured",
                             }
                         )
                     legacy_rows = _rows(
@@ -1618,10 +2218,14 @@ class PostgresApiBackend(ApiBackend):
                                 "request_bytes": 0,
                                 "response_bytes": None,
                                 "measured_cost": 0.0,
+                                "accounting_status": "unavailable",
                                 "currency": "USD",
                                 "input_tokens": None,
                                 "output_tokens": None,
+                                "p50_duration_ms": None,
+                                "p95_duration_ms": None,
                                 "langfuse_status": "historical_not_instrumented",
+                                "langfuse_verified_at": None,
                                 "request_preview": None,
                                 "response_preview": None,
                                 "request_sha256": None,
@@ -1667,10 +2271,14 @@ class PostgresApiBackend(ApiBackend):
                                 "request_bytes": 0,
                                 "response_bytes": None,
                                 "measured_cost": float(source["measured_cost"] or 0.0),
+                                "accounting_status": "measured",
                                 "currency": source["currency"],
                                 "input_tokens": None,
                                 "output_tokens": None,
+                                "p50_duration_ms": None,
+                                "p95_duration_ms": None,
                                 "langfuse_status": "historical_not_instrumented",
+                                "langfuse_verified_at": None,
                                 "request_preview": None,
                                 "response_preview": None,
                                 "request_sha256": None,
@@ -1681,13 +2289,30 @@ class PostgresApiBackend(ApiBackend):
                         )
                     agent_rows = _rows(
                         connection,
-                        "SELECT execution_id, parent_execution_id, trace_id, campaign_run_id, "
-                        "attempt_id, agent_role, status, provider, model, execution_mode, "
-                        "input_sha256, output_sha256, input_tokens, output_tokens, error_code, "
-                        "started_at, finished_at, duration_ms, measured_cost, currency, "
-                        "langfuse_status "
+                        "WITH role_metrics AS ("
+                        "SELECT organization_id, campaign_run_id, agent_role, "
+                        "percentile_cont(0.5) WITHIN GROUP (ORDER BY duration_ms) "
+                        "AS p50_duration_ms, "
+                        "percentile_cont(0.95) WITHIN GROUP (ORDER BY duration_ms) "
+                        "AS p95_duration_ms "
                         "FROM agent_executions WHERE organization_id = :org "
-                        "ORDER BY started_at DESC LIMIT 1000",
+                        "AND status <> 'running' AND duration_ms IS NOT NULL "
+                        "GROUP BY organization_id, campaign_run_id, agent_role"
+                        ") "
+                        "SELECT e.execution_id, e.parent_execution_id, e.trace_id, "
+                        "e.campaign_run_id, "
+                        "e.attempt_id, e.agent_role, e.status, e.provider, e.model, "
+                        "e.execution_mode, e.input_sha256, e.output_sha256, e.input_tokens, "
+                        "e.output_tokens, e.error_code, e.started_at, e.finished_at, "
+                        "e.duration_ms, e.measured_cost, e.currency, e.langfuse_status, "
+                        "e.langfuse_verified_at, "
+                        "m.p50_duration_ms, m.p95_duration_ms "
+                        "FROM agent_executions e LEFT JOIN role_metrics m "
+                        "ON m.organization_id = e.organization_id "
+                        "AND m.campaign_run_id = e.campaign_run_id "
+                        "AND m.agent_role = e.agent_role "
+                        "WHERE e.organization_id = :org "
+                        "ORDER BY e.started_at DESC LIMIT 1000",
                         {"org": principal.organization_id},
                     )
                     for source in agent_rows:
@@ -1719,10 +2344,30 @@ class PostgresApiBackend(ApiBackend):
                                 "request_bytes": 0,
                                 "response_bytes": None,
                                 "measured_cost": float(source["measured_cost"] or 0.0),
+                                "accounting_status": (
+                                    "measured"
+                                    if source["execution_mode"] == "deterministic"
+                                    or (
+                                        source["input_tokens"] is not None
+                                        and source["output_tokens"] is not None
+                                    )
+                                    else "unavailable"
+                                ),
                                 "currency": source["currency"],
                                 "input_tokens": source["input_tokens"],
                                 "output_tokens": source["output_tokens"],
+                                "p50_duration_ms": (
+                                    float(source["p50_duration_ms"])
+                                    if source["p50_duration_ms"] is not None
+                                    else None
+                                ),
+                                "p95_duration_ms": (
+                                    float(source["p95_duration_ms"])
+                                    if source["p95_duration_ms"] is not None
+                                    else None
+                                ),
                                 "langfuse_status": source["langfuse_status"],
+                                "langfuse_verified_at": source["langfuse_verified_at"],
                                 "request_preview": None,
                                 "response_preview": None,
                                 "request_sha256": source["input_sha256"],
@@ -1779,9 +2424,25 @@ class PostgresApiBackend(ApiBackend):
                             verification_rows = _rows(
                                 connection,
                                 "SELECT ar.*, f.finding_id AS linked_finding_id, "
+                                "f.severity AS finding_severity, "
+                                "f.category AS finding_category, "
+                                "f.target_version AS finding_target_version, "
+                                "f.source_kind AS finding_source_kind, "
+                                "f.execution_profile AS finding_execution_profile, "
                                 "a.case_id, a.case_content_hash, "
-                                "a.category AS case_category, a.attack_class, a.owasp_mappings, "
-                                "v.state AS verdict_state, "
+                                "a.category AS case_category, a.severity AS case_severity, "
+                                "a.attack_class, a.owasp_mappings, "
+                                "(SELECT t.payload->'oracle_refs' FROM target_definitions t "
+                                "WHERE t.organization_id = ar.organization_id "
+                                "AND t.target_id = ar.target_id "
+                                "AND t.version = ar.target_version LIMIT 1) "
+                                "AS target_oracle_refs, "
+                                "(SELECT t.payload->'canary_refs' FROM target_definitions t "
+                                "WHERE t.organization_id = ar.organization_id "
+                                "AND t.target_id = ar.target_id "
+                                "AND t.version = ar.target_version LIMIT 1) "
+                                "AS target_canary_refs, "
+                                "v.id AS verdict_id, v.state AS verdict_state, "
                                 "v.confidence AS verdict_confidence, "
                                 "v.reason_codes AS verdict_reason_codes, "
                                 "v.confirmation_source AS verdict_confirmation_source, "
@@ -1789,7 +2450,7 @@ class PostgresApiBackend(ApiBackend):
                                 "vr.report_id AS vuln_report_id, "
                                 "vr.contract_payload AS report_payload, "
                                 "rd.contract_payload AS regression_payload, "
-                                "l.evidence_content_hash "
+                                "l.evidence_content_hash, l.provenance AS linked_provenance "
                                 "FROM finding f JOIN finding_evidence_links l "
                                 "ON l.organization_id = f.organization_id "
                                 "AND l.finding_id = f.finding_id "
@@ -1800,18 +2461,33 @@ class PostgresApiBackend(ApiBackend):
                                 "AND a.run_id = l.campaign_run_id "
                                 "AND a.attempt_id = l.attempt_id "
                                 "JOIN verdict v ON v.id = l.verdict_id "
+                                "AND v.organization_id = l.organization_id "
+                                "AND v.campaign_run_id = l.campaign_run_id "
+                                "AND v.attempt_id = l.attempt_id "
                                 "LEFT JOIN vuln_reports vr "
                                 "ON vr.organization_id = f.organization_id "
                                 "AND vr.finding_id = f.finding_id "
+                                "AND vr.campaign_run_id = l.campaign_run_id "
+                                "AND vr.attempt_id = l.attempt_id "
                                 "LEFT JOIN LATERAL (SELECT d.contract_payload "
                                 "FROM regression_dispositions d "
                                 "WHERE d.organization_id = f.organization_id "
                                 "AND d.finding_id = f.finding_id "
+                                "AND d.report_id = vr.report_id "
+                                "AND d.campaign_run_id = l.campaign_run_id "
+                                "AND d.attempt_id = l.attempt_id "
                                 "ORDER BY d.created_at DESC LIMIT 1) rd ON true "
                                 "WHERE f.organization_id = :org "
                                 "AND l.campaign_run_id = :run_id "
                                 "ORDER BY f.created_at DESC",
                                 {"org": principal.organization_id, "run_id": run_id},
+                            )
+                        approval_finding_counts = Counter(
+                            item["linked_finding_id"] for item in verification_rows
+                        )
+                        if any(count != 1 for count in approval_finding_counts.values()):
+                            return ResourceResult.unavailable(
+                                "approval_evidence_identifier_ambiguous"
                             )
                         try:
                             row["verification_chain"] = [

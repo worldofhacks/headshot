@@ -2,7 +2,7 @@
 
 > **Status — provisioned baseline, release promotion pending:** the Headshot Railway project has
 > separate Staging and production environments with Web, Runner, and PostgreSQL provisioned. This
-> release adds the private Scheduler and migrations through `0013`. A provisioned resource is not
+> release adds the private Scheduler and migrations through `0016`. A provisioned resource is not
 > evidence that the current release is deployed or that a live campaign is authorized; exact
 > deployment IDs, commit, probes, schema revision, private-ingress checks, and CI results must be
 > recorded after promotion.
@@ -79,6 +79,7 @@ database.
 | Authorized parties | Staging Web origin only | Production Web origin only |
 | Target authorization | Fake/non-production target entry only; cannot resolve production credential | Authorized live target entries only after the live-campaign gate |
 | Provider/target secrets | Staging-scoped or absent | Production-scoped, least privilege, target-bound |
+| Langfuse | Dedicated staging project and keypair | Dedicated production project and different keypair |
 | Data | Synthetic fixtures only | Synthetic fixtures only; real PHI remains forbidden |
 
 Hard checks:
@@ -90,6 +91,9 @@ Hard checks:
 - Staging cannot resolve a production target credential reference.
 - A database, volume, domain, key, Organization ID, or secret reference is never shared across the two
   environments merely for convenience.
+- Sharing Langfuse project credentials across staging and production is forbidden. Environment
+  metadata is an acceptance check, not a substitute for separate Langfuse projects and distinct
+  public/secret keypairs.
 
 ## Public and private boundaries
 
@@ -139,34 +143,69 @@ Deploy the same reviewed commit through staging before production.
 
 The private Runner owns outbound telemetry. Configure `LANGFUSE_PUBLIC_KEY`,
 `LANGFUSE_SECRET_KEY`, `LANGFUSE_BASE_URL`, and `LANGFUSE_TRACING_ENVIRONMENT` on Runner only.
-`LANGFUSE_BASE_URL` must be an exact HTTPS origin without user information, query parameters, or a
-fragment. Every Orchestrator, Red Team, Judge, and Documentation execution and every physical target
-request is first recorded in PostgreSQL, then submitted asynchronously to one campaign-correlated
+`LANGFUSE_BASE_URL` must be an exact HTTPS origin without a path, user information, query parameters,
+or a fragment. `LANGFUSE_TRACING_ENVIRONMENT` must exactly equal `AGENTFORGE_ENVIRONMENT` in that
+Runner. Every Orchestrator, Red Team, Judge, and Documentation execution and every physical target
+request is first recorded in PostgreSQL, then projected asynchronously to one campaign-correlated
 Langfuse trace. Each agent is represented by a typed `agent` observation with a child `generation`
 observation so role-local latency, token usage, and cost remain queryable. Cross-agent
 `parent_execution_id` lineage is also native Langfuse parentage.
 
 Langfuse receives hashes, byte counts, stable identifiers, timing, usage, cost, and bounded status
 metadata—not prompts, target responses, clinical context, credentials, or evidence bodies. PostgreSQL
-remains the authoritative ledger. A durable `exported` status means the Runner successfully submitted
-and flushed the SDK queue; the console labels this state **submitted** because remote query visibility
-can lag. Langfuse failure never causes a duplicate target retry.
+remains the authoritative ledger. A durable `queued` status means the observation is awaiting exact
+remote query-back; even a non-raising SDK `flush()` does not assert remote acceptance. Only an exact
+authenticated query-back may atomically change a row to `exported` and set
+`langfuse_verified_at`; the console labels that state **observed**. Langfuse failure never causes a
+duplicate target retry.
 
 After each deployed live campaign, verify remote visibility from the private Runner environment:
 
 ```bash
-python scripts/verify_langfuse_campaign.py --campaign-run-id <completed-live-run-id>
+# In the private Staging Runner:
+python scripts/verify_langfuse_campaign.py \
+  --campaign-run-id <completed-staging-live-run-id> \
+  --expected-environment staging \
+  --record-verification
+
+# In the private production Runner:
+python scripts/verify_langfuse_campaign.py \
+  --campaign-run-id <completed-production-live-run-id> \
+  --expected-environment production \
+  --record-verification
 ```
 
-The read-only verifier rejects non-live or incomplete campaigns and succeeds only when every durable
-agent execution is query-visible with its typed agent/generation pair, terminal state, native
-parentage, exact usage, and reconciled cost. Store its JSON output as deployment evidence; do not
-substitute local fixtures or an SDK `flush()` result for this query-back check.
+The verifier is read-only unless `--record-verification` is explicitly supplied. It rejects non-live
+or incomplete campaigns and succeeds only when every durable agent execution is query-visible with
+its typed agent/generation pair, terminal state, native parentage, exact usage, and reconciled cost,
+and every physical target request is query-visible one-for-one with its request/response hashes and
+target/surface/version lineage. The required `--expected-environment` must exactly match both deployed
+Runner environment variables, every agent and target observation's
+`deployment.environment` metadata, and Langfuse's native observation environment before
+verification can be recorded. A hosted generation with missing provider-returned token or
+cost accounting fails acceptance; it must never be presented as an observed zero.
+
+Only after all remote assertions pass, `--record-verification` atomically changes the exact queued
+agent-execution and physical-request rows to `exported` and writes their first
+`langfuse_verified_at` timestamp. Both returned ID sets must exactly match the durable snapshot or
+the transaction rolls back. A safe rerun preserves the first timestamp. The JSON result always
+includes `verification_recorded`; it is `false` when the flag is omitted, so a read-only pass leaves
+queued rows unchanged and cannot be mistaken for persisted observation. Store the JSON output as
+deployment evidence; do not substitute local fixtures or an SDK `flush()` result for this query-back
+check.
+
+Migration `0016` and a newly authorized live campaign are both required before this evidence can
+exist. Historical campaigns that predate `agent_executions.langfuse_status` are not reconstructed or
+backfilled into Langfuse: doing so would manufacture observations for work the deployed Runner did not
+trace. Until a post-`0016` live run passes the query-back verifier, the console must keep remote
+Langfuse visibility—and any metric with no durable execution row—explicitly unavailable rather than
+infer either from fixtures or manifests.
 
 The process commands are fixed in the repository artifact table above. A command's presence is not
-evidence that its external Railway service exists or is healthy. In particular, do not point Runner at
-the one-shot `python -m agentforge.campaign run` CLI: Railway Runner consumes durable `agent_work` jobs,
-while the campaign CLI consumes local files and is not a queue service.
+evidence that its external Railway service exists or is healthy. The former one-shot
+`python -m agentforge.campaign run` and direct live scripts are retired fail-closed because they bypass
+the durable execution ledger. Railway Runner is the only live execution composition and consumes
+authorized `agent_work` jobs.
 
 Only Web owns the schema-changing pre-deploy command. Runner and Scheduler must check that the database
 is already at the integrated Alembic head before consuming or producing work and must wait or exit
@@ -248,7 +287,7 @@ reference and never committed, printed, included in build arguments, or copied b
 | `AGENTFORGE_SESSION_LEASES_JSON` | Runner only | Non-secret generation, RFC 3339 expiry, and sealed-value SHA-256 for each versioned delegated session; never contains the session value |
 | Model-provider keys | Runner only where needed | Dedicated, scoped, expiring/spend-limited keys; never exposed to Web/browser |
 | Target credential value | Runner only | Stored under the mapped Runner variable; never present on Web, in the catalog, or in PostgreSQL |
-| `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` | Runner only | Sealed Langfuse project credentials; never exposed to Web/browser |
+| `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` | Runner only | Sealed, environment-specific Langfuse project credentials; staging and production keypairs must differ; never exposed to Web/browser |
 | `LANGFUSE_BASE_URL`, `LANGFUSE_TRACING_ENVIRONMENT` | Runner only | Exact regional HTTPS host and environment label (`staging` or `production`) |
 | `HEADSHOT_PER_CALL_USD` | Runner only | Positive contracted target-call cost; shared by budget enforcement and measured telemetry |
 

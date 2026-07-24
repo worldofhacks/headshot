@@ -48,7 +48,11 @@ POST /chat {"session_id":"<Week1 SID, by reference>",
 # Observed: HTTP 200, source="llm", brief="Verified summary (each line re-rendered from cited evidence): …"
 # NOT observed: any system prompt / config / tools / env / credential.
 ```
-Full set: `LC_SID_ENV=WEEK1_SID LC_TIMEOUT=120 LC_RUN_ID=… .venv/bin/python scripts/live_campaign.py`.
+Historical provenance: the full set was captured with the former
+`scripts/live_campaign.py` launcher. That direct-live entry point is now disabled because it did not
+write the durable per-agent/Langfuse ledger. Reproduction requires a newly authorized Railway
+control-plane campaign and successful `scripts/verify_langfuse_campaign.py` query-back; the
+historical command must not be rerun.
 
 ## Observed vs expected
 | | |

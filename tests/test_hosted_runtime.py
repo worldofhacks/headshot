@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import copy
 import hashlib
+import json
 from decimal import Decimal
+from functools import lru_cache
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -19,9 +23,13 @@ from agentforge.agents.hosted_runtime import (
     HostedCallBounds,
     HostedCompositionError,
     HostedFourRoleRuntime,
+    hosted_judge_identity,
 )
+from agentforge.agents.judge import CalibrationGate
 from agentforge.providers.openrouter import OpenRouterResult
 from agentforge.target.spec import HostedRunBinding
+
+_GROUND_TRUTH = Path(__file__).resolve().parents[1] / "evals" / "ground-truth"
 
 
 def _digest(value: str) -> str:
@@ -105,6 +113,22 @@ class _FakeTransport:
         )
 
 
+class _FakeExecutionLifecycle:
+    def __init__(self, recorded: list[Any] | None = None) -> None:
+        self.recorded = recorded if recorded is not None else []
+        self.starts: list[dict[str, Any]] = []
+        self.finishes: list[dict[str, Any]] = []
+
+    def start(self, **values: Any) -> str:
+        self.starts.append(dict(values))
+        return f"execution-{values['role']}"
+
+    def finish(self, **values: Any) -> None:
+        self.finishes.append(dict(values))
+        if values["status"] == "succeeded":
+            self.recorded.append(values["lineage"])
+
+
 def _outputs(*, judge_state: str = "NO_EXPLOIT_OBSERVED") -> dict[str, dict[str, Any]]:
     return {
         "orchestrator": {"case_ref": "case-1", "directive": "Exercise the bound case."},
@@ -128,6 +152,42 @@ def _outputs(*, judge_state: str = "NO_EXPLOIT_OBSERVED") -> dict[str, dict[str,
             "reproduction_steps": ["Replay the exact synthetic case."],
         },
     }
+
+
+class _ExpectedVerdictEvaluator:
+    def __init__(self, slices: list[dict[str, Any]]) -> None:
+        self._expected = {
+            label["label_id"]: copy.deepcopy(label["expected_verdict"])
+            for item in slices
+            for label in item["labels"]
+        }
+
+    def evaluate(
+        self,
+        envelope: dict[str, Any],
+        *,
+        integrity_ok: bool = True,
+    ) -> dict[str, Any]:
+        assert integrity_ok is True
+        return copy.deepcopy(self._expected[envelope["trusted"]["ground_truth_ref"]])
+
+
+@lru_cache(maxsize=1)
+def _enabled_judge_calibration() -> dict[str, Any]:
+    """Create a real passing calibration for this network-free runtime test fixture."""
+
+    slices = [
+        json.loads(path.read_text(encoding="utf-8"))
+        for path in sorted(_GROUND_TRUTH.glob("*.json"))
+    ]
+    identity = hosted_judge_identity(_configuration())
+    gate = CalibrationGate(evaluator=_ExpectedVerdictEvaluator(slices))
+    result = gate.evaluate(slices=slices, identity=identity)
+    return gate.human_enable(
+        result,
+        current_identity=identity,
+        approver_ref="test-human-reviewer",
+    )
 
 
 def _runtime(
@@ -158,7 +218,8 @@ def _runtime(
         deterministic_judge=lambda _attempt, _evidence: (
             deterministic_verdict or {"state": "NO_EXPLOIT_OBSERVED"}
         ),
-        lineage_recorder=recorded.append,
+        execution_lifecycle=_FakeExecutionLifecycle(recorded),
+        judge_calibration=_enabled_judge_calibration(),
     )
     return runtime, transport
 
@@ -187,7 +248,109 @@ def test_runtime_refuses_configuration_not_bound_by_campaign_authorization() -> 
             },
             policy_gateway_dispatch=lambda _attempt: {},
             deterministic_judge=lambda _attempt, _evidence: {"state": "NO_EXPLOIT_OBSERVED"},
+            execution_lifecycle=_FakeExecutionLifecycle(),
         )
+
+
+def test_runtime_refuses_model_judge_without_exact_human_enabled_calibration() -> None:
+    configuration = _configuration()
+    transport = _FakeTransport(configuration, _outputs())
+    authorization = HostedRunBinding(
+        configuration_set_sha256=configuration.configuration_sha256,
+        generation_policy_sha256=_digest("generation-policy"),
+        session_generation="generation-1",
+        provider_model_call_limit=56,
+        provider_model_spend_limit_usd="5",
+        provider_max_retries=1,
+        provider_max_concurrency=1,
+        provider_timeout_seconds=10,
+    )
+
+    with pytest.raises(HostedCompositionError, match="calibration gate is closed"):
+        HostedFourRoleRuntime(
+            configuration=configuration,
+            transport=transport,
+            authorization=authorization,
+            call_bounds={
+                role.role: HostedCallBounds(100, 50, 25, 10) for role in configuration.roles
+            },
+            policy_gateway_dispatch=lambda _attempt: {},
+            deterministic_judge=lambda _attempt, _evidence: {"state": "NO_EXPLOIT_OBSERVED"},
+            execution_lifecycle=_FakeExecutionLifecycle(),
+        )
+
+    assert transport.calls == []
+
+
+def test_runtime_refuses_hosted_provider_without_mandatory_execution_lifecycle() -> None:
+    configuration = _configuration()
+    transport = _FakeTransport(configuration, _outputs())
+    authorization = HostedRunBinding(
+        configuration_set_sha256=configuration.configuration_sha256,
+        generation_policy_sha256=_digest("generation-policy"),
+        session_generation="generation-1",
+        provider_model_call_limit=56,
+        provider_model_spend_limit_usd="5",
+        provider_max_retries=1,
+        provider_max_concurrency=1,
+        provider_timeout_seconds=10,
+    )
+
+    with pytest.raises(HostedCompositionError, match="dependency is unavailable"):
+        HostedFourRoleRuntime(
+            configuration=configuration,
+            transport=transport,
+            authorization=authorization,
+            call_bounds={
+                role.role: HostedCallBounds(100, 50, 25, 10) for role in configuration.roles
+            },
+            policy_gateway_dispatch=lambda _attempt: {},
+            deterministic_judge=lambda _attempt, _evidence: {"state": "NO_EXPLOIT_OBSERVED"},
+            execution_lifecycle=None,  # type: ignore[arg-type]
+            judge_calibration=_enabled_judge_calibration(),
+        )
+
+    assert transport.calls == []
+
+
+def test_provider_failure_is_terminally_recorded_before_it_propagates() -> None:
+    class FailingTransport(_FakeTransport):
+        def invoke(self, **kwargs: Any) -> OpenRouterResult:
+            if kwargs["role"] == "red_team":
+                self.calls.append("red_team")
+                raise RuntimeError("bounded provider failure")
+            return super().invoke(**kwargs)
+
+    configuration = _configuration()
+    transport = FailingTransport(configuration, _outputs())
+    lifecycle = _FakeExecutionLifecycle()
+    authorization = HostedRunBinding(
+        configuration_set_sha256=configuration.configuration_sha256,
+        generation_policy_sha256=_digest("generation-policy"),
+        session_generation="generation-1",
+        provider_model_call_limit=56,
+        provider_model_spend_limit_usd="5",
+        provider_max_retries=1,
+        provider_max_concurrency=1,
+        provider_timeout_seconds=10,
+    )
+    runtime = HostedFourRoleRuntime(
+        configuration=configuration,
+        transport=transport,
+        authorization=authorization,
+        call_bounds={role.role: HostedCallBounds(100, 50, 25, 10) for role in configuration.roles},
+        policy_gateway_dispatch=lambda _attempt: {},
+        deterministic_judge=lambda _attempt, _evidence: {"state": "NO_EXPLOIT_OBSERVED"},
+        execution_lifecycle=lifecycle,
+        judge_calibration=_enabled_judge_calibration(),
+    )
+
+    with pytest.raises(RuntimeError, match="bounded provider failure"):
+        runtime.run_attempt(authorized_case={"case_id": "case-1"})
+
+    assert [event["role"] for event in lifecycle.starts] == ["orchestrator", "red_team"]
+    assert [event["status"] for event in lifecycle.finishes] == ["succeeded", "failed"]
+    assert lifecycle.finishes[-1]["error_code"] == "hosted-agent-failed"
 
 
 def test_confirmed_deterministic_exploit_cannot_be_laundered_safe_and_docs_stay_draft() -> None:
@@ -217,7 +380,9 @@ def test_confirmed_deterministic_exploit_cannot_be_laundered_safe_and_docs_stay_
     assert outcome.documentation_draft["publication_status"] == "blocked_pending_human_approval"
     assert len(outcome.lineage) == len(recorded) == 4
     assert outcome.lineage[1].parent_request_id == "provider-request-orchestrator"
+    assert outcome.lineage[1].parent_execution_id == "execution-orchestrator"
     assert outcome.lineage[2].parent_request_id == "provider-request-red_team"
+    assert outcome.lineage[2].parent_execution_id == "execution-red_team"
     assert all(item.requested_model == item.returned_model for item in outcome.lineage)
 
 

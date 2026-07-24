@@ -30,6 +30,22 @@ def upgrade() -> None:
         ["trace_id"],
     )
     op.add_column(
+        "outbound_http_requests",
+        sa.Column("langfuse_verified_at", sa.TIMESTAMP(timezone=True), nullable=True),
+    )
+    # Earlier runtimes treated a non-raising SDK flush as remote delivery. That signal is not
+    # authoritative, so require an exact Langfuse query-back before retaining "exported".
+    op.execute(
+        "UPDATE outbound_http_requests SET langfuse_status = 'queued' "
+        "WHERE langfuse_status = 'exported'"
+    )
+    op.create_check_constraint(
+        "outbound_request_langfuse_verification",
+        "outbound_http_requests",
+        "(langfuse_status = 'exported' AND langfuse_verified_at IS NOT NULL) OR "
+        "(langfuse_status <> 'exported' AND langfuse_verified_at IS NULL)",
+    )
+    op.add_column(
         "agent_executions",
         sa.Column(
             "langfuse_status",
@@ -48,9 +64,25 @@ def upgrade() -> None:
         "agent_executions",
         ["organization_id", "langfuse_status", "started_at"],
     )
+    op.add_column(
+        "agent_executions",
+        sa.Column("langfuse_verified_at", sa.TIMESTAMP(timezone=True), nullable=True),
+    )
+    op.create_check_constraint(
+        "agent_execution_langfuse_verification",
+        "agent_executions",
+        "(langfuse_status = 'exported' AND langfuse_verified_at IS NOT NULL) OR "
+        "(langfuse_status <> 'exported' AND langfuse_verified_at IS NULL)",
+    )
 
 
 def downgrade() -> None:
+    op.drop_constraint(
+        "agent_execution_langfuse_verification",
+        "agent_executions",
+        type_="check",
+    )
+    op.drop_column("agent_executions", "langfuse_verified_at")
     op.drop_index(
         "ix_agent_execution_langfuse_delivery",
         table_name="agent_executions",
@@ -61,18 +93,19 @@ def downgrade() -> None:
         type_="check",
     )
     op.drop_column("agent_executions", "langfuse_status")
+    op.drop_constraint(
+        "outbound_request_langfuse_verification",
+        "outbound_http_requests",
+        type_="check",
+    )
+    op.drop_column("outbound_http_requests", "langfuse_verified_at")
     op.drop_index(
         "ix_outbound_requests_trace_id",
         table_name="outbound_http_requests",
     )
-    # Revision 0015 required request-unique trace IDs. Preserve every row while restoring that
-    # older contract by assigning stable request-derived IDs only to duplicate trace groups.
-    op.execute(
-        "UPDATE outbound_http_requests SET trace_id = md5(request_id) "
-        "WHERE trace_id IN ("
-        "SELECT trace_id FROM outbound_http_requests GROUP BY trace_id HAVING count(*) > 1"
-        ")"
-    )
+    # Revision 0015 required request-unique trace IDs. Re-key every request, rather than only
+    # duplicate groups, so a derived ID cannot collide with an untouched campaign trace.
+    op.execute("UPDATE outbound_http_requests SET trace_id = md5(request_id)")
     op.create_unique_constraint(
         op.f("uq_outbound_http_requests_trace_id"),
         "outbound_http_requests",

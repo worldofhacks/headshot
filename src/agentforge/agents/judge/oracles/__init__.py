@@ -26,12 +26,21 @@ from agentforge.agents.judge.oracles.category import (
     ToolAuthorizationOracle,
     ToolCallObservation,
 )
+from agentforge.agents.judge.oracles.registry import (
+    AUTHORED_DETERMINISTIC_ORACLES,
+    AuthoredOracleRegistration,
+    OracleRegistryError,
+    resolve_authored_oracle,
+)
 
 __all__ = [
+    "AUTHORED_DETERMINISTIC_ORACLES",
+    "AuthoredOracleRegistration",
     "CanaryOracle",
     "IdentityRoleOracle",
     "Oracle",
     "OracleObservationError",
+    "OracleRegistryError",
     "ResourceLimitOracle",
     "ResourceObservation",
     "RetrievalScopeObservation",
@@ -41,5 +50,6 @@ __all__ = [
     "StateDiffObservation",
     "ToolAuthorizationOracle",
     "ToolCallObservation",
+    "resolve_authored_oracle",
     "trusted_signal",
 ]

@@ -79,10 +79,15 @@ def test_meaningful_api_is_default_deny(monkeypatch, auth_environ) -> None:
         "/api/v1/principal",
         "/api/v1/campaigns",
         "/api/v1/findings",
+        "/api/v1/findings/finding-1",
         "/api/v1/approvals",
+        "/api/v1/approvals/request-1",
+        "/api/v1/reports",
+        "/api/v1/reports/report-1",
         "/api/v1/targets",
         "/api/v1/configuration",
         "/api/v1/components",
+        "/api/v1/agents/judge/prompt",
         "/api/v1/birdseye",
         "/api/v1/events",
     ):
@@ -114,6 +119,7 @@ def test_verified_principal_and_capabilities_are_server_derived(
         "org:console:read",
         "org:findings:read",
     ]
+    assert "session_id" not in body["data"]
     assert "org:campaign:authorize" not in str(body)
     assert response.headers["cache-control"] == "no-store"
 
@@ -127,6 +133,7 @@ def test_wrong_org_and_missing_permission_are_forbidden(
         organization_id="org_2OtherFixture",
     )
     no_findings = token_factory(permissions=("org:console:read",))
+    evidence_without_findings = token_factory(permissions=("org:console:read", "org:evidence:read"))
     client = TestClient(_app(StubBackend()))
 
     assert (
@@ -138,6 +145,26 @@ def test_wrong_org_and_missing_permission_are_forbidden(
     assert (
         client.get(
             "/api/v1/findings", headers={"Authorization": f"Bearer {no_findings}"}
+        ).status_code
+        == 403
+    )
+    assert (
+        client.get(
+            "/api/v1/reports", headers={"Authorization": f"Bearer {no_findings}"}
+        ).status_code
+        == 403
+    )
+    assert (
+        client.get(
+            "/api/v1/approvals/request-1",
+            headers={"Authorization": f"Bearer {evidence_without_findings}"},
+        ).status_code
+        == 403
+    )
+    assert (
+        client.get(
+            "/api/v1/agents/judge/prompt",
+            headers={"Authorization": f"Bearer {no_findings}"},
         ).status_code
         == 403
     )

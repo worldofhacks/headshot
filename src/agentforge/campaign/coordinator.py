@@ -259,6 +259,7 @@ class SecureCampaignCoordinator:
         run_oracle: bool = True,
         tamper_after_persist: Callable[[Engine, str, str], None] | None = None,
         attempt_id: str | None = None,
+        red_team_execution_id: str | None = None,
     ) -> CampaignOutcome:
         """Run ONE selected seed case through the fail-closed chain, or BLOCK before dispatch.
 
@@ -282,6 +283,7 @@ class SecureCampaignCoordinator:
                 run_oracle=run_oracle,
                 tamper_after_persist=tamper_after_persist,
                 attempt_id=attempt_id,
+                red_team_execution_id=red_team_execution_id,
             )
         except (AuthorizationError, BindingError, CampaignAbort) as exc:
             # Any fail-closed gate violation durably aborts the run: write the abort-state
@@ -330,6 +332,7 @@ class SecureCampaignCoordinator:
         run_oracle: bool,
         tamper_after_persist: Callable[[Engine, str, str], None] | None,
         attempt_id: str | None,
+        red_team_execution_id: str | None,
     ) -> CampaignOutcome:
         binding = self.config.binding
         policy = self.config.policy
@@ -428,6 +431,7 @@ class SecureCampaignCoordinator:
             policy,
             credential,
             attempt_id=attempt_id,
+            red_team_execution_id=red_team_execution_id,
         )
 
         # (6) RECORD -> PERSIST -> RE-READ -> RE-VERIFY the content_hash from Postgres.
@@ -521,6 +525,7 @@ class SecureCampaignCoordinator:
         credential: Any,
         *,
         attempt_id: str | None,
+        red_team_execution_id: str | None,
     ) -> AttemptResult:
         """Dispatch exactly one attempt through the gateway to the BOUND live adapter.
 
@@ -544,6 +549,11 @@ class SecureCampaignCoordinator:
                 campaign_run_id=self.config.campaign_run_id,
                 attempt_id=attempt_id,
                 organization_id=str(self.config.result_context.get("organization_id", "")),
+                target_version=str(self.config.result_context.get("target_version", "")),
+                surface_id=str(self.config.result_context.get("surface_id", "")),
+                surface_version=str(self.config.result_context.get("surface_version", "")),
+                execution_profile=str(self.config.result_context.get("execution_profile", "")),
+                red_team_execution_id=red_team_execution_id,
             )
         except Exception as exc:  # a gateway abort / off-allowlist denial is a durable hard abort
             raise CampaignAbort(

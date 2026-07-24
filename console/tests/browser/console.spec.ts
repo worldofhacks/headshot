@@ -17,6 +17,13 @@ test("direct routes and browser history restore authoritative screens", async ({
   await page.goto("/findings/server-record");
   await expect(page.getByRole("heading", { name: "Findings", exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Risk distribution", exact: true })).toBeVisible();
+
+  await page.goto("/agents");
+  await expect(page.getByRole("heading", { name: "Agent operations", exact: true })).toBeVisible();
+  await expect(page.getByText("Configured model", { exact: true })).toBeVisible();
+  await expect(page.getByText("Configured provider", { exact: true })).toBeVisible();
+  await expect(page.getByText("Provider-served model", { exact: true })).toBeVisible();
+  await expect(page.getByText("unavailable — not durably recorded", { exact: true }).first()).toBeVisible();
 });
 
 test("390px navigation exposes every screen without application overflow", async ({ page }) => {
@@ -92,19 +99,68 @@ test("browser boundary has no console errors or external asset requests", async 
 });
 
 test("trace and cost screens visualize measured Langfuse-correlated telemetry", async ({ page }) => {
+  await page.goto("/live");
+  await page.getByRole("button", { name: /Orchestrator/ }).click();
+  await expect(page.getByText("Campaign p50 / p95", { exact: true })).toBeVisible();
+  await expect(page.getByText("4.6 ms / 6.2 ms", { exact: true })).toBeVisible();
+  await expect(page.getByText("Campaign known spend", { exact: true })).toBeVisible();
+  await expect(
+    page.getByText(
+      "4 observed · 2 awaiting remote verification",
+      { exact: true },
+    ),
+  ).toBeVisible();
+
+  await page.goto("/agents");
+  await expect(page.getByRole("heading", { name: "Agent operations", exact: true })).toBeVisible();
+  await expect(page.getByText("4.4 / 6.2 ms", { exact: true })).toBeVisible();
+  await expect(
+    page.getByText(
+      "4 observed · 2 awaiting remote verification",
+      { exact: true },
+    ),
+  ).toBeVisible();
+  await expect(page.getByText("Last Langfuse query-back", { exact: true })).toBeVisible();
+  const agentLedger = page.getByRole("table");
+  await expect(
+    agentLedger.getByRole("columnheader", { name: "Accounting", exact: true }),
+  ).toBeVisible();
+  await expect(agentLedger.getByText("unavailable", { exact: true }).first()).toBeVisible();
+
   await page.goto("/traces");
   await expect(page.getByRole("heading", { name: "Traces", exact: true, level: 1 })).toBeVisible();
   await expect(page.getByRole("img", { name: "Target request latency over time" })).toBeVisible();
-  await expect(page.getByText("85%").first()).toBeVisible();
+  await expect(page.getByText("77%").first()).toBeVisible();
+  await expect(page.getByText("Langfuse observed", { exact: true })).toBeVisible();
+  await expect(page.getByText("Awaiting remote verification", { exact: true })).toBeVisible();
   await expect(page.getByText("Black-box target requests", { exact: false })).toBeVisible();
+  await page.getByRole("listitem").filter({ hasText: "agent.red_team" }).click();
+  await expect(page.getByText("Campaign role p50 / p95", { exact: true })).toBeVisible();
+  await expect(page.getByText("6 ms / 8 ms", { exact: true })).toBeVisible();
   await page.getByRole("listitem").nth(7).click();
   await expect(page.getByText("Transport error: upstream_unavailable")).toBeVisible();
 
   await page.getByRole("button", { name: "Costs", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Costs", exact: true, level: 1 })).toBeVisible();
-  await expect(page.getByText("Total measured spend", { exact: true })).toBeVisible();
+  await expect(page.getByText("Known measured spend", { exact: true })).toBeVisible();
   await expect(page.getByText("$0.0900").first()).toBeVisible();
-  await expect(page.getByRole("table", { name: "Campaign accounting records" })).toBeVisible();
+  const accounting = page.getByRole("table", {
+    name: "Campaign and agent accounting records",
+  });
+  await expect(accounting).toBeVisible();
+  await expect(
+    accounting.getByRole("columnheader", { name: "Confirmed findings", exact: true }),
+  ).toBeVisible();
+  await expect(
+    accounting.getByRole("columnheader", { name: "Role p50", exact: true }),
+  ).toBeVisible();
+  await expect(
+    accounting.getByRole("columnheader", { name: "Role p95", exact: true }),
+  ).toBeVisible();
+  const redTeamAccounting = accounting.getByRole("row").filter({ hasText: "red team" });
+  await expect(redTeamAccounting).toContainText("6 ms");
+  await expect(redTeamAccounting).toContainText("8 ms");
+  await expect(redTeamAccounting).toContainText("$0.0000");
 
   const hasOverflow = await page.evaluate(
     () => document.documentElement.scrollWidth > window.innerWidth,

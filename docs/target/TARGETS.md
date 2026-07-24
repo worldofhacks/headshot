@@ -12,7 +12,8 @@ sessions (Week 1 and Week 2). This is the human-readable companion to the machin
 - `config/targets/clinical-copilot-20260724.json` — the `clinical-copilot-*` alias subset, kept
   byte-consistent with the canonical union above (referenced by tickets T-F05c/T-F05p and the
   final-submission manifest).
-- `config/targets.json` — script-facing summary used by `scripts/live_campaign.py` and the Bruno wrappers.
+- `config/targets.json` — legacy/historical summary retained for artifact provenance and the Bruno
+  wrappers. It is not live-execution authority; `scripts/live_campaign.py` now refuses.
 - Validate all of it — network-free, no secrets — with `python scripts/validate_target_catalog.py`
   (loads **both** environment files through the real `TrustedTargetCatalog` code path).
 
@@ -127,9 +128,22 @@ python scripts/validate_target_catalog.py
 (cd <bundle>/week1/bruno && npx --yes @usebruno/cli@3.5.2 run --env Runtime --bail)
 (cd <bundle>/week2/bruno && npx --yes @usebruno/cli@3.5.2 run --env Runtime --bail)
 
-# Platform adversarial campaign (SID by reference from .env.campaign; live sends require
-# AGENTFORGE_ENVIRONMENT=production):
-set -a; . ./.env.campaign; set +a
-LC_RUN_ID=live-campaign-YYYYMMDD-week1 LC_SID_ENV=WEEK1_SID LC_TIMEOUT=120 \
-  .venv/bin/python scripts/live_campaign.py
+# Platform adversarial campaign:
+# Use the authenticated Railway console/API to create the exact-scope authorization request,
+# obtain a decision from a distinct approver, and launch the campaign. The private durable Runner
+# is the only executor. Direct scripts intentionally exit before reading credentials or sending.
+#
+# After the authorized run completes, query the remote observations back:
+python scripts/verify_langfuse_campaign.py \
+  --campaign-run-id <completed-live-run-id> \
+  --expected-environment production \
+  --record-verification
 ```
+
+Omit `--record-verification` only for a read-only query-back probe. The explicit flag atomically
+changes every exact reconciled agent and physical target request from `queued` to `exported` and
+records its first verification time; any exact-ID mismatch rolls back the entire verification
+write. The required environment argument must exactly match the
+production Runner configuration and every queried observation. Production and Staging must use
+different Langfuse projects and distinct public/secret keypairs; a metadata label does not make shared
+project credentials safe.

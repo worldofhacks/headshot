@@ -165,6 +165,11 @@ class PolicyGateway:
         campaign_run_id: str | None = None,
         attempt_id: str | None = None,
         organization_id: str = "",
+        target_version: str = "",
+        surface_id: str = "",
+        surface_version: str = "",
+        execution_profile: str = "",
+        red_team_execution_id: str | None = None,
     ) -> AttemptResult:
         """Enforce the gate, then dispatch exactly one logical attempt through the adapter.
 
@@ -211,7 +216,14 @@ class PolicyGateway:
             "organization_id": organization_id,
             "case_id": str(attack_attempt.get("case_ref", "")),
             "attack_category": str(attack_attempt.get("category", "")),
+            "target_id": target_id,
+            "target_version": target_version,
+            "surface_id": surface_id,
+            "surface_version": surface_version,
+            "execution_profile": execution_profile,
         }
+        if red_team_execution_id:
+            request_metadata["red_team_execution_id"] = red_team_execution_id
         request = TargetRequest(
             turns=tuple(attack_attempt.get("input_sequence", [])),
             metadata=request_metadata,

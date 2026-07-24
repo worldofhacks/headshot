@@ -100,6 +100,9 @@ class EvalValidationError(ValueError):
 @dataclass(frozen=True, slots=True)
 class CorpusSummary:
     case_count: int
+    active_case_count: int
+    draft_case_count: int
+    retired_case_count: int
     ground_truth_label_count: int
     fixture_count: int
     categories: frozenset[str]
@@ -1908,8 +1911,7 @@ def validate_corpus(root: Path) -> CorpusSummary:
                 EvalValidationCode.COVERAGE_INCOMPLETE,
                 root / "seeds",
                 "",
-                "PRD threat-model subcategories are missing: "
-                + ", ".join(missing_subcategories),
+                "PRD threat-model subcategories are missing: " + ", ".join(missing_subcategories),
             )
         )
     missing_llm = sorted(REQUIRED_OWASP_LLM_IDS - llm_mappings)
@@ -1987,6 +1989,9 @@ def validate_corpus(root: Path) -> CorpusSummary:
     _raise_if_issues(issues)
     return CorpusSummary(
         case_count=len(cases),
+        active_case_count=sum(case.get("lifecycle_status") == "active" for case in cases),
+        draft_case_count=sum(case.get("lifecycle_status") == "draft" for case in cases),
+        retired_case_count=sum(case.get("lifecycle_status") == "retired" for case in cases),
         ground_truth_label_count=sum(len(labels) for labels in labels_by_category.values()),
         fixture_count=len(fixture_registry.fixture_ids),
         categories=frozenset(categories),
