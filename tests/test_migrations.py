@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Iterator
+from decimal import Decimal
 
 import pytest
 from sqlalchemy import Engine, text
@@ -298,5 +299,133 @@ def test_0019_downgrade_survives_a_recorded_model_substitution() -> None:
         assert row["error_code"] == "provider-model-substituted"
 
         _db.alembic_upgrade(url, "head")
+    finally:
+        _db.drop_database(admin, dbname)
+
+
+def test_migration_graph_has_exactly_one_head() -> None:
+    """Guards the defect that made an entire lane untestable without failing loudly.
+
+    Two branches once landed revisions both numbered 0016. Git saw no conflict because the
+    filenames differed, ``alembic upgrade head`` failed with MultipleHeads, every DB-backed test
+    errored at fixture setup, and ``readiness.expected_alembic_head`` fails ``GET /ready`` closed.
+    """
+
+    from agentforge.readiness import expected_alembic_head
+
+    # Raises RuntimeError unless the graph resolves to exactly one head.
+    assert expected_alembic_head() == "0019"
+
+
+def test_0019_applies_stepwise_over_a_populated_0018_database() -> None:
+    """The production shape: a populated 0018 database, migrated one revision at a time.
+
+    0019 only widens a CHECK constraint, so it adds no column, requires no backfill, and every
+    row that satisfied the old constraint satisfies the new one. This asserts that rather than
+    assuming it, because a populated upgrade is what actually runs in production.
+    """
+
+    admin = _db.admin_url()
+    dbname = f"agentforge_mig_{uuid.uuid4().hex[:12]}"
+    base, _sep = _db.split_db(admin)
+    url = f"{base}/{dbname}"
+
+    _db.create_fresh_database(admin, dbname)
+    try:
+        # Stop short of 0019 and populate as a pre-0019 deployment would be.
+        for revision in ("0017", "0018"):
+            _db.alembic_upgrade(url, revision)
+        engine = _db.build_engine(url)
+        with engine.begin() as conn:
+            conn.execute(text("SET LOCAL session_replication_role = replica"))
+            for index, (status, returned, error) in enumerate(
+                (
+                    ("succeeded", "google/gemini-2.5-pro", None),
+                    ("failed", None, "hosted-agent-failed"),
+                    ("succeeded", None, None),
+                ),
+                start=1,
+            ):
+                observed = returned is not None
+                conn.execute(
+                    text(
+                        "INSERT INTO agent_executions "
+                        "(execution_id, organization_id, campaign_run_id, agent_role, status, "
+                        "provider, model, execution_mode, configuration_version, input_sha256, "
+                        "output_sha256, returned_model, upstream_provider, provider_request_id, "
+                        "input_tokens, output_tokens, reasoning_tokens, physical_attempts, "
+                        "measured_cost, cost_measurement_state, trace_id, detail, started_at, "
+                        "finished_at, duration_ms, error_code) VALUES "
+                        "(:execution, 'org_Legacy', 'run_Legacy', 'judge', :status, 'openrouter', "
+                        "'google/gemini-2.5-pro', 'hosted_advisory', 1, repeat('a',64), "
+                        ":output_hash, :returned, :upstream, :request_id, "
+                        ":input_tokens, :output_tokens, :reasoning_tokens, :physical_attempts, "
+                        ":cost, :cost_state, repeat('c',32), '{}'::jsonb, clock_timestamp(), "
+                        "clock_timestamp(), 10, :error)"
+                    ),
+                    {
+                        "execution": f"legacy-{index}",
+                        "status": status,
+                        "output_hash": None if status == "failed" else "b" * 64,
+                        "returned": returned,
+                        "upstream": "Google" if observed else None,
+                        "request_id": "req" if observed else None,
+                        "input_tokens": 100 if observed else None,
+                        "output_tokens": 20 if observed else None,
+                        "reasoning_tokens": 5 if observed else None,
+                        "physical_attempts": 1 if observed else None,
+                        "cost": Decimal("0.01") if observed else None,
+                        "cost_state": "measured" if observed else "not_observed",
+                        "error": error,
+                    },
+                )
+            before = conn.execute(text("SELECT count(*) FROM agent_executions")).scalar_one()
+        engine.dispose()
+        assert before == 3
+
+        _db.alembic_upgrade(url, "0019")
+
+        engine = _db.build_engine(url)
+        with engine.connect() as conn:
+            rows = (
+                conn.execute(
+                    text(
+                        "SELECT execution_id, status, returned_model, measured_cost "
+                        "FROM agent_executions ORDER BY execution_id"
+                    )
+                )
+                .mappings()
+                .all()
+            )
+            head = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+        engine.dispose()
+
+        # No data loss, no backfill, no column left NULL that was not already NULL.
+        assert head == "0019"
+        assert len(rows) == 3
+        assert rows[0]["returned_model"] == "google/gemini-2.5-pro"
+        assert rows[0]["measured_cost"] is not None
+        assert rows[1]["returned_model"] is None
+        assert rows[2]["returned_model"] is None
+
+        # And it is reversible with the legacy rows still intact.
+        _db.alembic_downgrade(url, "0018")
+        engine = _db.build_engine(url)
+        with engine.connect() as conn:
+            survivors = (
+                conn.execute(
+                    text(
+                        "SELECT execution_id, returned_model FROM agent_executions "
+                        "ORDER BY execution_id"
+                    )
+                )
+                .mappings()
+                .all()
+            )
+        engine.dispose()
+        assert len(survivors) == 3
+        assert survivors[0]["returned_model"] == "google/gemini-2.5-pro"
+
+        _db.alembic_upgrade(url, "0019")
     finally:
         _db.drop_database(admin, dbname)

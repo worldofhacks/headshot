@@ -318,6 +318,7 @@ class OpenRouterResult:
 # provider a switch: choose a served-model name that trips one layer and its own substitution
 # disappears. Normalizing at ingress means no later layer can be made to drop the evidence.
 _SAFE_PROVIDER_TEXT = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9._:/@+-]*\Z")
+_UNSAFE_TEXT_PREFIX = "unsafe-provider-text-"
 
 
 def normalize_provider_text(value: object, *, maximum: int) -> str:
@@ -334,11 +335,15 @@ def normalize_provider_text(value: object, *, maximum: int) -> str:
             and len(candidate) <= maximum
             and _SAFE_PROVIDER_TEXT.fullmatch(candidate) is not None
             and not looks_like_provider_key(candidate)
+            # A provider handing us our own sentinel shape is digested like anything else, so a
+            # stored sentinel always means WE produced it. Otherwise the audit could not tell a
+            # redaction we performed from a string the provider simply chose to send.
+            and not candidate.startswith(_UNSAFE_TEXT_PREFIX)
         ):
             return candidate
     raw = value if isinstance(value, str) else repr(value)
     digest = hashlib.sha256(raw.encode("utf-8", "replace")).hexdigest()[:32]
-    return f"unsafe-provider-text-{digest}"
+    return f"{_UNSAFE_TEXT_PREFIX}{digest}"
 
 
 class _ModelSubstituted(HostedProviderError):
@@ -576,11 +581,10 @@ class OpenRouterTransport:
         # unusable becomes a digest rather than a reason to throw the observation away.
         returned_model = normalize_provider_text(payload.get("model"), maximum=160)
         request_id = normalize_provider_text(payload.get("id"), maximum=256)
-        upstream_provider, selected_model = self._selected_endpoint(
+        upstream_provider, selected_model, endpoint_consistent = self._observed_endpoint(
             payload,
             requested_model=requested_model,
         )
-        upstream_provider = normalize_provider_text(upstream_provider, maximum=64)
         usage = self._usage(payload)
         observed_result = OpenRouterResult(
             output={},
@@ -599,7 +603,14 @@ class OpenRouterTransport:
         )
         # Everything from here on runs inside the wrapper, because every step below can fail on
         # provider-controlled input and each one must still surrender the observation.
-        substituted = returned_model != requested_model or selected_model != returned_model
+        # Any disagreement about who served this call is a substitution for recording purposes:
+        # the served id differs, the router's endpoint disagrees with it, or the router's own
+        # account of the request does not line up. All three are refusals; none is a discard.
+        substituted = (
+            returned_model != requested_model
+            or selected_model != returned_model
+            or not endpoint_consistent
+        )
         try:
             try:
                 self._ledger.settle(reservation, **usage)
@@ -626,37 +637,48 @@ class OpenRouterTransport:
         return replace(observed_result, output=output)
 
     @staticmethod
-    def _selected_endpoint(
+    def _observed_endpoint(
         payload: Mapping[str, Any],
         *,
         requested_model: str,
-    ) -> tuple[str, str]:
+    ) -> tuple[str, str, bool]:
+        """Read the router's account of who served this call. Never raises.
+
+        Everything here is provider-controlled, so refusing to return would hand the provider a
+        way to erase its own substitution by malforming one metadata field. The response is still
+        refused upstream when ``consistent`` is False — but the row gets written either way.
+
+        ``metadata["requested"]`` is only the provider's echo of what we sent; we already hold the
+        authoritative value, so a mismatch is evidence about the provider, never a reason to drop
+        the record.
+        """
+
         metadata = payload.get("openrouter_metadata")
         if not isinstance(metadata, Mapping):
-            raise HostedProviderError("OpenRouter response has no router metadata")
-        if metadata.get("requested") != requested_model:
-            raise HostedProviderError("OpenRouter router metadata has a different requested model")
+            unreadable = normalize_provider_text(payload.get("openrouter_metadata"), maximum=64)
+            return unreadable, unreadable, False
+        consistent = normalize_provider_text(
+            metadata.get("requested"), maximum=160
+        ) == normalize_provider_text(requested_model, maximum=160)
         endpoints = metadata.get("endpoints")
         available = endpoints.get("available") if isinstance(endpoints, Mapping) else None
-        if not isinstance(available, list):
-            raise HostedProviderError("OpenRouter router metadata has an invalid endpoint list")
-        selected = [
-            endpoint
-            for endpoint in available
-            if isinstance(endpoint, Mapping) and endpoint.get("selected") is True
-        ]
+        selected = (
+            [
+                endpoint
+                for endpoint in available
+                if isinstance(endpoint, Mapping) and endpoint.get("selected") is True
+            ]
+            if isinstance(available, list)
+            else []
+        )
         if len(selected) != 1:
-            raise HostedProviderError("OpenRouter router metadata has no unique selected endpoint")
-        upstream_provider = selected[0].get("provider")
-        selected_model = selected[0].get("model")
-        if (
-            not isinstance(upstream_provider, str)
-            or not upstream_provider
-            or not isinstance(selected_model, str)
-            or not selected_model
-        ):
-            raise HostedProviderError("OpenRouter selected endpoint identity is invalid")
-        return upstream_provider, selected_model
+            unreadable = normalize_provider_text(endpoints, maximum=64)
+            return unreadable, unreadable, False
+        return (
+            normalize_provider_text(selected[0].get("provider"), maximum=64),
+            normalize_provider_text(selected[0].get("model"), maximum=160),
+            consistent,
+        )
 
     @staticmethod
     def _conservative_input_token_bound(

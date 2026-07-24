@@ -1,6 +1,9 @@
 # Provider-call lineage v1 migration
 
-Revision `0016` is an additive PostgreSQL migration over `0015`. It adds immutable
+Revision `0018` is an additive PostgreSQL migration over `0017`. (It was authored as
+`0016` and renumbered during integration: the shared branch had already taken `0016` for
+Langfuse delivery and `0017` for hosted agent execution lineage, and shipping a second `0016`
+produced two alembic heads.) It adds immutable
 `provider_call_invocations` and append-only `provider_call_events`, plus canonical nullable cost
 state and physical source-event references on `agent_executions`.
 
@@ -21,8 +24,7 @@ Only `headshot_runner` may insert lineage rows. `headshot_runner` and `headshot_
 no application role may update, delete, or truncate either table.
 
 Downgrade drops the two additive relations and lineage columns, restores unknown logical costs to
-the `0015` numeric-zero representation, and restores the prior logical terminal-shape constraint. A
-v1 terminal failure has no provider-output hash, so downgrade translates its sanitized final-event
-contract into the content hash required by the `0015` terminal shape before dropping lineage.
+the `0017` numeric-zero representation, and restores the prior logical terminal-shape constraint. A v1 terminal failure has no provider-output hash, so downgrade translates its sanitized final-event
+contract into the content hash required by the `0017` terminal shape before dropping lineage.
 That rollback necessarily loses v1-only physical lineage; it does not change any logical identity,
-status, timing, trace, or detail field that predates `0016`.
+status, timing, trace, or detail field that predates `0018`.

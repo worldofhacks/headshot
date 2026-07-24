@@ -376,25 +376,53 @@ def test_an_unusable_served_model_is_recorded_as_a_substitution_not_discarded() 
 
 
 @pytest.mark.parametrize(
-    ("mutate", "message"),
+    ("mutate", "label"),
     (
         (
             lambda payload: payload["openrouter_metadata"]["endpoints"]["available"].append(
-                {
-                    "provider": "Google",
-                    "model": "google/gemini-2.5-pro",
-                    "selected": True,
-                }
+                {"provider": "Google", "model": "google/gemini-2.5-pro", "selected": True}
             ),
-            "unique selected endpoint",
+            "two selected endpoints",
+        ),
+        (
+            lambda payload: payload["openrouter_metadata"].__setitem__("endpoints", None),
+            "endpoint list unreadable",
+        ),
+        (
+            lambda payload: payload.__setitem__("openrouter_metadata", None),
+            "router metadata absent",
+        ),
+        (
+            lambda payload: payload["openrouter_metadata"].__setitem__("requested", "  other  "),
+            "router echoes a different request",
+        ),
+        (
+            lambda payload: payload["openrouter_metadata"]["endpoints"]["available"][0].update(
+                {"provider": ""}
+            ),
+            "endpoint provider empty",
+        ),
+        (
+            lambda payload: payload["openrouter_metadata"]["endpoints"]["available"][0].update(
+                {"model": 42}
+            ),
+            "endpoint model not a string",
         ),
     ),
 )
-def test_transport_requires_one_exact_selected_router_endpoint(
+def test_unreadable_router_metadata_is_refused_but_never_erases_the_record(
     mutate: object,
-    message: str,
+    label: str,
 ) -> None:
+    """Router metadata is entirely provider-controlled, so it must not be a delete switch.
+
+    Each of these once raised before the observation existed, so a genuine substitution plus one
+    malformed metadata field lost the served identity, the typed code and the billed charge
+    together — the same defect as a padded model name, in a field the earlier fix did not reach.
+    """
+
     payload = _success().json()
+    payload["model"] = "google/gemini-flash"
     assert callable(mutate)
     mutate(payload)
     client = httpx.Client(
@@ -406,7 +434,7 @@ def test_transport_requires_one_exact_selected_router_endpoint(
         client=client,
     )
 
-    with pytest.raises(HostedProviderError, match=message):
+    with pytest.raises(HostedProviderResponseError) as raised:
         transport.invoke(
             role="judge",
             messages=({"role": "user", "content": "Judge."},),
@@ -418,6 +446,18 @@ def test_transport_requires_one_exact_selected_router_endpoint(
             max_reasoning_tokens=20,
             timeout_seconds=5,
         )
+
+    observed = raised.value.observed_result
+    assert raised.value.code == "provider-model-substituted", label
+    assert observed.requested_model == "google/gemini-2.5-pro"
+    # The billed charge survives, and every stored string is one the store will accept.
+    assert observed.measured_cost_usd > 0
+    for value, maximum in (
+        (observed.returned_model, 160),
+        (observed.upstream_provider, 64),
+        (observed.request_id, 256),
+    ):
+        assert value and value == value.strip() and len(value) <= maximum, label
 
 
 def test_charged_invalid_output_exposes_exact_observed_usage() -> None:

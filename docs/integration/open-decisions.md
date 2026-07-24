@@ -113,15 +113,25 @@ charset, not key-shaped — or a stable digest standing in for it. Downstream la
 the same function and **never discard on these fields**. An unusable name now costs the provider its
 anonymity instead of costing us the record.
 
-**Residual: a response with no readable usage or router metadata still cannot be recorded.**
-`_usage` and `_selected_endpoint` raise before an observation exists, so a substitution accompanied
-by a malformed `usage` block or an absent `openrouter_metadata` still lands as a bare
-`hosted-provider-unavailable` with no lineage. This one is not a missing predicate — it is the
-all-or-nothing shape of `agent_execution_hosted_measurement_tuple` (0017), which requires the seven
-observation columns to be all-NULL or all-NOT-NULL and therefore cannot represent "identity
-observed, usage not observed". Closing it needs either a schema change or the physical
-`provider_call_events` path, which already models exactly that with nullable tokens and
-`cost_measurement_state`. That is T-F17c. Recorded here rather than half-implemented.
+**Correction.** An earlier version of this document claimed the router-metadata failures were
+blocked by the all-or-nothing shape of `agent_execution_hosted_measurement_tuple`. **That was
+false.** In every one of those cases `openrouter_metadata` was present and the `usage` block fully
+valid, so all seven observation columns were available and the tuple would have been complete. It
+was a statement-ordering bug — the checks simply ran before the observation was built — and
+describing a fixable ordering bug as an accepted schema limit is precisely what let the same defect
+class reach a fourth review round. `_selected_endpoint` has been replaced by a total
+`_observed_endpoint` that never raises; all nine of those cases now record the substitution with
+its billed charge.
+
+**Residual: a response whose `usage` block cannot be read still cannot be recorded.** `_usage`
+raises before an observation exists, so a substitution accompanied by malformed usage lands as a
+bare `hosted-provider-unavailable` with no lineage. This one genuinely *is* the schema: without
+readable usage the seven observation columns cannot be completed, and
+`agent_execution_hosted_measurement_tuple` requires them all-NULL or all-NOT-NULL, so "identity
+observed, usage not observed" is unrepresentable. Closing it needs either a schema change or the
+physical `provider_call_events` path, which already models exactly that with nullable tokens and
+`cost_measurement_state`. That is T-F17c. Scope verified rather than assumed this time: the claim
+covers malformed `usage` only, and nothing else.
 
 **Residual (pre-existing): a reservation is never released on a pre-settle terminal error.**
 `HostedUsageLedger` has no release path, so those paths leave `unresolved_exposure_usd` inflated for
