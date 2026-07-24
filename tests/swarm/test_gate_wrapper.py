@@ -1163,8 +1163,10 @@ def test_wrapper_commits_the_complete_staged_report_with_one_atomic_replace(
         "log = Path(os.environ['TDD_SWARM_TEST_REPORT_PUBLISH_LOG'])\n"
         "source_bytes = source.read_bytes()\n"
         "destination_bytes = destination.read_bytes()\n"
-        "source_inode = source.lstat().st_ino\n"
+        "source_stat = source.lstat()\n"
+        "destination_before_stat = destination.lstat()\n"
         "os.replace(source, destination)\n"
+        "destination_after_stat = destination.lstat()\n"
         "event = {\n"
         "    'operation': 'replace',\n"
         "    'source': str(source),\n"
@@ -1172,8 +1174,21 @@ def test_wrapper_commits_the_complete_staged_report_with_one_atomic_replace(
         "    'source_sha256': hashlib.sha256(source_bytes).hexdigest(),\n"
         "    'destination_before_sha256': hashlib.sha256(destination_bytes).hexdigest(),\n"
         "    'destination_after_sha256': hashlib.sha256(destination.read_bytes()).hexdigest(),\n"
-        "    'source_inode': source_inode,\n"
-        "    'destination_after_inode': destination.lstat().st_ino,\n"
+        "    'source_inode': source_stat.st_ino,\n"
+        "    'destination_before_stat': [\n"
+        "        destination_before_stat.st_dev,\n"
+        "        destination_before_stat.st_ino,\n"
+        "        destination_before_stat.st_size,\n"
+        "        destination_before_stat.st_mtime_ns,\n"
+        "        destination_before_stat.st_ctime_ns,\n"
+        "    ],\n"
+        "    'destination_after_stat': [\n"
+        "        destination_after_stat.st_dev,\n"
+        "        destination_after_stat.st_ino,\n"
+        "        destination_after_stat.st_size,\n"
+        "        destination_after_stat.st_mtime_ns,\n"
+        "        destination_after_stat.st_ctime_ns,\n"
+        "    ],\n"
         "    'source_exists_after': source.exists(),\n"
         "}\n"
         "with log.open('a', encoding='utf-8') as stream:\n"
@@ -1203,6 +1218,7 @@ def test_wrapper_commits_the_complete_staged_report_with_one_atomic_replace(
         )
         assert ready.exists(), "wrapper did not expose the generic pre-publication failpoint"
         assert report_path.read_bytes() == prior
+        prior_stat = report_path.lstat()
         staged_candidates = [
             path
             for path in report_directory.iterdir()
@@ -1235,6 +1251,7 @@ def test_wrapper_commits_the_complete_staged_report_with_one_atomic_replace(
             _terminate_process_group(process)
 
     assert process.returncode == 0, stdout + stderr
+    published_stat = report_path.lstat()
     events = [json.loads(line) for line in publication_log.read_text(encoding="utf-8").splitlines()]
     assert events == [
         {
@@ -1245,11 +1262,24 @@ def test_wrapper_commits_the_complete_staged_report_with_one_atomic_replace(
             "destination_before_sha256": hashlib.sha256(prior).hexdigest(),
             "destination_after_sha256": hashlib.sha256(staged_bytes).hexdigest(),
             "source_inode": staged_inode,
-            "destination_after_inode": staged_inode,
+            "destination_before_stat": [
+                prior_stat.st_dev,
+                prior_stat.st_ino,
+                prior_stat.st_size,
+                prior_stat.st_mtime_ns,
+                prior_stat.st_ctime_ns,
+            ],
+            "destination_after_stat": [
+                published_stat.st_dev,
+                published_stat.st_ino,
+                published_stat.st_size,
+                published_stat.st_mtime_ns,
+                published_stat.st_ctime_ns,
+            ],
             "source_exists_after": False,
         }
     ]
-    assert report_path.lstat().st_ino == staged_inode
+    assert published_stat.st_ino == staged_inode
     assert report_path.read_bytes() == staged_bytes
     assert not staged_path.exists()
 
