@@ -19,13 +19,14 @@ from sqlalchemy import Engine, create_engine, text
 from agentforge.agents.hosted import (
     HostedConfigurationSet,
     preflight_hosted_configuration_set,
+    resolve_hosted_prompt,
 )
 from agentforge.agents.hosted_policy import (
     DEFAULT_HOSTED_GENERATION_POLICY,
     HostedGenerationPolicyError,
     resolve_hosted_generation_policy,
 )
-from agentforge.agents.hosted_prompts import hosted_prompt
+from agentforge.agents.prompts import PromptRegistryError, prompt_for_identity
 from agentforge.agents.runtime import AGENT_DEFINITIONS, default_assignment
 from agentforge.api.backend import ApiBackend, ApiBackendUnavailable, ApiConflict
 from agentforge.api.birdseye import build_birdseye_snapshot
@@ -1234,7 +1235,14 @@ class PostgresApiBackend(ApiBackend):
                     staged_hosted_assignments: dict[str, dict[str, Any]] = {}
                     hosted_configurations: dict[str, HostedConfigurationSet] = {}
                     for row in hosted_rows:
-                        configuration = HostedConfigurationSet.from_payload(dict(row["payload"]))
+                        try:
+                            configuration = HostedConfigurationSet.from_payload(
+                                dict(row["payload"])
+                            )
+                        except (TypeError, ValueError):
+                            return ResourceResult.unavailable(
+                                "hosted_configuration_integrity_failed"
+                            )
                         if configuration.configuration_sha256 != row["configuration_sha256"]:
                             return ResourceResult.unavailable(
                                 "hosted_configuration_integrity_failed"
@@ -1254,8 +1262,9 @@ class PostgresApiBackend(ApiBackend):
                         for role in configuration.roles:
                             if activation is None and role.role in destination:
                                 continue
-                            prompt = hosted_prompt(role.role)
-                            if role.prompt_sha256 != prompt.prompt_sha256:
+                            try:
+                                prompt = resolve_hosted_prompt(role.role, role.prompt_sha256)
+                            except ValueError:
                                 return ResourceResult.unavailable("hosted_prompt_integrity_failed")
                             served = served_identity_by_role_configuration.get(
                                 (role.role, configuration.configuration_sha256)
@@ -1270,7 +1279,7 @@ class PostgresApiBackend(ApiBackend):
                                 "upstream_provider": (
                                     served["upstream_provider"] if served is not None else None
                                 ),
-                                "prompt_sha256": prompt.prompt_sha256,
+                                "prompt_sha256": prompt.sha256,
                                 "prompt_version": prompt.version,
                                 "execution_mode": "hosted_advisory",
                                 "activation_state": activation_state,
@@ -1654,19 +1663,75 @@ class PostgresApiBackend(ApiBackend):
                             }
                         )
                 elif resource == "agent_prompt":
-                    try:
-                        prompt = hosted_prompt(identifiers.get("agent_role", ""))
-                    except ValueError:
+                    agent_role = identifiers.get("agent_role", "")
+                    prompt_version = identifiers.get("prompt_version", "")
+                    prompt_sha256 = identifiers.get("prompt_sha256", "")
+                    configuration_sha256 = identifiers.get("configuration_sha256", "")
+                    configuration_row = (
+                        connection.execute(
+                            text(
+                                "SELECT configuration_sha256, payload "
+                                "FROM hosted_configuration_sets "
+                                "WHERE organization_id = :org "
+                                "AND configuration_sha256 = :configuration"
+                            ),
+                            {
+                                "org": principal.organization_id,
+                                "configuration": configuration_sha256,
+                            },
+                        )
+                        .mappings()
+                        .one_or_none()
+                    )
+                    if configuration_row is None:
                         rows = []
                     else:
-                        rows = [
-                            {
-                                "role": prompt.role,
-                                "prompt_version": prompt.version,
-                                "prompt_sha256": prompt.prompt_sha256,
-                                "system_prompt": prompt.system_prompt,
-                            }
-                        ]
+                        try:
+                            configuration = HostedConfigurationSet.from_payload(
+                                dict(configuration_row["payload"])
+                            )
+                        except (TypeError, ValueError):
+                            return ResourceResult.unavailable(
+                                "hosted_configuration_integrity_failed"
+                            )
+                        if (
+                            configuration.configuration_sha256
+                            != configuration_row["configuration_sha256"]
+                        ):
+                            return ResourceResult.unavailable(
+                                "hosted_configuration_integrity_failed"
+                            )
+                        configured_role = next(
+                            (
+                                role
+                                for role in configuration.roles
+                                if role.role == agent_role and role.prompt_sha256 == prompt_sha256
+                            ),
+                            None,
+                        )
+                        try:
+                            prompt = prompt_for_identity(
+                                agent_role,
+                                prompt_version,
+                                prompt_sha256,
+                            )
+                        except PromptRegistryError:
+                            rows = []
+                        else:
+                            if (
+                                configured_role is None
+                                or configured_role.prompt_version != prompt.version
+                            ):
+                                rows = []
+                            else:
+                                rows = [
+                                    {
+                                        "role": prompt.role,
+                                        "prompt_version": prompt.version,
+                                        "prompt_sha256": prompt.sha256,
+                                        "system_prompt": prompt.content,
+                                    }
+                                ]
                 elif resource in {
                     "hosted_configuration_set",
                     "hosted_configuration_preflight",
@@ -1690,7 +1755,14 @@ class PostgresApiBackend(ApiBackend):
                     if row is None:
                         rows = []
                     else:
-                        configuration = HostedConfigurationSet.from_payload(dict(row["payload"]))
+                        try:
+                            configuration = HostedConfigurationSet.from_payload(
+                                dict(row["payload"])
+                            )
+                        except (TypeError, ValueError):
+                            return ResourceResult.unavailable(
+                                "hosted_configuration_integrity_failed"
+                            )
                         if configuration.configuration_sha256 != row["configuration_sha256"]:
                             return ResourceResult.unavailable(
                                 "hosted_configuration_integrity_failed"

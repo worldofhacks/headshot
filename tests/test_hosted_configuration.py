@@ -15,14 +15,9 @@ from agentforge.agents.hosted import (
     HostedRoleConfiguration,
     TokenPrices,
     preflight_hosted_configuration_set,
+    resolve_hosted_prompt,
 )
-from agentforge.agents.hosted_prompts import (
-    HOSTED_JUDGE_PROMPT_VERSION,
-    HOSTED_PROMPT_LIVE_ROLE_VERSION,
-    HOSTED_PROMPT_VERSION,
-    HOSTED_PROMPTS,
-    hosted_prompt,
-)
+from agentforge.agents.prompts import load_prompt_registry
 
 MODELS = {
     "orchestrator": "anthropic/claude-opus-4.8",
@@ -48,6 +43,7 @@ UPSTREAM_PROVIDERS = {
     "judge": "google-vertex",
     "documentation": "openai",
 }
+_PROMPTS = {record.role: record for record in load_prompt_registry()}
 
 
 def _digest(value: str) -> str:
@@ -77,7 +73,7 @@ def _role(role: str) -> HostedRoleConfiguration:
         credential_reference=(
             f"secretref://staging/providers/openrouter/{role}/generation-20260724"
         ),
-        prompt_sha256=hosted_prompt(role).prompt_sha256,
+        prompt_sha256=_PROMPTS[role].sha256,
         policy_sha256=_digest(f"{role}:policy:v1"),
         prices=TokenPrices(
             input_usd_per_million_tokens=Decimal("1.25"),
@@ -194,28 +190,22 @@ def test_judge_and_red_team_require_frozen_independent_models_and_prompts() -> N
 
 
 def test_prompt_registry_is_exact_content_addressed_and_versioned() -> None:
-    assert tuple(HOSTED_PROMPTS) == (
+    assert tuple(_PROMPTS) == (
         "orchestrator",
         "red_team",
         "judge",
         "documentation",
     )
     for role in MODELS:
-        prompt = hosted_prompt(role)
+        prompt = _PROMPTS[role]
         assert prompt.role == role
         assert prompt.version == _role(role).prompt_version
-        assert (
-            prompt.prompt_sha256 == hashlib.sha256(prompt.system_prompt.encode("utf-8")).hexdigest()
-        )
-        assert prompt.system_prompt == prompt.system_prompt.strip()
-
-    assert hosted_prompt("orchestrator").version == HOSTED_PROMPT_LIVE_ROLE_VERSION
-    assert hosted_prompt("judge").version == HOSTED_JUDGE_PROMPT_VERSION
-    assert hosted_prompt("red_team").version == HOSTED_PROMPT_VERSION
-    assert hosted_prompt("documentation").version == HOSTED_PROMPT_VERSION
+        assert prompt.sha256 == hashlib.sha256(prompt.content.encode("utf-8")).hexdigest()
+        assert prompt.content.endswith("\n")
+        assert resolve_hosted_prompt(role, prompt.sha256) == prompt
 
     with pytest.raises(ValueError, match="four-role catalog"):
-        hosted_prompt("unknown")
+        resolve_hosted_prompt("unknown", "0" * 64)
 
 
 def test_prices_and_limits_require_decimal_units_and_closed_bounds() -> None:

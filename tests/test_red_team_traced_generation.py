@@ -14,11 +14,13 @@ from __future__ import annotations
 
 import json
 import socket
+from dataclasses import replace
 from decimal import Decimal
 
 import pytest
 
 from agentforge.agents.hosted_runtime import HostedCallBounds, HostedExecutionLineage
+from agentforge.agents.prompts import load_prompt_registry
 from agentforge.agents.red_team.hosted_generation import (
     RED_TEAM_SUBCAP_CEILING_USD,
     RedTeamRoleIdentity,
@@ -40,10 +42,14 @@ SEED = {
     "input_sequence": ["seed turn one"],
     "category": "prompt_injection",
 }
+PROMPTS = {record.role: record for record in load_prompt_registry()}
+RED_TEAM_PROMPT = PROMPTS["red_team"]
 ROLE = RedTeamRoleIdentity(
     provider="openrouter",
     model="qwen/qwen3.5-397b-a17b",
     upstream_provider="deepinfra",
+    prompt_version=RED_TEAM_PROMPT.version,
+    prompt_sha256=RED_TEAM_PROMPT.sha256,
     role_configuration_sha256="a" * 64,
 )
 CONFIG_SHA = "b" * 64
@@ -100,11 +106,11 @@ class _FakeLifecycle:
         self.finished.append(kwargs)
 
 
-def _provider(transport, lifecycle, *, parent="exec-orchestrator-9"):
+def _provider(transport, lifecycle, *, parent="exec-orchestrator-9", role_identity=ROLE):
     return TracedHostedRedTeamProvider(
         transport=transport,
         lifecycle=lifecycle,
-        role_identity=ROLE,
+        role_identity=role_identity,
         configuration_sha256=CONFIG_SHA,
         generation_policy_sha256=POLICY_SHA,
         call_bounds=BOUNDS,
@@ -427,15 +433,16 @@ def test_variants_output_schema_pins_exactly_count_and_rejects_out_of_bounds() -
             variants_output_schema(bad)
 
 
-def test_generation_messages_are_untrusted_proposed_input_only_no_secret() -> None:
-    # The prompt must instruct the UNTRUSTED generator to emit proposed input only (never a verdict
-    # or credential), carry the seed's own turns as context, and request EXACTLY `count` variants as
-    # strict JSON. No secret/credential/session id may ride in the prompt.
-    system, user = build_generation_messages(SEED, 2, "prompt_injection")
+def test_generation_messages_use_exact_authority_bytes_and_user_json_only() -> None:
+    system, user = build_generation_messages(
+        SEED,
+        2,
+        "prompt_injection",
+        prompt_version=RED_TEAM_PROMPT.version,
+        prompt_sha256=RED_TEAM_PROMPT.sha256,
+    )
     assert system["role"] == "system" and user["role"] == "user"
-    assert "UNTRUSTED" in system["content"]
-    assert "exactly 2" in system["content"]
-    assert "never a verdict, credential" in system["content"]
+    assert system["content"].encode("utf-8") == RED_TEAM_PROMPT.content.encode("utf-8")
     payload = json.loads(user["content"])
     assert payload == {
         "category": "prompt_injection",
@@ -443,6 +450,32 @@ def test_generation_messages_are_untrusted_proposed_input_only_no_secret() -> No
         "seed_case_ref": SEED["case_ref"],
         "seed_turns": SEED["input_sequence"],
     }
+    assert variants_output_schema(2)["properties"]["variants"]["minItems"] == payload["count"]
+
+
+@pytest.mark.parametrize(
+    ("prompt_version", "prompt_sha256"),
+    [
+        ("2", RED_TEAM_PROMPT.sha256),
+        (PROMPTS["judge"].version, PROMPTS["judge"].sha256),
+        (RED_TEAM_PROMPT.version, "0" * 64),
+    ],
+)
+def test_generation_rejects_wrong_role_version_or_hash_prompt_identity(
+    prompt_version: str,
+    prompt_sha256: str,
+) -> None:
+    hostile_identity = replace(
+        ROLE,
+        prompt_version=prompt_version,
+        prompt_sha256=prompt_sha256,
+    )
+    with pytest.raises(TracedRedTeamGenerationError, match="prompt identity"):
+        _provider(
+            _FakeTransport(result=_result(["cont-a"])),
+            _FakeLifecycle(),
+            role_identity=hostile_identity,
+        )
 
 
 def test_untyped_transport_failure_records_the_typed_fallback_error_code() -> None:

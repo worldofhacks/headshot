@@ -74,6 +74,9 @@ where = ["src"]
 # rationale: validation.py resolves them via importlib.resources, so a wheel/container must carry
 # them or `validate-corpus` fails with no repo on disk.
 "agentforge.evals" = ["schemas/*.json"]
+# Package-owned hosted-role prompt authority. Raw UTF-8 bytes (including trailing newlines) are
+# resolved with importlib.resources and hashed before any provider composition.
+"agentforge.agents.prompts" = ["registry.v1.json", "v1/*.txt"]
 
 [tool.pytest.ini_options]
 # src-layout: make the package importable in tests without requiring an editable install.

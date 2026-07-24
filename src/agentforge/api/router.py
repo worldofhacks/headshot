@@ -450,9 +450,26 @@ def agents(request: Request, principal: ConsolePrincipal) -> JSONResponse:
     return _read(request, "agents", principal)
 
 
-@router.get("/agents/{agent_role}/prompt")
-def agent_prompt(request: Request, agent_role: str, principal: ConfigPrincipal) -> JSONResponse:
-    return _read(request, "agent_prompt", principal, {"agent_role": agent_role})
+@router.get("/agent-prompts/{agent_role}/{prompt_version}/{prompt_sha256}")
+def agent_prompt(
+    request: Request,
+    agent_role: str,
+    prompt_version: str,
+    prompt_sha256: str,
+    configuration_set_sha256: str,
+    principal: ConfigPrincipal,
+) -> JSONResponse:
+    return _read(
+        request,
+        "agent_prompt",
+        principal,
+        {
+            "agent_role": agent_role,
+            "prompt_version": prompt_version,
+            "prompt_sha256": prompt_sha256,
+            "configuration_sha256": configuration_set_sha256,
+        },
+    )
 
 
 @router.get("/agent-activity")
