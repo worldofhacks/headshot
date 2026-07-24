@@ -14,6 +14,19 @@ test("direct routes and browser history restore authoritative screens", async ({
   await expect(page).toHaveURL(/\/reports\/browser-report-prompt-injection$/);
   await expect(page.getByRole("heading", { name: "Reports", exact: true, level: 1 })).toBeVisible();
 
+  await page.goto("/coverage");
+  await expect(page.getByRole("heading", {
+    name: "Coverage & Regression",
+    exact: true,
+    level: 1,
+  })).toBeVisible();
+  await expect(page.getByRole("button", {
+    name: "Coverage & Regression",
+    exact: true,
+  })).toHaveAttribute("aria-current", "page");
+  await expect(page.getByText("Verified attempts", { exact: true }).first()).toBeVisible();
+  await expect(page.getByText("Regression checks", { exact: true }).first()).toBeVisible();
+
   await page.goto("/findings/server-record");
   await expect(page.getByRole("heading", { name: "Findings", exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Risk distribution", exact: true })).toBeVisible();

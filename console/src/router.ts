@@ -3,6 +3,7 @@ export type ScreenName =
   | "findings"
   | "approvals"
   | "reports"
+  | "coverage"
   | "agents"
   | "tooling"
   | "traces"
@@ -20,6 +21,7 @@ const screens = new Set<ScreenName>([
   "findings",
   "approvals",
   "reports",
+  "coverage",
   "agents",
   "tooling",
   "traces",
