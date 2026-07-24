@@ -25,6 +25,7 @@ import type {
   ComponentReadModel,
   ConfigurationReadModel,
   CostReadModel,
+  CoverageReadModel,
   EvidenceReadModel,
   EvidenceIntegrityReadModel,
   FindingDetailReadModel,
@@ -35,6 +36,7 @@ import type {
   JudgeCalibrationSummaryReadModel,
   RegressionDispositionReadModel,
   ReportReadModel,
+  ResilienceReadModel,
   SafetyCapsReadModel,
   TargetReadModel,
   ToolScopeReadModel,
@@ -721,6 +723,62 @@ export const decodeApprovals: ReadModelDecoder<ApprovalReadModel[]> = (value) =>
 export const decodeApprovalDetail: ReadModelDecoder<ApprovalDetailReadModel> = (value) =>
   decodeApproval(value, true) as ApprovalDetailReadModel;
 
+const decodeCoverageRecord = (value: unknown): CoverageReadModel => {
+  const name = "coverage";
+  const result = record(value, name);
+  exactKeys(result, [
+    "target_version",
+    "verified_attempt_count",
+    "total_case_count",
+    "category_count",
+    "execution_profile",
+    "evidence_provenance",
+    "classifications",
+    "owasp_web",
+    "owasp_llm",
+    "verdict_counts",
+    "covered",
+    "as_of",
+  ], name);
+  string(result, "target_version", name);
+  number(result, "verified_attempt_count", name, { integer: true, minimum: 0 });
+  number(result, "total_case_count", name, { integer: true, minimum: 0 });
+  number(result, "category_count", name, { integer: true, minimum: 0 });
+  literal(result, "execution_profile", ["synthetic", "live"], name);
+  string(result, "evidence_provenance", name);
+  stringArray(result, "classifications", name);
+  stringArray(result, "owasp_web", name);
+  stringArray(result, "owasp_llm", name);
+  const verdictCounts = object(result, "verdict_counts", name);
+  for (const count of Object.values(verdictCounts)) {
+    if (
+      typeof count !== "number"
+      || !Number.isSafeInteger(count)
+      || count < 0
+    ) {
+      invalid(name);
+    }
+  }
+  boolean(result, "covered", name);
+  timestamp(result, "as_of", name);
+  return result as CoverageReadModel;
+};
+
+export const decodeCoverage: ReadModelDecoder<CoverageReadModel[]> = (value) =>
+  records(value, "coverage", decodeCoverageRecord);
+
+const decodeResilienceRecord = (value: unknown): ResilienceReadModel => {
+  const name = "resilience";
+  const result = record(value, name);
+  exactKeys(result, ["regression_id", "version", "status", "recorded_at"], name);
+  for (const key of ["regression_id", "version", "status"]) string(result, key, name);
+  timestamp(result, "recorded_at", name);
+  return result as ResilienceReadModel;
+};
+
+export const decodeResilience: ReadModelDecoder<ResilienceReadModel[]> = (value) =>
+  records(value, "resilience", decodeResilienceRecord);
+
 const decodeReport = (value: unknown): ReportReadModel => {
   const name = "report";
   const result = record(value, name);
@@ -811,25 +869,29 @@ const decodeAgentBudget = (value: unknown): AgentBudgetReadModel => {
     "configuration_set_sha256",
     "role_usd_cap",
     "role_usd_spent",
+    "role_unresolved_usd_exposure",
     "role_usd_remaining",
     "role_usd_overrun",
     "role_call_cap",
     "role_physical_calls",
+    "role_unresolved_physical_calls",
     "role_calls_remaining",
     "role_call_overrun",
     "global_usd_cap",
     "global_usd_spent",
+    "global_unresolved_usd_exposure",
     "global_usd_remaining",
     "global_usd_overrun",
     "global_call_cap",
     "global_physical_calls",
+    "global_unresolved_physical_calls",
     "global_calls_remaining",
     "global_call_overrun",
   ], name);
   const status = literal(
     result,
     "status",
-    ["staged_pending_authorization", "active", "unavailable"],
+    ["staged_pending_authorization", "active", "historical", "unavailable"],
     name,
   );
   const campaignRunId = nullableString(result, "campaign_run_id", name);
@@ -846,12 +908,24 @@ const decodeAgentBudget = (value: unknown): AgentBudgetReadModel => {
   }
   const roleUsdCap = nullableNumber(result, "role_usd_cap", name);
   const roleUsdSpent = number(result, "role_usd_spent", name, { minimum: 0 });
+  const roleUnresolvedUsdExposure = number(
+    result,
+    "role_unresolved_usd_exposure",
+    name,
+    { minimum: 0 },
+  );
   const roleUsdRemaining = nullableNumber(result, "role_usd_remaining", name);
   const roleUsdOverrun = number(result, "role_usd_overrun", name, { minimum: 0 });
   const roleCallCap = nullableNonnegativeInteger(result, "role_call_cap", name);
   const rolePhysicalCalls = number(
     result,
     "role_physical_calls",
+    name,
+    { integer: true, minimum: 0 },
+  );
+  const roleUnresolvedPhysicalCalls = number(
+    result,
+    "role_unresolved_physical_calls",
     name,
     { integer: true, minimum: 0 },
   );
@@ -868,12 +942,24 @@ const decodeAgentBudget = (value: unknown): AgentBudgetReadModel => {
   );
   const globalUsdCap = nullableNumber(result, "global_usd_cap", name);
   const globalUsdSpent = number(result, "global_usd_spent", name, { minimum: 0 });
+  const globalUnresolvedUsdExposure = number(
+    result,
+    "global_unresolved_usd_exposure",
+    name,
+    { minimum: 0 },
+  );
   const globalUsdRemaining = nullableNumber(result, "global_usd_remaining", name);
   const globalUsdOverrun = number(result, "global_usd_overrun", name, { minimum: 0 });
   const globalCallCap = nullableNonnegativeInteger(result, "global_call_cap", name);
   const globalPhysicalCalls = number(
     result,
     "global_physical_calls",
+    name,
+    { integer: true, minimum: 0 },
+  );
+  const globalUnresolvedPhysicalCalls = number(
+    result,
+    "global_unresolved_physical_calls",
     name,
     { integer: true, minimum: 0 },
   );
@@ -913,12 +999,16 @@ const decodeAgentBudget = (value: unknown): AgentBudgetReadModel => {
       || configurationSha256 !== null
       || [
         roleUsdSpent,
+        roleUnresolvedUsdExposure,
         roleUsdOverrun,
         rolePhysicalCalls,
+        roleUnresolvedPhysicalCalls,
         roleCallOverrun,
         globalUsdSpent,
+        globalUnresolvedUsdExposure,
         globalUsdOverrun,
         globalPhysicalCalls,
+        globalUnresolvedPhysicalCalls,
         globalCallOverrun,
       ].some((candidate) => candidate !== 0)
     ) {
@@ -929,7 +1019,7 @@ const decodeAgentBudget = (value: unknown): AgentBudgetReadModel => {
   if (
     caps.some((candidate) => candidate === null)
     || configurationSha256 === null
-    || (status === "active" && campaignRunId === null)
+    || (["active", "historical"].includes(status) && campaignRunId === null)
     || (status === "staged_pending_authorization" && campaignRunId !== null)
     || roleCallCap === 0
     || globalCallCap === 0
@@ -938,16 +1028,16 @@ const decodeAgentBudget = (value: unknown): AgentBudgetReadModel => {
   }
   if (
     Math.abs(
-      roleUsdSpent + (roleUsdRemaining ?? 0)
+      roleUsdSpent + roleUnresolvedUsdExposure + (roleUsdRemaining ?? 0)
       - ((roleUsdCap ?? 0) + roleUsdOverrun),
     ) > 0.000001
-    || rolePhysicalCalls + (roleCallsRemaining ?? 0)
+    || rolePhysicalCalls + roleUnresolvedPhysicalCalls + (roleCallsRemaining ?? 0)
       !== (roleCallCap ?? 0) + roleCallOverrun
     || Math.abs(
-      globalUsdSpent + (globalUsdRemaining ?? 0)
+      globalUsdSpent + globalUnresolvedUsdExposure + (globalUsdRemaining ?? 0)
       - ((globalUsdCap ?? 0) + globalUsdOverrun),
     ) > 0.000001
-    || globalPhysicalCalls + (globalCallsRemaining ?? 0)
+    || globalPhysicalCalls + globalUnresolvedPhysicalCalls + (globalCallsRemaining ?? 0)
       !== (globalCallCap ?? 0) + globalCallOverrun
   ) {
     invalid(name);
