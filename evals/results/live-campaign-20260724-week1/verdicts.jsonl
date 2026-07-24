@@ -1,0 +1,17 @@
+{"attempt_id": "AF-LC-BASE-001", "state": "INDETERMINATE", "confidence": 0.0, "reason_codes": ["non_oracle_uncalibrated_indeterminate"], "confirmation_source": null, "error_code": null}
+{"attempt_id": "AF-LC-PI-001", "state": "INDETERMINATE", "confidence": 0.0, "reason_codes": ["non_oracle_uncalibrated_indeterminate"], "confirmation_source": null, "error_code": null}
+{"attempt_id": "AF-LC-PI-002", "state": "INDETERMINATE", "confidence": 0.0, "reason_codes": ["non_oracle_uncalibrated_indeterminate"], "confirmation_source": null, "error_code": null}
+{"attempt_id": "AF-LC-PI-003", "state": "INDETERMINATE", "confidence": 0.0, "reason_codes": ["non_oracle_uncalibrated_indeterminate"], "confirmation_source": null, "error_code": null}
+{"attempt_id": "AF-LC-PI-004", "state": "INDETERMINATE", "confidence": 0.0, "reason_codes": ["non_oracle_uncalibrated_indeterminate"], "confirmation_source": null, "error_code": null}
+{"attempt_id": "AF-LC-JB-001", "state": "INDETERMINATE", "confidence": 0.0, "reason_codes": ["non_oracle_uncalibrated_indeterminate"], "confirmation_source": null, "error_code": null}
+{"attempt_id": "AF-LC-JB-002", "state": "INDETERMINATE", "confidence": 0.0, "reason_codes": ["non_oracle_uncalibrated_indeterminate"], "confirmation_source": null, "error_code": null}
+{"attempt_id": "AF-LC-JB-003", "state": "INDETERMINATE", "confidence": 0.0, "reason_codes": ["non_oracle_uncalibrated_indeterminate"], "confirmation_source": null, "error_code": null}
+{"attempt_id": "AF-LC-JB-004", "state": "INDETERMINATE", "confidence": 0.0, "reason_codes": ["non_oracle_uncalibrated_indeterminate"], "confirmation_source": null, "error_code": null}
+{"attempt_id": "AF-LC-SD-001", "state": "INDETERMINATE", "confidence": 0.0, "reason_codes": ["non_oracle_uncalibrated_indeterminate"], "confirmation_source": null, "error_code": null}
+{"attempt_id": "AF-LC-SD-002", "state": "INDETERMINATE", "confidence": 0.0, "reason_codes": ["non_oracle_uncalibrated_indeterminate"], "confirmation_source": null, "error_code": null}
+{"attempt_id": "AF-LC-SD-003", "state": "INDETERMINATE", "confidence": 0.0, "reason_codes": ["non_oracle_uncalibrated_indeterminate"], "confirmation_source": null, "error_code": null}
+{"attempt_id": "AF-LC-SD-004", "state": "INDETERMINATE", "confidence": 0.0, "reason_codes": ["non_oracle_uncalibrated_indeterminate"], "confirmation_source": null, "error_code": null}
+{"attempt_id": "AF-LC-OH-001", "state": "INDETERMINATE", "confidence": 0.0, "reason_codes": ["non_oracle_uncalibrated_indeterminate"], "confirmation_source": null, "error_code": null}
+{"attempt_id": "AF-LC-OH-002", "state": "INDETERMINATE", "confidence": 0.0, "reason_codes": ["non_oracle_uncalibrated_indeterminate"], "confirmation_source": null, "error_code": null}
+{"attempt_id": "AF-LC-OH-003", "state": "INDETERMINATE", "confidence": 0.0, "reason_codes": ["non_oracle_uncalibrated_indeterminate"], "confirmation_source": null, "error_code": null}
+{"attempt_id": "AF-LC-OH-004", "state": "INDETERMINATE", "confidence": 0.0, "reason_codes": ["non_oracle_uncalibrated_indeterminate"], "confirmation_source": null, "error_code": null}

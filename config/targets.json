@@ -1,0 +1,60 @@
+{
+  "_comment": "Global target configuration for the two authorized synthetic Clinical Co-Pilot sessions. Credentials are BY REFERENCE ONLY: the SIDs live in the gitignored .env.campaign (WEEK1_SID / WEEK2_SID) and are NEVER committed, printed, or logged. The extracted Bruno bundle is NEVER committed. Same /chat surface + host for both; the two targets differ only by their patient-pinned session (SID).",
+  "authorization_ref": "authorization://agentforge/headshot-owner-synthetic-2026-07-24",
+  "allowlisted_hosts": ["agent-production-9f62.up.railway.app"],
+  "session_policy": {
+    "idle_timeout_seconds": 259200,
+    "chat_turn_limit_per_session": 1000,
+    "shared_sessions": true,
+    "patient_pinned": true,
+    "survives_agent_restart_and_oauth_token_refresh": true
+  },
+  "rules": {
+    "synthetic_data_only": true,
+    "max_concurrent_workers": 3,
+    "no_infrastructure_changes": true,
+    "no_credential_rotation_or_oauth_registration": true,
+    "no_record_deletion": true,
+    "no_dos_or_load_testing": true,
+    "week2_synthetic_document_uploads_authorized": true,
+    "bundle_never_committed": true,
+    "sids_never_committed_or_logged": true
+  },
+  "targets": {
+    "week1": {
+      "target_id": "copilot-week1",
+      "base_url": "https://agent-production-9f62.up.railway.app",
+      "app_url_path": "/app",
+      "chat_relative_path": "chat",
+      "payload_profile": "copilot_chat",
+      "auth_mode": "session",
+      "sid_env_var": "WEEK1_SID",
+      "credential_ref": "secretref://staging/copilot-week1/session-generation-20260724a",
+      "write_upload_allowed": false,
+      "coverage": "liveness, readiness, anonymous guideline retrieval, authenticated patient-pinned cited chat"
+    },
+    "week2": {
+      "target_id": "copilot-week2",
+      "base_url": "https://agent-production-9f62.up.railway.app",
+      "app_url_path": "/week2",
+      "chat_relative_path": "chat",
+      "payload_profile": "copilot_chat",
+      "auth_mode": "session",
+      "sid_env_var": "WEEK2_SID",
+      "credential_ref": "secretref://staging/copilot-week2/session-generation-20260724a",
+      "write_upload_allowed": true,
+      "coverage": "week1 plus synthetic lab upload, bounded processing polling, grounded extraction, PNG preview, digest verification, synthetic intake upload, permanent duplicate handling"
+    }
+  },
+  "response_envelope": {
+    "brief": "string (assistant natural-language answer)",
+    "source": ["llm", "deterministic_fallback", "deterministic_refusal"],
+    "degraded": "boolean",
+    "verdicts": "array<string>",
+    "citations": "array<{source_type, source_id, page_or_section, field_or_chunk_id, quote_or_value}>",
+    "claims": "optional array<{text, source_class, verdict(pass|flagged), citations, overlay?}>",
+    "correlation_id": "string (== response header x-copilot-request-id)"
+  },
+  "request_body": { "session_id": "<by reference — from sid_env_var>", "message": "<prompt>" },
+  "bruno_bundle_path_uncommitted": "/Users/quietguy/Documents/Dev/Gauntlet/OpenEMR-Custom-Build/claude-adversarial-run/adversarial-smart-bruno-2026-07-24"
+}

@@ -1,0 +1,1327 @@
+[
+  {
+    "iterationIndex": 0,
+    "results": [
+      {
+        "test": {
+          "filename": "health.bru"
+        },
+        "request": {
+          "method": "GET",
+          "url": "https://agent-production-9f62.up.railway.app/health",
+          "headers": {
+            "content-type": null
+          }
+        },
+        "response": {
+          "status": 200,
+          "statusText": "OK",
+          "headers": {
+            "cache-control": "no-store, no-cache, must-revalidate",
+            "content-type": "application/json",
+            "date": "Fri, 24 Jul 2026 17:13:51 GMT",
+            "server": "railway-hikari",
+            "x-copilot-request-id": "a16bd8b186b44ab8aa8f00dadd2461be",
+            "x-railway-request-id": "HmeVifYSRS-8lHUI-_9nXA",
+            "content-length": "67",
+            "x-hikari-trace": "ord1.zmv5",
+            "x-railway-edge": "ord1",
+            "connection": "close"
+          },
+          "data": {
+            "status": "alive",
+            "sha": "d15c21da3c11cd4558df840c94c918f9777f07fb"
+          },
+          "url": "https://agent-production-9f62.up.railway.app/health",
+          "responseTime": 294,
+          "duration": 294,
+          "size": 67
+        },
+        "error": null,
+        "status": "pass",
+        "assertionResults": [],
+        "testResults": [
+          {
+            "description": "liveness returns HTTP 200",
+            "status": "pass",
+            "uid": "5aghcMuGbfJvkPmUck7Z-"
+          },
+          {
+            "description": "liveness returns the process-only contract",
+            "status": "pass",
+            "uid": "OpiJ1cF4q7BP9awVwmYlf"
+          },
+          {
+            "description": "liveness carries a correlation id",
+            "status": "pass",
+            "uid": "8YZoyDDnR5YaNNEJjSqxs"
+          },
+          {
+            "description": "liveness cannot be served from a stale cache",
+            "status": "pass",
+            "uid": "f1RYOYMEhRRMmtm17-UWf"
+          }
+        ],
+        "preRequestTestResults": [],
+        "postResponseTestResults": [],
+        "shouldStopRunnerExecution": false,
+        "runDuration": 0.4029815,
+        "name": "Health",
+        "suitename": "/Users/quietguy/Documents/Dev/Gauntlet/OpenEMR-Custom-Build/claude-adversarial-run/adversarial-smart-bruno-2026-07-24/week2/bruno/health",
+        "path": "health",
+        "iterationIndex": 0
+      },
+      {
+        "test": {
+          "filename": "ready.bru"
+        },
+        "request": {
+          "method": "GET",
+          "url": "https://agent-production-9f62.up.railway.app/ready",
+          "headers": {
+            "content-type": null
+          }
+        },
+        "response": {
+          "status": 200,
+          "statusText": "OK",
+          "headers": {
+            "cache-control": "no-store, no-cache, must-revalidate",
+            "content-type": "application/json",
+            "date": "Fri, 24 Jul 2026 17:13:58 GMT",
+            "server": "railway-hikari",
+            "x-copilot-request-id": "691d1eac8efb4c7891795d070a2d0f7f",
+            "x-railway-request-id": "BFxK0KNvSr-HGu3i-_9nXA",
+            "x-hikari-trace": "ord1.zmv5",
+            "x-railway-edge": "ord1",
+            "vary": "accept-encoding",
+            "transfer-encoding": "chunked",
+            "connection": "close"
+          },
+          "data": {
+            "status": "ready",
+            "checks": [
+              {
+                "name": "openemr_fhir",
+                "kind": "hard",
+                "ok": true,
+                "detail": "HTTP 200"
+              },
+              {
+                "name": "anthropic",
+                "kind": "hard",
+                "ok": true,
+                "detail": "HTTP 200"
+              },
+              {
+                "name": "session_store",
+                "kind": "hard",
+                "ok": true,
+                "detail": "ok"
+              },
+              {
+                "name": "langfuse",
+                "kind": "soft",
+                "ok": true,
+                "detail": "HTTP 200"
+              },
+              {
+                "name": "retrieval_index",
+                "kind": "soft",
+                "ok": true,
+                "detail": "ok"
+              },
+              {
+                "name": "active_reranker",
+                "kind": "soft",
+                "ok": true,
+                "detail": "ok"
+              },
+              {
+                "name": "document_runtime",
+                "kind": "hard",
+                "ok": true,
+                "detail": "ready"
+              },
+              {
+                "name": "document_category_read",
+                "kind": "hard",
+                "ok": true,
+                "detail": "authorized_read_ok"
+              },
+              {
+                "name": "graph_state",
+                "kind": "soft",
+                "ok": true,
+                "detail": "graph_enabled"
+              }
+            ]
+          },
+          "url": "https://agent-production-9f62.up.railway.app/ready",
+          "responseTime": 7700,
+          "duration": 7700,
+          "size": 648
+        },
+        "error": null,
+        "status": "pass",
+        "assertionResults": [],
+        "testResults": [
+          {
+            "description": "readiness returns its dependency envelope",
+            "status": "pass",
+            "uid": "pGH1Q-_8NMb6KHOOCKGdX"
+          },
+          {
+            "description": "HTTP status agrees with hard dependency state",
+            "status": "pass",
+            "uid": "IoAz0pHSNPmsx_bqfP5CV"
+          },
+          {
+            "description": "readiness carries a correlation id",
+            "status": "pass",
+            "uid": "0UeXg9RpbdWyNBhE3bBgQ"
+          },
+          {
+            "description": "readiness cannot be served from a stale cache",
+            "status": "pass",
+            "uid": "8MTehEJv0-vW2Rj1G7uZB"
+          }
+        ],
+        "preRequestTestResults": [],
+        "postResponseTestResults": [],
+        "shouldStopRunnerExecution": false,
+        "runDuration": 7.7605059579999995,
+        "name": "Readiness",
+        "suitename": "/Users/quietguy/Documents/Dev/Gauntlet/OpenEMR-Custom-Build/claude-adversarial-run/adversarial-smart-bruno-2026-07-24/week2/bruno/ready",
+        "path": "ready",
+        "iterationIndex": 0
+      },
+      {
+        "test": {
+          "filename": "lab-upload.bru"
+        },
+        "request": {
+          "method": "POST",
+          "url": "https://agent-production-9f62.up.railway.app/documents",
+          "headers": {
+            "content-type": "multipart/form-data; boundary=--------------------------e41416e3857c285de50f51a5"
+          },
+          "data": {
+            "_overheadLength": 372,
+            "_valueLength": 39,
+            "_valuesToMeasure": [
+              {
+                "fd": null,
+                "path": "/Users/quietguy/Documents/Dev/Gauntlet/OpenEMR-Custom-Build/claude-adversarial-run/adversarial-smart-bruno-2026-07-24/week2/evals/fixtures/documents/clean.pdf",
+                "flags": "r",
+                "mode": 438,
+                "end": null,
+                "bytesRead": 753,
+                "_events": {},
+                "_readableState": {
+                  "highWaterMark": 65536,
+                  "buffer": [],
+                  "bufferIndex": 0,
+                  "length": 0,
+                  "pipes": [],
+                  "awaitDrainWriters": null
+                },
+                "_eventsCount": 2
+              }
+            ],
+            "writable": false,
+            "readable": true,
+            "dataSize": 0,
+            "maxDataSize": 2097152,
+            "pauseStreams": true,
+            "_released": true,
+            "_streams": [],
+            "_currentStream": null,
+            "_insideLoop": false,
+            "_pendingNext": false,
+            "_boundary": "--------------------------e41416e3857c285de50f51a5",
+            "_events": {},
+            "_eventsCount": 3
+          }
+        },
+        "response": {
+          "status": 200,
+          "statusText": "OK",
+          "headers": {
+            "cache-control": "private, no-store",
+            "content-type": "application/json",
+            "date": "Fri, 24 Jul 2026 17:13:54 GMT",
+            "server": "railway-hikari",
+            "x-copilot-request-id": "5560b0d2eb3c4f63b6f08d2263966a54",
+            "x-railway-request-id": "a3eE96wPTLaQdTeH0_TJvA",
+            "content-length": "243",
+            "x-hikari-trace": "ord1.x8wt",
+            "x-railway-edge": "ord1",
+            "connection": "close"
+          },
+          "data": {
+            "job_id": "d29602ab-65bc-4dbf-94e8-bc3ea308228f",
+            "document_id": "faa0b156-308a-4b4d-9a61-ababdbf1c9f7",
+            "state": "complete",
+            "status_url": "/documents/faa0b156-308a-4b4d-9a61-ababdbf1c9f7/status",
+            "correlation_id": "0a2b70fbaf824187aa39e89aaec5ff39"
+          },
+          "url": "https://agent-production-9f62.up.railway.app/documents",
+          "responseTime": 706,
+          "duration": 706,
+          "size": 243
+        },
+        "error": null,
+        "status": "pass",
+        "assertionResults": [],
+        "testResults": [
+          {
+            "description": "lab source is accepted or permanently deduplicated",
+            "status": "pass",
+            "uid": "5J4Vh8SPc5uw9qk2BY7GD"
+          }
+        ],
+        "preRequestTestResults": [],
+        "postResponseTestResults": [],
+        "shouldStopRunnerExecution": false,
+        "runDuration": 0.823250666,
+        "name": "Lab upload",
+        "suitename": "/Users/quietguy/Documents/Dev/Gauntlet/OpenEMR-Custom-Build/claude-adversarial-run/adversarial-smart-bruno-2026-07-24/week2/bruno/lab-upload",
+        "path": "lab-upload",
+        "iterationIndex": 0
+      },
+      {
+        "test": {
+          "filename": "lab-status.bru"
+        },
+        "request": {
+          "method": "GET",
+          "url": "https://agent-production-9f62.up.railway.app/documents/faa0b156-308a-4b4d-9a61-ababdbf1c9f7/status?session_id=***REDACTED_SESSION_WEEK2***",
+          "headers": {
+            "content-type": null
+          }
+        },
+        "response": {
+          "status": 200,
+          "statusText": "OK",
+          "headers": {
+            "cache-control": "private, no-store",
+            "content-type": "application/json",
+            "date": "Fri, 24 Jul 2026 17:13:55 GMT",
+            "server": "railway-hikari",
+            "x-copilot-request-id": "3e12f9ebac0c43c7a0a49b6d12e1f8f1",
+            "x-railway-request-id": "X3vIg-3IQZi-kWLFjq4OvQ",
+            "x-hikari-trace": "ord1.x8wt",
+            "x-railway-edge": "ord1",
+            "vary": "accept-encoding",
+            "transfer-encoding": "chunked",
+            "connection": "close"
+          },
+          "data": {
+            "document_id": "faa0b156-308a-4b4d-9a61-ababdbf1c9f7",
+            "state": "complete",
+            "reason": null,
+            "correlation_id": "0a2b70fbaf824187aa39e89aaec5ff39",
+            "updated_ts": "2026-07-24T17:05:06.070984+00:00",
+            "fields_grounded": 0,
+            "fields_unsupported": 0,
+            "attempt_count": 1,
+            "next_retry_at": null
+          },
+          "url": "https://agent-production-9f62.up.railway.app/documents/faa0b156-308a-4b4d-9a61-ababdbf1c9f7/status?session_id=***REDACTED_SESSION_WEEK2***",
+          "responseTime": 280,
+          "duration": 280,
+          "size": 269
+        },
+        "error": null,
+        "status": "pass",
+        "assertionResults": [],
+        "testResults": [
+          {
+            "description": "status uses the closed processing vocabulary",
+            "status": "pass",
+            "uid": "AdBx1NKkDru1hjGR7eGju"
+          },
+          {
+            "description": "poll remains bound to the uploaded document",
+            "status": "pass",
+            "uid": "Z_M8FG7Kekvo1I4ZpgJ-t"
+          }
+        ],
+        "preRequestTestResults": [],
+        "postResponseTestResults": [],
+        "shouldStopRunnerExecution": false,
+        "runDuration": 0.381400333,
+        "name": "Bounded lab status poll",
+        "suitename": "/Users/quietguy/Documents/Dev/Gauntlet/OpenEMR-Custom-Build/claude-adversarial-run/adversarial-smart-bruno-2026-07-24/week2/bruno/lab-status",
+        "path": "lab-status",
+        "iterationIndex": 0
+      },
+      {
+        "test": {
+          "filename": "lab-extraction-report.bru"
+        },
+        "request": {
+          "method": "GET",
+          "url": "https://agent-production-9f62.up.railway.app/documents/faa0b156-308a-4b4d-9a61-ababdbf1c9f7/extraction-report?session_id=***REDACTED_SESSION_WEEK2***",
+          "headers": {
+            "content-type": null
+          }
+        },
+        "response": {
+          "status": 200,
+          "statusText": "OK",
+          "headers": {
+            "cache-control": "private, no-store",
+            "content-type": "application/json",
+            "date": "Fri, 24 Jul 2026 17:13:55 GMT",
+            "server": "railway-hikari",
+            "x-copilot-request-id": "eafbace6148b4c92a35e3049802577a1",
+            "x-railway-request-id": "zZQHs6ifQqSRfMVFwUFZXw",
+            "content-length": "149",
+            "x-hikari-trace": "ord1.x8wt",
+            "x-railway-edge": "ord1",
+            "connection": "close"
+          },
+          "data": {
+            "document_id": "faa0b156-308a-4b4d-9a61-ababdbf1c9f7",
+            "doc_type": "lab_pdf",
+            "state": "complete",
+            "fields_grounded": 0,
+            "fields_unsupported": 0,
+            "fields": []
+          },
+          "url": "https://agent-production-9f62.up.railway.app/documents/faa0b156-308a-4b4d-9a61-ababdbf1c9f7/extraction-report?session_id=***REDACTED_SESSION_WEEK2***",
+          "responseTime": 285,
+          "duration": 285,
+          "size": 149
+        },
+        "error": null,
+        "status": "pass",
+        "assertionResults": [],
+        "testResults": [
+          {
+            "description": "completed extraction exposes only grounded or redacted fields",
+            "status": "pass",
+            "uid": "0zrfFuafcpT9ujxM0Mv8f"
+          }
+        ],
+        "preRequestTestResults": [],
+        "postResponseTestResults": [],
+        "shouldStopRunnerExecution": false,
+        "runDuration": 0.337615583,
+        "name": "Lab extraction report",
+        "suitename": "/Users/quietguy/Documents/Dev/Gauntlet/OpenEMR-Custom-Build/claude-adversarial-run/adversarial-smart-bruno-2026-07-24/week2/bruno/lab-extraction-report",
+        "path": "lab-extraction-report",
+        "iterationIndex": 0
+      },
+      {
+        "test": {
+          "filename": "lab-page-preview.bru"
+        },
+        "request": {
+          "method": "GET",
+          "url": "https://agent-production-9f62.up.railway.app/documents/faa0b156-308a-4b4d-9a61-ababdbf1c9f7/pages/1?session_id=***REDACTED_SESSION_WEEK2***",
+          "headers": {
+            "content-type": null
+          }
+        },
+        "response": {
+          "status": 200,
+          "statusText": "OK",
+          "headers": {
+            "cache-control": "private, no-store",
+            "content-type": "image/png",
+            "date": "Fri, 24 Jul 2026 17:13:57 GMT",
+            "server": "railway-hikari",
+            "x-copilot-request-id": "1a6d635352394c9492be7dd1f8f6cdd6",
+            "x-railway-request-id": "qkTgXnHcTbKlmFJ6-_9nXA",
+            "content-length": "38410",
+            "x-hikari-trace": "ord1.x8wt",
+            "x-railway-edge": "ord1",
+            "connection": "close"
+          },
+          "data": "�PNG\r\n\u001a\n\u0000\u0000\u0000\rIHDR\u0000\u0000\u0006�\u0000\u0000\b�\b\u0002\u0000\u0000\u0000>5Q�\u0000\u0000��IDATx���e�Ue��;\u0004�\u0014lE��P\fP�@A\t\u0015\u0003\u001b�RQ�\u0003\u000b\u0013\u0013\u0003A\u0010\u0010Q\u0014\u0003T,\fP\f0�\u000e\u0005�F\u001aɁa�/�?>�5���\u001989�W�������\f�\u001f�������4\u0000\u0000\u0000\u0000`��Q�\u001b\u0000\u0000\u0000\u0000\u0000RC�\u0003\u0000\u0000\u0000�@�}\u0000\u0000\u0000\u0000\u0010\b�\u000f\u0000\u0000\u0000\u0000\u0002!�\u0001\u0000\u0000\u0000@ �>\u0000\u0000\u0000\u0000\b��\u0007\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 \u0010b\u001f\u0000\u0000\u0000\u0000\u0004B�\u0003\u0000\u0000\u0000�@�}\u0000\u0000\u0000\u0000\u0010\b�\u000f\u0000\u0000\u0000\u0000\u0002!�\u0001\u0000\u0000\u0000@ �>\u0000\u0000\u0000\u0000\b��\u0007\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 \u0010b\u001f\u0000\u0000\u0000\u0000\u0004B�\u0003\u0000\u0000\u0000�@�}\u0000\u0000\u0000\u0000\u0010\b�\u000f\u0000\u0000\u0000\u0000\u0002!�\u0001\u0000\u0000\u0000@ �>\u0000\u0000\u0000\u0000\b��\u0007\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 \u0010b\u001f\u0000\u0000\u0000\u0000\u0004B�\u0003\u0000\u0000\u0000�@�}\u0000\u0000\u0000\u0000\u0010\b�\u000f\u0000\u0000\u0000\u0000\u0002!�\u0001\u0000\u0000\u0000@ �>\u0000\u0000\u0000\u0000\b��\u0007\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 \u0010b\u001f\u0000\u0000\u0000\u0000\u0004B�\u0003\u0000\u0000\u0000�@�}\u0000\u0000\u0000\u0000\u0010\b�\u000f\u0000\u0000\u0000\u0000\u0002!�\u0001\u0000\u0000\u0000@ �>\u0000\u0000\u0000\u0000\b��\u0007\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 \u0010b\u001f\u0000\u0000\u0000\u0000\u0004B�\u0003\u0000\u0000\u0000�@�}\u0000\u0000\u0000\u0000\u0010\b�\u000f\u0000\u0000\u0000\u0000\u0002!�\u0001\u0000\u0000\u0000@ �>\u0000\u0000\u0000\u0000\b��\u0007\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 \u0010b\u001f\u0000\u0000\u0000\u0000\u0004B�\u0003\u0000\u0000\u0000�@�}\u0000\u0000\u0000\u0000\u0010\b�\u000f\u0000\u0000\u0000\u0000\u0002!�\u0001\u0000\u0000\u0000@ �>\u0000\u0000\u0000\u0000\b��\u0007\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 \u0010b\u001f\u0000\u0000\u0000\u0000\u0004B�\u0003\u0000\u0000\u0000�@�}\u0000\u0000\u0000\u0000\u0010\b�\u000f\u0000\u0000\u0000\u0000\u0002!�\u0001\u0000\u0000\u0000@ �>\u0000\u0000\u0000\u0000\b��\u0007\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 \u0010b\u001f\u0000\u0000\u0000\u0000\u0004B�\u0003\u0000\u0000\u0000�@�}\u0000\u0000\u0000\u0000\u0010\b�\u000f\u0000\u0000\u0000\u0000\u0002!�\u0001\u0000\u0000\u0000@ �>\u0000\u0000\u0000\u0000\b��\u0007\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 \u0010b\u001f\u0000\u0000\u0000\u0000\u0004B�\u0003\u0000\u0000\u0000�@�}\u0000\u0000\u0000\u0000\u0010\b�\u000f\u0000\u0000\u0000\u0000\u0002!�\u0001\u0000\u0000\u0000@ �>\u0000\u0000\u0000\u0000\b��\u0007\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 \u0010b\u001f\u0000\u0000\u0000\u0000\u0004B�\u0003\u0000\u0000\u0000�@�}\u0000\u0000\u0000\u0000\u0010\b�\u000f\u0000\u0000\u0000\u0000\u0002!�\u0001\u0000\u0000\u0000@ �>\u0000\u0000\u0000\u0000\b��\u0007\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 \u0010b\u001f\u0000\u0000\u0000\u0000\u0004B�\u0003\u0000\u0000\u0000�@�}\u0000\u0000\u0000\u0000\u0010\b�\u000f\u0000\u0000\u0000\u0000\u0002!�\u0001\u0000\u0000\u0000@ �>\u0000\u0000\u0000\u0000\b��\u0007\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 \u0010b\u001f\u0000\u0000\u0000\u0000\u0004B�\u0003\u0000\u0000\u0000�@�}\u0000\u0000\u0000\u0000\u0010\b�\u000f\u0000\u0000\u0000\u0000\u0002!�\u0001\u0000\u0000\u0000@ �>\u0000\u0000\u0000\u0000\b��\u0007\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 \u0010b\u001f\u0000\u0000\u0000\u0000\u0004B�\u0003\u0000\u0000\u0000�@�}\u0000\u0000\u0000\u0000\u0010\b�\u000f\u0000\u0000\u0000\u0000\u0002!�\u0001\u0000\u0000\u0000@ �>\u0000\u0000\u0000\u0000\b��\u0007\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 \u0010b\u001f\u0000\u0000\u0000\u0000\u0004B�\u0003\u0000\u0000\u0000�@�}\u0000\u0000\u0000\u0000\u0010\b�\u000f\u0000\u0000\u0000\u0000\u0002!�\u0001\u0000\u0000\u0000@ �>\u0000\u0000\u0000\u0000\b��\u0007\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 \u0010b\u001f\u0000\u0000\u0000\u0000\u0004B�\u0003\u0000\u0000\u0000�@�}\u0000\u0000\u0000\u0000\u0010\b�\u000f\u0000\u0000\u0000\u0000\u0002!�\u0001\u0000\u0000\u0000@ �>\u0000\u0000\u0000\u0000\b��\u0007\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 \u0010b\u001f\u0000\u0000\u0000\u0000\u0004B�\u0003\u0000\u0000\u0000�@�}\u0000\u0000\u0000\u0000\u0010\b�\u000f\u0000\u0000\u0000\u0000\u0002!�\u0001\u0000\u0000\u0000@ �>\u0000\u0000\u0000\u0000\b��\u0007\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 \u0010b\u001f\u0000\u0000\u0000\u0000\u0004B�\u0003\u0000\u0000\u0000�@�}\u0000\u0000\u0000\u0000\u0010\b�\u000f\u0000\u0000\u0000\u0000\u0002!�\u0001\u0000\u0000\u0000@ �>\u0000\u0000\u0000\u0000\b��\u0007\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 \u0010b\u001f\u0000\u0000\u0000\u0000\u0004B�\u0003\u0000\u0000\u0000�@�}\u0000\u0000\u0000\u0000\u0010\b�\u000f\u0000\u0000\u0000\u0000\u0002!�\u0001\u0000\u0000\u0000@ �>\u0000\u0000\u0000\u0000\b��\u0007\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 \u0010b\u001f\u0000\u0000\u0000\u0000\u0004B�\u0003\u0000\u0000\u0000�@�}\u0000\u0000\u0000\u0000\u0010\b�\u000f\u0000\u0000\u0000\u0000\u0002!�\u0001\u0000\u0000\u0000@ �>\u0000\u0000\u0000\u0000\b��\u0007\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 \u0010b\u001f\u0000\u0000\u0000\u0000\u0004B�\u0003\u0000\u0000\u0000�@�}\u0000\u0000\u0000\u0000\u0010\b�\u000f\u0000\u0000\u0000\u0000\u0002!�\u0001\u0000\u0000\u0000@ �>\u0000\u0000\u0000\u0000\b��\u0007\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 \u0010b\u001f\u0000\u0000\u0000\u0000\u0004B�\u0003\u0000\u0000\u0000�@�}\u0000\u0000\u0000\u0000\u0010\b�\u000f\u0000\u0000\u0000\u0000\u0002!�\u0001\u0000\u0000\u0000@ �>\u0000\u0000\u0000\u0000\b��\u0007\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 \u0010b\u001f\u0000\u0000\u0000\u0000\u0004B�\u0003\u0000\u0000\u0000�@�}\u0000\u0000\u0000\u0000\u0010\b�\u000f\u0000\u0000\u0000\u0000\u0002!�\u0001\u0000\u0000\u0000@ �>\u0000\u0000\u0000\u0000\b��\u0007\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 \u0010b\u001f\u0000\u0000\u0000\u0000\u0004B�\u0003\u0000\u0000\u0000�@�}\u0000\u0000\u0000\u0000\u0010\b�\u000f\u0000\u0000\u0000\u0000\u0002!�\u0001\u0000\u0000\u0000@ �>\u0000\u0000\u0000\u0000\b��\u0007\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 \u0010b\u001f\u0000\u0000\u0000\u0000\u0004B�\u0003\u0000\u0000\u0000�@�}\u0000\u0000\u0000\u0000\u0010\b�\u000f\u0000\u0000\u0000\u0000\u0002!�\u0001\u0000\u0000\u0000@ �>\u0000\u0000\u0000\u0000\b��\u0007\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 \u0010b\u001f\u0000\u0000\u0000\u0000\u0004B�\u0003\u0000\u0000\u0000�@�}\u0000\u0000\u0000\u0000\u0010\b�\u000f\u0000\u0000\u0000\u0000\u0002!�\u0001\u0000\u0000\u0000@ �>\u0000\u0000\u0000\u0000\b��\u0007\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 \u0010b\u001f\u0000\u0000\u0000\u0000\u0004B�\u0003\u0000\u0000\u0000�@�}\u0000\u0000\u0000\u0000\u0010\b�\u000f\u0000\u0000\u0000\u0000\u0002!�\u0001\u0000\u0000\u0000@ �>\u0000\u0000\u0000\u0000\b��\u0007\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 \u0010b\u001f\u0000\u0000\u0000\u0000\u0004B�\u0003\u0000\u0000\u0000�@�}\u0000\u0000\u0000\u0000\u0010\b�\u000f\u0000\u0000\u0000\u0000\u0002!�\u0001\u0000\u0000\u0000@ �>\u0000\u0000\u0000\u0000\b��\u0007\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 \u0010b\u001f\u0000\u0000\u0000\u0000\u0004B�\u0003\u0000\u0000\u0000�@�}\u0000\u0000\u0000\u0000\u0010\b�\u000f\u0000\u0000\u0000\u0000\u0002!�\u0001\u0000\u0000\u0000@ �>\u0000\u0000\u0000\u0000\b��\u0007\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 \u0010b\u001f\u0000\u0000\u0000\u0000\u0004B�\u0003\u0000\u0000\u0000�@�}\u0000\u0000\u0000\u0000\u0010\b�\u000f\u0000\u0000\u0000\u0000\u0002!�\u0001\u0000\u0000\u0000@ �>\u0000\u0000\u0000\u0000\b��\u0007\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 \u0010b\u001f\u0000\u0000\u0000\u0000\u0004B�\u0003\u0000\u0000\u0000�@�}\u0000\u0000\u0000\u0000\u0010\b�\u000f\u0000\u0000\u0000\u0000\u0002!�\u0001\u0000\u0000\u0000@ �>\u0000\u0000\u0000\u0000\b��\u0007\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 \u0010b\u001f\u0000\u0000\u0000\u0000\u0004B�\u0003\u0000\u0000\u0000�@�}\u0000\u0000\u0000\u0000\u0010\b�\u000f\u0000\u0000\u0000\u0000\u0002!�\u0001\u0000\u0000\u0000@ �>\u0000\u0000\u0000\u0000\b��\u0007\u0000\u0000\u0000\u0000�(Z�\u001b�m��ի�O�>mڴ�s�Y�&33�X�b%J��U�V�ƍ\u001b6lX�l���#\u0000\u0000\u0000�f�}���׏\u001e=��\u000fZ�R���:*�\u000f�\u001f?~Ȑ!�|��O?��q��ͽ-##c�=�<��\u0003�>��֭[gd${b��_���o��222�\u0017/^�D�R�J���ޕ+WNr\u001b\u0000\u0000\u0000@0ҳ��\u000b{\u000f\u0004h���U�T)��\u001ex��_�u����_\r\u00180`Ȑ!?����\u001ek��v�ڵ�\u0005\u0017\\P�jխ��:t���k�%��M�֭۴iӦM�6k���#�L>A\u0002\u0000\u0000\u0000�/��|��Ǿ�\u001b7�����o^�bE2G,Q��-��r�M7\u0015-��I�)�}9խ[���.�袋v�y�\u0014.\u000b\u0000\u0000\u0000l/�\u0004�\u000eg�ԩ�\u001f~��_�d�KKK[�n]Ϟ=\u000f;찙3g�doI���o���}��g��\u0001��\u0017\u0000\u0000\u0000�\u0010�}�X�\r\u001b֤I�����?ߙ��Q�t��ŋ��;����&M�<�䓩�`\n,_���/nݺ�?��S�{\u0001\u0000\u0000\u0000\n���\u000ed����{�\r\u001br}�x��G\u001cq�m����G\u001f�\\�2++kժU�֭[�t�رc\u001f��SO=us��]���+�x衇�s�[�\u000f>8��S׭[W�\u001b\u0001\u0000\u0000\u0000\n�{��/233_}�խ���W_���眜q�\u0019'�|r�W�i��Z�n��W�}�ٮ]���\u000b_�hѮ]��~������\u0005\u000b\u0016\f\u001e<�O�>��G�ox��/��<n8~ϾC\u000f=�+���\u000ffff�[�n����~���I��p\u0006_�N�^~��<�\u0007\u0000\u0000\u0000�މ}l+��c�y����w�}7�xcJ\u0016�7ڷo��o��'��裏���y_m����\\s�s�=\u0017)==}���yY'\u001e�\u0012hs\u001b7n�5k�}��7lذ\\��>��e˖[�&\u0000\u0000\u0000��r\u0019/�[�d�e�]�k\b�����~���*}iii\u0015*T\u00188p��[�|��K���\u0017_|�Y�\u0012��V��ȨW��СCǏ\u001f�뮻��p�m�\u0015�f\u0000\u0000\u0000��%�\u0011����j��\u0005��-����\u0013O���'����\u001f��;�-[62�������)t�a�}��\u0007;��Sd��\u0017_|��g\u0005�\u001f\u0000\u0000\u0000���}\u0004��w�\u001d:th|~�e����+��\u000f?��ѣG�.]:2\u001f;v���?���\t�g�}n����|ܸq\u0005�\u0019\u0000\u0000\u0000���}�,;;��+�����k�T=9��#����{��k��vɒ%)9�V�ڵk���/����w\u0002\u0000\u0000\u0000\u0014<����\u001d;��\u001f�\f322�\f\u0019\u0012?\u001d/aW\\qEӦM#Å\u000b\u0017���/U�ȻR�J\u001dx����W_}U�;\u0001\u0000\u0000\u0000\n��G�r}`n�Ν�5k�£ddd��ׯH�\"���!CRx��kҤId�dɒ���B�\f\u0000\u0000\u0000P��>��bŊ�^{->��kR~��M��i�&2�={��\t\u0013R~��T�B��p�ڵ\u0005�\u0013\u0000\u0000\u0000���}\u0004륗^Z�fMdx��G7n�8?\u000ew�9�ć�rr߆\r\u001b�����\u0000\u0000\u0000@x�>���{�Ň]�vͧÝ|�ɕ*U�\f�\u000f\u001f�kz�W\u000b\u0016,�\u000fK�*U��\u0000\u0000\u0000\u0000\n��G��N�\u001a�ddd\u001cw�q�t��ŋw��)2\\�ti�\t!���?�L��k��\f�\u0001\u0000\u0000 |���0�^�z޼y�a�ƍw�i��;�a�\u001d\u0016\u001fN�6-��\u00187��9s�D��} \t\u0000\u0000\u0000��\u0012�\b���ӳ��#�c�9&_\u000fZ�^����c�M7�\u0014\u001f�}\u0000\u0000\u0000��\u0010�\bS��m����׃��~���y�I>\u00191b�K/�\u0014\u0019\u0016)R�U�V\u0005�\u0007\u0000\u0000\u0000�\u0010�}�iƌ\u0019��n�햯\u0007-S�L�:u\"��ӧ��A7���~����<���K�{���^\u0000{\u0000\u0000\u0000\u0000\n��G��/_\u001e\u001f�w���\u0010�>\u001b7�V�^��3����W]uUVVV���ŋ�~����\u0001\u0000\u0000\u0000`�Q��7\u0000�bݺu���;���-Y�dd�v�ڼ|Μ9�<���-++믿��7o޼y��Ν�jժͽ��\u0007\u001f��l\b\u0000\u0000\u0000�J�#L����a�b����%J��Lr͎������������7�ܽ{�T�\u0006\u0000\u0000\u0000l�\\�K�22r��޸qc~\u001f7~!m�\"E���qE�\u0016���;�瞂?4\u0000\u0000\u0000P���G��\u0017/\u001e\u001ffff�/�M��\u0019��s��[Æ\r\u0007\r\u001aԸq�\u0002>.\u0000\u0000\u0000P��G��T�\u0012\u001f���\u001f�}���A�;/�+##��\u0013O|��7���[�\u000f\u0000\u0000\u0000vL��#L��o|8{���w�=_�;k֬�d�=�̿Õ/_�I�&\u0007\u001dtЁ\u0007\u001ex��תU+��\u0005\u0000\u0000\u0000l��>�T�^��p֬Y'�pB�\u001d����Z�lYdؠA���p�1����k�����(Q�Dɒ%K�.]�v������'\u0000\u0000\u0000\u0010*��0m.���Ag̘\u0011\u001fnU��i��\u000e=����\b\u0000\u0000\u0000ر�g\u001fa�P�B���\u000f?�0_\u000f:u���p�b\u001f\u0000\u0000\u0000@2�>�\u0015�bw޼y�~�m�\u001d��^�\u000f\u000f8���;\"\u0000\u0000\u0000@Nb\u001f�:�����\u0011#F���~�����G�\u0007\u001ex`�ʕ��\u0000\u0000\u0000\u0000\u0011b\u001f�jѢE�j�\"×^z)333?\u000e7lذ������\u000b.ȏc\u0001\u0000\u0000\u0000�J�#XE�\u0014i߾}d��/�<���)?ֺu�\u0006\f\u0018\u0010\u0019�,Y��3�L��\u0000\u0000\u0000\u00006G�#d�^ziFF�����^�lYj\u000ft���ϛ7/2<��S+V���\u0003\u0001\u0000\u0000\u0000l��G�\u000e8��s�9'2\\�dɭ�ޚ£̝;����ϻv�£\u0000\u0000\u0000\u0000�'�����իT�R��SO=\u0015��61k֬9��֮]\u001b��~��G\u001duTJ\u000e\u0001\u0000\u0000\u0000�Gb\u001f��]��UW]\u0015�w����?Nr����SO=5�\u0010�ʕ+���'��\u0001\u0000\u0000\u0000���G�n���z��E��ׯo׮݈\u0011#\u0012^v��՝:uz����/=����\u0007\u0001\u0003\u0000\u0000\u0000�7���-[���ުR�Jd��?�t��骫�Z�~�֮�駟\u001ep�\u0001�F���ԦM���;/��\u0002\u0000\u0000\u0000$C�c������ŋ\u0017�����7l�p���yL~�fͺ��K�>��s��_=�c�9[\u0010\u0000\u0000\u0000 \u0019b\u001f;�#�8���\u0019\u0019���Ϝ9�����}����Ώ>�hŊ\u0015�7lذa����=�ܑG\u001e��~����/;;;�N�\u0016-�z뭒%K��\u000f\u0000\u0000\u0000\u0000�_�\u0016�\u0006��t�ҥF�\u001a�;w^�xq���~��;�HKK����g�}�U�V�d����/Y�d�̙�֭���-[�|��7�O�\u0005\u0000\u0000\u0000(0b\u001f;�V�Z}��7�۷���6���\u001b7Μ9s�̙y\\�T�R�z��ꪫr=m\u0010\u0000\u0000\u0000��h\u0013�p�֭���_q�\u0015%J�H~�#�<rʔ)�\\s��\u0007\u0000\u0000\u0000\u0014:y�\u001dQɒ%���3o޼\u001e=z�-[6�\u0015���[�l���/�\u001d;v�=�L�\u000e\u0001\u0000\u0000\u0000\u0012���s\u0006���{ｋ\u0016-�9iӦM˖-���K�,yꩧF�\u001e=iҤ����|͚5�>��/�8��7dȐɓ'�4n���s�IrY\u0000\u0000\u0000`�%���oݺu�&M���/'L��`��5k֬]��X�b%K��U�V�F�\u001a6lبQ�\u001a5j\u0014�N\u0001\u0000\u0000\u0000r'�\u0001\u0000\u0000\u0000@ ܳ\u000f\u0000\u0000\u0000\u0000\u0002!�\u0001\u0000\u0000\u0000@ �>\u0000\u0000\u0000\u0000\b��\u0007\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 \u0010b\u001f\u0000\u0000\u0000\u0000\u0004B�\u0003\u0000\u0000\u0000�@�}\u0000\u0000\u0000\u0000\u0010\b�\u000f\u0000\u0000\u0000\u0000\u0002!�\u0001\u0000\u0000\u0000@ �>\u0000\u0000\u0000\u0000\b��\u0007\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 \u0010b\u001f\u0000\u0000\u0000\u0000\u0004B�\u0003\u0000\u0000\u0000�@�}\u0000\u0000\u0000\u0000\u0010\b�\u000f\u0000\u0000\u0000\u0000\u0002!�\u0001\u0000\u0000\u0000@ �>\u0000\u0000\u0000\u0000\b��\u0007\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 \u0010b\u001f\u0000\u0000\u0000\u0000\u0004B�\u0003\u0000\u0000\u0000�@�}\u0000\u0000\u0000\u0000\u0010\b�\u000f\u0000\u0000\u0000\u0000\u0002!�\u0001\u0000\u0000\u0000@ �>\u0000\u0000\u0000\u0000\b��\u0007\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 \u0010b\u001f\u0000\u0000\u0000\u0000\u0004B�\u0003\u0000\u0000\u0000�@�}\u0000\u0000\u0000\u0000\u0010\b�\u000f\u0000\u0000\u0000\u0000\u0002!�\u0001\u0000\u0000\u0000@ �>\u0000\u0000\u0000\u0000\b��\u0007\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 \u0010b\u001f\u0000\u0000\u0000\u0000\u0004B�\u0003\u0000\u0000\u0000�@�}\u0000\u0000\u0000\u0000\u0010\b�\u000f\u0000\u0000\u0000\u0000\u0002!�\u0001\u0000\u0000\u0000@ �>\u0000\u0000\u0000\u0000\b��\u0007\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 \u0010b\u001f\u0000\u0000\u0000\u0000\u0004B�\u0003\u0000\u0000\u0000�@�}\u0000\u0000\u0000\u0000\u0010\b�\u000f\u0000\u0000\u0000\u0000\u0002!�\u0001\u0000\u0000\u0000@ �>\u0000\u0000\u0000\u0000\b��\u0007\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 \u0010b\u001f\u0000\u0000\u0000\u0000\u0004B�\u0003\u0000\u0000\u0000�@�}\u0000\u0000\u0000\u0000\u0010\b�\u000f\u0000\u0000\u0000\u0000\u0002!�\u0001\u0000\u0000\u0000@ �>\u0000\u0000\u0000\u0000\b��\u0007\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 \u0010b\u001f\u0000\u0000\u0000\u0000\u0004B�\u0003\u0000\u0000\u0000�@�}\u0000\u0000\u0000\u0000\u0010\b�\u000f\u0000\u0000\u0000\u0000\u0002!�\u0001\u0000\u0000\u0000@ �>\u0000\u0000\u0000\u0000\b��\u0007\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 \u0010b\u001f\u0000\u0000\u0000\u0000\u0004B�\u0003\u0000\u0000\u0000�@�}\u0000\u0000\u0000\u0000\u0010\b�\u000f\u0000\u0000\u0000\u0000\u0002!�\u0001\u0000\u0000\u0000@ �>\u0000\u0000\u0000\u0000\b��\u0007\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 \u0010b\u001f\u0000\u0000\u0000\u0000\u0004B�\u0003\u0000\u0000\u0000�@�}\u0000\u0000\u0000\u0000\u0010\b�\u000f\u0000\u0000\u0000\u0000\u0002!�\u0001\u0000\u0000\u0000@ �>\u0000\u0000\u0000\u0000\b��\u0007\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 \u0010b\u001f\u0000\u0000\u0000\u0000\u0004B�\u0003\u0000\u0000\u0000�@�}\u0000\u0000\u0000\u0000\u0010\b�\u000f\u0000\u0000\u0000\u0000\u0002!�\u0001\u0000\u0000\u0000@ �>\u0000\u0000\u0000\u0000\b��\u0007\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 \u0010b\u001f\u0000\u0000\u0000\u0000\u0004B�\u0003\u0000\u0000\u0000�@�}\u0000\u0000\u0000\u0000\u0010\b�\u000f\u0000\u0000\u0000\u0000\u0002!�\u0001\u0000\u0000\u0000@ �>\u0000\u0000\u0000\u0000\b��\u0007\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 \u0010b\u001f\u0000\u0000\u0000\u0000\u0004B�\u0003\u0000\u0000\u0000�@�}\u0000\u0000\u0000\u0000\u0010\b�\u000f\u0000\u0000\u0000\u0000\u0002!�\u0001\u0000\u0000\u0000@ �>\u0000\u0000\u0000\u0000\b��\u0007\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 \u0010b\u001f\u0000\u0000\u0000\u0000\u0004B�\u0003\u0000\u0000\u0000�@�}\u0000\u0000\u0000\u0000\u0010\b�\u000f\u0000\u0000\u0000\u0000\u0002!�\u0001\u0000\u0000\u0000@ �>\u0000\u0000\u0000\u0000\b��\u0007\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 \u0010b\u001f\u0000\u0000\u0000\u0000\u0004B�\u0003\u0000\u0000\u0000�@�}\u0000\u0000\u0000\u0000\u0010\b�\u000f\u0000\u0000\u0000\u0000\u0002!�\u0001\u0000\u0000\u0000@ �>\u0000\u0000\u0000\u0000\b��\u0007\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 \u0010b\u001f\u0000\u0000\u0000\u0000\u0004B�\u0003\u0000\u0000\u0000�@�}\u0000\u0000\u0000\u0000\u0010\b�\u000f\u0000\u0000\u0000\u0000\u0002!�\u0001\u0000\u0000\u0000@ �>\u0000\u0000\u0000\u0000\b��\u0007\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 \u0010b\u001f\u0000\u0000\u0000\u0000\u0004B�\u0003\u0000\u0000\u0000�@�}\u0000\u0000\u0000\u0000\u0010\b�\u000f\u0000\u0000\u0000\u0000\u0002!�\u0001\u0000\u0000\u0000@ �>\u0000\u0000\u0000\u0000\b��\u0007\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 \u0010b\u001f\u0000\u0000\u0000\u0000\u0004B�\u0003\u0000\u0000\u0000�@�}\u0000\u0000\u0000\u0000\u0010\b�\u000f\u0000\u0000\u0000\u0000\u0002!�\u0001\u0000\u0000\u0000@ �>\u0000\u0000\u0000\u0000\b��\u0007\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 \u0010b\u001f\u0000\u0000\u0000\u0000\u0004B�\u0003\u0000\u0000\u0000�@�}\u0000\u0000\u0000\u0000\u0010\b�\u000f\u0000\u0000\u0000\u0000\u0002!�\u0001\u0000\u0000\u0000@ �>\u0000\u0000\u0000\u0000\b��\u0007\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 \u0010b\u001f\u0000\u0000\u0000\u0000\u0004B�\u0003\u0000\u0000\u0000�@�}\u0000\u0000\u0000\u0000\u0010\b�\u000f\u0000\u0000\u0000\u0000\u0002!�\u0001\u0000\u0000\u0000@ �>\u0000\u0000\u0000\u0000\b��\u0007\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 \u0010b\u001f\u0000\u0000\u0000\u0000\u0004B�\u0003\u0000\u0000\u0000�@�}\u0000\u0000\u0000\u0000\u0010\b�\u000f\u0000\u0000\u0000\u0000\u0002!�\u0001\u0000\u0000\u0000@ �>\u0000\u0000\u0000\u0000\b��\u0007\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 \u0010b\u001f\u0000\u0000\u0000\u0000\u0004B�\u0003\u0000\u0000\u0000�@�}\u0000\u0000\u0000\u0000\u0010\b�\u000f\u0000\u0000\u0000\u0000\u0002!�\u0001\u0000\u0000\u0000@ �>\u0000\u0000\u0000\u0000\b��\u0007\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 \u0010b\u001f\u0000\u0000\u0000\u0000\u0004B�\u0003\u0000\u0000\u0000�@�}\u0000\u0000\u0000\u0000\u0010\b�\u000f\u0000\u0000\u0000\u0000\u0002!�\u0001\u0000\u0000\u0000@ �>\u0000\u0000\u0000\u0000\b��\u0007\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 \u0010b\u001f\u0000\u0000\u0000\u0000\u0004B�\u0003\u0000\u0000\u0000�@�}\u0000\u0000\u0000\u0000\u0010\b�\u000f\u0000\u0000\u0000\u0000\u0002!�\u0001\u0000\u0000\u0000@ �>\u0000\u0000\u0000\u0000\b��\u0007\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 \u0010b\u001f\u0000\u0000\u0000\u0000\u0004B�\u0003\u0000\u0000\u0000�@�}\u0000\u0000\u0000\u0000\u0010\b�\u000f\u0000\u0000\u0000\u0000\u0002!�\u0001\u0000\u0000\u0000@ �>\u0000\u0000\u0000\u0000\b��\u0007\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 \u0010b\u001f\u0000\u0000\u0000\u0000\u0004B�\u0003\u0000\u0000\u0000�@�}\u0000\u0000\u0000\u0000\u0010\b�\u000f\u0000\u0000\u0000\u0000\u0002!�\u0001\u0000\u0000\u0000@ �>\u0000\u0000\u0000\u0000\b��\u0007\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 \u0010b\u001f\u0000\u0000\u0000\u0000\u0004B�\u0003\u0000\u0000\u0000�@�}\u0000\u0000\u0000\u0000\u0010\b�\u000f\u0000\u0000\u0000\u0000\u0002!�\u0001\u0000\u0000\u0000@ �>\u0000\u0000\u0000\u0000\b��\u0007\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 \u0010b\u001f\u0000\u0000\u0000\u0000\u0004B�\u0003\u0000\u0000\u0000�@�}\u0000\u0000\u0000\u0000\u0010\b�\u000f\u0000\u0000\u0000\u0000\u0002!�\u0001\u0000\u0000\u0000@ �>\u0000\u0000\u0000\u0000\b��\u0007\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 \u0010b\u001f\u0000\u0000\u0000\u0000\u0004B�\u0003\u0000\u0000\u0000�@�}\u0000\u0000\u0000\u0000\u0010\b�\u000f\u0000\u0000\u0000\u0000\u0002!�\u0001\u0000\u0000\u0000@ �>\u0000\u0000\u0000\u0000\b��\u0007\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 \u0010b\u001f\u0000\u0000\u0000\u0000\u0004B�\u0003\u0000\u0000\u0000�@�}\u0000\u0000\u0000\u0000\u0010\b�\u000f\u0000\u0000\u0000\u0000\u0002!�\u0001\u0000\u0000\u0000@ �>\u0000\u0000\u0000\u0000\b��\u0007\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 \u0010b\u001f\u0000\u0000\u0000\u0000\u0004B�\u0003\u0000\u0000\u0000�@�}\u0000\u0000\u0000\u0000\u0010\b�\u000f\u0000\u0000\u0000\u0000\u0002!�\u0001\u0000\u0000\u0000@ �>\u0000\u0000\u0000\u0000\b��\u0007\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 \u0010b\u001f\u0000\u0000\u0000\u0000\u0004B�\u0003\u0000\u0000\u0000�@�}\u0000\u0000\u0000\u0000\u0010\b�\u000f\u0000\u0000\u0000\u0000\u0002!�\u0001\u0000\u0000\u0000@ �>\u0000\u0000\u0000\u0000\b��\u0007\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 \u0010b\u001f\u0000\u0000\u0000\u0000\u0004B�\u0003\u0000\u0000\u0000�@�}\u0000\u0000\u0000\u0000\u0010\b�\u000f\u0000\u0000\u0000\u0000\u0002!�\u0001\u0000\u0000\u0000@ �>\u0000\u0000\u0000\u0000\b��\u0007\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 \u0010b\u001f\u0000\u0000\u0000\u0000\u0004B�\u0003\u0000\u0000\u0000�@�}\u0000\u0000\u0000\u0000\u0010\b�\u000f\u0000\u0000\u0000\u0000\u0002!�\u0001\u0000\u0000\u0000@ �>\u0000\u0000\u0000\u0000\b��\u0007\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 \u0010b\u001f\u0000\u0000\u0000\u0000\u0004B�\u0003\u0000\u0000\u0000�@�}\u0000\u0000\u0000\u0000\u0010\b�\u000f\u0000\u0000\u0000\u0000\u0002Q��7\u0000�׆\r\u001b~���E�\u0016�_�>--�x��5jԨ]�vF�*\r�X�jՏ?��z�����gddT�P�nݺ�ʕ+�}\u0001\u0000\u0000\u0004B죐-X�`�ȑ���\u00193~���M�/��ŋ�����kݺ��'�X�n���&����nԨQS�L�:u�y󲳳#o�i����o�c�=�u��\u0007\u001dtP�\"E\ne�\u0000\u0000\u0000\u0001H��G\u0017\u0014�\u000f>���{����6nܘ�O5h���k��ܹsѢ����}�ݶm�F~ɋ\u0016-:q��\u0006\r\u001al��7��\u001e���\"��N;��_�9���.^�x�m\u0007\u001dt�g�}���\u0011_?===33�?�����sϙ3g�,Y�d�w����w�=��cSr�޽{�|��9'{�ǬY���W^y嬳�J��7�I�&\u0013&L�\fO?���_=_�\u001b���_7j�(2LOO��3�G,\\�pذa�\u0006\r�2eJ�?U�F��/���K/�\\�r\u0006\u0000\u0000�a�:�B0u���;�u���ƍ۪ҷ�]�t�g�}\"\u001d-W'�pB���7��֮]{�e��0s��믷�v[�(\u0015*T�ӧO����\u001bb����޽{�d'���gJ溇���ml�/�\u0016dee��\u001e\n����ʊ\u001f7�\u000f�����_��W�^����W_�U�/--��?���[v�e�[o�5��\u0001\u0000\u0000�Ob\u001f\u0005���^;��C?���d\u0016�7o�\u0019g�q饗�[�n���ӧO�*U\"��?�|����l �+��r�ʕ��O>\u0019?smsn���iӦ�j?P�&N�شi��n��?�zn��ի��&M�|��7)�\u001b\u0000\u0000@��>\nԣ�>ڱc�իW�d�~��\u001dy�����\u0016�S�j��\u001e{,>��\u001b\u0016-Z��\u001e�|�͑#GF���v�\u0019g���E233�t�aÆ��\u0003��w��͚5�:ujJV�>}z�f�^z饔�\u0006\u0000\u0000�#��\u000e\n�{�ףG�-\\?X�\\�&M���ޥJ����^�f�ܹsg̘�`���}d�ĉg�u�ȑ#���޳�:륗^\u001a=zt��%K���A�\u0006%��l�r���/�<2�R�J߾}�v����{���ۓ�\u000f\u0014�޽{_���{�H�\"�\u001a5:��\u001b6lX�t�R�J�_�~ѢE���w�}��7��z��\r\u001b�>��kמ����w\u0000\u0000�@�}\u0014������ε����\u001e�^{m˖-��k�\\\u001f\u0011�p��\u0011#F<��s�~�m�շ�z�gϞ�z���џy�z��E�\u0001\u001c2d����Gn���~�����kd��OV�V-����SN9�q��\t�'/���۵k�U\u001f\u0019;v�e�rN��k����?�+ԨQc�������j���c���C\u000e٪�\u0015���\u000fӧO�9)]�t�V��j'\u0015+Vܪ��ţ�>���׬Y��n�騣�*_���>�`��\u0001\u0003\u0006<�����G䥍\u001b7^x��ʕ�СC*w\f\u0000\u0000\u0010�l(\u0010W\\qE�ׯR�JC�\f�����\u00181bD�\u0006|iiiŋ\u0017��_��٧�~:��z��eff&�\u0013M�4)�\b����o�#�>�!�\u0006\r\u001a�[�.��ln��W�WӦM#k^��I���5���~�����,���o�#Ç\u000f�|$===U�I���?���v�-%+��;��Ͼ��\u000b�~�f͚C�\u000eݸqc\u001e�Y�bŅ\u0017^��R\u0015+V�?~�?\u001c\u0000\u0000���=�(\b�\u0016-�?\u0010�N�:_}�չ�\u001bOf�ӡC�ɓ'�뮑yfff<�D\\z���f̘��C\u000f���9mܸ�k׮��V�J�\\�b�M�:��;�Lf\u0005(x�\u0016-�޽{|޼y�Y�f�}�ٹ����r��\r\u00180`РA�,[�쬳���b\u000e\u0000\u0000��\u0013�(\b���z�\u001c\u0019\u0019\u0019Æ\r�{ｷv��5k���e˖��\u0007\u000e\u001c�t��-|0==}��\u0001%K������~�ik�ѷo߉\u0013'F�\t_���\u0003\u000f<\u0010_\u0019�e�^{��ŋ#æM��\u001e=�\\�r\t,x�y�=�������7w\n!\u0000\u0000\u0000��}\u0014����*2�С��\u001f��j\r\u001b6�ݻwd�����g�m��{���\u001dw�\u0011\u0019�Y�&�K����?����#���۟~��[�N�����t�v��䗂\u00020v��!C�D�{���￿�;���nݺ���3>������\u0016�\u0000\u0000\u0000;\u001a���\u0010?U�m۶�,x�\u0019g\u0014/^<2��ؗ��v�����@7z���_=�G�ꪫV�X�s��\u0005�-[��Lf͚u뭷&�\u001a\u0014�뮻.>|��v�i�$W��[�֭\u001b\u0019Κ5�7�Hre\u0000\u0000���}\u0014�\u0005\u000b\u0016D&I>s�bŊ�\u001f|d��\u0017_��\u0007�\u0014)2p���E�ϡ�޽�ʕ+�r���{�W^�\f�zꩄ/�\u001d<xp�\n\u0015\"�G\u001f}t���-\b\u0005fƌ\u0019�|�Mdx�qǵi�&�ŋ\u0017/��S������\u0000\u0000\u0000�\u0012�(\b�����P��i׮]d��_��\r\u001b6����#��~�-�k\u0006#֬Yӭ[�ȰC�\u000e�:u�ˡs��.�<�裑�ƍ\u001b�?��ȍ\u000ea[3t�����\u0007\u001fL���;w��?\u0006Ə\u001f�p��T\u001d\u0002\u0000\u0000 0�� ?�)Sfɒ%9'\u000b\u0017.L��\u001c9\u001dp�\u0001�\u001f~x��c��v�]�v\u001e?۳g��_}֬Y9�}��9��s\u001b5j��\u000f�u�]��yT�Z5�'𦥥��������ѣs\u000e���\u001bn��'�Hrq�'���/��bdؠA�-�%�*���ݻw?�����ʖ-{�!�4o޼y����\r\u0010\u0000\u0000 lb\u001f\u0005�~�����k�ɓO>��\u0003:6iڴi�\u0017��(Qb���G\u001cqD�S\u000e���.��/��\"===�OM�>��\u001f�\f�zꩪU�&����}�����G��SO=u�i��h�\"��!�ƍ\u001b��/�D�ɜ嚫SO=uٲe͛7oԨQ�g\u0004\u0003\u0000\u0000\u0004�e�\u0014�V�ZE&/���w�}W(����\u000e�_���W_���?��gggw��u���9�\u001d;v�رcJ�S�F��I|���\u0017\\p�?����C@j}����a��F��|��ݻwoڴ��\u0007\u0000\u0000�\u0017b\u001f\u0005!\u001e�����:ꨇ\u001ez(��\n�}��W�N���n����o\u001e0`���sR�jէ�z*���ܹ�i��\u0016\u0019�����^{m\n�\u0002�2s��Ȥ|����O�l\u0006\u0000\u0000�M�>\nB�z�N>���p�ʕ�]w]�F�\u0006\f\u0018��gk�Vٲe���\u0017\u0019.]��G�\u001e����}�\r7D�O?�tJ.���g���ٿ���?�\u0007��͘1#2�o��\ne'\u0000\u0000\u0000�K죀<��\u0013�K���g̘q��\u0017׬Y��C\u000f���{�L����]`�jݺ���\u001b\u0019���\u000b�|�I�I�\u001e=�.]�sҩS�\u000e\u001d:�|?U�V�۷o|~�E\u0017-_�<凃�mذ�\u001f~�\f�իW(�\u0001\u0000\u0000�_\u001e�A\u0001�S��SO=u�\u0017�|&ƿ���'L�0a[n��R�J͚5k޼�a�\u001dv��\u0007�*U*_7�裏����\u000b\u0016,�9�֭��ɓ�\u0017/�����G\u001f���\u000b9_�V�Zj/�ͩ}��g�y�K/��s��o�u��}����t�m��ɓ�\u0015+����͛��u؜\u001f�1~\r��\u0007\u0000\u0000P��>\n�y�W�X�.]�deem�mK�.}�w�y睴��bŊ5jԨU�Vm۶=��\u00037���dT�\\��'��<Bt֬Y\u000f>�୷޺nݺ�.�,򑧟~�J�*)�ɿ�|�ɱc����9�C�\fi߾}�j�\\������Gvvv�).\tkҤ�E\u0017]���\nݜ9s��}�ݷ�w\u0002\u0000\u0000@Nb\u001f\u0005ꬳΪY�f�n�f͚����_��믿�����Z�j�r�)�ڵ;��c32Ry\u0005zǎ\u001dO=��7�x#��{�9��3���ȵ��:uj߾}\n�\u001eW�r����ǻ�%�\\2}��ʕ+����)׫�\u0013өS��b�ʕ+��r��\u0015�N\u0000\u0000\u0000��=�(h-Z��2e�C\u000f=��]����۷o�֭��s��\u001e{��Iᮞzꩊ\u0015+本]��s�����a�^��S�6m�;��������W\u0000G�����\u0019\u001f��*l\u0000\u0000\u0000\u0012&�Q\b�\u0015+֣G�9s����3��w���OW_}�.������z\u0007�\u0004ԨQ㡇\u001e�\f'N�\u0018)\u001a�}\u0001oN�=�X�ڵ#��Ç���k\u0005�\u0001�\u0002�\u000f\u0000\u0000`�$�Qh�W�~�wΘ1c���w�yg������˗/�ꪫ�5k6u�Ԕ���\u000b/lٲ�\u0016�p����\u0005�9U�Pa�����e�]�p��\u0002�\u0006�*�K�S\u0015�\u0001\u0000\u0000H�{�Q��ի׳gϞ={Λ7oܸq�ƍ���O�駼|v�ĉ�\u001dv��ѣ�<���w���6h�`����U���O&��ҪU��]����/�p��^zi���u��-UOx���\u000f�|�͔,E�r=�/�\u0017�\u0003\u0000\u0000�\u0000��m������iii����g�}���\u001f���;���\u0016>�r��\u0013N8᭷���yyy���w�ݣG��K}��-�\u000bxsz衇>���H�|���_|��Ν;\u0017�~�U۶m[�j���V�Z���\u0017y&r2J�,����\u0005\u0015*T�\u000f�嗂�\t\u0000\u0000\u00009�}l�j׮}�g�y�iii�&Mz���G�\u001e���_�z���ի۵k7k֬�5k&yܫ����矟<yr�a۶mO;��$WNLٲe�{-[fgg�_~��-Z��Q�F��j\u0007���^�z����6j�]v�\u000f�>\u0000\u0000�B�}l\u0007\u001a7n|�m�}��W���{�\u001e=J�*\u0015�?��s�u�%����=��32Lյ��9�裯���p�ҥ\u0017_|q��\u0007����ԩ\u0013\u001fΝ;��w\u0002\u0000\u0000@Nb\u001fۓ�ի?��Cs�ν��\u000b⯾���Ǐ/�]\u0015���o����\fG�\u001e=hРB�\u000fT�R�t�ґ�\u0017_|Q(�\u0001\u0000\u0000�_b\u001f۟\u001a5j\f\u001c8��\u001f����/\u0016�~\n@�ҥ\u0007\u000f\u001e\u001c��UW]�믿\u0016ʖ`�]w�L�͛���\u0017�f\u0000\u0000\u0000�D�c{u�5�t��12�裏\ne3\u0005��\u000e�?9dŊ\u0015\u0017^xa��\u0007\u000e:��pܸq)?иq�n����c�fff�|q\u0000\u0000���}�w�y������;v�x�\u0011G���o��v�\u0016���#�9s����o�Z[s��w׫W/2\u001c3fL�~�\ne?���=�����_N��^{��^�z�hѢbŊ�Z�z��\u0007���۔\u001f\u0005\u0000\u0000 \f��K�\u001a1b����sN&O�ܦM��,��>�Ԯ];R��O�^�v픬��)Q�Đ!C�5k�aÆ��k���U�V���[am�\u001d�1�\u001c\u0013\u001f�\u001e=��?�H���9}�ᇛ��5k֌\u00193f̘1�j�\n8�\u0003\u0000\u0000$Ù}��c%�|��\u0014���\u001e{D&�W�N��ۚ\u0003\u000f<��\u001bo�\fW�\\y�\u0005\u0017dgg\u0017ʖ�aժU+��ꬬ��{.�G��OfΜ\u0019\u0019\u001e��)<\u0004\u0000\u0000@H�>�ס�\u001e\u001a�L�8�\u001f~ȿ#\u0006߼z��ٰa��p�رO<�D��\u001d�)��\u0012\u001f>��S+V�H�!\u001e{�<\u001e\u0017\u0000\u0000�4���v�!�\u0014-\u001a�Z|��\u0001�Z��ّIŊ\u0015S����X�bC�\f)V�Xd~�M7�kE���/�<�\u0017�����ٳgJ���\u001f�w��s�=Su+\u0000\u0000\u0000���}�2e�4j�(2|��G'O����ӦM�믿rN��ӛ4i���۸�\r\u001b�c��ի�9�B�\u000f;�]v����O�ϟ|�ɔ�\u001d�֭�ƍ\u001b#�믿>#ÿ�\u0000\u0000\u0000r翗�w�;w�L֯_�y�]�6ɕ��Ȥ^�z��ٷɍ7�x��\u0007F�_�u�l�\u001d�u�]\u0017\u001ffeeu��y���ɬܯ_�\u001f��5kv��%�e\u0001\u0000\u0000�&����;２%KF����\t'���?�$��ȑ#�\u000f\u001f\u001e\u0019�x�\t/�})Z��!CJ�(Q�\u001baGװaöm���3f�8���\u0013�;>z��+��\">��꫋\u0017/�ؚ\u0000\u0000\u0000;\u0002��|W�R�3�8#>\u001f;v��G\u001f=u��\u0004�|��W�\u0017\u000f�,Y�k�Id�ۧz���}�݅�\u000bH�߿�����o���M�6\t��7jԨ\u000e\u001d:�_�>2?蠃����\u0004w\t\u0000\u0000�c\u0010�(\b�z��������q��\u0017_|q��{[�믿�z�\u001d;v��̌�t�E\u0017�Z\u001c\u0002֣G��\u000e;��w���Z�jC�\u000eMOO���駟���?�|\u001e�Z�jU׮]۵k\u0017�̿r��#F�pZ\u001f\u0000\u0000��E��\b��V�Z�<��\u0005\u0017\\\u0010)++k��\u0001Ç\u000fo۶��\u001f޼y����ǫ����?�䓱cǾ��{�V�����~��{����mXFF����\u001b5j�z����K�����5k��\u0005��w�A�\u0006�p�mǱ�\u001e{�\r7����\u0016-ZԥK�!C�t�����+_�|�+̟?�o߾\u0003\u0007\u000e\\�hQ�������N�:)�7\u0000\u0000@p�>\n���?f̘�^z)�WW�\\9lذaÆ���U�X�I�&�˗/^���5kV�^=u�Կ��{\u000b�W�XqԨQ�ʕ˗�o���k��{��0}��W)\\-~]jHz��jժ'�x\"�W?���?��hѢ�\u001dvX�\u0016-v�i�ҥK�_�~ɒ%�'O����Ν�����g�\u0014)��㏟t�I��}\u0000\u0000�@�}\u0014�\u0017^x�L�2\u0003\u0006\f��ۖ-[���\u001f�}ٚ5k����{��Wr�ێ]q�\u0015o���رc\u000b{#�Њ\u0014)ҧO�}�٧{��YYY��gÆ\r�~�駟~��e˖-;|�p�\u000f\u0000\u0000 �ܳ���������z�E���27k��o�9�CR���(==���+[�lao\u0004������\u001e=�B�\n)Ym�����ϕ>\u0000\u0000��\u0013�(hw�}��)SN8�$שY�f߾}Ǎ\u001bW�F��ll���n�=��C��\u000bHKKKkݺ��y�n���\\\u001f˓GU�T�ӧϴi�\u000e8���m\r\u0000\u0000 |.�\u0010��~���'�|2lذ7�|s�[��M��u�Y�^zi�R��c{U�T�]�v�I2�\"������)Եk�1c�L�0!r��W�^�zʿ�\"E�Ŀ��%K&��ʗ/\u001fY�f͚[�H�R���Og��w�9�E\u0012��\n^�ʕ��\u001e=z<�䓏=�X���؜F�\u001au����K.I��\u0000\u0000\u0000;����\u0010\u001d\nFVV��>f̘\u001f~�a޼ys��]�dI�=�˗�k����{�C\u000e9�]�v��\tۑ�\u001b7N�>}�ĉ\u0013&L�0a����#w�+U�����ߠA�\u0006\r\u001a�p�\t��oam\u0015\u0000\u0000 \u0000b\u001fۜe˖�X�b���YYYŊ\u0015+[�lժU\u000b{S@j�]�vŊ\u0015k׮]�n]�\"EJ�(Q�F��\f��\u0000\u0000\u0000H\r�\u000f\u0000\u0000\u0000\u0000\u0002�d\n\u0000\u0000\u0000\u0000\b��\u0007\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 \u0010b\u001f\u0000\u0000\u0000\u0000\u0004B�\u0003\u0000\u0000\u0000�@�}\u0000\u0000\u0000\u0000\u0010\b�\u000f\u0000\u0000\u0000\u0000\u0002!�\u0001\u0000\u0000\u0000@ �>\u0000\u0000\u0000\u0000\b��\u0007\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 \u0010b\u001f\u0000\u0000\u0000\u0000\u0004B�\u0003\u0000\u0000\u0000�@�}\u0000\u0000\u0000\u0000\u0010\b�\u000f\u0000\u0000\u0000\u0000\u0002!�\u0001\u0000\u0000\u0000@ �>\u0000\u0000\u0000\u0000\b��\u0007\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 \u0010b\u001f\u0000\u0000\u0000\u0000\u0004B�\u0003\u0000\u0000\u0000�@�}\u0000\u0000\u0000\u0000\u0010\b�\u000f\u0000\u0000\u0000\u0000\u0002!�\u0001\u0000\u0000\u0000@ �>\u0000\u0000\u0000\u0000\b��\u0007\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 \u0010b\u001f\u0000\u0000\u0000\u0000\u0004B�\u0003\u0000\u0000\u0000�@�}\u0000\u0000\u0000\u0000\u0010\b�\u000f\u0000\u0000\u0000\u0000\u0002!�\u0001\u0000\u0000\u0000@ �>\u0000\u0000\u0000\u0000\b��\u0007\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 \u0010b\u001f\u0000\u0000\u0000\u0000\u0004B�\u0003\u0000\u0000\u0000�@�}\u0000\u0000\u0000\u0000\u0010\b�\u000f\u0000\u0000\u0000\u0000\u0002!�\u0001\u0000\u0000\u0000@ �>\u0000\u0000\u0000\u0000\b��\u0007\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 \u0010b\u001f\u0000\u0000\u0000\u0000\u0004B�\u0003\u0000\u0000\u0000�@�}\u0000\u0000\u0000\u0000\u0010\b�\u000f\u0000\u0000\u0000\u0000\u0002!�\u0001\u0000\u0000\u0000@ �>\u0000\u0000\u0000\u0000\b��\u0007\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 \u0010b\u001f\u0000\u0000\u0000\u0000\u0004B�\u0003\u0000\u0000\u0000�@�}\u0000\u0000\u0000\u0000\u0010\b�\u000f\u0000\u0000\u0000\u0000\u0002!�\u0001\u0000\u0000\u0000@ �>\u0000\u0000\u0000\u0000\b��\u0007\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 \u0010b\u001f\u0000\u0000\u0000\u0000\u0004B�\u0003\u0000\u0000\u0000�@�}\u0000\u0000\u0000\u0000\u0010\b�\u000f\u0000\u0000\u0000\u0000\u0002!�\u0001\u0000\u0000\u0000@ �>\u0000\u0000\u0000\u0000\b��\u0007\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 \u0010b\u001f\u0000\u0000\u0000\u0000\u0004B�\u0003\u0000\u0000\u0000�@�}\u0000\u0000\u0000\u0000\u0010\b�\u000f\u0000\u0000\u0000\u0000\u0002!�\u0001\u0000\u0000\u0000@ �>\u0000\u0000\u0000\u0000\b��\u0007\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 \u0010b\u001f\u0000\u0000\u0000\u0000\u0004B�\u0003\u0000\u0000\u0000�@�}\u0000\u0000\u0000\u0000\u0010\b�\u000f\u0000\u0000\u0000\u0000\u0002!�\u0001\u0000\u0000\u0000@ �>\u0000\u0000\u0000\u0000\b��\u0007\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 \u0010b\u001f\u0000\u0000\u0000\u0000\u0004B�\u0003\u0000\u0000\u0000�@�}\u0000\u0000\u0000\u0000\u0010\b�\u000f\u0000\u0000\u0000\u0000\u0002!�\u0001\u0000\u0000\u0000@ �>\u0000\u0000\u0000\u0000\b��\u0007\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 \u0010b\u001f\u0000\u0000\u0000\u0000\u0004B�\u0003\u0000\u0000\u0000�@�}\u0000\u0000\u0000\u0000\u0010\b�\u000f\u0000\u0000\u0000\u0000\u0002!�\u0001\u0000\u0000\u0000@ �>\u0000\u0000\u0000\u0000\b��\u0007\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 \u0010b\u001f\u0000\u0000\u0000\u0000\u0004B�\u0003\u0000\u0000\u0000�@�}\u0000\u0000\u0000\u0000\u0010\b�\u000f\u0000\u0000\u0000\u0000\u0002!�\u0001\u0000\u0000\u0000@ �>\u0000\u0000\u0000\u0000\b��\u0007\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 \u0010b\u001f\u0000\u0000\u0000\u0000\u0004B�\u0003\u0000\u0000\u0000�@�}\u0000\u0000\u0000\u0000\u0010\b�\u000f\u0000\u0000\u0000\u0000\u0002!�\u0001\u0000\u0000\u0000@ �>\u0000\u0000\u0000\u0000\b��\u0007\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 \u0010b\u001f\u0000\u0000\u0000\u0000\u0004B�\u0003\u0000\u0000\u0000�@�}\u0000\u0000\u0000\u0000\u0010\b�\u000f\u0000\u0000\u0000\u0000\u0002!�\u0001\u0000\u0000\u0000@ �>\u0000\u0000\u0000\u0000\b��\u0007\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 \u0010b\u001f\u0000\u0000\u0000\u0000\u0004B�\u0003\u0000\u0000\u0000�@�}\u0000\u0000\u0000\u0000\u0010\b�\u000f\u0000\u0000\u0000\u0000\u0002!�\u0001\u0000\u0000\u0000@ �>\u0000\u0000\u0000\u0000\b��\u0007\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 \u0010b\u001f\u0000\u0000\u0000\u0000\u0004B�\u0003\u0000\u0000\u0000�@�}\u0000\u0000\u0000\u0000\u0010\b�\u000f\u0000\u0000\u0000\u0000\u0002!�\u0001\u0000\u0000\u0000@ �>\u0000\u0000\u0000\u0000\b��\u0007\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 \u0010b\u001f\u0000\u0000\u0000\u0000\u0004B�\u0003\u0000\u0000\u0000�@�}\u0000\u0000\u0000\u0000\u0010\b�\u000f\u0000\u0000\u0000\u0000\u0002!�\u0001\u0000\u0000\u0000@ �>\u0000\u0000\u0000\u0000\b��\u0007\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 \u0010b\u001f\u0000\u0000\u0000\u0000\u0004B�\u0003\u0000\u0000\u0000�@�}\u0000\u0000\u0000\u0000\u0010\b�\u000f\u0000\u0000\u0000\u0000\u0002!�\u0001\u0000\u0000\u0000@ �>\u0000\u0000\u0000\u0000\b��\u0007\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 \u0010b\u001f\u0000\u0000\u0000\u0000\u0004B�\u0003\u0000\u0000\u0000�@�}\u0000\u0000\u0000\u0000\u0010\b�\u000f\u0000\u0000\u0000\u0000\u0002!�\u0001\u0000\u0000\u0000@ �>\u0000\u0000\u0000\u0000\b��\u0007\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 \u0010b\u001f\u0000\u0000\u0000\u0000\u0004B�\u0003\u0000\u0000\u0000�@�}\u0000\u0000\u0000\u0000\u0010\b�\u000f\u0000\u0000\u0000\u0000\u0002!�\u0001\u0000\u0000\u0000@ �>\u0000\u0000\u0000\u0000\b��\u0007\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 \u0010b\u001f\u0000\u0000\u0000\u0000\u0004B�\u0003\u0000\u0000\u0000�@�}\u0000\u0000\u0000\u0000\u0010\b�\u000f\u0000\u0000\u0000\u0000\u0002!�\u0001\u0000\u0000\u0000@ �>\u0000\u0000\u0000\u0000\b��\u0007\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 \u0010b\u001f\u0000\u0000\u0000\u0000\u0004B�\u0003\u0000\u0000\u0000�@�}\u0000\u0000\u0000\u0000\u0010\b�\u000f\u0000\u0000\u0000\u0000\u0002!�\u0001\u0000\u0000\u0000@ �>\u0000\u0000\u0000\u0000\b��\u0007\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 \u0010b\u001f\u0000\u0000\u0000\u0000\u0004B�\u0003\u0000\u0000\u0000�@�}\u0000\u0000\u0000\u0000\u0010\b�\u000f\u0000\u0000\u0000\u0000\u0002!�\u0001\u0000\u0000\u0000@ �>\u0000\u0000\u0000\u0000\b��\u0007\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 \u0010b\u001f\u0000\u0000\u0000\u0000\u0004B�\u0003\u0000\u0000\u0000�@�}\u0000\u0000\u0000\u0000\u0010\b�\u000f\u0000\u0000\u0000\u0000\u0002!�\u0001\u0000\u0000\u0000@ �>\u0000\u0000\u0000\u0000\b��\u0007\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 \u0010b\u001f\u0000\u0000\u0000\u0000\u0004B�\u0003\u0000\u0000\u0000�@�}\u0000\u0000\u0000\u0000\u0010\b�\u000f\u0000\u0000\u0000\u0000\u0002!�\u0001\u0000\u0000\u0000@ �>\u0000\u0000\u0000\u0000\b��\u0007\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 \u0010b\u001f\u0000\u0000\u0000\u0000\u0004B�\u0003\u0000\u0000\u0000�@�}\u0000\u0000\u0000\u0000\u0010\b�\u000f\u0000\u0000\u0000\u0000\u0002!�\u0001\u0000\u0000\u0000@ �>\u0000\u0000\u0000\u0000\b��\u0007\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 \u0010b\u001f\u0000\u0000\u0000\u0000\u0004B�\u0003\u0000\u0000\u0000�@�}\u0000\u0000\u0000\u0000\u0010\b�\u000f\u0000\u0000\u0000\u0000\u0002!�\u0001\u0000\u0000\u0000@ �>\u0000\u0000\u0000\u0000\b��\u0007\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 \u0010b\u001f\u0000\u0000\u0000\u0000\u0004B�\u0003\u0000\u0000\u0000�@�}\u0000\u0000\u0000\u0000\u0010\b�\u000f\u0000\u0000\u0000\u0000\u0002!�\u0001\u0000\u0000\u0000@ �>\u0000\u0000\u0000\u0000\b��\u0007\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 \u0010b\u001f\u0000\u0000\u0000\u0000\u0004B�\u0003\u0000\u0000\u0000�@�}\u0000\u0000\u0000\u0000\u0010\b�\u000f\u0000\u0000\u0000\u0000\u0002!�\u0001\u0000\u0000\u0000@ �>\u0000\u0000\u0000\u0000\b��\u0007\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 \u0010b\u001f\u0000\u0000\u0000\u0000\u0004B�\u0003\u0000\u0000\u0000�@�}\u0000\u0000\u0000\u0000\u0010\b�\u000f\u0000\u0000\u0000\u0000\u0002!�\u0001\u0000\u0000\u0000@ �>\u0000\u0000\u0000\u0000\b��\u0007\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 \u0010b\u001f\u0000\u0000\u0000\u0000\u0004B�\u0003\u0000\u0000\u0000�@�}\u0000\u0000\u0000\u0000\u0010\b�\u000f\u0000\u0000\u0000\u0000\u0002!�\u0001\u0000\u0000\u0000@ �>\u0000\u0000\u0000\u0000\b��\u0007\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 \u0010b\u001f\u0000\u0000\u0000\u0000\u0004B�\u0003\u0000\u0000\u0000�@�}\u0000\u0000\u0000\u0000\u0010\b�\u000f\u0000\u0000\u0000\u0000\u0002!�\u0001\u0000\u0000\u0000@ �>\u0000\u0000\u0000\u0000\b��\u0007\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 \u0010b\u001f\u0000\u0000\u0000\u0000\u0004B�\u0003\u0000\u0000\u0000�@�}\u0000\u0000\u0000\u0000\u0010\b�\u000f\u0000\u0000\u0000\u0000\u0002!�\u0001\u0000\u0000\u0000@ �>\u0000\u0000\u0000\u0000\b��\u0007\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 \u0010b\u001f\u0000\u0000\u0000\u0000\u0004B�\u0003\u0000\u0000\u0000�@�}\u0000\u0000\u0000\u0000\u0010\b�\u000f\u0000\u0000\u0000\u0000\u0002!�\u0001\u0000\u0000\u0000@ �>\u0000\u0000\u0000\u0000\bD���\u0000l�~���ɓ'O�:uڴi3f�X�t�u����J�,Y�B����7�?*U�T؛ݾ�^���o��6mڦo���~[�vmVVV��ūU���n�խ[�iӦ�\u001dw\\�*U\n{���̙3�L���O���+W�������(_�|�:uv�m�}�ݷe˖\r\u001b6,�\u0002\u0000\u0000l�ҳ��\u000b{\u000f�.Z�zu��~��w�m�����>�l�2e\u0012^p�ҥ/���������<~�C\u000e���K�8㌒%K&|ܴ��J����\u0007\r\u001a��+��\\��?ߜ��Ѹq�Ν;_t�E�˗O�po������sN�W���#�$�T\u001e���Ǉ����ݻw_�pa�ɮ��z����jW��\u001f{�jժm�#�� [��\u000e\u001d:t���3g�����W�ަM�+���A�\u0006�\u001c�?�~��?��C�IFFF���K�.���\u0003\u0006\f���sN\u001a6lx�\r7$�2\u0000\u0000@Z6�\\��\u001bo���/Y�$��f͚թS�\u0012%J$�\u0017�r���\\s��?��e����������^�}��˗�ѣG\u0002����{#K���\u001e����+�����ԩ\u0013��s�=��]�ן;w�?��\u000f�9?��C۶m�\u0014)���iiii�\u001dw����\u0013>����矹nl���)Y���.��ܪU���\f\u0000\u0000��}\u0014�K/�t��Ņ���kݺuw�q�\u0001\u0007\u001c��+�l�V7\u0001K�,y�G����}��po��w�����\u001f���{n�䩼[�b��\u000f?�������[��۶�ꫯ����\n{\u0017�ڰa�\u0003\u000f<РA�Q�Feee%�Ș1c�8��ݻG�TM�aÆ庱�\u0003\u0007��X\u0000\u0000\u0000�%�Qh\u0016,XЭ[�����o���\r\u001b6���;333�_mժUݺukݺu���6�]%�_�~�������_��?�<�S�v�p3ھ,_���\u000b/,�]$e���\u0007\u001f|��7޸v��$�����ӧOÆ\rgϞ��������u��g�͙3'��\u0002\u0000\u0000H-\u000f�0���+�۷�ԩS�nc�ȑ�:uZ�~�\u0016�S�X��M�֪U�t�����+W��9s�9s�И>������\u001c9�裏N~���w��޽{_��[xC�\"E\u001a5j�뮻�*U�X�b�֭�駟�L��f͚�}���K�.\u001d6lX�b��a�ۖ\u000f>��_�~]�v-�$b���G\u001f}�_����ԬY�q��e˖-Y��\r\u001b\u0016/^<y��?��ss����\u001f�:�\u000f?��~��)���ɓ�L���W�{�\u0014�9\u0011\u0000\u0000 ��>\nY�nݎ:ꨝw޹�6�ꫯ�y�\u001b6l���]v�嬳�jѢ��\u001f\u001e�Ś5k����aÆ���\u000b˗/�|���'�|�1c\u000e=���Z��U�\u001ey�͕�]v����O?�裏8���\u0005���f̘��\u000b/\f\u001c80�+�G�\u0018������gd����^۪U��vۭ�7�u�̙ӢE�\\K_ѢE۷o�1�\u001c}�ѹ��q��\u0005����O?=q��\\_=��ǎ\u001d���\u00179��Q�F�����8dȐ^�z\u0015-�ߞ\u0000\u0000�6*��*f\u001b�x��B<Gi���+}\u0015*T�����̙s�}��j�*��Ֆ*U�Y�fO>��\u001f�ѯ_�ʕ+�߳r��\u0013N8!g,HX�~W�{��{��\u0011��*U�gϞ�g��ݻ�I'���#J�\u0014)ҠA�\u0007\u001ex��~���s=�oԨQ��w_����Y�r�\u0005\u0017\\��]=K}���-[���\u0004�c�9���\u001f>|��\u0017_��\u0007����]�t�0a¸q���s��\u001b\u0016/^ܩS���ߗ����/���Ŋ\u0015\u001b:th��\u0010���_�G�N�(\u0000\u0000\u0000�G���\u001a5j�С\u0005�iӦ�{���N;��\u001f��\u001bJ�,���J�.}�%�L�>��SO���lٲV�Z͝;7�\u001d\u0017�w��ٳg_s�5�y���gΜy�w�*U*/�,Y��[o�8q�.��\u0012��;��ꫯ����`�رO<�Da�b+\\r�%���{dX�t�\u0011#F|����\u001e�9��#'O�|�9��_�9s��W_��>ǌ\u0019����\u0016-Zԯ_�y��9��1\u001d\u0000\u0000��L�c�p�W�C@���ʺ��\u000br�O�\u0005\u0017\\��+�T�Rek׬^��믿��#��_Z�pa�N�+��*%.����3�\u000f>��w�y�N�:[�Z�F�>���jժE�\u001b6l8��sw��u�t�M\t?˸����K\u001f|�AdX�D�Q�Fu��akW+]������8��K������\u000f\u0013�eZZZ�\u001a���ۧ��E���;�l�\u001e�\u0000\u0000\u0000�K�c��lٲ�.�� ��裏~����y���\u0007\f\u0018P�H��W���\u001f|������>\u001a6lX����࿫�\r\u00192d�ر�a�\u0006\r�}��r��%���{�=f̘�\u0015+F�?������\u0013[s��z����;o�ƍ�����lٲ�\twE�\u0016}�嗏=�������\u0018:th�6m�/�u�]�������?��\u001c92�Qڵk���ֱcǜ�����5dȐ��\u0002\u0000\u0000���>\nG���#���{o��\u0001\u0005s�\u001f��gϞ�y�\u0016-\u001e}�ќ��J�u�]w뭷��=z�X�l�֮V��U����k��62,R��K/���]\u000e��\u0003\u000e��{�������]\u001e�\u0013��⋇\u001f~�P6�w��~��\u0005\u000b\"�+���m۶�,[�h���\u0007W�P!2���Ə\u001f�ؚ#F������͛o:{�jժ-[�����{.�C\u0000\u0000\u0000�7���1p���SS{����/�\u0014��{���?�7)_���A��/}��~��\u001a5�\f\u0017,Xp�m�m�R��]%��W_]�hQdx�%���6m[p�%��\u001f�0mڴw�y'�ŷ5���+^�xdسgϙ3g\u0016�~�b͚5�\u0007\u000f�\f�T���_���v��\u001bn��s=�6/r��w��O?=�K?��ç�~��Q\u0000\u0000\u0000��G�h֬Y�l�\u0015+V\u0014�3F׬Y��e�\u000f?�p\u00027�ۜ�E����/\u001e�\u0006\u000f\u001e�jժ�Z�\u0010����?Q�|��w�ygJ\u0016/Z����\u001b�����)Y�R�~����v��.]�l��)|��7W�X\u0011\u0019�~����\u0013s�UWժU+2|���/_��K͟??g�KOO?�������N;-RZ���k\u0001\u0000�\u001d��G��뮻��v}��G}���������P�n���??�\u0007:���/����p�ʕ�����.UX�U�~���q��E���~zժUSu�\u000e\u001d:ԯ_��,U�ԑG\u001e�s\u0012�뮻�C\u000e�\f�����￿P��^x�Ȥt��)��V�T�믿>�d��>�s\u0012�^��\u0017^�Y�\u000f:�ڵk����*UjժU�����\t$E\u0000\u0000��&�QhJ�(1dȐ�E�F��_�ܹs�︹�l��+�L�\u001c�s�\u0015Wć\t�ڿ����\r\u001b6,�\u0004�N�:��(]�vm۶m�޽�����˗�\u001b7.\u0012��Q�H�!C��*U*2�뮻�L�R([ڂ�\u000b\u0017���{��I'�T�L�\u0014\u001e�3�h֬Y�\u001e=�x㍿��{���\u0003\u0007\u000eL�,��)�9����@9�q͚5/��R\u0002\u001b\u0006\u0000\u0000�Wb\u001f��iӦ7�tSd�jժ��??��1:����f�ʕ���\u000b��p���&M\"�O>�$���\u0015�w�\u00129�m�I�j�Z�h�ڣ\\~��#G����k\u000f=��bŊ�v�m�>��\u0013,Iff�瞻~��B���\u001e=zÆ\r�a��wɫV��\u0017_|��C\u000f�k�.�3F'L�0{�윓���nҶm�Hf\u001d8p`b�\u0003\u0000\u0000�?b\u001f���n�?���>{�����p_~�e�>wmڴ)_�|~\u001c.--��sύL����x�\u0004�*��*%�M�\u0016�\u001cq�\u0011�q\u0012�\u000e�{��G\u001cqDd8y��ﾻP��9S�N�\u000fS�zS\"�h�\u0003\u000e8`�=����lٲ'�tR��7�|�\r�P\t\u0000\u0000���>\nY�bņ\f\u0019\u0012���7�\u001c9�&%��)---r+����<��\u0002A\u0001W����_W�\\\u0019\u0019��!�;������\u0007�/�������B�R��\t�^�z�ʕ\u000be3[���\u0019y�K�\u001a�M\"W�9�\u000f\u0000\u0000���}\u0014�\u0003\u000e8�gϞ�a>=c4�S��;��\u001e%��իW�V-2̵9�EA~Wɛ1cF|X�^���Ixv�}�\u0007\u001f|02ܰaC�.]֭[W([���\u0002l���G�^�xq�I�\u001a�MN:�r��圼��\u000b��\u0017\u000e\u0000\u0000�&������\u001b\u000f:��p\t�{�N��m��w�U�Vj�\u0012\u0011\u000f\u001c3f̈_M�G\u0005�]%/~bWڶ�{�G�]v�1�\u001c\u0013\u0019Θ1#��\u000bŪU�����6��#���{�7�4�%K�r�)9'K�,I�|\u0000\u0000�|\"��M��ђ%KF�w�q����Su�U�V���O�a��\\)\u0017�pu�ʕ?��sb�\u0015�w�\u0012��W�H�}�٧P6\u0013�����{.~�ɇ\u001f~����*�-�4{��x��\u0006cߒ%KF�\u001e�s��kx7q%/\u0000\u0000��\u0013��V��~��\u000b�[���sύ?�31��ׇ͋�v�-%�oA�w�����<*��*%\u0016-Z\u0014�T�X1~�A\u0012�뮻>��#�aVVV�.]֬YS([�W�O?--m�w.��l����333sN6w\r�&�[��T�R��G\u001f}�p�\u0007\u0000\u0000H9��m�5�\\s��G��}�ݽ�ޛ��s�\u001fu��M��[\u0010�g_ZZ�?���̚��]�D�^fJ_�]x�'�xbd8gΜ�o��P��\\�dW�X���ɖE��[�N�\u0003\u000f<p\u000b�/V�X�\u0006fgg\u000f\u001a4(_6\u0007\u0000\u0000���>�!��1Z�t�ȼW�^�&MJ~�\\�C�\n\u0015�_y�r-\\I��?������0�&��g�}6r�YZZ��?�駟\u0016�~6��7|[�\u0005�3g΄\t\u0013rN�|Z�&�+y\u0007\r\u001a�q��T�\f\u0000\u0000 Qb\u001fۖ=������\fׯ_ߥK�x9�Z�ׯ�\u000f�\u0016-���)׳���q���J��\u001fB�V�Y�f�>}\"������?ժU������O?rZ_Z�b_�\u0016-\"�#���cƌI��\u0000\u0000\u0000\u0012%��͹���[�h\u0011\u0019N�:��;�Lr�\\�[�\u00050�r=DJNqʿ�*%�!u�ڵ�����}���ڵ�\f�͛w�u�\u0015�v��6��m��\u0005���~�\u0017rN�W�~�a���\u0007�\u0014)ҡC��p��\u0001��\u001c\u0000\u0000@��>�9��1Z�\\����\u0007\u001e�8qb2+ǟ`���\u001b��V��ٕ(Q\"����ڴ�֊�P�T��d�\u0005PWwL����R�Jd��3�|�ᇅ����~ZZ�\u001f�Q�;ٜO?�t���9'��zjFF���\u0018����7����$\u0000\u0000\u0000\u0005L�c[T�n݇\u001ez(2���:��93h�]v�\u000f�͛���y�k�Hս\u0002��J�ڵkG&\u001b7n����\ne3��V���O?\u001d\u0019fgg_x�+V�(��ԪU+>��_\n~'���5��\u001c~��_���̡C��fg\u0000\u0000\u0000I����Ab.���_�����9�9s�m��ֻw��֬^�z�J��.]�s8k֬�w�73gΌ\u000f�ի�����J�]w�5>�?�n��V��\u0011t�����O��s\u000e��k����/2�S�N|\u00189��\u0010�Y���W_�9��Ș4i�ԩS�B�\u001a5\"�z���W_}uʶ\b\u0000\u0000�\u0010��m׀\u0001\u0003�ׯ�|���G\u001ey�]�v�\u001f~xbk��~_|�E���ٳ\u0013�b�̘1#2�P�B�!,a��]%/������\u001e}��\u0005��\u001d�SO=5v��\u0005\u000b\u0016�\u001c\u000e\u001c8��N;��\u0013\u000br'�ʕ�X��e�r\u000e���ۂ��\u0016�\u001c92r��ƍ\u001b����d֜>}��\t\u0013\u000e9��\u0006\u0000\u0000�\u0014����]���?\u001e\u0019nܸ���[�zubk�ϧ����#���\\�̾����\u0010��]%/נ9nܸ��Ɏc��v�߿|~��\u0017���y\\�\u0017`Μ9��W\u0001o#W�kxSb�����,\u0000\u0000@މ}lӺt�r��'G�?���7ޘ؂�\u001b7�\u000fG�\u001a��jy1�����;2lРA�\u000f���*y��o�\"E\"����ggg��X�|��6R�\n�)��r��F���ǕW^Y�;�����O?�4�\u0007Z�`���~�q��<�����\u001a3fLʷ���6|��U�V���\u0000\u0000\u0000y$����߿�ʕ#�'�|�O>I`�v��ş�9bĈ\u00047�\u0007Æ\r�\u000f\u001b5j�\u001f�J�w��\n\u0015*4i�$2\\�ti�J�8���kԨ����w����7ߌ\\Ѽ�y������x�\u0017F�\u001cY��hٲe|8z��\u001f�W^9��\u0003�V�ڡC��}�Ι3g����\u0017���R��������W^ɏ�\u0001\u0000\u0000��=���U�^����:��3s\u000e���/���)S��+Wn�V�Y�f���#�\u0016�\u00193fٲe\u0015+VL~�q/��BdR�X�SO=5?����*%��\u001d{�_�ud8`����IpѢEӧOOKK�1cƌ\u00193���S�H�\u001bo��W�^)<�v�bŊ\u0003\u0007\u000e<���#�]�6o޼J�*\u0005��c�=6>\u001c1b��?�ڿn��F/Y���^{�������ԩ3{��\u0012%J����5�g�}vժU\u00138�G\u001f}4eʔ���\u0003\u0007���\t,\u0005\u0000\u0000�\u0012b\u001fہ3�8��^�<:�����k��뷵��~��ط~��g�y&?.w�4iR��}'�tR�j�R~�MR�]%�c����\"�W^y��\u001e�P�B��2t��H�����k��R����u��\u0017_|��>�s���w�֭�N=�[����>o޼��5k�\f\u001b6���_���x���ق5k��\\�2e��ɓsN�V�:hР�E\u0013�\u0017⫯�ڱcǜ��?�|֬Y��o\u0002�\u0001\u0000\u0000$�e�l\u001f���\u001b\u000fd�������v�\u000e\u001d:�������[�hQ��ی;�#>���\u000bR~��R�]%�y��eʔ�\fW�^���\u0018dee���'2LOO��׶�y���\u000fD\u001e1b��/�\\`{hݺu|���O��*�g�yf͚5��\t'�����O��رcb�/--��O�����s�%�\u001a\u0000\u0000@��>�\u000fU�Ty�g��.�hk��V�Z�\u000b/�02\\�b�]wݕ��r��[o��曑a�\u001a5N<���\u001e(\"��U�J�(ѥK������Z�`AJ\u000e1jԨ��92<��w�y甬��*W�ܠA����#��������ӥ�^\u001a\u001fΘ1�駟N���ׯ�/U�X���;/��gee��⋑a�Ν\u0013�@�\u0012%\"g����=���\u001b6lHxM\u0000\u0000�d�}l7N=�Գ�:+2���ߺwﾵK�y�e˖�\f���;nܸ����Z�fM�\u000f?���+�\u000f�M�\u0014~Wɻ�k�\u000fEY�|�u�]��♙���>y�M7%�x\u0000Z�h\u0011�`v���]�v͏g\"�\u001dp�\u0001�\u001dw\\|~�m�����O<��\u001f�\u0011\u0019�u�Y��K��\u001f3f̟��sR�N��\u000e;,�=�s�9�ɂ\u0005\u000b�~��d�\u0004\u0000\u0000H�����'��Y�fd8dȐ\u0015+Vl�:;�s�4mذ��N��\u001f����Y��3ό�n֠A�\u001e=z$�~^��J�\u001e{��\u0003I�\u000e\u001d���Y{��5u���𨣎:��C�\\9\u0018\u000f<���{�\u0019\u0019�\u001a5�_~)�\r�Zu�/_ޭ[��\u001b7&��\u000f?�p뭷F�\u0019\u0019\u00197�p��>2t����3Έ���U�7o��n�E�)�P\u001d\u0000\u0000`��}lO*U�\u0014y�@�z��\u0011oaK�,iӦ�\u000b�Yy�ƍ�sΨQ�\"󌌌\u0001\u0003\u0006\u0014+V,���.��U���\\�:u\u001a?~|�˾��[��9���U�t���\u0007�O�,0�\u001dw\\�ƍ��7�x�[�n\t/�t��\u000e\u001d:���׮]��=\u001c��\u00199rdd��5������}�ّ��\u001b?�\u0010\u0000\u0000�\u0000�}lgN<�Ĕ<�L�2/��r���#�9s�4i���/�Ll٥K��q�\u0019Ç\u000f��t�\u0015W\u001c|���-��T}W�;���s��y���'�t�w�}���cƌ�رc��h�\u001dw\\�\u000f�ؑ\u001d~��W_}u!n`����kiii�����Yx[�bŊ�?~ʔ)�y�R�����}��W_]�zu�I���\u000f8��\u00046\u0010\u0011��7++k���ɯ\f\u0000\u0000���>�?�>�讻��:͛7�߿|��o�\u001du�Q�<����b�������G�\u0018\u0011�Y�f��sO�\u001bMB����=����\u001a5��W�Xq�\u0011G<��Cy��������\u0013O<qݺu��jժ5lذ$�\u001a�^�z���~�u�ƍ\u001b?��\u0003�����\u000f�i�f���y_�/�hܸ�ĉ\u0013�/=��������\u0007���=��3�~�-�k��\u000e9����+�\u001b#\u0002\u0000\u0000�T��7\u0000[�|��\u0003\u0007\u000elժU��!ݥK��ӧ���;2_�~}�\u001e=���s�5�\\t�E�K���\"�ׯ\u001f5jT���ǌ\u0019��\u001b\u000e9���{�L�2I�6\u0001)���T�D��_~�I�&�V����z��뮻nذaO<�D��ͷ�Ȇ\r\u001b^��\u0007\u001f|��o���Z�h�W^y�jժ[��e˖=��#[��\\�o߾N�:)Y*�J�,9x���\u000e;,++�P6p�UW}�ᇹޥq���cǎ���;/��-�]�>}�\u0013O<1`��\\�\u000b.�`s\u000f�MKK��_�O�IU�KKK;�s&L��s2w��q��\u001d}��y�����S�Kx�\u0017V�P!%K\u0001\u0000\u0000ۣ�BO\u0000�\b*T�\u0010y.Ē%K*U��̚ݺu�۷��^���\u001b7n��K�p7�J�*mz��!�\u001c����*U*--m��ճgϞ2e��ɓ�~�����{s\u001f?蠃ƌ\u0019����ޖ���\u001c9��3�\\�v���P�V�֭[�p�\t\u0007\u001ex`ٲeK�(�nݺ����￟4i�ȑ#7w\u001f����'�|2/�����n�����-z���[�j\u0015\u0019�������޺u�F�w�;w�����n��{�ws������ �Z�hQ�֭�p�v�\u0012%�<��\u0013N8�c��Z�j�2e6lذlٲɓ'O�4i�ر�}���>{衇~��'%K���\u001b����<\u000e=�Є/؏[�xq�\u001a5֯_�sx��g�\u001f\t���v��\u0017\u000f\u00180 U�����\u001f��c�|Z\u001c\u0000\u0000�\u000edC�+_�|�\u0017oɒ%I��r��-���]��g����bI:���.]�U;����$}��ժUK��\\�d�W^y%�\u001b�B�J���\u001f?b����}��\u0010�;w��}�1�֭��-��s��~��V�\\ٶmۄ����ر��ի�|�}��'�>}�l���S�G+U�Բe���袋R�%���\u001fL��\u0005\u0000\u0000l_ܳ��U�2e\u0006\r\u001a��F\t�ڵ맟~Z�v픬���V�R���\u0007���\u0015+VL՚\tK�w��C\u000f=t�ĉ���OՂ;��رc;v옪\u0005\u0003V�x�!C�\u0014�#��ʔ)���_{��)\\��o~��7�r�9\u0013'N�={v�I�\"E:u��m�����5kָ�$\u0000\u0000P��>�cG\u001eyd���S��!�\u001c2iҤk���lٲI.նm��ӧw��%%\u001bK��~WI�S��\u0017_|q�-��Oc�*Ŋ\u0015���˧M�\u00166\u0002�ӨQ��լ\u0005,##�w�ޣF�jܸq�K\u001dt�A�~��=���!;�h��-[���In �M�6񸿅[\u0004\u0000\u0000\u0000�\u0007���۽�޻��{�j�*U�<�����Ͽ�;v�i���x�J�����iӦ�\u001c9�F�\u001a��U����JR�r�z��5���r��[��%K�q�\u0019ӦM{�'�T��\u001f;\f��7�ܴi����)����w߽��ۇ\u001ezh\u0002\u001foذ�/�8a#�8�?߼~���ÇG��;wN�[V�D��ق�}������c\u0001\u0000\u0000l�\u0007tP\u0010���\r\u001b6�\u001ct�AE�\u0014I�����/��\u0012\u0019&���U�F�\u001c��_~��W�'O���_\u0019\u0019\u0019{�w�F�N<�Ď\u001d;n��\u0000y�=~WIZ�r�\u001bo�1a�\u0013'N�<933ss�U�V�ƍ۷o�i�%|V`�_B���~�z\u0010�I�֭[�sҸq�\u0012%J�d���{޼y�a\n��*�}��'�|��\u0017`ѢE�{[�2e���V�Z�y�������k֬�<yrdذa�-_����\u000b\u0017Ν;72�m��\"g\u0011���O\u000b\u0016,H��7)�?G\u0000\u0000`\u001b!��[�fͷ�~;s��իW�Y�&--�D�\u0012�˗oРA���K�.]�\u001b\fǺu�&M�4}��M_��\r\u001b�\u0015+V�l�z��\u001dp�\u0001\u0005��`\n˼y����ŋ\u0017�]�v�ڵ\u0019\u0019\u0019%J��[�n�\u0006\r��c�m侓\u0000\u0000\u0000�2�\u000f\u0000\u0000\u0000\u0000\u0002�}\u0000\u0000\u0000\u0000\u0010\b�\u000f\u0000\u0000\u0000\u0000\u0002!�\u0001\u0000\u0000\u0000@ �>\u0000\u0000\u0000\u0000\b��\u0007\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 \u0010b\u001f\u0000\u0000\u0000\u0000\u0004B�\u0003\u0000\u0000\u0000�@�}\u0000\u0000\u0000\u0000\u0010\b�\u000f\u0000\u0000\u0000\u0000\u0002!�\u0001\u0000\u0000\u0000@ �>\u0000\u0000\u0000\u0000\b��\u0007\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 \u0010b\u001f\u0000\u0000\u0000\u0000\u0004B�\u0003\u0000\u0000\u0000�@�}\u0000\u0000\u0000\u0000\u0010\b�\u000f\u0000\u0000\u0000\u0000\u0002!�\u0001\u0000\u0000\u0000@ �>\u0000\u0000\u0000\u0000\b��\u0007\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 \u0010b\u001f\u0000\u0000\u0000\u0000\u0004B�\u0003\u0000\u0000\u0000�@�}\u0000\u0000\u0000\u0000\u0010\b�\u000f\u0000\u0000\u0000\u0000\u0002!�\u0001\u0000\u0000\u0000@ �>\u0000\u0000\u0000\u0000\b��\u0007\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 \u0010b\u001f\u0000\u0000\u0000\u0000\u0004B�\u0003\u0000\u0000\u0000�@�}\u0000\u0000\u0000\u0000\u0010\b�\u000f\u0000\u0000\u0000\u0000\u0002!�\u0001\u0000\u0000\u0000@ �>\u0000\u0000\u0000\u0000\b��\u0007\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 \u0010b\u001f\u0000\u0000\u0000\u0000\u0004B�\u0003\u0000\u0000\u0000�@�}\u0000\u0000\u0000\u0000\u0010\b�\u000f\u0000\u0000\u0000\u0000\u0002!�\u0001\u0000\u0000\u0000@ �>\u0000\u0000\u0000\u0000\b��\u0007\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 \u0010b\u001f\u0000\u0000\u0000\u0000\u0004B�\u0003\u0000\u0000\u0000�@�}\u0000\u0000\u0000\u0000\u0010\b�\u000f\u0000\u0000\u0000\u0000\u0002!�\u0001\u0000\u0000\u0000@ �>\u0000\u0000\u0000\u0000\b��\u0007\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 \u0010b\u001f\u0000\u0000\u0000\u0000\u0004B�\u0003\u0000\u0000\u0000�@�}\u0000\u0000\u0000\u0000\u0010\b�\u000f\u0000\u0000\u0000\u0000\u0002!�\u0001\u0000\u0000\u0000@ �>\u0000\u0000\u0000\u0000\b��\u0007\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 \u0010b\u001f\u0000\u0000\u0000\u0000\u0004B�\u0003\u0000\u0000\u0000�@�}\u0000\u0000\u0000\u0000\u0010\b�\u000f\u0000\u0000\u0000��k��c��Ͼ���\u0000�\b\u0015\u0015�REq).��Z�hݗ�j]\b耣�Ƶֺ\u0012�V��*j\u0011\u0014\u0011\u0017\u0014\u001bk��h�\u0004�ԭ�D�j�\"ZP�h\u00157`����O|�>\u0007p�33����˹��|�%�\to�9?\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\bQ��\u000b�A���~�W��%:w�|��7��ŋ\u0017���k\u0005Î\u001d;\u001ey�M?���N���_~�cyy��G\u001fݾ}����E�\u0016M�6�T/TO;��N;�Tw���\u001f����\u0005�\u001d{��ڵ+�+��/����;�m����鳎�̝;w޼y\r}����\u000e\u001d:t�С{��;�c��/++�3g�;�S��֨O�>���[��\u0004\u0000\u0000\u0000y�W�^��;�oʔ)%�ek��6�̟?�\u000f���\u0017\u000f��;����G?�ѬY�\n�>��I'���%���\u001ey�\u0001\u0003\u0006ԝ�y���s��\u001em\u0001�_~��7�Xw��s�\u001dv�a\u0005�}��'ݻw/�+v����O?�;�뮻�\u000f\u001f�����׿��曛��۷�ׯ_������衇��߿)�]z饿���r·\u001a6l�����%\u0000\u0000\u0000��}��o�~ҤI{�w�[��;�C\u000e9d�M7m�����СC�N��~��o��)gRO5553gΜ9s��y�\u0007\u000e\u001c8lذ�6۬u\u0017\u0003\u0000\u0000�\u0012�}P����\\sM�p���\u0017]tQS����9��S���o&�ڵ{��;w�ܔci��s�^u�U�o����޺bŊ�^\u0007\u0000\u0000\u0000JC�5�����g���C\u000f=���O7��K.��7ި;�������ګ�\u0007�t�}���\u0017_��{.\\���w\u0001\u0000\u0000�\u0012\u0010�`\rڶm��\u0003\u000ft�ر`>|��%K�4���\u001f|̘1u'\u0007\u001f|�e�]��\u00157x���\u001d�M�\u000e\u001d�s��ٳ\u000f8��F�\u0000\u0004\u0000\u0000\u0000�7���Vs�=�\u0014״F�ҥK����\u001dw�qԨQ\u0017^xa��E�.��\t\u0013&4�\u0005\u000b\u0016TUU՝l��&\u000f>�`�6��}�}��<yr�O���.�p�ȑ#��f��\u001f���;�����n��V�N�5Z�z���?cƌ\u00193fL�>}ʔ)K�.-����;�C�Νۭ[�����6ی\u001c9�q�]���ۮ��\u0001\u0000\u0000��\u0010�h5'�tR��J�8������??���u���sϩ��Z|�ڵY�bŀ\u0001\u0003>�쳺������ݻ�⭶�j�������w�-�}G\u001ey�O\u0007���|뭷�z��󟗕�UWW�~��cǎ-�'RVV�hѢ\u0011#F\u0014�\u0001��6�t�\u0006��\u0003\u0000\u0000���c��V�����{o׮]\u000b�C�\u000e�ꫯ�y�\u0015W\\���ם\f\u00192��O.͊4��o>r����\u001f\u0007\u001cp@��ƍ�1cF�/\u0005\u0000\u0000\u0000%#���l��ַ�zk�p��\u0005�_~y}���SO�\u001e=��o߾�~�\u0018�ңG��������6�c�\u0000\u0000\u0000��\u0011��[TUU\u001dw�q\u0005ñcǾ����~�\u000b�\f\u0019�z��o&\u0015\u0015\u0015\u000f?�pɿ^�Fh׮݃\u000f>ةS���ԩS[e\u001f\u0000\u0000\u0000(\t�\u000f�݄\t\u00136�tӺ�իW�y�˖-[�SV�\\9`��O>����k��{｛kK\u001a�O�>�\u001csL�p�̙��խ�\u000f\u0000\u0000\u00004��\u0007߮gϞw�yg����߾����������W^�;9��\u0003����fُ�:��c\u000b&�W�^�`Ak�\u0002\u0000\u0000\u0000% �A��|��\u0003\u0006\f(\u0018�\u001e=zڴi�\u0017O�2eԨQu'ݺu{衇ڴ�o���W�^����}\u0005\u0000\u0000\u0000�7�\u0003��رc\u000b�ЪU����jjj�\u000e?����O?��W�����u�][m�UKlIC�\\��x��\u0002\u0000\u0000���ϴP_ݻw�8qb�pΜ9#G������ځ\u0003\u0007�����{�駟^��@�\u0007o��V�G�\u001e-�\t\u0000\u0000\u0000���\u0007\rp��G\u000f\u001d:�`8jԨY�f������\u0017_|���n��رc[f=\u001ajʔ)\u0005�N�:���\u000e��\f\u0000\u0000\u00004��\u0007\r3z��m�٦�dŊ\u0015g�q�ʕ+_x�믿��C\u0015\u0015\u0015�'O�x�[vG�eΜ9/��B����>�\u000b\u0000\u0000�w�?�B�t������///�;|�7.��A�\u0006���֝�\u00181��?�q�.H�,[�쬳�Z�bE�|РA��\u000f\u0000\u0000\u0000���\u0007\rv�A\u0007]t�E\u0005�ѣG��u'����\u0011#Zn-ꭺ���C\u000f}���\u000b�]�t���l��\u0000\u0000\u0000�$�>h����7���[�\u0005]�v}衇ڶm�b+Q\u001f�\u0016-��K����ꫯ\u0016?:r�H��\u0006\u0000\u0000�;���\u0017`�u�)�TT4�w`�^���\u0012�� \u001bm�ѤI���wߕ+W��q����ӧe�ڰ,[�lΜ9뾦��vŊ\u0015�\u0017/�;w�����7�|s���555k���#����\u000b\u001a�����7�l�F?��5�\\s����4\u0000\u0000\u00006\u001cb\u001f���F�\rRp�����^{]y��]w]�C\u0003\u0007\u000e��o���7��u�]Ku�!�\u001c�?���\u0018\u001bdժU�|�I��Y�ti��\u0002\u0000\u0000`��c��x#F��ٳg����k�eh���\u0007?��3>�\u000b\u0000\u0000@\u0000�\u000f\u001a��\u001f�裏��\u0017^xauuu��CC���N�=�����ߡC���\u0005\u0000\u0000\u0000J@�F�?�ھU���z���-�\u000f�ץK�3�8㥗^�;w�O~��^\u0007\u0000\u0000\u0000J�w��j:u�ԊOo��+W\u000e\u001a4�/�X�\u0005�?���I�*++[r+֡]�v���/v�e�]v���C\u000f�ҥKi��ܹ���^��z��]��\u0000\u0000\u0000ؠ�}��\u000f>��[�n��E#]������}�\u0005\u0017\\p�!���\u0007?h��64�z�:���Njkk\u0017-Z4cƌ9s�,[����\u0015+V����#G��۷os�ӯ_��^z�9N\u0006\u0000\u0000��\u0013���^}��\u001bn��`XUUu��֝,Y����jʔ)M���\u0006�\u0011�D={�������ʕ+�N�z�9�,X�����W_�k��&M��ӟ��q{\u0002\u0000\u0000�z�w�A�|��秝vڪU��\u000e\u0007\u000e\u001c8q�ēN:���S��\u001b7�\u0005�+�殓������\u0015\u0015\u0015G\u001duԜ9s�;＂�?���?~���%|9\u0000\u0000\u0000X�}�0�{��[wҫW�;��lܸq�m�Y���^z�y�Zn�TZVV֦M��[Թs�1c�<���۷�;���\u001d2d�\u0013O<Q�W\u0004\u0000\u0000�V'�A\u0003��\u000fx衇\n�w�}�&�lRVV��曏\u001d;��ѯ��z����yk}����}��ץ:��W��Ǖ��\u001f>a��ʕ+\u0007\f\u0018�׿���^\u0014\u0000\u0000\u0000Z��\u0007���{�s�9\u0005�!C�\u001cw�q��x�)�\u0014����^�馛�}��Y�j?��Ò\u001c�t�ҥK�\u0016\f��j��\u001c�F���W\\qE�p��姞z��ŋ��u\u0001\u0000\u0000��}P/������K�,�;�ݻ�m��Vp�رc�?�{���Μ9�Y7,�5�A�T�o�����m�ݶ$���\r7�p�'\u0016\f?��\u0001\u0003\u0006|��t\t\u0000\u0000\u0000�&�A��\u001a5��S�\u0013'N�֭[��G�\u001ecƌ)\u0018���TVV���4㊥��\u0016[\u0014��T����g��}������Kr�ڔ��?���{�G���\u0017_\\�-}\u0001\u0000\u0000�H�o7mڴk���`8lذ#�8b��\u000f\u00180��}d�f�*>d�T^^޻w��\u00193Jrxq��j����\u0006\u001d\u0005:u���?��S�N\u0005�Q�F���k���\u0000\u0000\u0000�2�>�\u0016_}�ՠA�V�XQwاO�[n�e\u001d�\u001a7nܦ�nZ0�馛�+]�����?�|IN~�7\n&;�cIN�V}��\u001d9rd�������jٲe-�\u0003\u0000\u0000\u00004+�\u000f�Ņ\u0017^8o޼�������o�w���\u0016[l�����`�jժ��\u0007���g���/�������N\u0013�]�|��O>Y0<�裛xl�]x���o��޺ꪫZl\u0007\u0000\u0000\u0000h>b\u001f��c�=6q�Ă��{��\u0007�s\u0007\u000e\u001cx���\u0017\f�͛w饗�h�f��O(����m�O=���^0���~��c�M�6\u0013'N�СC���[o}��\u0017[l\r\u0000\u0000\u0000h&b\u001f�բE��\u000e\u001dZ0�n���߼����ݻ\u0017\fǍ\u001b7u��\u0012�ל�<��v��\u0015\f\u001fx��w�}��g.]����.+\u0018���k��o��ׯߕW^Y0\\�z�����C$\u0000\u0000\u0000|��}�f��?����\u000e۴is���\u0017��amz��y���\u0017�|�\u0019g,Y��4�6��]�\u001et�A\u0005�\u0015+V�p�\t�.b#F�(�;�\u0005\u0017\\иӚ���/�i��\n���������\u0000\u0000\u0000@\t�}�f��r�s�=W0�袋���\u0006�s�i�\u0015Lu��\u0012�\u001a�K.)\u001eΜ9����ꫯ\u001atԪU��?��ѣG\u0017����_YY��\u0015\u001b�}��\u0013&L(///�O�4��\u001ek�}\u0000\u0000\u0000�T*Z{\u0001X\u001f͘1���\r?��\u000fo��F�v�]w���K�~�i��I�N8��/�[\u001cu�QG\u001ey��>[0�\u0017v�q�Q�F\r\u001a4���\u0015{��\u0017���\u0017^x����o��M���_\u000e�����g�}�w\u0016̇\u000f\u001f��~���ٳ�\u0007���,\\��Dە���u��y�M6)�\u0000\u0000\u0000l\b�>(�t�ҁ\u0003\u0007����\u001d�m���\u0007\u001e�h��\u001aq`�^�n�����\u0007\u0017̇\r\u001b��~���ѣ�6��o�y�ԩ�V�*�/Z����O\u001f=z�1�\u001cs��\u0007��~\u001bo�q�\u000b>���ٳgϞ={���3f�X��\u0007\u000f>�Úi��\u00185jԓO>�hѢ�Ï?�����zꩧ\u001azڬY�J��Æ\r\u001b?~|\t\u000f\u0004\u0000\u0000`C �A�_��Wo��f���K/�{�\u001b}fee壏>Z������\u000f\u001f���7����.��\u001f?~ذa���ŏN�>}���eeem۶�ѣGǎ\u001d+**�/_�dɒ�>�l�'�r�)ŷ9na]�v\u001d3f̉'�X0��'L�P|o\u0016\u0000\u0000\u0000X���>�?�z��v��.�^{m\u0013O\u001e?~�������\u0013O<1iҤ&�ܬ�<����o�\u001f�]�jՇ\u001f~8����~�������w���O�<�m۶�\\�QN8�\u0013N8�x~��\u0017ϟ?���\u0001\u0000\u0000�&\u0012���[�xqUUU�����\u0007\u001eh߾}\u0013\u000f�r�-o�����\u0005\u0017\\�����7����ɓ'w�ڵ�Gu��骫�z�G**֗�\u0015�q�\u001dݺu+\u0018~�嗕��k|?#\u0000\u0000\u0000���>�V�^=dȐ����UW]��\u001e{��%�\f\u0019r�1�\u0014\f�,YRUU�z�꒼D3\u00190`��\u0005\u000b����.]�4�6m�TUU����#G�lz9-�-����\u001bo,����+7�tS��\u0003\u0000\u0000\u0000M�����l}����/Y0�СC�,�6����ׯ_�~��\u000e;v�X|[ަ���o��5��\u000e;���Ӻu�V�\u000bۈ;���&�lr�\r7\\|�ţG�~�gfϞ�r��o}V۶m������\u000f\u001d:t�]wm��\u001ft�A\u0005�\t�ݻw�O+p��g/^����?/�/Y�d���k��z��\u0007��o�)��w�f=\u001f\u0000\u0000�H�������Ӳe�f̘1mڴiӦ-\\�p���˖-����رcǎ\u001d7�x�=��s����g�}:w����\u0002\u0000\u0000��B�\u0003\u0000\u0000\u0000�\u0010��\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000�\u0010�\u0000\u0000\u0000\u0000 ��\u0007\u0000\u0000\u0000\u0000!�>\u0000\u0000\u0000\u0000\b!�\u0001\u0000\u0000\u0000@\b�\u000f\u0000\u0000\u0000\u0000B�}\u0000\u0000\u0000\u0000\u0010B�\u0003\u0000\u0000\u0000�\u0010b\u001f\u0000\u0000\u0000\u0000��_��\u0001�&\u0003\u0000\u0000\u0000\u0000IEND�B`�",
+          "url": "https://agent-production-9f62.up.railway.app/documents/faa0b156-308a-4b4d-9a61-ababdbf1c9f7/pages/1?session_id=***REDACTED_SESSION_WEEK2***",
+          "responseTime": 1825,
+          "duration": 1825,
+          "size": 38410
+        },
+        "error": null,
+        "status": "pass",
+        "assertionResults": [],
+        "testResults": [
+          {
+            "description": "preview is PNG and private",
+            "status": "pass",
+            "uid": "Ud8NzZyX_Yr_L0vCm9ohw"
+          }
+        ],
+        "preRequestTestResults": [],
+        "postResponseTestResults": [],
+        "shouldStopRunnerExecution": false,
+        "runDuration": 1.875467375,
+        "name": "Patient-pinned page preview",
+        "suitename": "/Users/quietguy/Documents/Dev/Gauntlet/OpenEMR-Custom-Build/claude-adversarial-run/adversarial-smart-bruno-2026-07-24/week2/bruno/lab-page-preview",
+        "path": "lab-page-preview",
+        "iterationIndex": 0
+      },
+      {
+        "test": {
+          "filename": "lab-readback.bru"
+        },
+        "request": {
+          "method": "GET",
+          "url": "https://agent-production-9f62.up.railway.app/documents/faa0b156-308a-4b4d-9a61-ababdbf1c9f7/readback-verification?session_id=***REDACTED_SESSION_WEEK2***",
+          "headers": {
+            "content-type": null
+          }
+        },
+        "response": {
+          "status": 200,
+          "statusText": "OK",
+          "headers": {
+            "cache-control": "private, no-store",
+            "content-type": "application/json",
+            "date": "Fri, 24 Jul 2026 17:14:00 GMT",
+            "server": "railway-hikari",
+            "x-copilot-request-id": "b4500932099742dfb5940e49df6d67b9",
+            "x-railway-request-id": "gUCc25yMS7OTe-iSWUN5dQ",
+            "x-hikari-trace": "ord1.x8wt",
+            "x-railway-edge": "ord1",
+            "vary": "accept-encoding",
+            "transfer-encoding": "chunked",
+            "connection": "close"
+          },
+          "data": {
+            "document_id": "faa0b156-308a-4b4d-9a61-ababdbf1c9f7",
+            "source": {
+              "algorithm": "sha256",
+              "expected_hash": "145f3d50a1f807429d5b0ddc459bf649c00a5b8f64736982132fab14a7574969",
+              "observed_hash": "145f3d50a1f807429d5b0ddc459bf649c00a5b8f64736982132fab14a7574969",
+              "verified": true
+            },
+            "artifact": {
+              "algorithm": "sha256",
+              "expected_hash": "65b9d2c4b88bf40c3dc1ad7b657e7605fe3bd0fad1f78d6bc0485eccc62763ec",
+              "observed_hash": "65b9d2c4b88bf40c3dc1ad7b657e7605fe3bd0fad1f78d6bc0485eccc62763ec",
+              "verified": true
+            }
+          },
+          "url": "https://agent-production-9f62.up.railway.app/documents/faa0b156-308a-4b4d-9a61-ababdbf1c9f7/readback-verification?session_id=***REDACTED_SESSION_WEEK2***",
+          "responseTime": 2857,
+          "duration": 2857,
+          "size": 484
+        },
+        "error": null,
+        "status": "pass",
+        "assertionResults": [],
+        "testResults": [
+          {
+            "description": "source and artifact fresh reads match their SHA-256 digests",
+            "status": "pass",
+            "uid": "xLYXjwn2OEaHMeLp8CHtR"
+          }
+        ],
+        "preRequestTestResults": [],
+        "postResponseTestResults": [],
+        "shouldStopRunnerExecution": false,
+        "runDuration": 2.940258792,
+        "name": "Source and artifact readback verification",
+        "suitename": "/Users/quietguy/Documents/Dev/Gauntlet/OpenEMR-Custom-Build/claude-adversarial-run/adversarial-smart-bruno-2026-07-24/week2/bruno/lab-readback",
+        "path": "lab-readback",
+        "iterationIndex": 0
+      },
+      {
+        "test": {
+          "filename": "evidence-search.bru"
+        },
+        "request": {
+          "method": "POST",
+          "url": "https://agent-production-9f62.up.railway.app/evidence/search",
+          "headers": {
+            "accept": "application/json",
+            "content-type": "application/json"
+          },
+          "data": "{\n  \"query\": \"type 2 diabetes; HbA1c\",\n  \"k\": 5\n}"
+        },
+        "response": {
+          "status": 200,
+          "statusText": "OK",
+          "headers": {
+            "cache-control": "private, no-store",
+            "content-type": "application/json",
+            "date": "Fri, 24 Jul 2026 17:14:05 GMT",
+            "server": "railway-hikari",
+            "x-copilot-request-id": "dc61c557507c49faa403b92bb5dfc456",
+            "x-railway-request-id": "fk2C932zQ7Oz0qLelt7tkg",
+            "x-hikari-trace": "ord1.x8wt",
+            "x-railway-edge": "ord1",
+            "vary": "accept-encoding",
+            "transfer-encoding": "chunked",
+            "connection": "close"
+          },
+          "data": {
+            "items": [
+              {
+                "source_id": "vadod-diabetes-2023@d80c45f784072b051e542785aadaea851b8564c60123fa0bb1365e750d391fb7",
+                "section": "Management Appendix: Glycemic Control Targets and Monitoring",
+                "chunk_id": "vadod-diabetes-2023:p0097:c001:1d22ccc8223e",
+                "quote": "Appendix B: Glycemic Control Targets and Monitoring Setting an HbA1c target range is an important treatment strategy in the management of Type 2 Diabetes Mellitus. Table B-1 provides general guidance for setting HbA1c target ranges based on patients’ comorbidities, life expectancy, and extent of microvascular complications. Other factors might also be considered, and these are addressed in several footnotes. Setting target ranges with upper and lower bounds highlights the importance of considering the risks associated with both hyper- and hypoglycemia. These guiding principles are intended to complement Recommendations 9 and 10 and to help in creating individualized treatment strategies using shared-decision making.",
+                "score": 0.8786140002191632,
+                "corpus_version": "vadod-cpg-trio@d80c45f784072b051e542785aadaea851b8564c60123fa0bb1365e750d391fb7"
+              },
+              {
+                "source_id": "vadod-diabetes-2023@d80c45f784072b051e542785aadaea851b8564c60123fa0bb1365e750d391fb7",
+                "section": "Recommendations: Diabetes Mellitus Management",
+                "chunk_id": "vadod-diabetes-2023:p0040:c001:9a564c9d33f1",
+                "quote": "Further research is required to determine (1) the preferred measures of glycemic variability that convey risk information and practical means to communicate them to clinicians and patients, (2) whether a dose-response relationship occurs between the magnitude of exposure to glycemic variability and adverse outcomes, and (3) whether interventions to reduce glycemic variability affect outcomes. Recommendation 9. We suggest setting an individualized HbA1c target range based on the clinician’s appraisal of the risk benefit ratio, patient characteristics, presence or absence of type 2 diabetes mellitus complications, comorbidities, and life expectancy. (Weak for | Not reviewed, Amended) Discussion Patients, providers, and even health care systems often focus on therapies that reduce HbA1c levels to reduce complications. Yet, appropriate shared decision making requires a more nuanced approach. For example, presenting the benefits and harms of an intervention as an estimate of absolute, rather than relative, the risk might be more meaningful to the patient.",
+                "score": 0.6671913520409182,
+                "corpus_version": "vadod-cpg-trio@d80c45f784072b051e542785aadaea851b8564c60123fa0bb1365e750d391fb7"
+              },
+              {
+                "source_id": "vadod-diabetes-2023-quick-reference@d80c45f784072b051e542785aadaea851b8564c60123fa0bb1365e750d391fb7",
+                "section": "Quick Reference: Diabetes and Non-Pharmacotherapy Recommendations",
+                "chunk_id": "vadod-diabetes-2023-quick-reference:p0002:c002:fee53f14a57b",
+                "quote": "Amended tnemeganaM cimecylG For adults with type 2 diabetes mellitus, we suggest using high glycemic variability over time (e.g., fluctuation in HbA1c or Reviewed, 8. Weak for fasting blood glucose) as a prognostic indicator for risk of Newreplaced hypoglycemia, morbidity, and mortality. We suggest setting an individualized HbA1c target range based on the clinician’s appraisal of the risk benefit ratio, Not reviewed, 9. Weak for patient characteristics, presence or absence of type 2 diabetes Amended mellitus complications, comorbidities, and life expectancy. We suggest an HbA1c range of 7.0–8.5% for most patients, if Not reviewed, 10. Weak for it can be safely achieved. Amended In insulintreated adults with type 2 diabetes mellitus who are not achieving glycemic goals, we suggest realtime continuous Reviewed, 11. Weak for glucose monitoring to decrease hypoglycemia and improve Newadded HbA1c. yparehtocamrahp-noN yparehT noitirtuN lacideM For adults with type 2 diabetes mellitus, we suggest a Reviewed, 12.",
+                "score": 0.6494704645448318,
+                "corpus_version": "vadod-cpg-trio@d80c45f784072b051e542785aadaea851b8564c60123fa0bb1365e750d391fb7"
+              },
+              {
+                "source_id": "vadod-diabetes-2023-quick-reference@d80c45f784072b051e542785aadaea851b8564c60123fa0bb1365e750d391fb7",
+                "section": "Quick Reference: Diabetes and Non-Pharmacotherapy Recommendations",
+                "chunk_id": "vadod-diabetes-2023-quick-reference:p0002:c003:40e6c37ce5a0",
+                "quote": "Weak for glucose monitoring to decrease hypoglycemia and improve Newadded HbA1c. yparehtocamrahp-noN yparehT noitirtuN lacideM For adults with type 2 diabetes mellitus, we suggest a Reviewed, 12. Mediterranean style diet to improve glycemic control, body Weak for Newreplaced weight, and hypertension. For adults with type 2 diabetes mellitus, we suggest a nutrition Reviewed, 13. intervention strategy providing 13–50% of their total daily Weak for Newreplaced caloric intake from carbohydrates for diabetes management. For adults with type 2 diabetes mellitus, we suggest a Reviewed, 14. Weak for vegetarian dietary pattern for glycemic control and weight loss. Newadded For adults with type 2 diabetes mellitus, we suggest against Weak Reviewed, 15. intermittent fasting. against Newadded",
+                "score": 0.6369951949819154,
+                "corpus_version": "vadod-cpg-trio@d80c45f784072b051e542785aadaea851b8564c60123fa0bb1365e750d391fb7"
+              },
+              {
+                "source_id": "vadod-diabetes-2023@d80c45f784072b051e542785aadaea851b8564c60123fa0bb1365e750d391fb7",
+                "section": "Recommendations: Diabetes Mellitus Management",
+                "chunk_id": "vadod-diabetes-2023:p0038:c002:33b00b56c255",
+                "quote": "Participants from the focus group felt that DSMES should be available to all patients, including those with medical credentials and their family members and support system via various modalities. Thus, the Work Group made the following recommendation: In adults with type 2 diabetes mellitus, we recommend diabetes self-management education and support. Recommendation 8. For adults with type 2 diabetes mellitus, we suggest using high glycemic variability over time (e.g., fluctuation in HbA1c or fasting blood glucose) as a prognostic indicator for risk of hypoglycemia, morbidity, and mortality. (Weak for | Reviewed, New-replaced) Discussion Glycemic variability refers to variation (i.e., coefficient of variation [CV] or standard deviation [SD]) in glucose or HbA1c values over time. It can be used as another measure of glucose control in addition to average or cumulative values of these measures. The determinants of glycemic variability differ and might include factors such as glucose-lowering medication regimens, medication adherence, level of HbA1c, comorbidities, engagement with self-care, food insecurity, and financial and social support.",
+                "score": 0.6011339761849369,
+                "corpus_version": "vadod-cpg-trio@d80c45f784072b051e542785aadaea851b8564c60123fa0bb1365e750d391fb7"
+              }
+            ],
+            "corpus_version": "vadod-cpg-trio@d80c45f784072b051e542785aadaea851b8564c60123fa0bb1365e750d391fb7",
+            "correlation_id": "dc61c557507c49faa403b92bb5dfc456"
+          },
+          "url": "https://agent-production-9f62.up.railway.app/evidence/search",
+          "responseTime": 5653,
+          "duration": 5653,
+          "size": 6814
+        },
+        "error": null,
+        "status": "pass",
+        "assertionResults": [],
+        "testResults": [
+          {
+            "description": "evidence search returns its typed response",
+            "status": "pass",
+            "uid": "ojcoL0fF9JBW4IBr4wh53"
+          },
+          {
+            "description": "each snippet matches EvidenceSnippet and the response corpus version",
+            "status": "pass",
+            "uid": "jzDpsQwWjQiRYGx5-eT0A"
+          },
+          {
+            "description": "body and response header carry the same correlation id",
+            "status": "pass",
+            "uid": "VcBIinc-91RLPKGF3DBBm"
+          }
+        ],
+        "preRequestTestResults": [],
+        "postResponseTestResults": [],
+        "shouldStopRunnerExecution": false,
+        "runDuration": 5.724097208,
+        "name": "VA/DoD guideline evidence search",
+        "suitename": "/Users/quietguy/Documents/Dev/Gauntlet/OpenEMR-Custom-Build/claude-adversarial-run/adversarial-smart-bruno-2026-07-24/week2/bruno/evidence-search",
+        "path": "evidence-search",
+        "iterationIndex": 0
+      },
+      {
+        "test": {
+          "filename": "chat.bru"
+        },
+        "request": {
+          "method": "POST",
+          "url": "https://agent-production-9f62.up.railway.app/chat",
+          "headers": {
+            "content-type": "application/json"
+          },
+          "data": "{\n  \"session_id\": \"***REDACTED_SESSION_WEEK2***\",\n  \"message\": \"Give me the pre-visit brief.\"\n}"
+        },
+        "response": {
+          "status": 200,
+          "statusText": "OK",
+          "headers": {
+            "cache-control": "private, no-store",
+            "content-type": "application/json",
+            "date": "Fri, 24 Jul 2026 17:15:27 GMT",
+            "server": "railway-hikari",
+            "x-copilot-request-id": "3d366d565a494717bf0f88398bbcd79b",
+            "x-railway-request-id": "UtX_cRwRRbWIy6MBWUN5dQ",
+            "x-hikari-trace": "ord1.zmv5",
+            "x-railway-edge": "ord1",
+            "vary": "accept-encoding",
+            "transfer-encoding": "chunked",
+            "connection": "close"
+          },
+          "data": {
+            "brief": "Verified summary (each line re-rendered from cited evidence):\n- Atopic dermatitis (disorder) [active]\n- Perennial allergic rhinitis (disorder) [active]\n- Medication review due (situation) [active]\n- Acute viral pharyngitis (disorder) [inactive]\n- Streptococcal sore throat (disorder) [inactive]\n- Laceration - injury (disorder) [inactive]\n- Laceration of thigh (disorder) [inactive]\n- Viral sinusitis (disorder) [inactive]\n- cetirizine hydrochloride 5 MG Oral Tablet — dose not specified — confirm before dosing\n- NDA020800 0.3 ML Epinephrine 1 MG/ML Auto-Injector — dose not specified — confirm before dosing\n- Penicillin V Potassium 250 MG Oral Tablet — dose not specified — confirm before dosing\n- Ibuprofen 100 MG Oral Tablet — dose not specified — confirm before dosing\n- sodium fluoride 0.0272 MG/MG Oral Gel — dose not specified — confirm before dosing\n\nUploaded document:\n- chief_concern: \"Blurry vision R eye + numbness in toes ~3 weeks. Worried about diabetes complications.\"\n- results.0.test_name: Magnesium\n- results.0.value: 1.6\n- results.0.abnormal_flag: L\n- vitals.bps.value: 138\n- vitals.bpd.value: 88\n- vitals.weight.value: 185.6\n- vitals.height.value: 66",
+            "source": "llm",
+            "degraded": false,
+            "verdicts": [
+              "flagged",
+              "flagged",
+              "flagged",
+              "pass",
+              "pass",
+              "pass",
+              "flagged",
+              "pass",
+              "pass",
+              "pass",
+              "pass",
+              "pass",
+              "flagged",
+              "pass",
+              "pass",
+              "flagged",
+              "pass",
+              "pass",
+              "pass",
+              "flagged",
+              "blocked",
+              "blocked",
+              "blocked",
+              "blocked",
+              "blocked",
+              "blocked",
+              "blocked",
+              "blocked",
+              "blocked",
+              "flagged",
+              "blocked"
+            ],
+            "citations": [
+              {
+                "source_type": "patient_record",
+                "source_id": "Condition/a234b799-f16a-4cc6-abb3-71292d969827",
+                "page_or_section": null,
+                "field_or_chunk_id": "Condition:a234b799-f16a-4cc6-abb3-71292d969827:261579a3",
+                "quote_or_value": "{\"clinical_status\":\"active\",\"display\":\"Atopic dermatitis (disorder)\"}"
+              },
+              {
+                "source_type": "patient_record",
+                "source_id": "Condition/a234b799-f178-4024-97c2-5f79d368c28d",
+                "page_or_section": null,
+                "field_or_chunk_id": "Condition:a234b799-f178-4024-97c2-5f79d368c28d:0b242b30",
+                "quote_or_value": "{\"clinical_status\":\"active\",\"display\":\"Perennial allergic rhinitis (disorder)\"}"
+              },
+              {
+                "source_type": "patient_record",
+                "source_id": "Condition/a234b799-f181-463b-b3aa-35f68c3b0079",
+                "page_or_section": null,
+                "field_or_chunk_id": "Condition:a234b799-f181-463b-b3aa-35f68c3b0079:150106e7",
+                "quote_or_value": "{\"clinical_status\":\"active\",\"display\":\"Medication review due (situation)\"}"
+              },
+              {
+                "source_type": "patient_record",
+                "source_id": "Condition/a234b799-f171-4653-b111-4262fc098740",
+                "page_or_section": null,
+                "field_or_chunk_id": "Condition:a234b799-f171-4653-b111-4262fc098740:4a221977",
+                "quote_or_value": "{\"clinical_status\":\"inactive\",\"display\":\"Acute viral pharyngitis (disorder)\"}"
+              },
+              {
+                "source_type": "patient_record",
+                "source_id": "Condition/a234b799-f176-4493-a097-18f5f257262b",
+                "page_or_section": null,
+                "field_or_chunk_id": "Condition:a234b799-f176-4493-a097-18f5f257262b:95e2306d",
+                "quote_or_value": "{\"clinical_status\":\"inactive\",\"display\":\"Streptococcal sore throat (disorder)\"}"
+              },
+              {
+                "source_type": "patient_record",
+                "source_id": "Condition/a234b799-f17a-47fe-806d-c437fdad3937",
+                "page_or_section": null,
+                "field_or_chunk_id": "Condition:a234b799-f17a-47fe-806d-c437fdad3937:6e0b76d0",
+                "quote_or_value": "{\"clinical_status\":\"inactive\",\"display\":\"Laceration - injury (disorder)\"}"
+              },
+              {
+                "source_type": "patient_record",
+                "source_id": "Condition/a234b799-f17b-4622-9893-29e1c04ded5e",
+                "page_or_section": null,
+                "field_or_chunk_id": "Condition:a234b799-f17b-4622-9893-29e1c04ded5e:9a66d4cd",
+                "quote_or_value": "{\"clinical_status\":\"inactive\",\"display\":\"Laceration of thigh (disorder)\"}"
+              },
+              {
+                "source_type": "patient_record",
+                "source_id": "Condition/a234b799-f182-4a1b-b346-46e912d8ab60",
+                "page_or_section": null,
+                "field_or_chunk_id": "Condition:a234b799-f182-4a1b-b346-46e912d8ab60:6e1e1b12",
+                "quote_or_value": "{\"clinical_status\":\"inactive\",\"display\":\"Viral sinusitis (disorder)\"}"
+              },
+              {
+                "source_type": "patient_record",
+                "source_id": "MedicationRequest/a234b79a-32dc-451b-b828-b0e2278662ce",
+                "page_or_section": null,
+                "field_or_chunk_id": "MedicationRequest:a234b79a-32dc-451b-b828-b0e2278662ce:0917d82a",
+                "quote_or_value": "{\"name\":\"cetirizine hydrochloride 5 MG Oral Tablet\"}"
+              },
+              {
+                "source_type": "patient_record",
+                "source_id": "MedicationRequest/a234b799-f14c-4804-a29d-d4745f7c2971",
+                "page_or_section": null,
+                "field_or_chunk_id": "MedicationRequest:a234b799-f14c-4804-a29d-d4745f7c2971:8ca7b5c0",
+                "quote_or_value": "{\"name\":\"cetirizine hydrochloride 5 MG Oral Tablet\"}"
+              },
+              {
+                "source_type": "patient_record",
+                "source_id": "MedicationRequest/a234b79a-32e1-46e3-8723-d30ae9ecc138",
+                "page_or_section": null,
+                "field_or_chunk_id": "MedicationRequest:a234b79a-32e1-46e3-8723-d30ae9ecc138:eef810a9",
+                "quote_or_value": "{\"name\":\"NDA020800 0.3 ML Epinephrine 1 MG/ML Auto-Injector\"}"
+              },
+              {
+                "source_type": "patient_record",
+                "source_id": "MedicationRequest/a234b799-f150-43f0-a027-6442b128da8e",
+                "page_or_section": null,
+                "field_or_chunk_id": "MedicationRequest:a234b799-f150-43f0-a027-6442b128da8e:c2974c39",
+                "quote_or_value": "{\"name\":\"NDA020800 0.3 ML Epinephrine 1 MG/ML Auto-Injector\"}"
+              },
+              {
+                "source_type": "patient_record",
+                "source_id": "MedicationRequest/a234b79a-32e3-4e9c-82dc-10fb291caa4c",
+                "page_or_section": null,
+                "field_or_chunk_id": "MedicationRequest:a234b79a-32e3-4e9c-82dc-10fb291caa4c:1d93decb",
+                "quote_or_value": "{\"name\":\"Penicillin V Potassium 250 MG Oral Tablet\"}"
+              },
+              {
+                "source_type": "patient_record",
+                "source_id": "MedicationRequest/a234b79a-32e5-461a-80d0-b725d6fad759",
+                "page_or_section": null,
+                "field_or_chunk_id": "MedicationRequest:a234b79a-32e5-461a-80d0-b725d6fad759:30e11e9c",
+                "quote_or_value": "{\"name\":\"Ibuprofen 100 MG Oral Tablet\"}"
+              },
+              {
+                "source_type": "patient_record",
+                "source_id": "MedicationRequest/a234b79a-32e7-46af-99bb-18de990b7438",
+                "page_or_section": null,
+                "field_or_chunk_id": "MedicationRequest:a234b79a-32e7-46af-99bb-18de990b7438:94c8b581",
+                "quote_or_value": "{\"name\":\"sodium fluoride 0.0272 MG/MG Oral Gel\"}"
+              },
+              {
+                "source_type": "uploaded_document",
+                "source_id": "261f6d5c-dd1c-43d0-a3f5-78888dd740f2",
+                "page_or_section": "1",
+                "field_or_chunk_id": "chief_concern",
+                "quote_or_value": "\"Blurry vision R eye + numbness in toes ~3 weeks. Worried about diabetes complications.\""
+              },
+              {
+                "source_type": "uploaded_document",
+                "source_id": "f0c38d46-5b9a-40a5-a7bc-ee02c412e903",
+                "page_or_section": "2",
+                "field_or_chunk_id": "results[0].test_name",
+                "quote_or_value": "Magnesium"
+              },
+              {
+                "source_type": "uploaded_document",
+                "source_id": "f0c38d46-5b9a-40a5-a7bc-ee02c412e903",
+                "page_or_section": "2",
+                "field_or_chunk_id": "results[0].value",
+                "quote_or_value": "1.6"
+              },
+              {
+                "source_type": "uploaded_document",
+                "source_id": "f0c38d46-5b9a-40a5-a7bc-ee02c412e903",
+                "page_or_section": "2",
+                "field_or_chunk_id": "results[0].abnormal_flag",
+                "quote_or_value": "L"
+              },
+              {
+                "source_type": "uploaded_document",
+                "source_id": "8671b1ea-dbef-4b24-8b2a-42a855834aee",
+                "page_or_section": "1",
+                "field_or_chunk_id": "vitals.bps.value",
+                "quote_or_value": "138"
+              },
+              {
+                "source_type": "uploaded_document",
+                "source_id": "8671b1ea-dbef-4b24-8b2a-42a855834aee",
+                "page_or_section": "1",
+                "field_or_chunk_id": "vitals.bpd.value",
+                "quote_or_value": "88"
+              },
+              {
+                "source_type": "uploaded_document",
+                "source_id": "8671b1ea-dbef-4b24-8b2a-42a855834aee",
+                "page_or_section": "1",
+                "field_or_chunk_id": "vitals.weight.value",
+                "quote_or_value": "185.6"
+              },
+              {
+                "source_type": "uploaded_document",
+                "source_id": "8671b1ea-dbef-4b24-8b2a-42a855834aee",
+                "page_or_section": "1",
+                "field_or_chunk_id": "vitals.height.value",
+                "quote_or_value": "66"
+              }
+            ],
+            "claims": [
+              {
+                "text": "chief_concern: \"Blurry vision R eye + numbness in toes ~3 weeks. Worried about diabetes complications.\"",
+                "source_class": "uploaded_document",
+                "verdict": "pass",
+                "citations": [
+                  {
+                    "source_type": "uploaded_document",
+                    "source_id": "261f6d5c-dd1c-43d0-a3f5-78888dd740f2",
+                    "page_or_section": "1",
+                    "field_or_chunk_id": "chief_concern",
+                    "quote_or_value": "\"Blurry vision R eye + numbness in toes ~3 weeks. Worried about diabetes complications.\""
+                  }
+                ],
+                "overlay": {
+                  "source_id": "261f6d5c-dd1c-43d0-a3f5-78888dd740f2",
+                  "page": 1,
+                  "bbox": {
+                    "x0": 0.08460076045627377,
+                    "y0": 0.33444816053511706,
+                    "x1": 0.7034220532319392,
+                    "y1": 0.3451505016722408
+                  }
+                }
+              },
+              {
+                "text": "results.0.test_name: Magnesium",
+                "source_class": "uploaded_document",
+                "verdict": "pass",
+                "citations": [
+                  {
+                    "source_type": "uploaded_document",
+                    "source_id": "f0c38d46-5b9a-40a5-a7bc-ee02c412e903",
+                    "page_or_section": "2",
+                    "field_or_chunk_id": "results[0].test_name",
+                    "quote_or_value": "Magnesium"
+                  }
+                ],
+                "overlay": {
+                  "source_id": "f0c38d46-5b9a-40a5-a7bc-ee02c412e903",
+                  "page": 2,
+                  "bbox": {
+                    "x0": 0.17450980392156865,
+                    "y0": 0.159179292929293,
+                    "x1": 0.25895424836601316,
+                    "y1": 0.17180555555555563
+                  }
+                }
+              },
+              {
+                "text": "results.0.value: 1.6",
+                "source_class": "uploaded_document",
+                "verdict": "pass",
+                "citations": [
+                  {
+                    "source_type": "uploaded_document",
+                    "source_id": "f0c38d46-5b9a-40a5-a7bc-ee02c412e903",
+                    "page_or_section": "2",
+                    "field_or_chunk_id": "results[0].value",
+                    "quote_or_value": "1.6"
+                  }
+                ],
+                "overlay": {
+                  "source_id": "f0c38d46-5b9a-40a5-a7bc-ee02c412e903",
+                  "page": 2,
+                  "bbox": {
+                    "x0": 0.13910130718954247,
+                    "y0": 0.17685606060606066,
+                    "x1": 0.16181372549019607,
+                    "y1": 0.1894823232323233
+                  }
+                }
+              },
+              {
+                "text": "results.0.abnormal_flag: L",
+                "source_class": "uploaded_document",
+                "verdict": "pass",
+                "citations": [
+                  {
+                    "source_type": "uploaded_document",
+                    "source_id": "f0c38d46-5b9a-40a5-a7bc-ee02c412e903",
+                    "page_or_section": "2",
+                    "field_or_chunk_id": "results[0].abnormal_flag",
+                    "quote_or_value": "L"
+                  }
+                ],
+                "overlay": {
+                  "source_id": "f0c38d46-5b9a-40a5-a7bc-ee02c412e903",
+                  "page": 2,
+                  "bbox": {
+                    "x0": 0.19812091503267973,
+                    "y0": 0.24756313131313137,
+                    "x1": 0.20720588235294118,
+                    "y1": 0.260189393939394
+                  }
+                }
+              },
+              {
+                "text": "vitals.bps.value: 138",
+                "source_class": "uploaded_document",
+                "verdict": "pass",
+                "citations": [
+                  {
+                    "source_type": "uploaded_document",
+                    "source_id": "8671b1ea-dbef-4b24-8b2a-42a855834aee",
+                    "page_or_section": "1",
+                    "field_or_chunk_id": "vitals.bps.value",
+                    "quote_or_value": "138"
+                  }
+                ],
+                "overlay": {
+                  "source_id": "8671b1ea-dbef-4b24-8b2a-42a855834aee",
+                  "page": 1,
+                  "bbox": {
+                    "x0": 0.26531045751633986,
+                    "y0": 0.5127146464646465,
+                    "x1": 0.2925653594771242,
+                    "y1": 0.5253409090909091
+                  }
+                }
+              },
+              {
+                "text": "vitals.bpd.value: 88",
+                "source_class": "uploaded_document",
+                "verdict": "pass",
+                "citations": [
+                  {
+                    "source_type": "uploaded_document",
+                    "source_id": "8671b1ea-dbef-4b24-8b2a-42a855834aee",
+                    "page_or_section": "1",
+                    "field_or_chunk_id": "vitals.bpd.value",
+                    "quote_or_value": "88"
+                  }
+                ],
+                "overlay": {
+                  "source_id": "8671b1ea-dbef-4b24-8b2a-42a855834aee",
+                  "page": 1,
+                  "bbox": {
+                    "x0": 0.27076797385620915,
+                    "y0": 0.5480681818181818,
+                    "x1": 0.28893790849673207,
+                    "y1": 0.5606944444444444
+                  }
+                }
+              },
+              {
+                "text": "vitals.weight.value: 185.6",
+                "source_class": "uploaded_document",
+                "verdict": "pass",
+                "citations": [
+                  {
+                    "source_type": "uploaded_document",
+                    "source_id": "8671b1ea-dbef-4b24-8b2a-42a855834aee",
+                    "page_or_section": "1",
+                    "field_or_chunk_id": "vitals.weight.value",
+                    "quote_or_value": "185.6"
+                  }
+                ],
+                "overlay": {
+                  "source_id": "8671b1ea-dbef-4b24-8b2a-42a855834aee",
+                  "page": 1,
+                  "bbox": {
+                    "x0": 0.1481699346405229,
+                    "y0": 0.5834217171717172,
+                    "x1": 0.18905228758169937,
+                    "y1": 0.5960479797979797
+                  }
+                }
+              },
+              {
+                "text": "vitals.height.value: 66",
+                "source_class": "uploaded_document",
+                "verdict": "pass",
+                "citations": [
+                  {
+                    "source_type": "uploaded_document",
+                    "source_id": "8671b1ea-dbef-4b24-8b2a-42a855834aee",
+                    "page_or_section": "1",
+                    "field_or_chunk_id": "vitals.height.value",
+                    "quote_or_value": "66"
+                  }
+                ],
+                "overlay": {
+                  "source_id": "8671b1ea-dbef-4b24-8b2a-42a855834aee",
+                  "page": 1,
+                  "bbox": {
+                    "x0": 0.14454248366013073,
+                    "y0": 0.6187752525252526,
+                    "x1": 0.1627124183006536,
+                    "y1": 0.6314015151515151
+                  }
+                }
+              }
+            ],
+            "patient": {
+              "name": "Corine538 Hills818",
+              "gender": "female",
+              "birth_date": "2015-08-01"
+            },
+            "correlation_id": "3d366d565a494717bf0f88398bbcd79b"
+          },
+          "url": "https://agent-production-9f62.up.railway.app/chat",
+          "responseTime": 75884,
+          "duration": 75884,
+          "size": 11366
+        },
+        "error": null,
+        "status": "pass",
+        "assertionResults": [],
+        "testResults": [
+          {
+            "description": "authenticated chat returns HTTP 200",
+            "status": "pass",
+            "uid": "-VSAgeJGAIvy3dtVFsg9w"
+          },
+          {
+            "description": "chat returns the verified serving envelope",
+            "status": "pass",
+            "uid": "dO6x6yCpCYD0EW_jvrcn0"
+          },
+          {
+            "description": "every served claim owns its machine-readable citation set",
+            "status": "pass",
+            "uid": "SdrfAzdpuBTYnPAPMgNun"
+          },
+          {
+            "description": "chat never presents an empty brief",
+            "status": "pass",
+            "uid": "jJSF6rBeT00IRcNhAi-Ay"
+          },
+          {
+            "description": "body and response header carry the same correlation id",
+            "status": "pass",
+            "uid": "n2uIoplgkKFq5srDpDs5-"
+          }
+        ],
+        "preRequestTestResults": [],
+        "postResponseTestResults": [],
+        "shouldStopRunnerExecution": false,
+        "runDuration": 75.952857584,
+        "name": "Cited patient-pinned chat",
+        "suitename": "/Users/quietguy/Documents/Dev/Gauntlet/OpenEMR-Custom-Build/claude-adversarial-run/adversarial-smart-bruno-2026-07-24/week2/bruno/chat",
+        "path": "chat",
+        "iterationIndex": 0
+      },
+      {
+        "test": {
+          "filename": "intake-upload.bru"
+        },
+        "request": {
+          "method": "POST",
+          "url": "https://agent-production-9f62.up.railway.app/documents",
+          "headers": {
+            "content-type": "multipart/form-data; boundary=--------------------------4b7ff0d38e30bb3b1d66f638"
+          },
+          "data": {
+            "_overheadLength": 384,
+            "_valueLength": 43,
+            "_valuesToMeasure": [
+              {
+                "fd": null,
+                "path": "/Users/quietguy/Documents/Dev/Gauntlet/OpenEMR-Custom-Build/claude-adversarial-run/adversarial-smart-bruno-2026-07-24/week2/evals/fixtures/golden/intake-full-valid.pdf",
+                "flags": "r",
+                "mode": 438,
+                "end": null,
+                "bytesRead": 2146,
+                "_events": {},
+                "_readableState": {
+                  "highWaterMark": 65536,
+                  "buffer": [],
+                  "bufferIndex": 0,
+                  "length": 0,
+                  "pipes": [],
+                  "awaitDrainWriters": null
+                },
+                "_eventsCount": 2
+              }
+            ],
+            "writable": false,
+            "readable": true,
+            "dataSize": 0,
+            "maxDataSize": 2097152,
+            "pauseStreams": true,
+            "_released": true,
+            "_streams": [],
+            "_currentStream": null,
+            "_insideLoop": false,
+            "_pendingNext": false,
+            "_boundary": "--------------------------4b7ff0d38e30bb3b1d66f638",
+            "_events": {},
+            "_eventsCount": 3
+          }
+        },
+        "response": {
+          "status": 200,
+          "statusText": "OK",
+          "headers": {
+            "cache-control": "private, no-store",
+            "content-type": "application/json",
+            "date": "Fri, 24 Jul 2026 17:15:27 GMT",
+            "server": "railway-hikari",
+            "x-copilot-request-id": "a8b9657cc7fb43db9150c174e4be66a7",
+            "x-railway-request-id": "7wFCSxiXT62t4qeWnPRhug",
+            "content-length": "243",
+            "x-hikari-trace": "ord1.zmv5",
+            "x-railway-edge": "ord1",
+            "connection": "close"
+          },
+          "data": {
+            "job_id": "8707901c-0662-4dd8-a8c7-3717986b7c8a",
+            "document_id": "8671b1ea-dbef-4b24-8b2a-42a855834aee",
+            "state": "complete",
+            "status_url": "/documents/8671b1ea-dbef-4b24-8b2a-42a855834aee/status",
+            "correlation_id": "06836e939c494bb09580fa38ffa7da31"
+          },
+          "url": "https://agent-production-9f62.up.railway.app/documents",
+          "responseTime": 710,
+          "duration": 710,
+          "size": 243
+        },
+        "error": null,
+        "status": "pass",
+        "assertionResults": [],
+        "testResults": [
+          {
+            "description": "intake source is accepted or already deduplicated",
+            "status": "pass",
+            "uid": "ClYS_a2wbNtESC6kv1S7w"
+          }
+        ],
+        "preRequestTestResults": [],
+        "postResponseTestResults": [],
+        "shouldStopRunnerExecution": false,
+        "runDuration": 0.814438958,
+        "name": "Intake upload",
+        "suitename": "/Users/quietguy/Documents/Dev/Gauntlet/OpenEMR-Custom-Build/claude-adversarial-run/adversarial-smart-bruno-2026-07-24/week2/bruno/intake-upload",
+        "path": "intake-upload",
+        "iterationIndex": 0
+      },
+      {
+        "test": {
+          "filename": "intake-duplicate.bru"
+        },
+        "request": {
+          "method": "POST",
+          "url": "https://agent-production-9f62.up.railway.app/documents",
+          "headers": {
+            "content-type": "multipart/form-data; boundary=--------------------------66823d131163eff1baa82d40"
+          },
+          "data": {
+            "_overheadLength": 384,
+            "_valueLength": 43,
+            "_valuesToMeasure": [
+              {
+                "fd": null,
+                "path": "/Users/quietguy/Documents/Dev/Gauntlet/OpenEMR-Custom-Build/claude-adversarial-run/adversarial-smart-bruno-2026-07-24/week2/evals/fixtures/golden/intake-full-valid.pdf",
+                "flags": "r",
+                "mode": 438,
+                "end": null,
+                "bytesRead": 2146,
+                "_events": {},
+                "_readableState": {
+                  "highWaterMark": 65536,
+                  "buffer": [],
+                  "bufferIndex": 0,
+                  "length": 0,
+                  "pipes": [],
+                  "awaitDrainWriters": null
+                },
+                "_eventsCount": 2
+              }
+            ],
+            "writable": false,
+            "readable": true,
+            "dataSize": 0,
+            "maxDataSize": 2097152,
+            "pauseStreams": true,
+            "_released": true,
+            "_streams": [],
+            "_currentStream": null,
+            "_insideLoop": false,
+            "_pendingNext": false,
+            "_boundary": "--------------------------66823d131163eff1baa82d40",
+            "_events": {},
+            "_eventsCount": 3
+          }
+        },
+        "response": {
+          "status": 200,
+          "statusText": "OK",
+          "headers": {
+            "cache-control": "private, no-store",
+            "content-type": "application/json",
+            "date": "Fri, 24 Jul 2026 17:15:28 GMT",
+            "server": "railway-hikari",
+            "x-copilot-request-id": "94ec043eed904bc0a9e32685205e6c27",
+            "x-railway-request-id": "aMfiO0_-QvWMyOTGjq4OvQ",
+            "content-length": "243",
+            "x-hikari-trace": "ord1.zmv5",
+            "x-railway-edge": "ord1",
+            "connection": "close"
+          },
+          "data": {
+            "job_id": "8707901c-0662-4dd8-a8c7-3717986b7c8a",
+            "document_id": "8671b1ea-dbef-4b24-8b2a-42a855834aee",
+            "state": "complete",
+            "status_url": "/documents/8671b1ea-dbef-4b24-8b2a-42a855834aee/status",
+            "correlation_id": "06836e939c494bb09580fa38ffa7da31"
+          },
+          "url": "https://agent-production-9f62.up.railway.app/documents",
+          "responseTime": 603,
+          "duration": 603,
+          "size": 243
+        },
+        "error": null,
+        "status": "pass",
+        "assertionResults": [],
+        "testResults": [
+          {
+            "description": "the same patient-scoped bytes are a permanent no-op",
+            "status": "pass",
+            "uid": "oCTuQCeUEbcLae4cK0mmC"
+          }
+        ],
+        "preRequestTestResults": [],
+        "postResponseTestResults": [],
+        "shouldStopRunnerExecution": false,
+        "runDuration": 0.657776875,
+        "name": "Intake duplicate idempotency check",
+        "suitename": "/Users/quietguy/Documents/Dev/Gauntlet/OpenEMR-Custom-Build/claude-adversarial-run/adversarial-smart-bruno-2026-07-24/week2/bruno/intake-duplicate",
+        "path": "intake-duplicate",
+        "iterationIndex": 0
+      }
+    ],
+    "summary": {
+      "totalRequests": 11,
+      "passedRequests": 11,
+      "failedRequests": 0,
+      "errorRequests": 0,
+      "skippedRequests": 0,
+      "skippedByBail": 0,
+      "totalAssertions": 0,
+      "passedAssertions": 0,
+      "failedAssertions": 0,
+      "totalTests": 24,
+      "passedTests": 24,
+      "failedTests": 0,
+      "totalPreRequestTests": 0,
+      "passedPreRequestTests": 0,
+      "failedPreRequestTests": 0,
+      "totalPostResponseTests": 0,
+      "passedPostResponseTests": 0,
+      "failedPostResponseTests": 0
+    }
+  }
+]

@@ -1,0 +1,659 @@
+[
+  {
+    "iterationIndex": 0,
+    "results": [
+      {
+        "test": {
+          "filename": "health.bru"
+        },
+        "request": {
+          "method": "GET",
+          "url": "https://agent-production-9f62.up.railway.app/health",
+          "headers": {
+            "content-type": null
+          }
+        },
+        "response": {
+          "status": 200,
+          "statusText": "OK",
+          "headers": {
+            "cache-control": "no-store, no-cache, must-revalidate",
+            "content-type": "application/json",
+            "date": "Fri, 24 Jul 2026 17:02:41 GMT",
+            "server": "railway-hikari",
+            "x-copilot-request-id": "6d1b52dea95941139c787013c1a6f673",
+            "x-railway-request-id": "gAnnteUXQBKqzOLOY53eZw",
+            "content-length": "67",
+            "x-hikari-trace": "ord1.x8wt",
+            "x-railway-edge": "ord1",
+            "connection": "close"
+          },
+          "data": {
+            "status": "alive",
+            "sha": "d15c21da3c11cd4558df840c94c918f9777f07fb"
+          },
+          "url": "https://agent-production-9f62.up.railway.app/health",
+          "responseTime": 217,
+          "duration": 217,
+          "size": 67
+        },
+        "error": null,
+        "status": "pass",
+        "assertionResults": [],
+        "testResults": [
+          {
+            "description": "liveness returns HTTP 200",
+            "status": "pass",
+            "uid": "i-W3rmhdzmwml-5f0hqLr"
+          },
+          {
+            "description": "liveness returns the process-only contract",
+            "status": "pass",
+            "uid": "WQ5uzn6Raq0scJevB75uA"
+          },
+          {
+            "description": "liveness carries a correlation id",
+            "status": "pass",
+            "uid": "RcuYQBx5VNBIYxQbyX3g4"
+          },
+          {
+            "description": "liveness cannot be served from a stale cache",
+            "status": "pass",
+            "uid": "7KXR5VvD5dF-8dUsFFVqR"
+          }
+        ],
+        "preRequestTestResults": [],
+        "postResponseTestResults": [],
+        "shouldStopRunnerExecution": false,
+        "runDuration": 0.335731917,
+        "name": "Health",
+        "suitename": "/Users/quietguy/Documents/Dev/Gauntlet/OpenEMR-Custom-Build/claude-adversarial-run/adversarial-smart-bruno-2026-07-24/week1/bruno/health",
+        "path": "health",
+        "iterationIndex": 0
+      },
+      {
+        "test": {
+          "filename": "ready.bru"
+        },
+        "request": {
+          "method": "GET",
+          "url": "https://agent-production-9f62.up.railway.app/ready",
+          "headers": {
+            "content-type": null
+          }
+        },
+        "response": {
+          "status": 200,
+          "statusText": "OK",
+          "headers": {
+            "cache-control": "no-store, no-cache, must-revalidate",
+            "content-type": "application/json",
+            "date": "Fri, 24 Jul 2026 17:02:56 GMT",
+            "server": "railway-hikari",
+            "x-copilot-request-id": "ac06fb14cb884a00a98895c634730611",
+            "x-railway-request-id": "ErVd1zb5QryW0jOVwUFZXw",
+            "x-hikari-trace": "ord1.zmv5",
+            "x-railway-edge": "ord1",
+            "vary": "accept-encoding",
+            "transfer-encoding": "chunked",
+            "connection": "close"
+          },
+          "data": {
+            "status": "ready",
+            "checks": [
+              {
+                "name": "openemr_fhir",
+                "kind": "hard",
+                "ok": true,
+                "detail": "HTTP 200"
+              },
+              {
+                "name": "anthropic",
+                "kind": "hard",
+                "ok": true,
+                "detail": "HTTP 200"
+              },
+              {
+                "name": "session_store",
+                "kind": "hard",
+                "ok": true,
+                "detail": "ok"
+              },
+              {
+                "name": "langfuse",
+                "kind": "soft",
+                "ok": true,
+                "detail": "HTTP 200"
+              },
+              {
+                "name": "retrieval_index",
+                "kind": "soft",
+                "ok": true,
+                "detail": "ok"
+              },
+              {
+                "name": "active_reranker",
+                "kind": "soft",
+                "ok": true,
+                "detail": "ok"
+              },
+              {
+                "name": "document_runtime",
+                "kind": "hard",
+                "ok": true,
+                "detail": "ready"
+              },
+              {
+                "name": "document_category_read",
+                "kind": "hard",
+                "ok": true,
+                "detail": "authorized_read_ok"
+              },
+              {
+                "name": "graph_state",
+                "kind": "soft",
+                "ok": true,
+                "detail": "graph_enabled"
+              }
+            ]
+          },
+          "url": "https://agent-production-9f62.up.railway.app/ready",
+          "responseTime": 9643,
+          "duration": 9643,
+          "size": 648
+        },
+        "error": null,
+        "status": "pass",
+        "assertionResults": [],
+        "testResults": [
+          {
+            "description": "readiness returns its dependency envelope",
+            "status": "pass",
+            "uid": "NJ_52Qb77m4PgYjPMIoE4"
+          },
+          {
+            "description": "HTTP status agrees with hard dependency state",
+            "status": "pass",
+            "uid": "B2sRW8h0Ue_5VC9DCvNVb"
+          },
+          {
+            "description": "readiness carries a correlation id",
+            "status": "pass",
+            "uid": "B9Yu-mc5l8EN84ZdbOZGb"
+          },
+          {
+            "description": "readiness cannot be served from a stale cache",
+            "status": "pass",
+            "uid": "PVi1CGdgz1Q5BWPIwnWxK"
+          }
+        ],
+        "preRequestTestResults": [],
+        "postResponseTestResults": [],
+        "shouldStopRunnerExecution": false,
+        "runDuration": 9.704131457999999,
+        "name": "Readiness",
+        "suitename": "/Users/quietguy/Documents/Dev/Gauntlet/OpenEMR-Custom-Build/claude-adversarial-run/adversarial-smart-bruno-2026-07-24/week1/bruno/ready",
+        "path": "ready",
+        "iterationIndex": 0
+      },
+      {
+        "test": {
+          "filename": "evidence-search.bru"
+        },
+        "request": {
+          "method": "POST",
+          "url": "https://agent-production-9f62.up.railway.app/evidence/search",
+          "headers": {
+            "accept": "application/json",
+            "content-type": "application/json"
+          },
+          "data": "{\n  \"query\": \"type 2 diabetes; HbA1c\",\n  \"k\": 5\n}"
+        },
+        "response": {
+          "status": 200,
+          "statusText": "OK",
+          "headers": {
+            "cache-control": "private, no-store",
+            "content-type": "application/json",
+            "date": "Fri, 24 Jul 2026 17:03:00 GMT",
+            "server": "railway-hikari",
+            "x-copilot-request-id": "ac5be95b546f4314ac0b1b7394afd3e5",
+            "x-railway-request-id": "qpXe6NdMTiOlFtC5wUFZXw",
+            "x-hikari-trace": "ord1.zmv5",
+            "x-railway-edge": "ord1",
+            "vary": "accept-encoding",
+            "transfer-encoding": "chunked",
+            "connection": "close"
+          },
+          "data": {
+            "items": [
+              {
+                "source_id": "vadod-diabetes-2023@d80c45f784072b051e542785aadaea851b8564c60123fa0bb1365e750d391fb7",
+                "section": "Management Appendix: Glycemic Control Targets and Monitoring",
+                "chunk_id": "vadod-diabetes-2023:p0097:c001:1d22ccc8223e",
+                "quote": "Appendix B: Glycemic Control Targets and Monitoring Setting an HbA1c target range is an important treatment strategy in the management of Type 2 Diabetes Mellitus. Table B-1 provides general guidance for setting HbA1c target ranges based on patients’ comorbidities, life expectancy, and extent of microvascular complications. Other factors might also be considered, and these are addressed in several footnotes. Setting target ranges with upper and lower bounds highlights the importance of considering the risks associated with both hyper- and hypoglycemia. These guiding principles are intended to complement Recommendations 9 and 10 and to help in creating individualized treatment strategies using shared-decision making.",
+                "score": 0.8786140002191632,
+                "corpus_version": "vadod-cpg-trio@d80c45f784072b051e542785aadaea851b8564c60123fa0bb1365e750d391fb7"
+              },
+              {
+                "source_id": "vadod-diabetes-2023@d80c45f784072b051e542785aadaea851b8564c60123fa0bb1365e750d391fb7",
+                "section": "Recommendations: Diabetes Mellitus Management",
+                "chunk_id": "vadod-diabetes-2023:p0040:c001:9a564c9d33f1",
+                "quote": "Further research is required to determine (1) the preferred measures of glycemic variability that convey risk information and practical means to communicate them to clinicians and patients, (2) whether a dose-response relationship occurs between the magnitude of exposure to glycemic variability and adverse outcomes, and (3) whether interventions to reduce glycemic variability affect outcomes. Recommendation 9. We suggest setting an individualized HbA1c target range based on the clinician’s appraisal of the risk benefit ratio, patient characteristics, presence or absence of type 2 diabetes mellitus complications, comorbidities, and life expectancy. (Weak for | Not reviewed, Amended) Discussion Patients, providers, and even health care systems often focus on therapies that reduce HbA1c levels to reduce complications. Yet, appropriate shared decision making requires a more nuanced approach. For example, presenting the benefits and harms of an intervention as an estimate of absolute, rather than relative, the risk might be more meaningful to the patient.",
+                "score": 0.6671913520409182,
+                "corpus_version": "vadod-cpg-trio@d80c45f784072b051e542785aadaea851b8564c60123fa0bb1365e750d391fb7"
+              },
+              {
+                "source_id": "vadod-diabetes-2023-quick-reference@d80c45f784072b051e542785aadaea851b8564c60123fa0bb1365e750d391fb7",
+                "section": "Quick Reference: Diabetes and Non-Pharmacotherapy Recommendations",
+                "chunk_id": "vadod-diabetes-2023-quick-reference:p0002:c002:fee53f14a57b",
+                "quote": "Amended tnemeganaM cimecylG For adults with type 2 diabetes mellitus, we suggest using high glycemic variability over time (e.g., fluctuation in HbA1c or Reviewed, 8. Weak for fasting blood glucose) as a prognostic indicator for risk of Newreplaced hypoglycemia, morbidity, and mortality. We suggest setting an individualized HbA1c target range based on the clinician’s appraisal of the risk benefit ratio, Not reviewed, 9. Weak for patient characteristics, presence or absence of type 2 diabetes Amended mellitus complications, comorbidities, and life expectancy. We suggest an HbA1c range of 7.0–8.5% for most patients, if Not reviewed, 10. Weak for it can be safely achieved. Amended In insulintreated adults with type 2 diabetes mellitus who are not achieving glycemic goals, we suggest realtime continuous Reviewed, 11. Weak for glucose monitoring to decrease hypoglycemia and improve Newadded HbA1c. yparehtocamrahp-noN yparehT noitirtuN lacideM For adults with type 2 diabetes mellitus, we suggest a Reviewed, 12.",
+                "score": 0.6494704645448318,
+                "corpus_version": "vadod-cpg-trio@d80c45f784072b051e542785aadaea851b8564c60123fa0bb1365e750d391fb7"
+              },
+              {
+                "source_id": "vadod-diabetes-2023-quick-reference@d80c45f784072b051e542785aadaea851b8564c60123fa0bb1365e750d391fb7",
+                "section": "Quick Reference: Diabetes and Non-Pharmacotherapy Recommendations",
+                "chunk_id": "vadod-diabetes-2023-quick-reference:p0002:c003:40e6c37ce5a0",
+                "quote": "Weak for glucose monitoring to decrease hypoglycemia and improve Newadded HbA1c. yparehtocamrahp-noN yparehT noitirtuN lacideM For adults with type 2 diabetes mellitus, we suggest a Reviewed, 12. Mediterranean style diet to improve glycemic control, body Weak for Newreplaced weight, and hypertension. For adults with type 2 diabetes mellitus, we suggest a nutrition Reviewed, 13. intervention strategy providing 13–50% of their total daily Weak for Newreplaced caloric intake from carbohydrates for diabetes management. For adults with type 2 diabetes mellitus, we suggest a Reviewed, 14. Weak for vegetarian dietary pattern for glycemic control and weight loss. Newadded For adults with type 2 diabetes mellitus, we suggest against Weak Reviewed, 15. intermittent fasting. against Newadded",
+                "score": 0.6369951949819154,
+                "corpus_version": "vadod-cpg-trio@d80c45f784072b051e542785aadaea851b8564c60123fa0bb1365e750d391fb7"
+              },
+              {
+                "source_id": "vadod-diabetes-2023@d80c45f784072b051e542785aadaea851b8564c60123fa0bb1365e750d391fb7",
+                "section": "Recommendations: Diabetes Mellitus Management",
+                "chunk_id": "vadod-diabetes-2023:p0038:c002:33b00b56c255",
+                "quote": "Participants from the focus group felt that DSMES should be available to all patients, including those with medical credentials and their family members and support system via various modalities. Thus, the Work Group made the following recommendation: In adults with type 2 diabetes mellitus, we recommend diabetes self-management education and support. Recommendation 8. For adults with type 2 diabetes mellitus, we suggest using high glycemic variability over time (e.g., fluctuation in HbA1c or fasting blood glucose) as a prognostic indicator for risk of hypoglycemia, morbidity, and mortality. (Weak for | Reviewed, New-replaced) Discussion Glycemic variability refers to variation (i.e., coefficient of variation [CV] or standard deviation [SD]) in glucose or HbA1c values over time. It can be used as another measure of glucose control in addition to average or cumulative values of these measures. The determinants of glycemic variability differ and might include factors such as glucose-lowering medication regimens, medication adherence, level of HbA1c, comorbidities, engagement with self-care, food insecurity, and financial and social support.",
+                "score": 0.6011339761849369,
+                "corpus_version": "vadod-cpg-trio@d80c45f784072b051e542785aadaea851b8564c60123fa0bb1365e750d391fb7"
+              }
+            ],
+            "corpus_version": "vadod-cpg-trio@d80c45f784072b051e542785aadaea851b8564c60123fa0bb1365e750d391fb7",
+            "correlation_id": "ac5be95b546f4314ac0b1b7394afd3e5"
+          },
+          "url": "https://agent-production-9f62.up.railway.app/evidence/search",
+          "responseTime": 4160,
+          "duration": 4160,
+          "size": 6814
+        },
+        "error": null,
+        "status": "pass",
+        "assertionResults": [],
+        "testResults": [
+          {
+            "description": "evidence search returns its typed response",
+            "status": "pass",
+            "uid": "q5YEixwdBN6q9jNkhT-HW"
+          },
+          {
+            "description": "each snippet matches EvidenceSnippet and the response corpus version",
+            "status": "pass",
+            "uid": "viQowjojRPLZ_s4Yn234E"
+          },
+          {
+            "description": "body and response header carry the same correlation id",
+            "status": "pass",
+            "uid": "qJCrn3vIe8_TNetmDD2s4"
+          }
+        ],
+        "preRequestTestResults": [],
+        "postResponseTestResults": [],
+        "shouldStopRunnerExecution": false,
+        "runDuration": 4.217466125,
+        "name": "VA/DoD guideline evidence search",
+        "suitename": "/Users/quietguy/Documents/Dev/Gauntlet/OpenEMR-Custom-Build/claude-adversarial-run/adversarial-smart-bruno-2026-07-24/week1/bruno/evidence-search",
+        "path": "evidence-search",
+        "iterationIndex": 0
+      },
+      {
+        "test": {
+          "filename": "chat.bru"
+        },
+        "request": {
+          "method": "POST",
+          "url": "https://agent-production-9f62.up.railway.app/chat",
+          "headers": {
+            "content-type": "application/json"
+          },
+          "data": "{\n  \"session_id\": \"***REDACTED_SESSION_WEEK1***\",\n  \"message\": \"Give me the pre-visit brief.\"\n}"
+        },
+        "response": {
+          "status": 200,
+          "statusText": "OK",
+          "headers": {
+            "cache-control": "private, no-store",
+            "content-type": "application/json",
+            "date": "Fri, 24 Jul 2026 17:04:08 GMT",
+            "server": "railway-hikari",
+            "x-copilot-request-id": "d9e8d82bc5b747f8b751b4d978a154ca",
+            "x-railway-request-id": "qmAMfbCSTDuGVR_u9I3ezw",
+            "x-hikari-trace": "ord1.x8wt",
+            "x-railway-edge": "ord1",
+            "vary": "accept-encoding",
+            "transfer-encoding": "chunked",
+            "connection": "close"
+          },
+          "data": {
+            "brief": "Verified summary (each line re-rendered from cited evidence):\n- Atopic dermatitis (disorder) [active]\n- Perennial allergic rhinitis (disorder) [active]\n- Medication review due (situation) [active]\n- Acute viral pharyngitis (disorder) [inactive]\n- Streptococcal sore throat (disorder) [inactive]\n- Laceration - injury (disorder) [inactive]\n- Laceration of thigh (disorder) [inactive]\n- Viral sinusitis (disorder) [inactive]\n- cetirizine hydrochloride 5 MG Oral Tablet — dose not specified — confirm before dosing\n- NDA020800 0.3 ML Epinephrine 1 MG/ML Auto-Injector — dose not specified — confirm before dosing\n- Penicillin V Potassium 250 MG Oral Tablet — dose not specified — confirm before dosing\n- Ibuprofen 100 MG Oral Tablet — dose not specified — confirm before dosing\n- sodium fluoride 0.0272 MG/MG Oral Gel — dose not specified — confirm before dosing\n- Allergy: Allergic disposition (finding)\n- Allergy: Latex (substance)\n- Allergy: Mold (organism)\n- Allergy: House dust mite (organism)\n- Allergy: Animal dander (substance)\n- Allergy: Grass pollen (substance)\n- Allergy: Tree pollen (substance)\n- Allergy: Eggs (edible) (substance)\n- Allergy: Fish (substance)\n\nUploaded document:\n- chief_concern: \"Blurry vision R eye + numbness in toes ~3 weeks. Worried about diabetes complications.\"",
+            "source": "llm",
+            "degraded": false,
+            "verdicts": [
+              "flagged",
+              "flagged",
+              "flagged",
+              "pass",
+              "pass",
+              "pass",
+              "flagged",
+              "pass",
+              "pass",
+              "pass",
+              "pass",
+              "pass",
+              "flagged",
+              "pass",
+              "pass",
+              "flagged",
+              "pass",
+              "pass",
+              "pass",
+              "flagged",
+              "pass",
+              "pass",
+              "pass",
+              "pass",
+              "pass",
+              "pass",
+              "pass",
+              "pass",
+              "pass",
+              "flagged",
+              "blocked",
+              "blocked",
+              "blocked",
+              "blocked",
+              "blocked",
+              "blocked",
+              "blocked",
+              "blocked",
+              "blocked",
+              "blocked",
+              "blocked"
+            ],
+            "citations": [
+              {
+                "source_type": "patient_record",
+                "source_id": "Condition/a234b799-f16a-4cc6-abb3-71292d969827",
+                "page_or_section": null,
+                "field_or_chunk_id": "Condition:a234b799-f16a-4cc6-abb3-71292d969827:261579a3",
+                "quote_or_value": "{\"clinical_status\":\"active\",\"display\":\"Atopic dermatitis (disorder)\"}"
+              },
+              {
+                "source_type": "patient_record",
+                "source_id": "Condition/a234b799-f178-4024-97c2-5f79d368c28d",
+                "page_or_section": null,
+                "field_or_chunk_id": "Condition:a234b799-f178-4024-97c2-5f79d368c28d:0b242b30",
+                "quote_or_value": "{\"clinical_status\":\"active\",\"display\":\"Perennial allergic rhinitis (disorder)\"}"
+              },
+              {
+                "source_type": "patient_record",
+                "source_id": "Condition/a234b799-f181-463b-b3aa-35f68c3b0079",
+                "page_or_section": null,
+                "field_or_chunk_id": "Condition:a234b799-f181-463b-b3aa-35f68c3b0079:150106e7",
+                "quote_or_value": "{\"clinical_status\":\"active\",\"display\":\"Medication review due (situation)\"}"
+              },
+              {
+                "source_type": "patient_record",
+                "source_id": "Condition/a234b799-f171-4653-b111-4262fc098740",
+                "page_or_section": null,
+                "field_or_chunk_id": "Condition:a234b799-f171-4653-b111-4262fc098740:4a221977",
+                "quote_or_value": "{\"clinical_status\":\"inactive\",\"display\":\"Acute viral pharyngitis (disorder)\"}"
+              },
+              {
+                "source_type": "patient_record",
+                "source_id": "Condition/a234b799-f176-4493-a097-18f5f257262b",
+                "page_or_section": null,
+                "field_or_chunk_id": "Condition:a234b799-f176-4493-a097-18f5f257262b:95e2306d",
+                "quote_or_value": "{\"clinical_status\":\"inactive\",\"display\":\"Streptococcal sore throat (disorder)\"}"
+              },
+              {
+                "source_type": "patient_record",
+                "source_id": "Condition/a234b799-f17a-47fe-806d-c437fdad3937",
+                "page_or_section": null,
+                "field_or_chunk_id": "Condition:a234b799-f17a-47fe-806d-c437fdad3937:6e0b76d0",
+                "quote_or_value": "{\"clinical_status\":\"inactive\",\"display\":\"Laceration - injury (disorder)\"}"
+              },
+              {
+                "source_type": "patient_record",
+                "source_id": "Condition/a234b799-f17b-4622-9893-29e1c04ded5e",
+                "page_or_section": null,
+                "field_or_chunk_id": "Condition:a234b799-f17b-4622-9893-29e1c04ded5e:9a66d4cd",
+                "quote_or_value": "{\"clinical_status\":\"inactive\",\"display\":\"Laceration of thigh (disorder)\"}"
+              },
+              {
+                "source_type": "patient_record",
+                "source_id": "Condition/a234b799-f182-4a1b-b346-46e912d8ab60",
+                "page_or_section": null,
+                "field_or_chunk_id": "Condition:a234b799-f182-4a1b-b346-46e912d8ab60:6e1e1b12",
+                "quote_or_value": "{\"clinical_status\":\"inactive\",\"display\":\"Viral sinusitis (disorder)\"}"
+              },
+              {
+                "source_type": "patient_record",
+                "source_id": "MedicationRequest/a234b79a-32dc-451b-b828-b0e2278662ce",
+                "page_or_section": null,
+                "field_or_chunk_id": "MedicationRequest:a234b79a-32dc-451b-b828-b0e2278662ce:0917d82a",
+                "quote_or_value": "{\"name\":\"cetirizine hydrochloride 5 MG Oral Tablet\"}"
+              },
+              {
+                "source_type": "patient_record",
+                "source_id": "MedicationRequest/a234b799-f14c-4804-a29d-d4745f7c2971",
+                "page_or_section": null,
+                "field_or_chunk_id": "MedicationRequest:a234b799-f14c-4804-a29d-d4745f7c2971:8ca7b5c0",
+                "quote_or_value": "{\"name\":\"cetirizine hydrochloride 5 MG Oral Tablet\"}"
+              },
+              {
+                "source_type": "patient_record",
+                "source_id": "MedicationRequest/a234b79a-32e1-46e3-8723-d30ae9ecc138",
+                "page_or_section": null,
+                "field_or_chunk_id": "MedicationRequest:a234b79a-32e1-46e3-8723-d30ae9ecc138:eef810a9",
+                "quote_or_value": "{\"name\":\"NDA020800 0.3 ML Epinephrine 1 MG/ML Auto-Injector\"}"
+              },
+              {
+                "source_type": "patient_record",
+                "source_id": "MedicationRequest/a234b799-f150-43f0-a027-6442b128da8e",
+                "page_or_section": null,
+                "field_or_chunk_id": "MedicationRequest:a234b799-f150-43f0-a027-6442b128da8e:c2974c39",
+                "quote_or_value": "{\"name\":\"NDA020800 0.3 ML Epinephrine 1 MG/ML Auto-Injector\"}"
+              },
+              {
+                "source_type": "patient_record",
+                "source_id": "MedicationRequest/a234b79a-32e3-4e9c-82dc-10fb291caa4c",
+                "page_or_section": null,
+                "field_or_chunk_id": "MedicationRequest:a234b79a-32e3-4e9c-82dc-10fb291caa4c:1d93decb",
+                "quote_or_value": "{\"name\":\"Penicillin V Potassium 250 MG Oral Tablet\"}"
+              },
+              {
+                "source_type": "patient_record",
+                "source_id": "MedicationRequest/a234b79a-32e5-461a-80d0-b725d6fad759",
+                "page_or_section": null,
+                "field_or_chunk_id": "MedicationRequest:a234b79a-32e5-461a-80d0-b725d6fad759:30e11e9c",
+                "quote_or_value": "{\"name\":\"Ibuprofen 100 MG Oral Tablet\"}"
+              },
+              {
+                "source_type": "patient_record",
+                "source_id": "MedicationRequest/a234b79a-32e7-46af-99bb-18de990b7438",
+                "page_or_section": null,
+                "field_or_chunk_id": "MedicationRequest:a234b79a-32e7-46af-99bb-18de990b7438:94c8b581",
+                "quote_or_value": "{\"name\":\"sodium fluoride 0.0272 MG/MG Oral Gel\"}"
+              },
+              {
+                "source_type": "patient_record",
+                "source_id": "AllergyIntolerance/a234b799-f158-41cd-bac3-419fb9225b9f",
+                "page_or_section": null,
+                "field_or_chunk_id": "AllergyIntolerance:a234b799-f158-41cd-bac3-419fb9225b9f:d8734bc3",
+                "quote_or_value": "{\"substance\":\"Allergic disposition (finding)\"}"
+              },
+              {
+                "source_type": "patient_record",
+                "source_id": "AllergyIntolerance/a234b799-f15a-4433-82aa-c08ac70c36c9",
+                "page_or_section": null,
+                "field_or_chunk_id": "AllergyIntolerance:a234b799-f15a-4433-82aa-c08ac70c36c9:5abe0aef",
+                "quote_or_value": "{\"substance\":\"Latex (substance)\"}"
+              },
+              {
+                "source_type": "patient_record",
+                "source_id": "AllergyIntolerance/a234b799-f15c-4414-9e7f-46bcb402e249",
+                "page_or_section": null,
+                "field_or_chunk_id": "AllergyIntolerance:a234b799-f15c-4414-9e7f-46bcb402e249:fc6923a9",
+                "quote_or_value": "{\"substance\":\"Mold (organism)\"}"
+              },
+              {
+                "source_type": "patient_record",
+                "source_id": "AllergyIntolerance/a234b799-f15e-46ea-84dd-19ac25a57b63",
+                "page_or_section": null,
+                "field_or_chunk_id": "AllergyIntolerance:a234b799-f15e-46ea-84dd-19ac25a57b63:1122be51",
+                "quote_or_value": "{\"substance\":\"House dust mite (organism)\"}"
+              },
+              {
+                "source_type": "patient_record",
+                "source_id": "AllergyIntolerance/a234b799-f161-4abd-9095-bdc61e42ca7d",
+                "page_or_section": null,
+                "field_or_chunk_id": "AllergyIntolerance:a234b799-f161-4abd-9095-bdc61e42ca7d:3afed876",
+                "quote_or_value": "{\"substance\":\"Animal dander (substance)\"}"
+              },
+              {
+                "source_type": "patient_record",
+                "source_id": "AllergyIntolerance/a234b799-f162-4ebd-9f18-7808b3aad20c",
+                "page_or_section": null,
+                "field_or_chunk_id": "AllergyIntolerance:a234b799-f162-4ebd-9f18-7808b3aad20c:7d4ad1b4",
+                "quote_or_value": "{\"substance\":\"Grass pollen (substance)\"}"
+              },
+              {
+                "source_type": "patient_record",
+                "source_id": "AllergyIntolerance/a234b799-f164-4359-88ca-ba36bb89a2a6",
+                "page_or_section": null,
+                "field_or_chunk_id": "AllergyIntolerance:a234b799-f164-4359-88ca-ba36bb89a2a6:21678336",
+                "quote_or_value": "{\"substance\":\"Tree pollen (substance)\"}"
+              },
+              {
+                "source_type": "patient_record",
+                "source_id": "AllergyIntolerance/a234b799-f166-4379-aa5d-364b2cc7c76e",
+                "page_or_section": null,
+                "field_or_chunk_id": "AllergyIntolerance:a234b799-f166-4379-aa5d-364b2cc7c76e:29b4918d",
+                "quote_or_value": "{\"substance\":\"Eggs (edible) (substance)\"}"
+              },
+              {
+                "source_type": "patient_record",
+                "source_id": "AllergyIntolerance/a234b799-f168-48d4-a5f5-6ca01bc078bd",
+                "page_or_section": null,
+                "field_or_chunk_id": "AllergyIntolerance:a234b799-f168-48d4-a5f5-6ca01bc078bd:6fbd4747",
+                "quote_or_value": "{\"substance\":\"Fish (substance)\"}"
+              },
+              {
+                "source_type": "uploaded_document",
+                "source_id": "261f6d5c-dd1c-43d0-a3f5-78888dd740f2",
+                "page_or_section": "1",
+                "field_or_chunk_id": "chief_concern",
+                "quote_or_value": "\"Blurry vision R eye + numbness in toes ~3 weeks. Worried about diabetes complications.\""
+              }
+            ],
+            "claims": [
+              {
+                "text": "chief_concern: \"Blurry vision R eye + numbness in toes ~3 weeks. Worried about diabetes complications.\"",
+                "source_class": "uploaded_document",
+                "verdict": "pass",
+                "citations": [
+                  {
+                    "source_type": "uploaded_document",
+                    "source_id": "261f6d5c-dd1c-43d0-a3f5-78888dd740f2",
+                    "page_or_section": "1",
+                    "field_or_chunk_id": "chief_concern",
+                    "quote_or_value": "\"Blurry vision R eye + numbness in toes ~3 weeks. Worried about diabetes complications.\""
+                  }
+                ],
+                "overlay": {
+                  "source_id": "261f6d5c-dd1c-43d0-a3f5-78888dd740f2",
+                  "page": 1,
+                  "bbox": {
+                    "x0": 0.08460076045627377,
+                    "y0": 0.33444816053511706,
+                    "x1": 0.7034220532319392,
+                    "y1": 0.3451505016722408
+                  }
+                }
+              }
+            ],
+            "patient": {
+              "name": "Corine538 Hills818",
+              "gender": "female",
+              "birth_date": "2015-08-01"
+            },
+            "correlation_id": "d9e8d82bc5b747f8b751b4d978a154ca"
+          },
+          "url": "https://agent-production-9f62.up.railway.app/chat",
+          "responseTime": 72208,
+          "duration": 72208,
+          "size": 9640
+        },
+        "error": null,
+        "status": "pass",
+        "assertionResults": [],
+        "testResults": [
+          {
+            "description": "authenticated chat returns HTTP 200",
+            "status": "pass",
+            "uid": "5CsLlbtYQZgPzohdE_Sv3"
+          },
+          {
+            "description": "chat returns the verified serving envelope",
+            "status": "pass",
+            "uid": "cGVJ7ifZi7kYDVsUB5AsK"
+          },
+          {
+            "description": "every served claim owns its machine-readable citation set",
+            "status": "pass",
+            "uid": "qC6nY9d0y_akiZqkkP44f"
+          },
+          {
+            "description": "chat never presents an empty brief",
+            "status": "pass",
+            "uid": "hx-ZaOesF6RBOeE0WTCoT"
+          },
+          {
+            "description": "body and response header carry the same correlation id",
+            "status": "pass",
+            "uid": "OA2ja7Luy7NTMvwA1xw3w"
+          }
+        ],
+        "preRequestTestResults": [],
+        "postResponseTestResults": [],
+        "shouldStopRunnerExecution": false,
+        "runDuration": 72.269359625,
+        "name": "Cited patient-pinned chat",
+        "suitename": "/Users/quietguy/Documents/Dev/Gauntlet/OpenEMR-Custom-Build/claude-adversarial-run/adversarial-smart-bruno-2026-07-24/week1/bruno/chat",
+        "path": "chat",
+        "iterationIndex": 0
+      }
+    ],
+    "summary": {
+      "totalRequests": 4,
+      "passedRequests": 4,
+      "failedRequests": 0,
+      "errorRequests": 0,
+      "skippedRequests": 0,
+      "skippedByBail": 0,
+      "totalAssertions": 0,
+      "passedAssertions": 0,
+      "failedAssertions": 0,
+      "totalTests": 16,
+      "passedTests": 16,
+      "failedTests": 0,
+      "totalPreRequestTests": 0,
+      "passedPreRequestTests": 0,
+      "failedPreRequestTests": 0,
+      "totalPostResponseTests": 0,
+      "passedPostResponseTests": 0,
+      "failedPostResponseTests": 0
+    }
+  }
+]
