@@ -253,7 +253,9 @@ class _LangfuseBridge:
         status: str,
         input_tokens: int | None,
         output_tokens: int | None,
+        reasoning_tokens: int | None,
         measured_cost: float,
+        returned_model: str | None,
     ) -> None:
         if state is None:
             return
@@ -269,10 +271,13 @@ class _LangfuseBridge:
             for key, value in (
                 ("input", input_tokens),
                 ("output", output_tokens),
+                ("reasoning", reasoning_tokens),
             )
             if value is not None
         }
         if usage_details:
+            # The transport normalizes OpenRouter's inclusive completion count into disjoint
+            # final-output and reasoning counters before persistence.
             usage_details["total"] = sum(usage_details.values())
             generation_values["usage_details"] = usage_details
         final_cost_source = (
@@ -288,6 +293,8 @@ class _LangfuseBridge:
         # only attach cost when provider usage/cost accounting was actually returned.
         if final_cost_source != "unavailable":
             generation_values["cost_details"] = {"total": measured_cost}
+        if returned_model is not None:
+            generation_values["model"] = returned_model
         generation_ended = False
         agent_ended = False
         try:
@@ -623,8 +630,12 @@ class OutboundHttpTelemetry:
         execution_id: str,
         input_payload: dict[str, Any],
         redactions: tuple[str, ...] = (),
-    ) -> None:
-        """Project a durable agent start without making Langfuse authoritative."""
+    ) -> bool:
+        """Project a durable start and report whether a Langfuse observation opened.
+
+        Existing deterministic callers deliberately ignore the boolean and remain fail-soft.
+        Hosted provider composition uses it as a fail-before-provider observability gate.
+        """
 
         try:
             with self.engine.begin() as connection:
@@ -633,7 +644,10 @@ class OutboundHttpTelemetry:
                         text(
                             "SELECT execution_id, organization_id, campaign_run_id, attempt_id, "
                             "parent_execution_id, agent_role, provider, model, execution_mode, "
-                            "configuration_version, trace_id, input_sha256 "
+                            "configuration_version, trace_id, input_sha256, "
+                            "configuration_set_sha256, role_configuration_sha256, "
+                            "generation_policy_sha256, judge_calibration_id, "
+                            "judge_calibration_state "
                             "FROM agent_executions WHERE execution_id = :execution_id"
                         ),
                         {"execution_id": execution_id},
@@ -654,7 +668,7 @@ class OutboundHttpTelemetry:
                 )
         except Exception:
             _logger.warning("agent telemetry start persistence failed")
-            return
+            return False
 
         metadata = _sanitize(
             {
@@ -673,6 +687,31 @@ class OutboundHttpTelemetry:
                 "agent.model": str(row["model"]),
                 "agent.execution_mode": str(row["execution_mode"]),
                 "agent.input_sha256": str(row["input_sha256"]),
+                "agent.configuration_set_sha256": (
+                    str(row["configuration_set_sha256"])
+                    if row["configuration_set_sha256"] is not None
+                    else None
+                ),
+                "agent.role_configuration_sha256": (
+                    str(row["role_configuration_sha256"])
+                    if row["role_configuration_sha256"] is not None
+                    else None
+                ),
+                "agent.generation_policy_sha256": (
+                    str(row["generation_policy_sha256"])
+                    if row["generation_policy_sha256"] is not None
+                    else None
+                ),
+                "judge.calibration_id": (
+                    str(row["judge_calibration_id"])
+                    if row["judge_calibration_id"] is not None
+                    else None
+                ),
+                "judge.calibration_state": (
+                    str(row["judge_calibration_state"])
+                    if row["judge_calibration_state"] is not None
+                    else None
+                ),
             },
             redactions,
         )
@@ -709,7 +748,7 @@ class OutboundHttpTelemetry:
                         ),
                         {"execution_id": execution_id},
                     )
-                return
+                return False
         if langfuse_state is not None:
             self._agent_observation_ids[execution_id] = langfuse_state[3]
             self._agent_campaign_ids[execution_id] = str(row["campaign_run_id"])
@@ -726,6 +765,7 @@ class OutboundHttpTelemetry:
             metadata=dict(metadata),
             langfuse_state=langfuse_state,
         )
+        return langfuse_state is not None
 
     def bind_agent_attempt(self, *, execution_id: str, attempt_id: str) -> None:
         """Update in-process projection metadata after durable Red Team attempt binding."""
@@ -788,7 +828,9 @@ class OutboundHttpTelemetry:
                     connection.execute(
                         text(
                             "SELECT status, duration_ms, input_tokens, output_tokens, "
-                            "measured_cost, currency, output_sha256 "
+                            "reasoning_tokens, measured_cost, currency, output_sha256, "
+                            "returned_model, upstream_provider, provider_request_id, "
+                            "physical_attempts, oracle_agreement, decision_authority "
                             "FROM agent_executions WHERE execution_id = :execution_id"
                         ),
                         {"execution_id": execution_id},
@@ -813,6 +855,18 @@ class OutboundHttpTelemetry:
             "agent.output_sha256": str(row["output_sha256"]),
             "cost.usd": float(row["measured_cost"] or 0.0),
             "currency": str(row["currency"]),
+            "agent.returned_model": (
+                str(row["returned_model"]) if row["returned_model"] is not None else None
+            ),
+            "agent.upstream_provider": (
+                str(row["upstream_provider"]) if row["upstream_provider"] is not None else None
+            ),
+            "agent.provider_request_id": (
+                str(row["provider_request_id"]) if row["provider_request_id"] is not None else None
+            ),
+            "agent.physical_attempts": row["physical_attempts"],
+            "judge.oracle_agreement": row["oracle_agreement"],
+            "judge.decision_authority": row["decision_authority"],
             "error_code": pending.error_code,
         }
         try:
@@ -824,7 +878,11 @@ class OutboundHttpTelemetry:
                 status=str(row["status"]),
                 input_tokens=row["input_tokens"],
                 output_tokens=row["output_tokens"],
+                reasoning_tokens=row["reasoning_tokens"],
                 measured_cost=float(row["measured_cost"] or 0.0),
+                returned_model=(
+                    str(row["returned_model"]) if row["returned_model"] is not None else None
+                ),
             )
         except Exception:
             _logger.warning("Langfuse agent observation completion failed")
@@ -943,6 +1001,49 @@ class OutboundHttpTelemetry:
             availability=availability,
             detail=detail,
         )
+
+    def hosted_runtime_heartbeat(
+        self,
+        *,
+        configuration_sha256: str,
+        provider_bindings_verified: bool,
+        langfuse_observation_ready: bool,
+    ) -> None:
+        """Publish Runner-only readiness for one exact content-addressed hosted configuration."""
+
+        if (
+            not isinstance(configuration_sha256, str)
+            or len(configuration_sha256) != 64
+            or any(character not in "0123456789abcdef" for character in configuration_sha256)
+        ):
+            raise ValueError("hosted configuration identity is invalid")
+        self._upsert_component(
+            component_id=configuration_sha256,
+            name="OpenRouter hosted runtime",
+            kind="model-runtime",
+            availability=(
+                "operational and evidenced"
+                if provider_bindings_verified and langfuse_observation_ready
+                else "blocked pending authorization"
+            ),
+            detail=(
+                "four sealed provider bindings and Langfuse authentication verified by Runner"
+                if provider_bindings_verified and langfuse_observation_ready
+                else "Langfuse authentication is unavailable for mandatory hosted observations"
+                if provider_bindings_verified
+                else "one or more sealed provider bindings are unavailable"
+            ),
+        )
+
+    def hosted_observability_ready(self) -> bool:
+        """Return a fresh authenticated Langfuse gate for hosted provider calls."""
+
+        if not self.langfuse.configured():
+            return False
+        try:
+            return self.langfuse.auth_check() is True
+        except Exception:
+            return False
 
     def shutdown(self) -> None:
         self.flush()

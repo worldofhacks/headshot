@@ -240,6 +240,50 @@ export interface ReportReadModel extends JsonRecord {
   verification: FindingVerificationReadModel;
 }
 
+export type JudgeCalibrationState =
+  | "unavailable"
+  | "failed"
+  | "passed"
+  | "invalidated"
+  | "enabled";
+
+export type JudgeDecisionAuthority = "oracle" | "model" | "none";
+
+export interface AgentBudgetReadModel extends JsonRecord {
+  status: "staged_pending_authorization" | "active" | "unavailable";
+  campaign_run_id: string | null;
+  configuration_set_sha256: string | null;
+  role_usd_cap: number | null;
+  role_usd_spent: number;
+  role_usd_remaining: number | null;
+  role_usd_overrun: number;
+  role_call_cap: number | null;
+  role_physical_calls: number;
+  role_calls_remaining: number | null;
+  role_call_overrun: number;
+  global_usd_cap: number | null;
+  global_usd_spent: number;
+  global_usd_remaining: number | null;
+  global_usd_overrun: number;
+  global_call_cap: number | null;
+  global_physical_calls: number;
+  global_calls_remaining: number | null;
+  global_call_overrun: number;
+}
+
+export interface JudgeCalibrationSummaryReadModel extends JsonRecord {
+  state: JudgeCalibrationState;
+  calibration_id: string | null;
+  decision_authority: JudgeDecisionAuthority;
+  oracle_comparison_count: number;
+  oracle_agreement_count: number;
+  oracle_agreement_rate: number | null;
+  status_label:
+    | "not yet measured"
+    | "live, verified against oracle"
+    | "live, model-decisive after calibration";
+}
+
 export interface TraceReadModel extends JsonRecord {
   request_id: string | null;
   execution_id: string | null;
@@ -251,6 +295,13 @@ export interface TraceReadModel extends JsonRecord {
   provider: string;
   agent_role: "orchestrator" | "red_team" | "judge" | "documentation" | null;
   execution_mode: "deterministic" | "hosted_advisory" | null;
+  returned_model: string | null;
+  upstream_provider: string | null;
+  provider_request_id: string | null;
+  configuration_set_sha256: string | null;
+  role_configuration_sha256: string | null;
+  generation_policy_sha256: string | null;
+  physical_attempts: number | null;
   method: string | null;
   destination_host: string | null;
   relative_path: string | null;
@@ -263,10 +314,15 @@ export interface TraceReadModel extends JsonRecord {
   request_bytes: number;
   response_bytes: number | null;
   measured_cost: number;
-  accounting_status: "measured" | "unavailable";
+  accounting_status: "measured" | "partial" | "unavailable";
   currency: string;
   input_tokens: number | null;
   output_tokens: number | null;
+  reasoning_tokens: number | null;
+  judge_calibration_id: string | null;
+  judge_calibration_state: JudgeCalibrationState | null;
+  oracle_agreement: boolean | null;
+  decision_authority: JudgeDecisionAuthority | null;
   p50_duration_ms: number | null;
   p95_duration_ms: number | null;
   langfuse_status:
@@ -301,7 +357,10 @@ export interface CostReadModel extends JsonRecord {
   average_cost_per_request: number;
   input_tokens: number | null;
   output_tokens: number | null;
+  reasoning_tokens: number | null;
   token_observation_count: number;
+  physical_call_count: number;
+  provider_budget: AgentBudgetReadModel | null;
   p50_duration_ms: number | null;
   p95_duration_ms: number | null;
   budget_usd: number | null;
@@ -442,7 +501,11 @@ export interface AgentReadModel extends JsonRecord {
   currency: string;
   input_tokens: number | null;
   output_tokens: number | null;
+  reasoning_tokens: number | null;
   token_observation_count: number;
+  physical_call_count: number;
+  provider_budget: AgentBudgetReadModel;
+  judge_calibration: JudgeCalibrationSummaryReadModel | null;
   average_duration_ms: number | null;
   p50_duration_ms: number | null;
   p95_duration_ms: number | null;
@@ -468,19 +531,31 @@ export interface AgentActivityReadModel extends JsonRecord {
   status: "running" | "succeeded" | "failed" | "skipped";
   provider: string;
   model: string;
+  returned_model: string | null;
+  upstream_provider: string | null;
+  provider_request_id: string | null;
   execution_mode: "deterministic" | "hosted_advisory";
   configuration_version: number;
+  configuration_set_sha256: string | null;
+  role_configuration_sha256: string | null;
+  generation_policy_sha256: string | null;
   input_sha256: string;
   output_sha256: string | null;
   input_tokens: number | null;
   output_tokens: number | null;
+  reasoning_tokens: number | null;
+  physical_attempts: number | null;
   measured_cost: number;
-  accounting_status: "measured" | "unavailable";
+  accounting_status: "measured" | "partial" | "unavailable";
   currency: string;
   trace_id: string;
   langfuse_status: "not_attempted" | "disabled" | "queued" | "exported" | "error";
   langfuse_verified_at: string | null;
   detail: JsonRecord;
+  judge_calibration_id: string | null;
+  judge_calibration_state: JudgeCalibrationState | null;
+  oracle_agreement: boolean | null;
+  decision_authority: JudgeDecisionAuthority | null;
   error_code: string | null;
   started_at: string;
   finished_at: string | null;

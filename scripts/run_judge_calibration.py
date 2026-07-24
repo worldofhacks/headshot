@@ -1,9 +1,14 @@
 #!/usr/bin/env python3
-"""Reproduce the offline Judge calibration artifact without network access.
+"""Measure a Judge identity against versioned ground truth without network access.
 
-The default command reports the measured gate state.  ``--require-pass`` is the CI/runtime
-activation check: it exits non-zero unless the exact evaluator identity passes calibration.
-Human approval is deliberately a separate operation and is never synthesized here.
+With no result bundle, the command truthfully measures the deterministic oracle-precedence
+baseline under its deterministic identity.  It never labels that baseline as Gemini.  To measure
+a real hosted evaluator, pass previously captured, lineage-complete outcomes plus a separate
+expected-identity file.  The command never contacts a provider.
+
+``--require-pass`` exits non-zero unless the measured identity passes the unchanged calibration
+thresholds.  Human approval and runtime enablement are deliberately separate operations and are
+never synthesized here.
 """
 
 from __future__ import annotations
@@ -12,7 +17,16 @@ import argparse
 import json
 from pathlib import Path
 
-from agentforge.agents.judge import CalibrationGate, Judge, JudgeIdentity
+from agentforge.agents.judge import (
+    CalibrationGate,
+    CalibrationInputError,
+    Judge,
+    JudgeIdentity,
+)
+from agentforge.agents.judge.calibration_results import (
+    load_captured_calibration_evaluator,
+    load_judge_identity,
+)
 
 _ROOT = Path(__file__).resolve().parents[1]
 _GROUND_TRUTH = _ROOT / "evals" / "ground-truth"
@@ -20,6 +34,28 @@ _GROUND_TRUTH = _ROOT / "evals" / "ground-truth"
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--slice-dir",
+        type=Path,
+        default=_GROUND_TRUTH,
+        help="versioned ground-truth slice directory (default: evals/ground-truth)",
+    )
+    parser.add_argument(
+        "--captured-results",
+        type=Path,
+        help=(
+            "offline hosted-evaluator result bundle with per-sample OpenRouter trace, "
+            "returned-model, token, and measured-cost provenance"
+        ),
+    )
+    parser.add_argument(
+        "--expected-identity",
+        type=Path,
+        help=(
+            "separate exact JudgeIdentity JSON; required with --captured-results so result "
+            "content cannot self-select the identity being calibrated"
+        ),
+    )
     parser.add_argument(
         "--require-pass",
         action="store_true",
@@ -29,12 +65,52 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def main() -> int:
-    args = _parser().parse_args()
-    slices = [
-        json.loads(path.read_text(encoding="utf-8"))
-        for path in sorted(_GROUND_TRUTH.glob("*.json"))
-    ]
-    identity = JudgeIdentity(
+    parser = _parser()
+    args = parser.parse_args()
+    if (args.captured_results is None) != (args.expected_identity is None):
+        parser.error("--captured-results and --expected-identity must be provided together")
+    try:
+        slices = _load_slices(args.slice_dir)
+        if args.captured_results is None:
+            identity = _deterministic_identity()
+            evaluator = Judge()
+        else:
+            identity = load_judge_identity(args.expected_identity)
+            evaluator = load_captured_calibration_evaluator(
+                args.captured_results,
+                expected_identity=identity,
+                expected_label_ids=[
+                    label["label_id"] for item in slices for label in item["labels"]
+                ],
+            )
+        result = CalibrationGate(evaluator=evaluator).evaluate(
+            slices=slices,
+            identity=identity,
+        )
+    except CalibrationInputError as exc:
+        parser.error(str(exc))
+    print(json.dumps(result, indent=2, sort_keys=True))
+    return 2 if args.require_pass and result["state"] != "passed" else 0
+
+
+def _load_slices(path: Path) -> list[dict]:
+    try:
+        candidates = sorted(path.glob("*.json"))
+    except OSError as exc:
+        raise CalibrationInputError("ground-truth slice directory is unavailable") from exc
+    if not candidates:
+        raise CalibrationInputError("ground-truth slice directory has no JSON slices")
+    slices: list[dict] = []
+    for candidate in candidates:
+        try:
+            slices.append(json.loads(candidate.read_text(encoding="utf-8")))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise CalibrationInputError("ground-truth slice file is invalid") from exc
+    return slices
+
+
+def _deterministic_identity() -> JudgeIdentity:
+    return JudgeIdentity(
         judge_provider="deterministic-code",
         judge_model="oracle-precedence",
         judge_model_version="1",
@@ -43,9 +119,6 @@ def main() -> int:
         red_team_provider="offline-seed",
         red_team_model="seed-replay-v1",
     )
-    result = CalibrationGate(evaluator=Judge()).evaluate(slices=slices, identity=identity)
-    print(json.dumps(result, indent=2, sort_keys=True))
-    return 2 if args.require_pass and result["state"] != "passed" else 0
 
 
 if __name__ == "__main__":

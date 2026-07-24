@@ -519,6 +519,81 @@ def test_runner_and_langfuse_connection_heartbeat_is_persisted(migrated_db: Engi
     }
 
 
+def test_hosted_runtime_heartbeat_is_content_addressed_and_secret_free(
+    migrated_db: Engine,
+) -> None:
+    telemetry = OutboundHttpTelemetry(migrated_db, environment="staging")
+    configuration_sha256 = "a" * 64
+
+    telemetry.hosted_runtime_heartbeat(
+        configuration_sha256=configuration_sha256,
+        provider_bindings_verified=True,
+        langfuse_observation_ready=True,
+    )
+
+    with migrated_db.connect() as connection:
+        row = (
+            connection.execute(
+                text(
+                    "SELECT component_id, name, kind, availability, detail "
+                    "FROM runtime_component_status WHERE environment = 'staging' "
+                    "AND component_id = :configuration"
+                ),
+                {"configuration": configuration_sha256},
+            )
+            .mappings()
+            .one()
+        )
+    assert dict(row) == {
+        "component_id": configuration_sha256,
+        "name": "OpenRouter hosted runtime",
+        "kind": "model-runtime",
+        "availability": "operational and evidenced",
+        "detail": ("four sealed provider bindings and Langfuse authentication verified by Runner"),
+    }
+    serialized = repr(dict(row)).lower()
+    assert "secretref://" not in serialized
+    assert "credential_reference" not in serialized
+    assert "openrouter_api_key" not in serialized
+
+    with pytest.raises(ValueError, match="configuration identity"):
+        telemetry.hosted_runtime_heartbeat(
+            configuration_sha256="A" * 64,
+            provider_bindings_verified=True,
+            langfuse_observation_ready=True,
+        )
+
+
+def test_hosted_runtime_stays_blocked_when_langfuse_is_not_authenticated(
+    migrated_db: Engine,
+) -> None:
+    telemetry = OutboundHttpTelemetry(migrated_db, environment="staging")
+    configuration_sha256 = "b" * 64
+
+    telemetry.hosted_runtime_heartbeat(
+        configuration_sha256=configuration_sha256,
+        provider_bindings_verified=True,
+        langfuse_observation_ready=False,
+    )
+
+    with migrated_db.connect() as connection:
+        row = (
+            connection.execute(
+                text(
+                    "SELECT availability, detail FROM runtime_component_status "
+                    "WHERE environment = 'staging' AND component_id = :configuration"
+                ),
+                {"configuration": configuration_sha256},
+            )
+            .mappings()
+            .one()
+        )
+    assert dict(row) == {
+        "availability": "blocked pending authorization",
+        "detail": ("Langfuse authentication is unavailable for mandatory hosted observations"),
+    }
+
+
 def test_all_agent_roles_are_queued_for_queryback_with_observed_latency_and_spend(
     migrated_db: Engine,
 ) -> None:

@@ -21,6 +21,7 @@ from agentforge.correlation import campaign_trace_id
 from agentforge.policy.recorder import ExecutionRecorder
 from agentforge.security_tools.repository import SecurityToolEvidenceRepository
 from agentforge.target.spec import SafetyCaps, TargetLifecycle
+from agentforge.telemetry import OutboundHttpTelemetry
 from agentforge.web import WebSecurityConfig, create_web_app
 
 ORIGIN = "https://staging.headshot.example"
@@ -133,10 +134,10 @@ def _surface_payload() -> dict[str, Any]:
 
 def _hosted_configuration_payload() -> dict[str, Any]:
     identities = {
-        "orchestrator": ("anthropic/claude-opus-4.8", "Anthropic", 8, "0.75"),
-        "red_team": ("qwen/qwen3.5-397b-a17b", "Together", 21, "1.25"),
-        "judge": ("google/gemini-2.5-pro", "Google", 21, "2.5"),
-        "documentation": ("openai/gpt-5.4", "OpenAI", 6, "0.5"),
+        "orchestrator": ("anthropic/claude-opus-4.8", "anthropic", 9, "0.75"),
+        "red_team": ("qwen/qwen3.5-397b-a17b", "together", 19, "1"),
+        "judge": ("google/gemini-2.5-pro", "google-vertex", 19, "2.5"),
+        "documentation": ("openai/gpt-5.4", "openai", 9, "0.5"),
     }
     roles = []
     for role, (model, upstream, calls, usd) in identities.items():
@@ -425,7 +426,7 @@ def test_agent_models_and_tool_scope_are_real_configurable_projections(
     assert len(projection.json()["data"]["roles"]) == 4
     assert "secretref://" not in projection.text
     assert all(
-        role["provider_reference_bound"] is True for role in projection.json()["data"]["roles"]
+        role["provider_reference_bound"] is False for role in projection.json()["data"]["roles"]
     )
     staged_agents_response = client.get("/api/v1/agents")
     staged_agents = {row["role"]: row for row in staged_agents_response.json()["data"]}
@@ -1009,9 +1010,144 @@ def test_hosted_authorization_is_bound_but_launch_stays_unavailable_until_compos
     )
     assert unverified.status_code == 503
     assert unverified.json()["reason_code"] == "provider_credentials_runner_unverified"
+    missing_hosted_preflight = client.get(
+        f"/api/v1/hosted-configuration-sets/{configuration_sha256}/preflight"
+    )
+    assert missing_hosted_preflight.status_code == 200
+    assert missing_hosted_preflight.json()["state"] == "degraded"
+    assert (
+        missing_hosted_preflight.json()["reason_code"] == "provider_credentials_runner_unverified"
+    )
+    missing_campaign_preflight = client.get(
+        f"/api/v1/campaign-authorization-requests/{request_id}/preflight"
+    )
+    assert missing_campaign_preflight.status_code == 200
+    assert missing_campaign_preflight.json()["state"] == "degraded"
+    assert (
+        missing_campaign_preflight.json()["reason_code"] == "provider_credentials_runner_unverified"
+    )
     with migrated_db.connect() as connection:
         assert connection.execute(text("SELECT count(*) FROM campaign_runs")).scalar_one() == 0
         assert connection.execute(text("SELECT count(*) FROM jobs")).scalar_one() == 0
+
+    telemetry = OutboundHttpTelemetry(migrated_db, environment="staging")
+    telemetry.hosted_runtime_heartbeat(
+        configuration_sha256="b" * 64,
+        provider_bindings_verified=True,
+        langfuse_observation_ready=True,
+    )
+    wrong_configuration = client.post(
+        "/api/v1/campaigns",
+        json={"authorization_request_id": request_id},
+        headers=_headers("hosted-launch-wrong-config-heartbeat-0001"),
+    )
+    assert wrong_configuration.status_code == 503
+    assert wrong_configuration.json()["reason_code"] == "provider_credentials_runner_unverified"
+
+    with migrated_db.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO runtime_component_status "
+                "(environment, component_id, name, kind, availability, detail) VALUES "
+                "('staging', :configuration, 'Scheduler collision', 'scheduler', "
+                "'operational and evidenced', 'not a hosted runtime observation') "
+                "ON CONFLICT (environment, component_id) DO UPDATE SET "
+                "name = EXCLUDED.name, kind = EXCLUDED.kind, "
+                "availability = EXCLUDED.availability, detail = EXCLUDED.detail, "
+                "heartbeat_at = clock_timestamp()"
+            ),
+            {"configuration": configuration_sha256},
+        )
+    wrong_component_kind = client.post(
+        "/api/v1/campaigns",
+        json={"authorization_request_id": request_id},
+        headers=_headers("hosted-launch-wrong-component-kind-0001"),
+    )
+    assert wrong_component_kind.status_code == 503
+    assert wrong_component_kind.json()["reason_code"] == "provider_credentials_runner_unverified"
+
+    telemetry.hosted_runtime_heartbeat(
+        configuration_sha256=configuration_sha256,
+        provider_bindings_verified=True,
+        langfuse_observation_ready=True,
+    )
+    with migrated_db.begin() as connection:
+        connection.execute(
+            text(
+                "UPDATE runtime_component_status "
+                "SET heartbeat_at = clock_timestamp() - interval '91 seconds' "
+                "WHERE environment = 'staging' AND component_id = :configuration"
+            ),
+            {"configuration": configuration_sha256},
+        )
+    stale_configuration = client.post(
+        "/api/v1/campaigns",
+        json={"authorization_request_id": request_id},
+        headers=_headers("hosted-launch-stale-config-heartbeat-0001"),
+    )
+    assert stale_configuration.status_code == 503
+    assert stale_configuration.json()["reason_code"] == "provider_credentials_runner_unverified"
+    stale_hosted_preflight = client.get(
+        f"/api/v1/hosted-configuration-sets/{configuration_sha256}/preflight"
+    )
+    assert stale_hosted_preflight.status_code == 200
+    assert stale_hosted_preflight.json()["state"] == "degraded"
+    assert stale_hosted_preflight.json()["reason_code"] == (
+        "provider_credentials_runner_unverified"
+    )
+    stale_campaign_preflight = client.get(
+        f"/api/v1/campaign-authorization-requests/{request_id}/preflight"
+    )
+    assert stale_campaign_preflight.status_code == 200
+    assert stale_campaign_preflight.json()["state"] == "degraded"
+    assert stale_campaign_preflight.json()["reason_code"] == (
+        "provider_credentials_runner_unverified"
+    )
+
+    telemetry.hosted_runtime_heartbeat(
+        configuration_sha256=configuration_sha256,
+        provider_bindings_verified=True,
+        langfuse_observation_ready=True,
+    )
+    hosted_preflight = client.get(
+        f"/api/v1/hosted-configuration-sets/{configuration_sha256}/preflight"
+    )
+    assert hosted_preflight.status_code == 200
+    assert hosted_preflight.json()["state"] == "ready"
+    assert hosted_preflight.json()["data"]["runtime_available"] is True
+    assert hosted_preflight.json()["data"]["runtime_reason"] is None
+    assert (
+        hosted_preflight.json()["data"]["preflight"]["provider_binding_readiness"]
+        == "runner_verified"
+    )
+    assert all(
+        role["provider_reference_bound"] is True
+        for role in hosted_preflight.json()["data"]["roles"]
+    )
+    assert "secretref://" not in hosted_preflight.text
+    assert "credential_reference" not in hosted_preflight.text
+
+    campaign_preflight = client.get(
+        f"/api/v1/campaign-authorization-requests/{request_id}/preflight"
+    )
+    assert campaign_preflight.status_code == 200
+    assert campaign_preflight.json()["state"] == "ready"
+    assert campaign_preflight.json()["data"]["configuration_set_sha256"] == (configuration_sha256)
+    assert campaign_preflight.json()["data"]["gates"]["provider_bindings_runner_verified"] is True
+    assert campaign_preflight.json()["data"]["provider_calls_performed"] == 0
+    assert campaign_preflight.json()["data"]["target_calls_performed"] == 0
+    assert "secretref://" not in campaign_preflight.text
+    assert "credential_reference" not in campaign_preflight.text
+
+    launched = client.post(
+        "/api/v1/campaigns",
+        json={"authorization_request_id": request_id},
+        headers=_headers("hosted-launch-exact-config-heartbeat-0001"),
+    )
+    assert launched.status_code == 202, launched.text
+    with migrated_db.connect() as connection:
+        assert connection.execute(text("SELECT count(*) FROM campaign_runs")).scalar_one() == 1
+        assert connection.execute(text("SELECT count(*) FROM jobs")).scalar_one() == 1
 
 
 def test_target_projection_is_org_scoped_and_never_returns_credential_reference(
@@ -1554,15 +1690,28 @@ def test_agent_activity_exposes_row_level_hosted_accounting_status(
                 {
                     "execution": "hosted-agent-accounted",
                     "role": "red_team",
+                    "status": "succeeded",
                     "input_tokens": 120,
                     "output_tokens": 30,
+                    "physical_attempts": None,
                     "cost": 0.012,
                 },
                 {
                     "execution": "hosted-agent-unaccounted",
                     "role": "documentation",
+                    "status": "succeeded",
                     "input_tokens": None,
                     "output_tokens": None,
+                    "physical_attempts": None,
+                    "cost": 0,
+                },
+                {
+                    "execution": "hosted-agent-partial",
+                    "role": "orchestrator",
+                    "status": "failed",
+                    "input_tokens": None,
+                    "output_tokens": None,
+                    "physical_attempts": 2,
                     "cost": 0,
                 },
             ),
@@ -1573,11 +1722,13 @@ def test_agent_activity_exposes_row_level_hosted_accounting_status(
                     "INSERT INTO agent_executions "
                     "(execution_id, organization_id, campaign_run_id, agent_role, status, "
                     "provider, model, execution_mode, configuration_version, input_sha256, "
-                    "output_sha256, input_tokens, output_tokens, measured_cost, trace_id, detail, "
+                    "output_sha256, input_tokens, output_tokens, physical_attempts, "
+                    "measured_cost, trace_id, detail, "
                     "started_at, finished_at, duration_ms) VALUES "
-                    "(:execution, :org, :run, :role, 'succeeded', 'openrouter', "
+                    "(:execution, :org, :run, :role, :status, 'openrouter', "
                     "'provider/model', 'hosted_advisory', 1, :input_hash, :output_hash, "
-                    ":input_tokens, :output_tokens, :cost, :trace, '{}'::jsonb, "
+                    ":input_tokens, :output_tokens, :physical_attempts, :cost, :trace, "
+                    "'{}'::jsonb, "
                     "TIMESTAMPTZ '2026-07-21 10:00:00+00' + :index * INTERVAL '1 second', "
                     "TIMESTAMPTZ '2026-07-21 10:00:01+00' + :index * INTERVAL '1 second', 25)"
                 ),
@@ -1592,7 +1743,8 @@ def test_agent_activity_exposes_row_level_hosted_accounting_status(
                 },
             )
 
-    body = TestClient(_app_for(migrated_db, _reader(org_id))).get("/api/v1/agent-activity").json()
+    client = TestClient(_app_for(migrated_db, _reader(org_id)))
+    body = client.get("/api/v1/agent-activity").json()
 
     assert body["state"] == "ready"
     activity_by_id = {row["execution_id"]: row for row in body["data"]}
@@ -1600,6 +1752,26 @@ def test_agent_activity_exposes_row_level_hosted_accounting_status(
     assert activity_by_id["hosted-agent-accounted"]["measured_cost"] == 0.012
     assert activity_by_id["hosted-agent-unaccounted"]["accounting_status"] == "unavailable"
     assert activity_by_id["hosted-agent-unaccounted"]["measured_cost"] == 0
+    assert activity_by_id["hosted-agent-partial"]["accounting_status"] == "partial"
+    assert activity_by_id["hosted-agent-partial"]["physical_attempts"] == 2
+
+    agents = {row["role"]: row for row in client.get("/api/v1/agents").json()["data"]}
+    assert agents["orchestrator"]["accounting_status"] == "partial"
+    assert agents["orchestrator"]["physical_call_count"] == 2
+    agent_cost = next(
+        row
+        for row in client.get("/api/v1/costs").json()["data"]
+        if row["record_kind"] == "agent" and row["agent_role"] == "orchestrator"
+    )
+    assert agent_cost["accounting_status"] == "partial"
+    assert agent_cost["physical_call_count"] == 2
+    agent_trace = next(
+        row
+        for row in client.get("/api/v1/traces").json()["data"]
+        if row["execution_id"] == "hosted-agent-partial"
+    )
+    assert agent_trace["accounting_status"] == "partial"
+    assert agent_trace["physical_attempts"] == 2
 
 
 def test_costs_projection_is_empty_for_org_without_persisted_summaries(
@@ -1640,7 +1812,10 @@ def test_costs_projection_is_ready_from_persisted_run_summary(migrated_db: Engin
         "average_cost_per_request",
         "input_tokens",
         "output_tokens",
+        "reasoning_tokens",
         "token_observation_count",
+        "physical_call_count",
+        "provider_budget",
         "p50_duration_ms",
         "p95_duration_ms",
         "budget_usd",
@@ -1714,6 +1889,13 @@ def test_traces_projection_is_ready_from_persisted_attempt_and_verdict(
         "provider",
         "agent_role",
         "execution_mode",
+        "returned_model",
+        "upstream_provider",
+        "provider_request_id",
+        "configuration_set_sha256",
+        "role_configuration_sha256",
+        "generation_policy_sha256",
+        "physical_attempts",
         "method",
         "destination_host",
         "relative_path",
@@ -1730,6 +1912,11 @@ def test_traces_projection_is_ready_from_persisted_attempt_and_verdict(
         "currency",
         "input_tokens",
         "output_tokens",
+        "reasoning_tokens",
+        "judge_calibration_id",
+        "judge_calibration_state",
+        "oracle_agreement",
+        "decision_authority",
         "p50_duration_ms",
         "p95_duration_ms",
         "langfuse_status",

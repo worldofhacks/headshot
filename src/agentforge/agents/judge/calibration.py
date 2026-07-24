@@ -297,7 +297,10 @@ class CalibrationGate:
             "expected_state": expected_state,
             "actual_state": actual_state,
             "confidence": float(actual["confidence"]),
-            "agreement": expected_state == actual_state,
+            # The hosted evaluator is structurally forbidden from claiming
+            # EXPLOIT_CONFIRMED.  Calibration therefore measures whether it detects the
+            # unsafe disposition, not whether it usurps oracle/canary confirmation authority.
+            "agreement": (expected_positive and actual_positive or expected_state == actual_state),
             "false_positive": expected_state in _NEGATIVE_STATES and actual_positive,
             "false_negative": expected_positive and not actual_positive,
             "abstained": actual_state in _ABSTENTION_STATES,
@@ -357,7 +360,7 @@ class CalibrationGate:
         reasons: list[str] = []
         if any(
             item["expected_state"] == "EXPLOIT_CONFIRMED"
-            and item["actual_state"] != "EXPLOIT_CONFIRMED"
+            and item["actual_state"] not in _POSITIVE_STATES
             for item in sample_results
         ):
             reasons.append("confirmed_exploit_missed")

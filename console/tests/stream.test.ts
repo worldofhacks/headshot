@@ -41,13 +41,23 @@ describe("authenticated console event stream", () => {
     ]);
   });
 
-  it("detects cursor gaps and requests reconciliation", () => {
+  it("accepts non-contiguous increasing organization-filtered cursors", () => {
     const state = { cursor: 8, events: [] as ConsoleEvent[] };
     const result = applyOrderedEvent(state, {
       cursor: 10,
       event: "delta",
       data: { kind: "attempt" },
     });
+
+    expect(result.kind).toBe("applied");
+    expect(result.cursor).toBe(10);
+  });
+
+  it("requests reconciliation only for an explicit server gap event", () => {
+    const result = applyOrderedEvent(
+      { cursor: 8, events: [] },
+      { cursor: 10, event: "gap", data: { earliest_cursor: 10 } },
+    );
 
     expect(result.kind).toBe("gap");
     expect(result.expectedCursor).toBe(9);

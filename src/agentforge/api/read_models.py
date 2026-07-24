@@ -399,6 +399,13 @@ class TraceReadModel(_ReadModel):
     provider: str
     agent_role: Literal["orchestrator", "red_team", "judge", "documentation"] | None = None
     execution_mode: Literal["deterministic", "hosted_advisory"] | None = None
+    returned_model: str | None = None
+    upstream_provider: str | None = None
+    provider_request_id: str | None = None
+    configuration_set_sha256: str | None = None
+    role_configuration_sha256: str | None = None
+    generation_policy_sha256: str | None = None
+    physical_attempts: int | None = Field(default=None, ge=1)
     method: str | None
     destination_host: str | None
     relative_path: str | None
@@ -411,10 +418,17 @@ class TraceReadModel(_ReadModel):
     request_bytes: int = Field(ge=0)
     response_bytes: int | None = Field(default=None, ge=0)
     measured_cost: float = Field(ge=0)
-    accounting_status: Literal["measured", "unavailable"]
+    accounting_status: Literal["measured", "partial", "unavailable"]
     currency: str
     input_tokens: int | None = Field(default=None, ge=0)
     output_tokens: int | None = Field(default=None, ge=0)
+    reasoning_tokens: int | None = Field(default=None, ge=0)
+    judge_calibration_id: str | None = None
+    judge_calibration_state: (
+        Literal["unavailable", "failed", "passed", "invalidated", "enabled"] | None
+    ) = None
+    oracle_agreement: bool | None = None
+    decision_authority: Literal["oracle", "model", "none"] | None = None
     p50_duration_ms: float | None = Field(default=None, ge=0)
     p95_duration_ms: float | None = Field(default=None, ge=0)
     langfuse_status: Literal[
@@ -439,8 +453,40 @@ class TraceReadModel(_ReadModel):
             self.measured_cost != 0
             or self.input_tokens is not None
             or self.output_tokens is not None
+            or self.reasoning_tokens is not None
         ):
             raise ValueError("unavailable trace accounting cannot contain measured values")
+        if self.accounting_status == "partial" and (
+            self.agent_role is None or self.physical_attempts is None
+        ):
+            raise ValueError("partial trace accounting requires an observed agent provider call")
+        provider_identity = (
+            self.returned_model,
+            self.upstream_provider,
+            self.provider_request_id,
+        )
+        if any(value is None for value in provider_identity) != all(
+            value is None for value in provider_identity
+        ):
+            raise ValueError("trace provider identity must be recorded as one complete tuple")
+        if self.agent_role is None and any(
+            value is not None
+            for value in (
+                *provider_identity,
+                self.configuration_set_sha256,
+                self.role_configuration_sha256,
+                self.generation_policy_sha256,
+                self.physical_attempts,
+                self.reasoning_tokens,
+                self.judge_calibration_id,
+                self.judge_calibration_state,
+                self.oracle_agreement,
+                self.decision_authority,
+            )
+        ):
+            raise ValueError("non-agent traces cannot contain hosted agent lineage")
+        if self.decision_authority == "model" and self.judge_calibration_state != "enabled":
+            raise ValueError("model authority requires an enabled Judge calibration")
         if (self.langfuse_status == "exported") != (self.langfuse_verified_at is not None):
             raise ValueError("exported trace delivery requires exact Langfuse query-back proof")
         role_latencies = (self.p50_duration_ms, self.p95_duration_ms)
@@ -463,6 +509,106 @@ class TraceReadModel(_ReadModel):
         return self
 
 
+class AgentBudgetReadModel(_ReadModel):
+    """One role's campaign-scoped subcap plus the shared provider kill switch."""
+
+    status: Literal["staged_pending_authorization", "active", "unavailable"]
+    campaign_run_id: str | None = None
+    configuration_set_sha256: str | None = None
+    role_usd_cap: float | None = Field(default=None, ge=0)
+    role_usd_spent: float = Field(ge=0)
+    role_usd_remaining: float | None = Field(default=None, ge=0)
+    role_usd_overrun: float = Field(ge=0)
+    role_call_cap: int | None = Field(default=None, ge=1)
+    role_physical_calls: int = Field(ge=0)
+    role_calls_remaining: int | None = Field(default=None, ge=0)
+    role_call_overrun: int = Field(ge=0)
+    global_usd_cap: float | None = Field(default=None, ge=0)
+    global_usd_spent: float = Field(ge=0)
+    global_usd_remaining: float | None = Field(default=None, ge=0)
+    global_usd_overrun: float = Field(ge=0)
+    global_call_cap: int | None = Field(default=None, ge=1)
+    global_physical_calls: int = Field(ge=0)
+    global_calls_remaining: int | None = Field(default=None, ge=0)
+    global_call_overrun: int = Field(ge=0)
+
+    @model_validator(mode="after")
+    def validate_budget_reconciliation(self) -> Self:
+        cap_values = (
+            self.role_usd_cap,
+            self.role_usd_remaining,
+            self.role_call_cap,
+            self.role_calls_remaining,
+            self.global_usd_cap,
+            self.global_usd_remaining,
+            self.global_call_cap,
+            self.global_calls_remaining,
+        )
+        if self.status == "unavailable":
+            if any(value is not None for value in cap_values):
+                raise ValueError("unavailable hosted budget cannot contain inferred caps")
+            if self.configuration_set_sha256 is not None or self.campaign_run_id is not None:
+                raise ValueError("unavailable hosted budget cannot identify a configuration")
+            if any(
+                value != 0
+                for value in (
+                    self.role_usd_spent,
+                    self.role_usd_overrun,
+                    self.role_physical_calls,
+                    self.role_call_overrun,
+                    self.global_usd_spent,
+                    self.global_usd_overrun,
+                    self.global_physical_calls,
+                    self.global_call_overrun,
+                )
+            ):
+                raise ValueError("unavailable hosted budget cannot claim provider usage")
+            return self
+        if any(value is None for value in cap_values):
+            raise ValueError("hosted budget requires complete role and global cap reconciliation")
+        if self.configuration_set_sha256 is None:
+            raise ValueError("hosted budget requires its configuration-set identity")
+        if self.status == "active" and self.campaign_run_id is None:
+            raise ValueError("active hosted budget requires its campaign identity")
+        if self.status == "staged_pending_authorization" and self.campaign_run_id is not None:
+            raise ValueError("staged hosted budget cannot claim campaign activity")
+        assert self.role_usd_cap is not None
+        assert self.role_usd_remaining is not None
+        assert self.role_call_cap is not None
+        assert self.role_calls_remaining is not None
+        assert self.global_usd_cap is not None
+        assert self.global_usd_remaining is not None
+        assert self.global_call_cap is not None
+        assert self.global_calls_remaining is not None
+        if (
+            abs(
+                (self.role_usd_spent + self.role_usd_remaining)
+                - (self.role_usd_cap + self.role_usd_overrun)
+            )
+            > 0.000001
+        ):
+            raise ValueError("role provider spend does not reconcile to its subcap")
+        if (
+            self.role_physical_calls + self.role_calls_remaining
+            != self.role_call_cap + self.role_call_overrun
+        ):
+            raise ValueError("role provider calls do not reconcile to their subcap")
+        if (
+            abs(
+                (self.global_usd_spent + self.global_usd_remaining)
+                - (self.global_usd_cap + self.global_usd_overrun)
+            )
+            > 0.000001
+        ):
+            raise ValueError("global provider spend does not reconcile to its kill switch")
+        if (
+            self.global_physical_calls + self.global_calls_remaining
+            != self.global_call_cap + self.global_call_overrun
+        ):
+            raise ValueError("global provider calls do not reconcile to their kill switch")
+        return self
+
+
 class CostReadModel(_ReadModel):
     accounting_id: str
     campaign_id: str
@@ -479,7 +625,10 @@ class CostReadModel(_ReadModel):
     average_cost_per_request: float = Field(ge=0)
     input_tokens: int | None = Field(default=None, ge=0)
     output_tokens: int | None = Field(default=None, ge=0)
+    reasoning_tokens: int | None = Field(default=None, ge=0)
     token_observation_count: int = Field(ge=0)
+    physical_call_count: int = Field(ge=0)
+    provider_budget: AgentBudgetReadModel | None = None
     p50_duration_ms: float | None = Field(default=None, ge=0)
     p95_duration_ms: float | None = Field(default=None, ge=0)
     budget_usd: float | None = Field(default=None, ge=0)
@@ -503,9 +652,18 @@ class CostReadModel(_ReadModel):
         if self.accounting_status in {"partial", "unavailable"} and self.record_kind != "agent":
             raise ValueError("partial accounting states apply only to agent cost records")
         if self.accounting_status == "unavailable" and (
-            self.measured_cost != 0 or self.token_observation_count != 0
+            self.measured_cost != 0
+            or self.token_observation_count != 0
+            or self.reasoning_tokens is not None
+            or self.physical_call_count != 0
         ):
             raise ValueError("unavailable agent accounting cannot contain measured values")
+        if (self.record_kind == "agent") != (self.provider_budget is not None):
+            raise ValueError("only agent cost records carry a role provider budget")
+        if self.record_kind == "campaign" and (
+            self.reasoning_tokens is not None or self.physical_call_count != 0
+        ):
+            raise ValueError("target campaign cost records cannot contain provider call accounting")
         role_latencies = (self.p50_duration_ms, self.p95_duration_ms)
         if self.record_kind == "campaign" and any(value is not None for value in role_latencies):
             raise ValueError("campaign cost records cannot contain agent role percentiles")
@@ -579,6 +737,59 @@ class AgentAssignmentReadModel(_ReadModel):
         return self
 
 
+class JudgeCalibrationSummaryReadModel(_ReadModel):
+    """Observed live-evaluator reconciliation; never a substitute for calibration evidence."""
+
+    state: Literal["unavailable", "failed", "passed", "invalidated", "enabled"]
+    calibration_id: str | None = None
+    decision_authority: Literal["oracle", "model", "none"]
+    oracle_comparison_count: int = Field(ge=0)
+    oracle_agreement_count: int = Field(ge=0)
+    oracle_agreement_rate: float | None = Field(default=None, ge=0, le=1)
+    status_label: Literal[
+        "not yet measured",
+        "live, verified against oracle",
+        "live, model-decisive after calibration",
+    ]
+
+    @model_validator(mode="after")
+    def validate_calibration_status(self) -> Self:
+        if self.oracle_agreement_count > self.oracle_comparison_count:
+            raise ValueError("Judge agreements cannot exceed observed comparisons")
+        if self.oracle_comparison_count == 0:
+            if self.oracle_agreement_rate is not None:
+                raise ValueError("Judge agreement rate requires observed comparisons")
+        else:
+            expected = self.oracle_agreement_count / self.oracle_comparison_count
+            if (
+                self.oracle_agreement_rate is None
+                or abs(self.oracle_agreement_rate - expected) > 1e-9
+            ):
+                raise ValueError("Judge agreement rate does not reconcile to observed calls")
+        if self.state == "unavailable":
+            if self.calibration_id is not None:
+                raise ValueError("unavailable Judge calibration cannot claim an artifact")
+        elif self.calibration_id is None:
+            raise ValueError("measured Judge calibration requires its artifact identity")
+        if self.decision_authority == "model":
+            if (
+                self.state != "enabled"
+                or self.status_label != "live, model-decisive after calibration"
+            ):
+                raise ValueError("model authority requires an enabled, honestly labeled gate")
+        elif self.status_label == "live, model-decisive after calibration":
+            raise ValueError("model-decisive label contradicts the recorded authority")
+        if self.oracle_comparison_count == 0 and self.status_label != "not yet measured":
+            raise ValueError("live Judge label requires at least one oracle comparison")
+        if (
+            self.oracle_comparison_count > 0
+            and self.decision_authority != "model"
+            and self.status_label != "live, verified against oracle"
+        ):
+            raise ValueError("oracle-checked Judge activity requires the verified label")
+        return self
+
+
 class AgentReadModel(_ReadModel):
     role: str
     display_name: str
@@ -599,7 +810,11 @@ class AgentReadModel(_ReadModel):
     currency: str
     input_tokens: int | None = Field(default=None, ge=0)
     output_tokens: int | None = Field(default=None, ge=0)
+    reasoning_tokens: int | None = Field(default=None, ge=0)
     token_observation_count: int = Field(ge=0)
+    physical_call_count: int = Field(ge=0)
+    provider_budget: AgentBudgetReadModel
+    judge_calibration: JudgeCalibrationSummaryReadModel | None = None
     average_duration_ms: float | None = Field(default=None, ge=0)
     p50_duration_ms: float | None = Field(default=None, ge=0)
     p95_duration_ms: float | None = Field(default=None, ge=0)
@@ -642,9 +857,14 @@ class AgentReadModel(_ReadModel):
         if (self.execution_count == 0) != (self.accounting_status == "not_applicable"):
             raise ValueError("agent accounting applicability must match execution_count")
         if self.accounting_status == "unavailable" and (
-            self.measured_cost != 0 or self.token_observation_count != 0
+            self.measured_cost != 0
+            or self.token_observation_count != 0
+            or self.reasoning_tokens is not None
+            or self.physical_call_count != 0
         ):
             raise ValueError("unavailable agent accounting cannot contain measured values")
+        if (self.role == "judge") != (self.judge_calibration is not None):
+            raise ValueError("only the Judge carries evaluator calibration status")
         completed_count = status_total - self.running_count
         latency_values = (
             self.average_duration_ms,
@@ -674,19 +894,33 @@ class AgentActivityReadModel(_ReadModel):
     status: Literal["running", "succeeded", "failed", "skipped"]
     provider: str
     model: str
+    returned_model: str | None = None
+    upstream_provider: str | None = None
+    provider_request_id: str | None = None
     execution_mode: Literal["deterministic", "hosted_advisory"]
     configuration_version: int = Field(ge=1)
+    configuration_set_sha256: str | None = None
+    role_configuration_sha256: str | None = None
+    generation_policy_sha256: str | None = None
     input_sha256: str
     output_sha256: str | None = None
     input_tokens: int | None = Field(default=None, ge=0)
     output_tokens: int | None = Field(default=None, ge=0)
+    reasoning_tokens: int | None = Field(default=None, ge=0)
+    physical_attempts: int | None = Field(default=None, ge=1)
     measured_cost: float = Field(ge=0)
-    accounting_status: Literal["measured", "unavailable"]
+    accounting_status: Literal["measured", "partial", "unavailable"]
     currency: str
     trace_id: str
     langfuse_status: Literal["not_attempted", "disabled", "queued", "exported", "error"]
     langfuse_verified_at: datetime.datetime | None = None
     detail: dict[str, Any]
+    judge_calibration_id: str | None = None
+    judge_calibration_state: (
+        Literal["unavailable", "failed", "passed", "invalidated", "enabled"] | None
+    ) = None
+    oracle_agreement: bool | None = None
+    decision_authority: Literal["oracle", "model", "none"] | None = None
     error_code: str | None = None
     started_at: datetime.datetime
     finished_at: datetime.datetime | None = None
@@ -700,11 +934,15 @@ class AgentActivityReadModel(_ReadModel):
         if self.status != "running" and any(value is None for value in terminal_values):
             raise ValueError("terminal agent activity requires output, finish time, and duration")
         provider_accounting_complete = (
-            self.input_tokens is not None and self.output_tokens is not None
+            self.input_tokens is not None
+            and self.output_tokens is not None
+            and (self.configuration_set_sha256 is None or self.reasoning_tokens is not None)
         )
         expected_accounting_status = (
             "measured"
             if self.execution_mode == "deterministic" or provider_accounting_complete
+            else "partial"
+            if self.physical_attempts is not None
             else "unavailable"
         )
         if self.accounting_status != expected_accounting_status:
@@ -713,8 +951,62 @@ class AgentActivityReadModel(_ReadModel):
             self.measured_cost != 0
             or (self.input_tokens or 0) != 0
             or (self.output_tokens or 0) != 0
+            or (self.reasoning_tokens or 0) != 0
         ):
             raise ValueError("unavailable agent activity accounting cannot contain measured values")
+        if self.accounting_status == "partial" and self.physical_attempts is None:
+            raise ValueError("partial agent activity requires an observed provider call")
+        provider_identity = (
+            self.returned_model,
+            self.upstream_provider,
+            self.provider_request_id,
+        )
+        if any(value is None for value in provider_identity) != all(
+            value is None for value in provider_identity
+        ):
+            raise ValueError("agent activity provider identity must be one complete tuple")
+        authority = (
+            self.configuration_set_sha256,
+            self.role_configuration_sha256,
+            self.generation_policy_sha256,
+        )
+        if any(value is None for value in authority) != all(value is None for value in authority):
+            raise ValueError("agent activity hosted authority must be one complete tuple")
+        if self.execution_mode == "deterministic" and any(
+            value is not None
+            for value in (
+                *provider_identity,
+                *authority,
+                self.reasoning_tokens,
+                self.physical_attempts,
+                self.judge_calibration_id,
+                self.judge_calibration_state,
+                self.oracle_agreement,
+                self.decision_authority,
+            )
+        ):
+            raise ValueError("deterministic activity cannot claim hosted provider lineage")
+        if (
+            self.execution_mode == "hosted_advisory"
+            and self.status == "succeeded"
+            and self.configuration_set_sha256 is not None
+            and (
+                any(value is None for value in provider_identity)
+                or not provider_accounting_complete
+                or self.physical_attempts is None
+            )
+        ):
+            raise ValueError("successful hosted activity requires complete measured lineage")
+        judge_values = (
+            self.judge_calibration_id,
+            self.judge_calibration_state,
+            self.oracle_agreement,
+            self.decision_authority,
+        )
+        if self.agent_role != "judge" and any(value is not None for value in judge_values):
+            raise ValueError("non-Judge activity cannot claim evaluator reconciliation")
+        if self.decision_authority == "model" and self.judge_calibration_state != "enabled":
+            raise ValueError("model authority requires an enabled Judge calibration")
         if (self.langfuse_status == "exported") != (self.langfuse_verified_at is not None):
             raise ValueError("exported agent activity requires exact Langfuse query-back proof")
         return self
@@ -1051,6 +1343,7 @@ __all__ = [
     "ApprovalDetailReadModel",
     "AgentActivityReadModel",
     "AgentAssignmentReadModel",
+    "AgentBudgetReadModel",
     "AgentPromptReadModel",
     "AgentReadModel",
     "AttemptReadModel",
@@ -1075,6 +1368,7 @@ __all__ = [
     "FindingReadModel",
     "FindingDetailReadModel",
     "FindingVerificationReadModel",
+    "JudgeCalibrationSummaryReadModel",
     "PrincipalReadModel",
     "ReportReadModel",
     "ResilienceReadModel",

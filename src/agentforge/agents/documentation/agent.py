@@ -80,13 +80,7 @@ class DocumentationAgent:
     ) -> dict[str, Any]:
         """Return a draft-only ``VulnReport`` or fail closed without emitting a payload."""
 
-        self._validate_verdict(verdict)
-        self._validate_input(report_input)
-        if (
-            verdict["campaign_run_id"] != report_input.campaign_run_id
-            or verdict["attempt_id"] != report_input.attempt_id
-        ):
-            raise DocumentationInputError("verdict/report correlation mismatch; refusing to draft")
+        self.validate_request(verdict=verdict, report_input=report_input)
 
         steps = tuple(
             self._bounded_text("minimal reproduction", step)
@@ -148,6 +142,23 @@ class DocumentationAgent:
         self._reports_by_id[report_key] = copy.deepcopy(report)
         self._finding_by_reproduction[reproduction_key] = report_input.finding_id
         return copy.deepcopy(report)
+
+    @classmethod
+    def validate_request(
+        cls,
+        *,
+        verdict: Mapping[str, Any],
+        report_input: DocumentationInput,
+    ) -> None:
+        """Validate the confirmed, sanitized drafting boundary without creating a report."""
+
+        cls._validate_verdict(verdict)
+        cls._validate_input(report_input)
+        if (
+            verdict["campaign_run_id"] != report_input.campaign_run_id
+            or verdict["attempt_id"] != report_input.attempt_id
+        ):
+            raise DocumentationInputError("verdict/report correlation mismatch; refusing to draft")
 
     @staticmethod
     def _validate_verdict(verdict: Mapping[str, Any]) -> None:

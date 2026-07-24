@@ -11,8 +11,10 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from decimal import Decimal
+from types import MappingProxyType
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -23,19 +25,29 @@ from agentforge.secrets import looks_like_provider_key
 HOSTED_CONFIGURATION_SCHEMA_VERSION = "1"
 HOSTED_PROVIDER = "openrouter"
 HOSTED_MAX_PHYSICAL_CALLS = 56
-HOSTED_MAX_MEASURED_USD = Decimal("5")
+HOSTED_MAX_MEASURED_USD = Decimal("10")
 HOSTED_MAX_LOGICAL_RETRIES = 1
 HOSTED_MAX_CONCURRENCY = 1
-HOSTED_ROLE_MODELS: dict[AgentRole, str] = {
-    "orchestrator": "anthropic/claude-opus-4.8",
-    "red_team": "qwen/qwen3.5-397b-a17b",
-    "judge": "google/gemini-2.5-pro",
-    "documentation": "openai/gpt-5.4",
-}
+HOSTED_ROLE_MODELS: Mapping[AgentRole, str] = MappingProxyType(
+    {
+        "orchestrator": "anthropic/claude-opus-4.8",
+        "red_team": "qwen/qwen3.5-397b-a17b",
+        "judge": "google/gemini-2.5-pro",
+        "documentation": "openai/gpt-5.4",
+    }
+)
+HOSTED_ROLE_MAX_MEASURED_USD: Mapping[AgentRole, Decimal] = MappingProxyType(
+    {
+        "orchestrator": Decimal("1.50"),
+        "red_team": Decimal("1"),
+        "judge": Decimal("4"),
+        "documentation": Decimal("1"),
+    }
+)
 
 _HEX64 = re.compile(r"\A[0-9a-f]{64}\Z")
 _MODEL_ID = re.compile(r"\A[a-z0-9][a-z0-9._-]{0,63}/[a-z0-9][a-z0-9._-]{0,127}\Z")
-_UPSTREAM_PROVIDER = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9._ -]{0,63}\Z")
+_UPSTREAM_PROVIDER = re.compile(r"\A[a-z0-9][a-z0-9-]{0,63}\Z")
 _REFERENCE_AUTHORITY = re.compile(r"\A[a-z0-9][a-z0-9._-]{0,63}\Z")
 _REFERENCE_SEGMENT = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9._~-]{0,127}\Z")
 _ALIAS_MODEL_NAMES = frozenset({"auto", "default", "latest"})
@@ -128,7 +140,7 @@ def _validate_upstream_provider(value: object) -> str:
     if (
         not isinstance(value, str)
         or _UPSTREAM_PROVIDER.fullmatch(value) is None
-        or value.lower() in {"auto", "default", "any"}
+        or value in {"auto", "default", "any"}
     ):
         raise ValueError("upstream provider must be one exact OpenRouter provider slug")
     return value
@@ -287,7 +299,12 @@ class HostedLimits:
 
 @dataclass(frozen=True, slots=True)
 class HostedRoleConfiguration:
-    """One immutable role identity and its authorization-bound provider envelope."""
+    """One immutable role identity and its authorization-bound provider envelope.
+
+    ``upstream_provider`` is the exact lowercase OpenRouter routing slug sent in
+    ``provider.only``. The provider display identity returned by router metadata
+    is observed separately on each execution.
+    """
 
     role: AgentRole
     provider: str
@@ -320,6 +337,11 @@ class HostedRoleConfiguration:
             raise TypeError("hosted prices must use TokenPrices")
         if not isinstance(self.limits, HostedLimits):
             raise TypeError("hosted role limits must use HostedLimits")
+        role_usd_ceiling = HOSTED_ROLE_MAX_MEASURED_USD[self.role]
+        if self.limits.max_usd > role_usd_ceiling:
+            raise ValueError(
+                f"{self.role} measured-spend cap exceeds the closed role ceiling {role_usd_ceiling}"
+            )
         object.__setattr__(
             self,
             "configuration_sha256",
@@ -542,6 +564,7 @@ __all__ = [
     "HOSTED_MAX_MEASURED_USD",
     "HOSTED_MAX_PHYSICAL_CALLS",
     "HOSTED_PROVIDER",
+    "HOSTED_ROLE_MAX_MEASURED_USD",
     "HOSTED_ROLE_MODELS",
     "HostedConfigurationPreflight",
     "HostedConfigurationSet",

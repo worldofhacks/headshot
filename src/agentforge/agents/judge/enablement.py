@@ -41,6 +41,19 @@ def require_model_judge_enablement(
         sort_keys=True,
     ).encode("utf-8")
     current_sha256 = hashlib.sha256(encoded).hexdigest()
+    embedded_identity = candidate["judge_identity"]
+    embedded_encoded = json.dumps(
+        embedded_identity,
+        allow_nan=False,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    embedded_sha256 = hashlib.sha256(embedded_encoded).hexdigest()
+    if embedded_sha256 != candidate["identity_sha256"]:
+        raise CalibrationGateClosed("model Judge calibration identity is invalid")
+    if embedded_identity != identity:
+        raise CalibrationGateClosed("Judge identity drift requires recalibration")
     if candidate["identity_sha256"] != current_sha256:
         raise CalibrationGateClosed("Judge identity drift requires recalibration")
     if not candidate["independent_from_red_team"]:

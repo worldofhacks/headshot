@@ -408,7 +408,7 @@ def test_scope_hash_binds_complete_non_secret_hosted_run_authority() -> None:
     "overrides",
     (
         {"provider_model_call_limit": 57},
-        {"provider_model_spend_limit_usd": "5.01"},
+        {"provider_model_spend_limit_usd": "10.01"},
         {"provider_max_retries": 2},
         {"provider_max_concurrency": 2},
     ),
@@ -429,3 +429,18 @@ def test_hosted_run_binding_enforces_frozen_platform_ceilings(
     values.update(overrides)
     with pytest.raises(DefinitionError):
         HostedRunBinding(**values)  # type: ignore[arg-type]
+
+
+def test_hosted_run_binding_accepts_the_ten_dollar_global_kill_switch() -> None:
+    binding = HostedRunBinding(
+        configuration_set_sha256="b" * 64,
+        generation_policy_sha256="c" * 64,
+        session_generation="generation-20260724",
+        provider_model_call_limit=56,
+        provider_model_spend_limit_usd="10",
+        provider_max_retries=1,
+        provider_max_concurrency=1,
+        provider_timeout_seconds=30.0,
+    )
+
+    assert binding.provider_model_spend_limit_usd == "10"

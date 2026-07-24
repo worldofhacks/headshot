@@ -1491,11 +1491,25 @@ class AgentExecution(Base):
     configuration_version: Mapped[int] = mapped_column(Integer, nullable=False)
     input_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
     output_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    returned_model: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    upstream_provider: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    provider_request_id: Mapped[str | None] = mapped_column(String(256), nullable=True)
     input_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     output_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    measured_cost: Mapped[float] = mapped_column(Numeric(14, 6), nullable=False, server_default="0")
+    reasoning_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    measured_cost: Mapped[float] = mapped_column(
+        Numeric(20, 12), nullable=False, server_default="0"
+    )
     currency: Mapped[str] = mapped_column(String(3), nullable=False, server_default="USD")
     trace_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    configuration_set_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    role_configuration_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    generation_policy_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    physical_attempts: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    judge_calibration_id: Mapped[str | None] = mapped_column(String(67), nullable=True)
+    judge_calibration_state: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    oracle_agreement: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    decision_authority: Mapped[str | None] = mapped_column(String(16), nullable=True)
     langfuse_status: Mapped[str] = mapped_column(
         String(16), nullable=False, server_default="not_attempted"
     )
@@ -1543,6 +1557,88 @@ class AgentExecution(Base):
             "output_tokens IS NULL OR output_tokens >= 0",
             name="agent_execution_output_tokens",
         ),
+        CheckConstraint(
+            "(configuration_set_sha256 IS NULL OR "
+            "configuration_set_sha256 ~ '^[0-9a-f]{64}$') AND "
+            "(role_configuration_sha256 IS NULL OR "
+            "role_configuration_sha256 ~ '^[0-9a-f]{64}$') AND "
+            "(generation_policy_sha256 IS NULL OR "
+            "generation_policy_sha256 ~ '^[0-9a-f]{64}$')",
+            name="agent_execution_hosted_hashes",
+        ),
+        CheckConstraint(
+            "(reasoning_tokens IS NULL OR reasoning_tokens >= 0) AND "
+            "(physical_attempts IS NULL OR physical_attempts > 0)",
+            name="agent_execution_hosted_accounting",
+        ),
+        CheckConstraint(
+            "((returned_model IS NULL AND upstream_provider IS NULL "
+            "AND provider_request_id IS NULL) OR "
+            "(returned_model IS NOT NULL AND upstream_provider IS NOT NULL "
+            "AND provider_request_id IS NOT NULL)) AND "
+            "(returned_model IS NULL OR returned_model = model)",
+            name="agent_execution_provider_identity",
+        ),
+        CheckConstraint(
+            "configuration_set_sha256 IS NULL OR "
+            "((returned_model IS NULL AND upstream_provider IS NULL "
+            "AND provider_request_id IS NULL AND input_tokens IS NULL "
+            "AND output_tokens IS NULL AND reasoning_tokens IS NULL) OR "
+            "(returned_model IS NOT NULL AND upstream_provider IS NOT NULL "
+            "AND provider_request_id IS NOT NULL AND input_tokens IS NOT NULL "
+            "AND output_tokens IS NOT NULL AND reasoning_tokens IS NOT NULL "
+            "AND physical_attempts IS NOT NULL))",
+            name="agent_execution_hosted_measurement_tuple",
+        ),
+        CheckConstraint(
+            "configuration_set_sha256 IS NULL OR "
+            "(execution_mode = 'hosted_advisory' "
+            "AND role_configuration_sha256 IS NOT NULL "
+            "AND generation_policy_sha256 IS NOT NULL)",
+            name="agent_execution_hosted_authority",
+        ),
+        CheckConstraint(
+            "NOT (configuration_set_sha256 IS NOT NULL AND status = 'succeeded') OR "
+            "(returned_model IS NOT NULL AND upstream_provider IS NOT NULL "
+            "AND provider_request_id IS NOT NULL AND input_tokens IS NOT NULL "
+            "AND output_tokens IS NOT NULL AND reasoning_tokens IS NOT NULL "
+            "AND physical_attempts IS NOT NULL)",
+            name="agent_execution_hosted_terminal_lineage",
+        ),
+        CheckConstraint(
+            "judge_calibration_state IS NULL OR judge_calibration_state IN "
+            "('unavailable','failed','passed','invalidated','enabled')",
+            name="agent_execution_judge_calibration_state",
+        ),
+        CheckConstraint(
+            "judge_calibration_id IS NULL OR judge_calibration_id ~ '^JC-[0-9a-f]{64}$'",
+            name="agent_execution_judge_calibration_id",
+        ),
+        CheckConstraint(
+            "(judge_calibration_id IS NULL AND judge_calibration_state IS NULL "
+            "AND oracle_agreement IS NULL AND decision_authority IS NULL) OR "
+            "(agent_role = 'judge' AND execution_mode = 'hosted_advisory' "
+            "AND configuration_set_sha256 IS NOT NULL "
+            "AND judge_calibration_state IS NOT NULL "
+            "AND ((judge_calibration_state = 'unavailable' "
+            "AND judge_calibration_id IS NULL) OR "
+            "(judge_calibration_state <> 'unavailable' "
+            "AND judge_calibration_id IS NOT NULL)) "
+            "AND (decision_authority IS NULL OR "
+            "decision_authority IN ('oracle','model','none')) "
+            "AND (decision_authority <> 'model' OR "
+            "judge_calibration_state = 'enabled'))",
+            name="agent_execution_judge_reconciliation",
+        ),
+        CheckConstraint(
+            "NOT (configuration_set_sha256 IS NOT NULL AND agent_role = 'judge' "
+            "AND status = 'succeeded') OR decision_authority IS NOT NULL",
+            name="agent_execution_judge_terminal_authority",
+        ),
+        CheckConstraint(
+            "(oracle_agreement IS NULL AND decision_authority IS NULL) OR status <> 'running'",
+            name="agent_execution_reconciliation_terminal",
+        ),
         CheckConstraint("measured_cost >= 0", name="agent_execution_cost"),
         CheckConstraint(
             "langfuse_status IN ('not_attempted','disabled','queued','exported','error')",
@@ -1581,6 +1677,11 @@ class AgentExecution(Base):
             "organization_id",
             "langfuse_status",
             "started_at",
+        ),
+        Index(
+            "ix_agent_execution_provider_request",
+            "organization_id",
+            "provider_request_id",
         ),
     )
 

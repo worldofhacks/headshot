@@ -38,10 +38,16 @@ def _digest(value: str) -> str:
 
 def _configuration() -> HostedConfigurationSet:
     values = {
-        "orchestrator": ("anthropic/claude-opus-4.8", "Anthropic", 8),
-        "red_team": ("qwen/qwen3.5-397b-a17b", "Together", 21),
-        "judge": ("google/gemini-2.5-pro", "Google", 21),
-        "documentation": ("openai/gpt-5.4", "OpenAI", 6),
+        "orchestrator": ("anthropic/claude-opus-4.8", "anthropic", 9),
+        "red_team": ("qwen/qwen3.5-397b-a17b", "together", 19),
+        "judge": ("google/gemini-2.5-pro", "google-vertex", 19),
+        "documentation": ("openai/gpt-5.4", "openai", 9),
+    }
+    usd_caps = {
+        "orchestrator": Decimal("1.5"),
+        "red_team": Decimal("1"),
+        "judge": Decimal("4"),
+        "documentation": Decimal("1"),
     }
     return HostedConfigurationSet(
         roles=tuple(
@@ -59,7 +65,7 @@ def _configuration() -> HostedConfigurationSet:
                     max_input_tokens=10000,
                     max_output_tokens=10000,
                     max_reasoning_tokens=10000,
-                    max_usd=Decimal("5"),
+                    max_usd=usd_caps[role],
                     max_retries=1,
                     max_requests_per_second=Decimal("0.5"),
                     max_concurrency=1,

@@ -408,11 +408,11 @@ class HostedRunBinding:
         if (
             not spend.is_finite()
             or spend <= 0
-            or spend > Decimal("5")
+            or spend > Decimal("10")
             or self.provider_model_spend_limit_usd != format(spend, "f")
         ):
             raise DefinitionError(
-                "provider_model_spend_limit_usd must be canonical decimal text at most 5"
+                "provider_model_spend_limit_usd must be canonical decimal text at most 10"
             )
         if type(self.provider_max_retries) is not int or not 0 <= self.provider_max_retries <= 1:
             raise DefinitionError("provider_max_retries must be zero or one")

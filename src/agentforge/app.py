@@ -120,5 +120,8 @@ app = create_web_app(
         # Launch only appends exact approved work to the durable queue. The private Runner
         # independently reconstructs and revalidates every dispatch fact from Postgres.
         runner_available=True,
+        # The shared HostedRoleRuntime/OpenRouter composition is part of this release. Exact
+        # credential readiness remains Runner-only and is projected per configuration hash.
+        hosted_runtime_available=True,
     ),
 )

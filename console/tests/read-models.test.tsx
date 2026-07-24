@@ -58,6 +58,27 @@ const scope = {
   execution_profile: "live",
   hosted_run: null,
 };
+const unavailableProviderBudget = {
+  status: "unavailable",
+  campaign_run_id: null,
+  configuration_set_sha256: null,
+  role_usd_cap: null,
+  role_usd_spent: 0,
+  role_usd_remaining: null,
+  role_usd_overrun: 0,
+  role_call_cap: null,
+  role_physical_calls: 0,
+  role_calls_remaining: null,
+  role_call_overrun: 0,
+  global_usd_cap: null,
+  global_usd_spent: 0,
+  global_usd_remaining: null,
+  global_usd_overrun: 0,
+  global_call_cap: null,
+  global_physical_calls: 0,
+  global_calls_remaining: null,
+  global_call_overrun: 0,
+};
 const finding = {
   finding_id: "finding-1",
   state: "confirmed",
@@ -211,12 +232,12 @@ const validResources: Array<[string, (value: unknown) => unknown, unknown]> = [
   [
     "traces",
     decodeTraces,
-    [{ request_id: "request-1", execution_id: null, parent_execution_id: null, trace_id: "trace-1", campaign_id: "run-1", attempt_id: "attempt-1", operation: "target.http", provider: "openemr", agent_role: null, execution_mode: null, method: "POST", destination_host: "target.invalid", relative_path: "chat", status: "succeeded", status_code: 200, error_code: null, started_at: at, finished_at: "2026-07-21T00:00:00.012Z", duration_ms: 12.5, request_bytes: 25, response_bytes: 50, measured_cost: 0.01, accounting_status: "measured", currency: "USD", input_tokens: null, output_tokens: null, p50_duration_ms: null, p95_duration_ms: null, langfuse_status: "queued", langfuse_verified_at: null, request_preview: '{"turns":["synthetic"]}', response_preview: '{"answer":"safe"}', request_sha256: "a".repeat(64), response_sha256: "b".repeat(64), inspection_flags: [], inspection_owasp_mappings: [] }],
+    [{ request_id: "request-1", execution_id: null, parent_execution_id: null, trace_id: "trace-1", campaign_id: "run-1", attempt_id: "attempt-1", operation: "target.http", provider: "openemr", agent_role: null, execution_mode: null, returned_model: null, upstream_provider: null, provider_request_id: null, configuration_set_sha256: null, role_configuration_sha256: null, generation_policy_sha256: null, physical_attempts: null, method: "POST", destination_host: "target.invalid", relative_path: "chat", status: "succeeded", status_code: 200, error_code: null, started_at: at, finished_at: "2026-07-21T00:00:00.012Z", duration_ms: 12.5, request_bytes: 25, response_bytes: 50, measured_cost: 0.01, accounting_status: "measured", currency: "USD", input_tokens: null, output_tokens: null, reasoning_tokens: null, judge_calibration_id: null, judge_calibration_state: null, oracle_agreement: null, decision_authority: null, p50_duration_ms: null, p95_duration_ms: null, langfuse_status: "queued", langfuse_verified_at: null, request_preview: '{"turns":["synthetic"]}', response_preview: '{"answer":"safe"}', request_sha256: "a".repeat(64), response_sha256: "b".repeat(64), inspection_flags: [], inspection_owasp_mappings: [] }],
   ],
   [
     "costs",
     decodeCosts,
-    [{ accounting_id: "accounting-1", campaign_id: "run-1", provider: "provider", agent_role: null, record_kind: "campaign", measured_cost: 0.25, accounting_status: "measured", currency: "USD", request_count: 5, execution_count: 0, attempt_count: 5, confirmed_finding_count: 1, average_cost_per_request: 0.05, input_tokens: null, output_tokens: null, token_observation_count: 0, p50_duration_ms: null, p95_duration_ms: null, budget_usd: 1, budget_utilization: 0.25, duration_ms: 2500, execution_profile: "live", started_at: at, ended_at: "2026-07-21T00:00:02.500Z", recorded_at: at }],
+    [{ accounting_id: "accounting-1", campaign_id: "run-1", provider: "provider", agent_role: null, record_kind: "campaign", measured_cost: 0.25, accounting_status: "measured", currency: "USD", request_count: 5, execution_count: 0, attempt_count: 5, confirmed_finding_count: 1, average_cost_per_request: 0.05, input_tokens: null, output_tokens: null, reasoning_tokens: null, token_observation_count: 0, physical_call_count: 0, provider_budget: null, p50_duration_ms: null, p95_duration_ms: null, budget_usd: 1, budget_utilization: 0.25, duration_ms: 2500, execution_profile: "live", started_at: at, ended_at: "2026-07-21T00:00:02.500Z", recorded_at: at }],
   ],
   [
     "targets and surfaces",
@@ -304,7 +325,11 @@ const validResources: Array<[string, (value: unknown) => unknown, unknown]> = [
       currency: "USD",
       input_tokens: null,
       output_tokens: null,
+      reasoning_tokens: null,
       token_observation_count: 0,
+      physical_call_count: 0,
+      provider_budget: unavailableProviderBudget,
+      judge_calibration: null,
       average_duration_ms: 5,
       p50_duration_ms: 5,
       p95_duration_ms: 5,
@@ -555,6 +580,17 @@ describe("v1 read-model decoders", () => {
       ...campaign,
       hosted_run: { ...hostedRun, unexpected: true },
     }])).toThrow("Invalid hosted run binding read model");
+    expect(() => decodeCampaigns([{
+      ...campaign,
+      hosted_run: { ...hostedRun, configuration_set_sha256: "A".repeat(64) },
+    }])).toThrow("Invalid hosted run binding read model");
+    expect(() => decodeCampaigns([{
+      ...campaign,
+      hosted_run: {
+        ...hostedRun,
+        credential_reference: "secretref://staging/openrouter/orchestrator/generation-1",
+      },
+    }])).toThrow("Invalid hosted run binding read model");
   });
 
   it("decodes the explicit null hosted campaign binding", () => {
@@ -646,6 +682,7 @@ describe("v1 read-model decoders", () => {
       attempt_count: 1,
       confirmed_finding_count: 0,
       average_cost_per_request: 0,
+      provider_budget: unavailableProviderBudget,
       budget_usd: null,
       budget_utilization: null,
       p50_duration_ms: 10,
@@ -776,6 +813,83 @@ describe("v1 read-model decoders", () => {
     }
   });
 
+  it("reconciles hosted subcaps and honestly labels evaluator authority", () => {
+    const base = arrayFixtureRecord("agents");
+    const assignment = base.active_assignment;
+    if (assignment === null || typeof assignment !== "object" || Array.isArray(assignment)) {
+      throw new Error("Missing active assignment fixture");
+    }
+    const budget = {
+      status: "active",
+      campaign_run_id: "run-1",
+      configuration_set_sha256: "c".repeat(64),
+      role_usd_cap: 4,
+      role_usd_spent: 0.25,
+      role_usd_remaining: 3.75,
+      role_usd_overrun: 0,
+      role_call_cap: 10,
+      role_physical_calls: 1,
+      role_calls_remaining: 9,
+      role_call_overrun: 0,
+      global_usd_cap: 10,
+      global_usd_spent: 0.25,
+      global_usd_remaining: 9.75,
+      global_usd_overrun: 0,
+      global_call_cap: 56,
+      global_physical_calls: 1,
+      global_calls_remaining: 55,
+      global_call_overrun: 0,
+    };
+    const calibration = {
+      state: "failed",
+      calibration_id: "judge-calibration-1",
+      decision_authority: "oracle",
+      oracle_comparison_count: 3,
+      oracle_agreement_count: 2,
+      oracle_agreement_rate: 2 / 3,
+      status_label: "live, verified against oracle",
+    };
+    const judge = {
+      ...base,
+      role: "judge",
+      display_name: "Evaluator",
+      active_assignment: {
+        ...assignment,
+        role: "judge",
+        provider: "openrouter",
+        model: "google/gemini-2.5-pro",
+        resolved_model: "google/gemini-2.5-pro",
+        upstream_provider: "Google",
+        execution_mode: "hosted_advisory",
+        configuration_sha256: "c".repeat(64),
+      },
+      measured_cost: 0.25,
+      input_tokens: 100,
+      output_tokens: 20,
+      reasoning_tokens: 10,
+      token_observation_count: 1,
+      physical_call_count: 1,
+      provider_budget: budget,
+      judge_calibration: calibration,
+    };
+
+    expect(decodeAgents([judge])).toEqual([judge]);
+    expect(() => decodeAgents([{
+      ...judge,
+      judge_calibration: {
+        ...calibration,
+        decision_authority: "model",
+      },
+    }])).toThrow("Invalid judge calibration read model");
+    expect(() => decodeAgents([{
+      ...judge,
+      provider_budget: {
+        ...budget,
+        role_usd_remaining: 3.5,
+      },
+    }])).toThrow("Invalid agent budget read model");
+  });
+
   it("enforces running and terminal agent activity shapes", () => {
     const terminal = {
       execution_id: "execution-1",
@@ -786,12 +900,20 @@ describe("v1 read-model decoders", () => {
       status: "succeeded",
       provider: "headshot",
       model: "coverage-governor-v1",
+      returned_model: null,
+      upstream_provider: null,
+      provider_request_id: null,
       execution_mode: "deterministic",
       configuration_version: 1,
+      configuration_set_sha256: null,
+      role_configuration_sha256: null,
+      generation_policy_sha256: null,
       input_sha256: "a".repeat(64),
       output_sha256: "b".repeat(64),
       input_tokens: null,
       output_tokens: null,
+      reasoning_tokens: null,
+      physical_attempts: null,
       measured_cost: 0,
       accounting_status: "measured",
       currency: "USD",
@@ -799,6 +921,10 @@ describe("v1 read-model decoders", () => {
       langfuse_status: "exported",
       langfuse_verified_at: at,
       detail: {},
+      judge_calibration_id: null,
+      judge_calibration_state: null,
+      oracle_agreement: null,
+      decision_authority: null,
       error_code: null,
       started_at: at,
       finished_at: at,
@@ -816,8 +942,16 @@ describe("v1 read-model decoders", () => {
     const hostedMeasured = {
       ...terminal,
       execution_mode: "hosted_advisory",
+      returned_model: "anthropic/claude-opus-4.8",
+      upstream_provider: "Anthropic",
+      provider_request_id: "openrouter-request-1",
+      configuration_set_sha256: "c".repeat(64),
+      role_configuration_sha256: "d".repeat(64),
+      generation_policy_sha256: "e".repeat(64),
       input_tokens: 100,
       output_tokens: 20,
+      reasoning_tokens: 0,
+      physical_attempts: 1,
       measured_cost: 0.01,
     };
     const hostedUnavailable = {
@@ -825,11 +959,26 @@ describe("v1 read-model decoders", () => {
       execution_mode: "hosted_advisory",
       accounting_status: "unavailable",
     };
+    const hostedPartial = {
+      ...hostedUnavailable,
+      physical_attempts: 2,
+      accounting_status: "partial",
+    };
+    const evaluatorMeasured = {
+      ...hostedMeasured,
+      agent_role: "judge",
+      judge_calibration_id: "judge-calibration-1",
+      judge_calibration_state: "failed",
+      oracle_agreement: false,
+      decision_authority: "oracle",
+    };
 
     expect(decodeAgentActivity([terminal])).toEqual([terminal]);
     expect(decodeAgentActivity([running])).toEqual([running]);
     expect(decodeAgentActivity([hostedMeasured])).toEqual([hostedMeasured]);
     expect(decodeAgentActivity([hostedUnavailable])).toEqual([hostedUnavailable]);
+    expect(decodeAgentActivity([hostedPartial])).toEqual([hostedPartial]);
+    expect(decodeAgentActivity([evaluatorMeasured])).toEqual([evaluatorMeasured]);
     for (const malformed of [
       { ...running, finished_at: at },
       { ...terminal, output_sha256: null },
@@ -838,8 +987,13 @@ describe("v1 read-model decoders", () => {
       { ...running, langfuse_verified_at: at },
       { ...terminal, accounting_status: "unavailable" },
       { ...hostedUnavailable, accounting_status: "measured" },
+      { ...hostedUnavailable, accounting_status: "partial" },
       { ...hostedUnavailable, input_tokens: 1 },
       { ...hostedUnavailable, measured_cost: 0.01 },
+      {
+        ...evaluatorMeasured,
+        decision_authority: "model",
+      },
     ]) {
       expect(() => decodeAgentActivity([malformed])).toThrow(
         "Invalid agent activity read model",
