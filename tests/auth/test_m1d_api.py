@@ -287,7 +287,7 @@ def test_command_ignores_forged_identity_and_requires_idempotency(
         },
         headers={
             "Authorization": f"Bearer {token}",
-            "Idempotency-Key": "idem-policy-1234567890",
+            "Idempotency-Key": "idem-policy-1234567890",  # gitleaks:allow -- test nonce
         },
     )
 
