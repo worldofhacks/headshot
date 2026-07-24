@@ -550,6 +550,12 @@ class ToolScopeReadModel(_ReadModel):
     recorded_scan_count: int = Field(ge=0)
     recorded_finding_count: int = Field(ge=0)
     last_executed_at: datetime.datetime | None = None
+    # Per-tool execution evidence + runtime state (Task 4, emitted by the security-tools lane via
+    # agentforge.security_tools.tool_runtime.ToolExecutionEvidence.to_tool_scope_fields()). Additive
+    # with defaults so the read model stays valid until the postgres population is wired (Codex).
+    runtime_state: Literal["idle", "running", "evidenced", "error"] = "idle"
+    evidenced_finding_count: int = Field(default=0, ge=0)
+    last_error_code: str | None = None
 
 
 class BirdseyeCampaignReadModel(_ReadModel):
