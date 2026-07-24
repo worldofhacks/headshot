@@ -25,10 +25,21 @@ _SECRET_SHAPES = (
     re.compile(r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b"),
     re.compile(r"\bxox[baprs]-[0-9A-Za-z-]{10,}\b", re.IGNORECASE),
     re.compile(r"\bsk_(?:test|live)_[A-Za-z0-9_-]{16,}\b", re.IGNORECASE),
+    re.compile(r"\bghp_[A-Za-z0-9]{20,}\b"),
+    re.compile(r"\bgithub_pat_[A-Za-z0-9_]{20,}\b"),
+    re.compile(r"\bAIza[0-9A-Za-z_-]{35}\b"),
     re.compile(r"\bBearer\s+[A-Za-z0-9._~+/=-]{8,}\b", re.IGNORECASE),
     re.compile(
-        r"\b(?:api[_ -]?key|secret|token|password|credential|authorization)"
-        r"\s*[:=]\s*[\"']?[A-Za-z0-9/+_.=-]{16,}",
+        r"(?<![A-Za-z0-9_])[\"']?"
+        r"(?:[A-Za-z0-9]{1,32}[_-]){0,4}"
+        r"(?:api[_-]?key|secret|token|password|credential|authorization|session)"
+        r"[\"']?\s*[:=]\s*[\"']?[A-Za-z0-9/+_.=-]{16,}",
+        re.IGNORECASE,
+    ),
+    re.compile(r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b"),
+    re.compile(
+        r"\bpostgres(?:ql)?(?:\+[A-Za-z0-9]+)?://"
+        r"[^/\s:@]+:[^@\s/]+@[^/\s]+",
         re.IGNORECASE,
     ),
     re.compile(r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----", re.IGNORECASE),

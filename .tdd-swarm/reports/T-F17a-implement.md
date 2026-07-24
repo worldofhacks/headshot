@@ -20,8 +20,9 @@ Status: `DONE_WITH_CONCERNS`
   role-only fallback.
 - Added a closed, duplicate-key-safe manifest validator with bounded raw-byte reads, exact
   role/resource ordering, UTF-8/trailing-newline checks, and generic non-leaking failures.
-- Added broad secret-shape rejection for provider, AWS, Slack, Clerk, bearer, sensitive-assignment,
-  and PEM credential families.
+- Added broad secret-shape rejection for provider, AWS, Slack, Clerk, GitHub, Google, bearer, raw
+  JWT, environment/JSON sensitive assignments, credential-bearing PostgreSQL DSNs, and PEM
+  credential families.
 - Added the four package-owned v1 role prompts and their content-addressed manifest.
 - Declared all prompt authority resources as setuptools package data.
 - Added the hosted prompt registry migration/rollback contract.
@@ -64,6 +65,28 @@ The one warning is the existing Starlette `httpx` deprecation warning. Six addit
 adversarial probes confirmed generic rejection of AWS, Slack, Clerk, bearer, generic API-key
 assignment, and PEM secret shapes.
 
+## Post-review repair
+
+The independent GREEN review at `1e5e21d` found that eight additional hash-consistent secret
+shapes still passed validation. Before the repair, an implementation-owned probe reproduced all
+eight accepted bypasses: classic and fine-grained GitHub tokens, a Google API key, prefixed
+OpenRouter and target-session assignments, a quoted JSON password, a raw JWT, and a
+credential-bearing PostgreSQL DSN.
+
+The detector now covers each family without changing any packaged prompt byte or manifest digest.
+A post-repair probe varied all eight shapes across all four roles: all `32` hash-consistent bundles
+failed with the exact generic `prompt registry validation failed` error and exposed no supplied
+secret in `str` or `repr`.
+
+Post-repair gates:
+
+```text
+Focused frozen/offline wheel: 8 passed in 0.78s
+Hosted/packaging preservation: 14 passed, 2 deselected
+Network-disabled repository suite excluding only the pre-existing network-dependent wheel test:
+1132 passed, 3 skipped, 1 deselected, 1 warning
+```
+
 ## Quality and integrity gates
 
 - Ruff check: pass.
@@ -72,11 +95,12 @@ assignment, and PEM secret shapes.
 - Ticket source has no TODO/FIXME/debug-print/debug-log additions.
 - Frozen test SHA-256 and Git blob identities: exact.
 - Frozen test diff: empty.
-- `scripts/secret_scan.sh`: `secret scan clean (853 files)`.
+- `scripts/secret_scan.sh`: `secret scan clean (854 files)`.
 - `gitleaks git . --redact`: no leaks found.
 - Generated `__pycache__` directories removed before commit.
-- Independent read-only review found one Important secret-family coverage gap; the detector was
-  expanded as described above, and the frozen/offline/static/secret gates were rerun green.
+- The initial pre-commit review and the later GREEN review each found one Important secret-family
+  coverage gap. Both detector repairs and their implementation-owned adversarial probes are
+  recorded above; the frozen/offline/static/secret gates were rerun green after the second repair.
 
 ## Concern
 
