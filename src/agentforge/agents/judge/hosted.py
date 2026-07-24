@@ -235,26 +235,15 @@ def _bounded_model_envelope(
         projected.pop("campaign_id", None)
     for field in ("oracle_results", "canary_hits"):
         signals = list(trusted[field])
-        ordered = sorted(signals, key=lambda signal: 0 if signal["hit"] is True else 1)
-        selected = ordered[:MAX_EVALUATOR_SIGNALS_PER_KIND]
-        bounded: list[dict[str, Any]] = []
-        for signal in selected:
-            item = {
-                "id": _bounded_identifier(f"Evaluator {field} id", signal["id"], maximum=256),
-                "provenance": signal["provenance"],
-                "hit": signal["hit"],
-            }
-            if "detail" in signal:
-                item["detail"] = require_safe_model_text(
-                    f"Evaluator {field} detail",
-                    signal["detail"],
-                    maximum=512,
-                )
-            bounded.append(item)
-        trusted[field] = bounded
-        projection[f"{field}_count"] = len(signals)
-        projection[f"{field}_hit_count"] = sum(1 for signal in signals if signal["hit"] is True)
-        projection[f"{field}_omitted_count"] = max(0, len(signals) - len(bounded))
+        # These outcomes are the independent ground truth against which the model is measured.
+        # Sending hit booleans, identifiers, or details would disclose the answer and turn the
+        # agreement metric into label copying. The original envelope remains unchanged for local
+        # reconciliation; the provider receives only neutral availability/count metadata.
+        trusted[field] = []
+        projection_key = "oracle_signal" if field == "oracle_results" else "canary_signal"
+        projection[f"{projection_key}_count"] = len(signals)
+        projection[f"{projection_key}_available"] = bool(signals)
+        projection[f"{projection_key}_withheld_for_independent_assessment"] = len(signals)
     trusted["policy_decision"] = require_safe_model_text(
         "Evaluator policy decision",
         trusted["policy_decision"],
