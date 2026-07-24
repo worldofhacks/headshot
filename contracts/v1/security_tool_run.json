@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentforge.dev/contracts/v1/security_tool_run.json",
+  "title": "SecurityToolRun",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "run_id", "tool_name", "tool_version", "configuration_sha256",
+    "run_nonce", "target_id", "surface_id", "scan_provenance", "status",
+    "started_at", "finished_at", "artifact_sha256"
+  ],
+  "properties": {
+    "schema_version": {"const": "1"},
+    "run_id": {"type": "string", "minLength": 1, "maxLength": 128},
+    "tool_name": {"type": "string", "minLength": 1, "maxLength": 64},
+    "tool_version": {"type": "string", "minLength": 1, "maxLength": 64},
+    "configuration_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "run_nonce": {"type": "string", "minLength": 16, "maxLength": 128},
+    "target_id": {"type": "string", "minLength": 1, "maxLength": 128},
+    "surface_id": {"type": "string", "minLength": 1, "maxLength": 128},
+    "scan_provenance": {
+      "enum": ["platform_source", "local_fake", "platform_staging", "live_target"]
+    },
+    "status": {"enum": ["completed", "failed", "deferred"]},
+    "started_at": {"type": "string", "format": "date-time"},
+    "finished_at": {"type": "string", "format": "date-time"},
+    "artifact_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+  }
+}

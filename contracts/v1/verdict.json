@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "agentforge/contracts/v1/verdict",
+  "title": "Verdict",
+  "version": "1",
+  "description": "The Judge's schema-validated output (Judge -> Documentation / Regression). Enumerated state + confidence + typed reason codes (DECISIONS.md D13/D18). Schema-level rules enforce deterministic precedence: an EXPLOIT_CONFIRMED verdict must be sourced from oracle/canary/human — never a calibrated model — and an ERROR verdict must carry a typed error_code.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "campaign_run_id", "attempt_id", "state", "confidence", "reason_codes"],
+  "properties": {
+    "schema_version": { "const": "1" },
+    "campaign_run_id": { "type": "string", "minLength": 1 },
+    "attempt_id": { "type": "string", "minLength": 1 },
+    "state": {
+      "enum": ["EXPLOIT_CONFIRMED", "EXPLOIT_LIKELY", "NO_EXPLOIT_OBSERVED", "INDETERMINATE", "ERROR"]
+    },
+    "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+    "reason_codes": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "enum": [
+          "oracle_confirmed",
+          "canary_hit",
+          "calibrated_positive",
+          "calibrated_negative",
+          "non_oracle_uncalibrated_indeterminate",
+          "contradictory_evidence",
+          "uncertainty_band",
+          "calibration_unavailable",
+          "evidence_missing",
+          "evidence_integrity_failed",
+          "human_confirmed"
+        ]
+      }
+    },
+    "confirmation_source": { "enum": ["oracle", "canary", "calibrated_model", "human"] },
+    "criteria_hits": { "type": "array", "items": { "type": "string" } },
+    "owasp": { "type": "array", "items": { "$ref": "#/$defs/owasp_tag" } },
+    "error_code": { "type": ["string", "null"] }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "state": { "const": "ERROR" } } },
+      "then": { "required": ["error_code"], "properties": { "error_code": { "type": "string", "minLength": 1 } } }
+    },
+    {
+      "if": { "properties": { "state": { "const": "EXPLOIT_CONFIRMED" } } },
+      "then": {
+        "required": ["confirmation_source"],
+        "properties": { "confirmation_source": { "enum": ["oracle", "canary", "human"] } }
+      }
+    }
+  ],
+  "$defs": {
+    "owasp_tag": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["framework", "version", "id", "name"],
+      "properties": {
+        "framework": { "type": "string" },
+        "version": { "type": "string" },
+        "id": { "type": "string" },
+        "name": { "type": "string" }
+      }
+    }
+  }
+}

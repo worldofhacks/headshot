@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "agentforge/contracts/v1/campaign_directive",
+  "title": "CampaignDirective",
+  "version": "1",
+  "description": "Orchestrator -> RedTeam. Directs the next campaign: what to attack, the coverage goal, and the budget/rate caps the Policy Gateway will enforce.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "campaign_id", "target_ref", "category", "coverage_goal", "caps"],
+  "properties": {
+    "schema_version": { "const": "1" },
+    "campaign_id": { "type": "string", "minLength": 1 },
+    "target_ref": { "type": "string", "minLength": 1 },
+    "category": { "type": "string", "minLength": 1 },
+    "coverage_goal": { "type": "string" },
+    "mutation_policy": { "type": "string" },
+    "caps": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["budget_usd", "rate_per_min"],
+      "properties": {
+        "budget_usd": { "type": "number", "minimum": 0 },
+        "rate_per_min": { "type": "integer", "minimum": 1 },
+        "timeout_s": { "type": "integer", "minimum": 1 }
+      }
+    }
+  }
+}

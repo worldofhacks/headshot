@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentforge.dev/contracts/v1/scan_artifact.json",
+  "title": "ScanArtifact",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "artifact_id", "run_id", "tool_name", "tool_version", "media_type",
+    "sha256", "sanitized", "byte_length", "created_at", "artifact_locator"
+  ],
+  "properties": {
+    "schema_version": {"const": "1"},
+    "artifact_id": {"type": "string", "minLength": 1, "maxLength": 160},
+    "run_id": {"type": "string", "minLength": 1, "maxLength": 128},
+    "tool_name": {"type": "string", "minLength": 1, "maxLength": 64},
+    "tool_version": {"type": "string", "minLength": 1, "maxLength": 64},
+    "media_type": {"enum": ["application/json", "application/sarif+json", "text/plain"]},
+    "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "sanitized": {"const": true},
+    "byte_length": {"type": "integer", "minimum": 0, "maximum": 10485760},
+    "created_at": {"type": "string", "format": "date-time"},
+    "artifact_locator": {"type": "string", "minLength": 1, "maxLength": 500}
+  }
+}

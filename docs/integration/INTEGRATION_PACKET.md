@@ -246,7 +246,11 @@ Verdict persisted with the SAME (campaign_run_id, attempt_id) — verdict→atte
 
 ## 7. Packaging verification
 
-- `contracts/v1` (7) + `evals/schemas` (3) relocated **into the package** as **one authoritative copy each** (byte-for-byte renames; repo-root copies removed). Resolved via `importlib.resources` (zip-safe, CWD-independent); `AGENTFORGE_CONTRACTS_DIR` override preserved (tooling-only); schema-name traversal guard.
+- Runtime contract schemas and eval-authoring schemas are resolved from their **single package-owned
+  authorities** through `importlib.resources` (zip-safe, CWD-independent);
+  `AGENTFORGE_CONTRACTS_DIR` remains a tooling-only override and schema names are traversal-guarded.
+  The PRD-facing `contracts/v1/` directory is a generated, byte-identical publication of the
+  package-owned contract source, with registry/set/byte equality enforced in `tests/contract`.
 - **Proven out-of-repo:** wheel built + installed into a fresh venv **outside** the repo (only corpus *data* copied, no schemas) → `validate-corpus` exit 0. **Container smoke:** `docker run` validates the corpus inside the image. Both are CI steps.
 
 ## 8. Remaining live-authorization gate (not crossed)

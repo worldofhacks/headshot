@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "agentforge/contracts/v1/evidence_envelope",
+  "title": "EvidenceEnvelope",
+  "version": "1",
+  "description": "The Judge's typed input (ARCHITECTURE.md §4, DECISIONS.md D18). Every field carries an explicit trust label: `trusted` fields are code/human-populated deterministic signals; `hostile` is attacker-controlled transcript data, size-bounded, carried as data never instructions. A trusted signal can NEVER have provenance 'hostile' (the enum forbids it) — that is how hostile transcript content is structurally prevented from populating an oracle/canary field.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "campaign_run_id", "attempt_id", "trusted", "hostile"],
+  "properties": {
+    "schema_version": { "const": "1" },
+    "campaign_run_id": { "type": "string", "minLength": 1 },
+    "attempt_id": { "type": "string", "minLength": 1 },
+    "campaign_id": { "type": "string" },
+    "trusted": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["oracle_results", "canary_hits", "policy_decision"],
+      "properties": {
+        "oracle_results": { "type": "array", "items": { "$ref": "#/$defs/trusted_signal" } },
+        "canary_hits": { "type": "array", "items": { "$ref": "#/$defs/trusted_signal" } },
+        "policy_decision": { "type": "string" },
+        "expected_safe_behavior": { "type": "string" },
+        "ground_truth_ref": { "type": ["string", "null"] }
+      }
+    },
+    "hostile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["trust", "transcript"],
+      "properties": {
+        "trust": { "const": "hostile" },
+        "transcript": { "type": "string", "maxLength": 200000 },
+        "truncated": { "type": "boolean" }
+      }
+    }
+  },
+  "$defs": {
+    "trusted_signal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "provenance", "hit"],
+      "properties": {
+        "id": { "type": "string" },
+        "provenance": { "enum": ["code", "human"] },
+        "hit": { "type": "boolean" },
+        "detail": { "type": "string" }
+      }
+    }
+  }
+}

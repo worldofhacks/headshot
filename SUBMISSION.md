@@ -33,6 +33,7 @@ deployed.
 | Threat model | [`THREAT_MODEL.md`](THREAT_MODEL.md) | Implemented |
 | Users and workflows | [`USERS.md`](USERS.md) | Implemented |
 | Architecture | [`ARCHITECTURE.md`](ARCHITECTURE.md) | Implemented; final deployment claims require reconciliation |
+| Published inter-agent contracts | [`contracts/v1/`](contracts/v1/) | Implemented; byte-identical to the packaged runtime authority and enforced by contract tests |
 | ATO evidence packet | [`docs/evidence/ato/README.md`](docs/evidence/ato/README.md) | Implemented as an evidence index; live-acceptance fields remain pending |
 | Integration packet | [`docs/integration/INTEGRATION_PACKET.md`](docs/integration/INTEGRATION_PACKET.md) | Updated through source migration `0017`; deployed end-to-end proof pending |
 | Eval corpus | [`evals/`](evals/) and [`docs/evidence/OWASP_COVERAGE_MATRIX.md`](docs/evidence/OWASP_COVERAGE_MATRIX.md) | Locally schema-validated; active seed records remain marked `NOT_EXECUTED` |

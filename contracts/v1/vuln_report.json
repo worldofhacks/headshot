@@ -1,0 +1,97 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "agentforge/contracts/v1/vuln_report",
+  "title": "VulnReport",
+  "version": "1",
+  "description": "Documentation Agent draft output. It is generated only from a schema-valid EXPLOIT_CONFIRMED Verdict plus approved sanitized evidence references. This contract is intentionally draft-only; publication is a separate human-authorized boundary.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "report_id",
+    "finding_id",
+    "campaign_run_id",
+    "attempt_id",
+    "source_case_id",
+    "severity",
+    "category",
+    "description",
+    "clinical_impact",
+    "minimal_reproduction",
+    "reproduction_sha256",
+    "observed_behavior",
+    "expected_behavior",
+    "recommended_remediation",
+    "status",
+    "fix_validation",
+    "evidence_references",
+    "publication_state"
+  ],
+  "properties": {
+    "schema_version": { "const": "1" },
+    "report_id": { "type": "string", "minLength": 1, "maxLength": 80 },
+    "finding_id": { "type": "string", "minLength": 1, "maxLength": 160 },
+    "campaign_run_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "attempt_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "source_case_id": { "type": "string", "minLength": 1, "maxLength": 120 },
+    "severity": { "enum": ["low", "medium", "high", "critical"] },
+    "category": { "type": "string", "minLength": 1, "maxLength": 120 },
+    "description": { "type": "string", "minLength": 1, "maxLength": 4000 },
+    "clinical_impact": { "type": "string", "minLength": 1, "maxLength": 4000 },
+    "minimal_reproduction": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 32,
+      "items": { "type": "string", "minLength": 1, "maxLength": 4000 }
+    },
+    "reproduction_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "observed_behavior": { "type": "string", "minLength": 1, "maxLength": 4000 },
+    "expected_behavior": { "type": "string", "minLength": 1, "maxLength": 4000 },
+    "recommended_remediation": { "type": "string", "minLength": 1, "maxLength": 4000 },
+    "status": {
+      "enum": ["draft", "validated", "remediation_pending", "fix_pending", "fixed", "regressed"]
+    },
+    "fix_validation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "summary", "evidence_references"],
+      "properties": {
+        "state": { "enum": ["not_run", "failed", "passed_for_right_reason"] },
+        "summary": { "type": "string", "minLength": 1, "maxLength": 4000 },
+        "evidence_references": {
+          "type": "array",
+          "maxItems": 32,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/evidence_reference" }
+        }
+      }
+    },
+    "evidence_references": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 32,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/evidence_reference" }
+    },
+    "publication_state": {
+      "enum": ["draft_unpublished", "blocked_pending_human_approval"]
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "severity": { "const": "critical" } } },
+      "then": {
+        "properties": {
+          "publication_state": { "const": "blocked_pending_human_approval" }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "evidence_reference": {
+      "type": "string",
+      "pattern": "^evidence://sha256/[0-9a-f]{64}$",
+      "maxLength": 82
+    }
+  }
+}
