@@ -132,3 +132,28 @@ T-F07a, T-F08, T-F09a/b, T-F12, T-F13, T-F10a/b/c, T-F15, final T-F01b.
 - [open-question] True production isolation plus owner main merge/deploy and equal dual-remote green CI remain required.
 
 [locked-decision] Fewer than three genuine independently reproduced findings leaves PRD-32 incomplete.
+
+## P0 addendum — hosted agent runtime and provenance
+
+[locked-decision] T-F17a–T-F17f are an independent production-grade slice based on
+`1ac3ee02be7855b638dd1fa43bb0612a3db5f025`. They do not alter T-F16 ownership. Their source of
+truth is `docs/planning/agent-runtime-provenance.md`.
+
+| wave | id | title | status | deps | branch |
+|---:|---|---|---|---|---|
+| 26 | T-F17a | Version and package the exact four-role system prompts | backlog | T-F00 | ticket/T-F17a-agent-prompt-registry |
+| 26 | T-F17b | Persist append-only physical provider-call lineage | backlog | T-F00 | ticket/T-F17b-provider-call-lineage |
+| 27 | T-F17c | Bind exact system prompts and provider observations to hosted calls | backlog | T-F17a, T-F17b | ticket/T-F17c-hosted-system-messages |
+| 28 | T-F17d | Compose HostedFourRoleRuntime in the private production Runner | backlog | T-F17c | ticket/T-F17d-runner-hosted-composition |
+| 29 | T-F17e | Publish truthful hosted-runtime capability and gate deployment | backlog | T-F17d | ticket/T-F17e-hosted-capability-deployment |
+| 30 | T-F17f | Show configured versus observed agent provenance and exact prompts | backlog | T-F17b, T-F17c, T-F17e | ticket/T-F17f-agents-provenance-ui |
+
+```text
+T-F00 -> {T-F17a,T-F17b} -> T-F17c -> T-F17d -> T-F17e -> T-F17f
+```
+
+T-F17a and T-F17b are disjoint and may run in parallel. Every ticket preserves RED -> independent
+test review/freeze -> GREEN -> coordinator gate rerun -> independent code review -> independent
+security review. Deployment remains owner-gated and requires one image digest, additive migration
+evidence, fresh Runner capability, authenticated Web smoke, separate two-person campaign
+authorization, exact returned-model/upstream observations, and dual-remote green CI.
