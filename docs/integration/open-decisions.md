@@ -97,6 +97,13 @@ physical recorder is T-F17c. Two consequences until it lands:
   seven-column observation tuple belongs to that same ticket — a partial propagation would violate
   `agent_execution_hosted_measurement_tuple`.
 
+**Hostile served-model text.** `returned_model` is no longer pinned to the authorized id, so it is
+provider-controlled text bound for the audit log, Langfuse and the console. It is held to
+`require_safe_model_text`; a string carrying control characters or raw auth material discards the
+lineage rather than storing it. The substitution is still recorded, because `_record_failure` takes
+`error_code` from the exception rather than the lineage — so the row keeps
+`provider-model-substituted` even when the observed identity itself was too dangerous to persist.
+
 **Not durable before terminalization.** The observed identity lives only in the in-process result
 until the single `finish` write. A runner death between the provider response and that write leaves
 the row `running` with the evidence gone. Closing that gap needs the pre-call physical reservation,
