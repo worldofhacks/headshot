@@ -204,6 +204,25 @@ def test_spec_T_F17a_AC_1_identity_lookup_exhaustively_refuses_fallback_and_swap
         )
 
 
+# spec(T-F17a:AC-1)
+def test_identity_lookup_rejects_role_hash_reused_across_versions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    prompts = _prompt_module()
+    record = prompts.load_prompt_registry()[0]
+    ambiguous = prompts.PromptRecord(
+        role=record.role,
+        version="2",
+        sha256=record.sha256,
+        content=record.content,
+    )
+    monkeypatch.setattr(prompts, "load_prompt_registry", lambda: (record, ambiguous))
+
+    for version in (record.version, ambiguous.version):
+        with pytest.raises(prompts.PromptRegistryError):
+            prompts.prompt_for_identity(record.role, version, record.sha256)
+
+
 # spec(T-F17a:AC-2)
 def test_spec_T_F17a_AC_2_each_role_rejects_every_hostile_resource_class() -> None:
     prompts = _prompt_module()

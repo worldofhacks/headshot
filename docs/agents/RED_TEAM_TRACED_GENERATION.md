@@ -49,6 +49,8 @@ traced = TracedHostedRedTeamProvider(
         provider=rt.provider,
         model=rt.model_id,
         upstream_provider=rt.upstream_provider,
+        prompt_version=rt.prompt_version,
+        prompt_sha256=rt.prompt_sha256,
         role_configuration_sha256=rt.configuration_sha256,
     ),
     configuration_sha256=configuration.configuration_sha256,

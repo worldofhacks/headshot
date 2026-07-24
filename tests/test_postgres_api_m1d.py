@@ -522,6 +522,25 @@ def test_agent_models_and_tool_scope_are_real_configurable_projections(
     assert mismatched_prompt.status_code == 200
     assert mismatched_prompt.json()["state"] == "empty"
     assert "system_prompt" not in mismatched_prompt.text
+    other_organization = Principal(
+        user_id="user_OtherOrgConfigReader",
+        session_id="sess_OtherOrgConfigReader",
+        organization_id="org_OtherPromptTenant",
+        organization_role="org:operator",
+        organization_permissions=frozenset({"org:console:read", "org:config:manage"}),
+    )
+    cross_organization_prompt = backend.read(
+        "agent_prompt",
+        other_organization,
+        identifiers={
+            "agent_role": "red_team",
+            "prompt_version": red_team_prompt.version,
+            "prompt_sha256": red_team_prompt.sha256,
+            "configuration_sha256": configuration_sha256,
+        },
+    )
+    assert cross_organization_prompt.state == "empty"
+    assert cross_organization_prompt.data == []
     preflight = client.get(f"/api/v1/hosted-configuration-sets/{configuration_sha256}/preflight")
     assert preflight.status_code == 200
     assert preflight.json()["state"] == "degraded"
@@ -541,6 +560,33 @@ def test_agent_models_and_tool_scope_are_real_configurable_projections(
     )
     assert rejected.status_code == 503
     assert rejected.json()["reason_code"] == "atomic_hosted_configuration_set_required"
+
+    corrupted_configuration_sha256 = "e" * 64
+    with migrated_db.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO hosted_configuration_sets "
+                "(organization_id, configuration_sha256, schema_version, release_sha256, "
+                "payload, rationale, actor_user_id, actor_session_id) VALUES "
+                "(:org, :configuration, '1', :release, '{}'::jsonb, "
+                "'test-owned corrupt fixture', :user, :session)"
+            ),
+            {
+                "org": ORG_ID,
+                "configuration": corrupted_configuration_sha256,
+                "release": "d" * 64,
+                "user": LAUNCHER_ID,
+                "session": "sess_M1dApiLauncher",
+            },
+        )
+    corrupted_prompt = client.get(
+        f"/api/v1/agent-prompts/red_team/{red_team_prompt.version}/{red_team_prompt.sha256}"
+        f"?configuration_set_sha256={corrupted_configuration_sha256}"
+    )
+    assert corrupted_prompt.status_code == 200
+    assert corrupted_prompt.json()["state"] == "unavailable"
+    assert corrupted_prompt.json()["reason_code"] == "hosted_configuration_integrity_failed"
+    assert "system_prompt" not in corrupted_prompt.text
 
 
 def test_agent_activation_calibration_and_budget_follow_latest_authority(

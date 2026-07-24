@@ -40,6 +40,41 @@ import {
 
 type AgentRole = AgentReadModel["role"];
 
+type PromptAssignmentIdentity = Pick<
+  AgentReadModel["active_assignment"],
+  "prompt_version" | "prompt_sha256" | "configuration_sha256"
+>;
+
+export interface AgentPromptSelection {
+  source: "active" | "staged";
+  version: string;
+  sha256: string;
+  configurationSha256: string;
+}
+
+export const selectAgentPromptIdentity = (
+  agent: {
+    active_assignment: PromptAssignmentIdentity;
+    staged_assignment: PromptAssignmentIdentity | null;
+  } | null,
+): AgentPromptSelection | null => {
+  const candidates = [
+    ["active", agent?.active_assignment],
+    ["staged", agent?.staged_assignment],
+  ] as const;
+  for (const [source, assignment] of candidates) {
+    if (assignment?.prompt_version && assignment.prompt_sha256) {
+      return {
+        source,
+        version: assignment.prompt_version,
+        sha256: assignment.prompt_sha256,
+        configurationSha256: assignment.configuration_sha256,
+      };
+    }
+  }
+  return null;
+};
+
 const roleDisplayOrder: AgentRole[] = ["orchestrator", "red_team", "judge", "documentation"];
 
 const deterministicModels: Record<AgentRole, string[]> = {
@@ -93,12 +128,14 @@ function AgentPromptPanel({
   version,
   sha256,
   configurationSha256,
+  source,
 }: {
   client: ApiClient;
   role: AgentRole;
   version: string;
   sha256: string;
   configurationSha256: string;
+  source: AgentPromptSelection["source"];
 }) {
   const prompt = useResource<AgentPromptReadModel>(
     client,
@@ -107,7 +144,11 @@ function AgentPromptPanel({
   );
 
   return (
-    <Panel title="System prompt" meta="CONFIG_MANAGE only" eyebrow="SERVER-OWNED PROMPT">
+    <Panel
+      title={`${source === "active" ? "Active" : "Staged"} system prompt`}
+      meta={source === "active" ? "ACTIVE CONFIGURATION" : "PENDING AUTHORIZATION"}
+      eyebrow="SERVER-OWNED PROMPT · CONFIG_MANAGE ONLY"
+    >
       <ResourceView
         result={prompt.result}
         emptyLabel="No server-owned prompt is registered for this role."
@@ -154,20 +195,7 @@ export function AgentsScreen({
   const [model, setModel] = useState(deterministicModels.orchestrator[0]);
   const [rationale, setRationale] = useState("");
   const selectedAssignment = selected?.active_assignment;
-  const promptIdentity = selected?.staged_assignment?.prompt_version
-    && selected.staged_assignment.prompt_sha256
-    ? {
-        version: selected.staged_assignment.prompt_version,
-        sha256: selected.staged_assignment.prompt_sha256,
-        configurationSha256: selected.staged_assignment.configuration_sha256,
-      }
-    : selected?.active_assignment.prompt_version && selected.active_assignment.prompt_sha256
-      ? {
-          version: selected.active_assignment.prompt_version,
-          sha256: selected.active_assignment.prompt_sha256,
-          configurationSha256: selected.active_assignment.configuration_sha256,
-        }
-      : null;
+  const promptIdentity = selectAgentPromptIdentity(selected);
 
   useEffect(() => {
     if (!selectedAssignment) return;
@@ -496,6 +524,7 @@ export function AgentsScreen({
           version={promptIdentity.version}
           sha256={promptIdentity.sha256}
           configurationSha256={promptIdentity.configurationSha256}
+          source={promptIdentity.source}
         />
       ) : canConfigure ? (
         <Panel title="System prompt" meta="CONFIG_MANAGE only" eyebrow="SERVER-OWNED PROMPT">

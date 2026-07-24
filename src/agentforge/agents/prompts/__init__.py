@@ -166,9 +166,16 @@ def load_prompt_registry() -> tuple[PromptRecord, ...]:
 def prompt_for_identity(role: str, version: str, sha256: str) -> PromptRecord:
     """Resolve only an exact role/version/hash identity; no role-only fallback exists."""
 
-    for record in load_prompt_registry():
-        if (record.role, record.version, record.sha256) == (role, version, sha256):
-            return record
+    matches = tuple(
+        record
+        for record in load_prompt_registry()
+        if (record.role, record.sha256) == (role, sha256)
+    )
+    # A digest is part of the complete versioned identity, not a role-level alias. Fail closed if a
+    # future registry ever reuses one role/hash pair across versions (or contains duplicate
+    # records), even when one of those records exactly matches the caller's requested version.
+    if len(matches) == 1 and matches[0].version == version:
+        return matches[0]
     raise PromptRegistryError(_GENERIC_ERROR)
 
 
