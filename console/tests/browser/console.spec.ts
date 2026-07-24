@@ -94,14 +94,14 @@ test("trace and cost screens visualize measured Langfuse-correlated telemetry", 
   await page.goto("/traces");
   await expect(page.getByRole("heading", { name: "Traces", exact: true, level: 1 })).toBeVisible();
   await expect(page.getByRole("img", { name: "Target request latency over time" })).toBeVisible();
-  await expect(page.getByText("89%").first()).toBeVisible();
-  await expect(page.getByText("Token usage is unavailable", { exact: false })).toBeVisible();
+  await expect(page.getByText("85%").first()).toBeVisible();
+  await expect(page.getByText("Black-box target requests", { exact: false })).toBeVisible();
   await page.getByRole("listitem").nth(7).click();
   await expect(page.getByText("Transport error: upstream_unavailable")).toBeVisible();
 
   await page.getByRole("button", { name: "Costs", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Costs", exact: true, level: 1 })).toBeVisible();
-  await expect(page.getByText("Campaign spend", { exact: true })).toBeVisible();
+  await expect(page.getByText("Total measured spend", { exact: true })).toBeVisible();
   await expect(page.getByText("$0.0900").first()).toBeVisible();
   await expect(page.getByRole("table", { name: "Campaign accounting records" })).toBeVisible();
 

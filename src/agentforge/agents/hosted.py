@@ -361,12 +361,8 @@ class HostedRoleConfiguration:
             raise ValueError("hosted role prices payload has an invalid shape")
         try:
             token_prices = TokenPrices(
-                input_usd_per_million_tokens=Decimal(
-                    prices["input_usd_per_million_tokens"]
-                ),
-                output_usd_per_million_tokens=Decimal(
-                    prices["output_usd_per_million_tokens"]
-                ),
+                input_usd_per_million_tokens=Decimal(prices["input_usd_per_million_tokens"]),
+                output_usd_per_million_tokens=Decimal(prices["output_usd_per_million_tokens"]),
                 reasoning_usd_per_million_tokens=Decimal(
                     prices["reasoning_usd_per_million_tokens"]
                 ),

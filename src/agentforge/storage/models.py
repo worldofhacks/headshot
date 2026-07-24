@@ -1496,6 +1496,9 @@ class AgentExecution(Base):
     measured_cost: Mapped[float] = mapped_column(Numeric(14, 6), nullable=False, server_default="0")
     currency: Mapped[str] = mapped_column(String(3), nullable=False, server_default="USD")
     trace_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    langfuse_status: Mapped[str] = mapped_column(
+        String(16), nullable=False, server_default="not_attempted"
+    )
     detail: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
     error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
     started_at: Mapped[datetime.datetime] = mapped_column(
@@ -1539,6 +1542,10 @@ class AgentExecution(Base):
         ),
         CheckConstraint("measured_cost >= 0", name="agent_execution_cost"),
         CheckConstraint(
+            "langfuse_status IN ('not_attempted','disabled','queued','exported','error')",
+            name="agent_execution_langfuse_status",
+        ),
+        CheckConstraint(
             "jsonb_typeof(detail) = 'object'",
             name="agent_execution_detail_object",
         ),
@@ -1559,6 +1566,12 @@ class AgentExecution(Base):
             "ix_agent_execution_role_started",
             "organization_id",
             "agent_role",
+            "started_at",
+        ),
+        Index(
+            "ix_agent_execution_langfuse_delivery",
+            "organization_id",
+            "langfuse_status",
             "started_at",
         ),
     )

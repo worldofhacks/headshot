@@ -32,6 +32,18 @@ def test_birdseye_is_registry_derived_and_omits_missing_components(
             text("DELETE FROM runtime_component_status WHERE environment = :environment"),
             {"environment": environment},
         )
+
+    with migrated_db.connect() as connection:
+        unobserved = build_birdseye_snapshot(
+            connection,
+            organization_id=organization_id,
+            environment=environment,
+        )
+    assert unobserved["instrumentation"]["system_state"] == "unavailable"
+    unobserved_nodes = {node["component_id"]: node for node in unobserved["nodes"]}
+    assert unobserved_nodes["agent:judge"]["runtime_state"] == "unavailable"
+
+    with migrated_db.begin() as connection:
         connection.execute(
             text(
                 "INSERT INTO runtime_component_status "
@@ -60,6 +72,7 @@ def test_birdseye_is_registry_derived_and_omits_missing_components(
     assert result.data["campaign"] is None
     assert result.data["instrumentation"]["queue_queued"] == 0
     assert result.data["instrumentation"]["queue_leased"] == 0
+    assert result.data["instrumentation"]["confirmed_finding_count"] == 0
     assert result.data["security_posture"]["tested_categories"] == 0
     assert result.data["security_posture"]["priority_source"] == "unavailable"
     assert result.data["category_outcomes"] == []
@@ -78,7 +91,11 @@ def test_birdseye_is_registry_derived_and_omits_missing_components(
     assert nodes["runner"]["target_access"] == "policy-gated"
     assert nodes["runner"]["is_fresh"] is True
     assert nodes["agent:judge"]["heartbeat_at"] is None
-    assert nodes["agent:judge"]["current_task"].startswith("Configured and ready")
+    assert nodes["agent:judge"]["availability"] == "runtime execution not observed"
+    assert nodes["agent:judge"]["runtime_state"] == "unavailable"
+    assert nodes["agent:judge"]["healthy_instances"] == 0
+    assert nodes["agent:judge"]["current_task"].startswith("Configured; runtime execution")
+    assert result.data["instrumentation"]["system_state"] == "degraded"
     assert "langfuse" not in nodes
     assert all(
         edge["source_component_id"] in nodes and edge["target_component_id"] in nodes
@@ -197,6 +214,19 @@ def test_birdseye_projects_security_outcomes_and_recorded_agent_causality(
             ),
             {"run": run_id, "attempt": attempt_id, "org": organization_id},
         ).scalar_one()
+        # A Judge row without integrity-verifiable attempt evidence must not inflate the
+        # disposition projection.  Foreign-key enforcement is intentionally disabled for this
+        # corruption fixture above; production writes cannot create this row.
+        connection.execute(
+            text(
+                "INSERT INTO verdict "
+                "(state, confidence, campaign_run_id, attempt_id, organization_id, "
+                "confirmation_source, created_at) VALUES "
+                "('EXPLOIT_CONFIRMED', 1, :run, 'birdseye-unverified-attempt', :org, "
+                "'oracle', TIMESTAMPTZ '2026-07-23 18:00:12+00')"
+            ),
+            {"run": run_id, "org": organization_id},
+        )
         connection.execute(
             text(
                 "INSERT INTO finding "
@@ -253,14 +283,16 @@ def test_birdseye_projects_security_outcomes_and_recorded_agent_causality(
                 "payload": json.dumps(orchestration),
             },
         )
-        for execution_id, parent, role, attempt, offset in (
-            ("birdseye-exec-orchestrator", None, "orchestrator", None, 1),
+        for execution_id, parent, role, attempt, offset, duration_ms, cost in (
+            ("birdseye-exec-orchestrator", None, "orchestrator", None, 1, 12, 0.0),
             (
                 "birdseye-exec-red-team",
                 "birdseye-exec-orchestrator",
                 "red_team",
                 None,
                 2,
+                120,
+                0.02,
             ),
             (
                 "birdseye-exec-judge",
@@ -268,6 +300,17 @@ def test_birdseye_projects_security_outcomes_and_recorded_agent_causality(
                 "judge",
                 attempt_id,
                 3,
+                8,
+                0.0,
+            ),
+            (
+                "birdseye-exec-documentation",
+                "birdseye-exec-judge",
+                "documentation",
+                attempt_id,
+                4,
+                42,
+                0.01,
             ),
         ):
             connection.execute(
@@ -276,13 +319,14 @@ def test_birdseye_projects_security_outcomes_and_recorded_agent_causality(
                     "(execution_id, organization_id, campaign_run_id, attempt_id, "
                     "parent_execution_id, agent_role, status, provider, model, execution_mode, "
                     "configuration_version, input_sha256, output_sha256, measured_cost, "
-                    "trace_id, detail, started_at, finished_at, duration_ms) VALUES "
+                    "trace_id, langfuse_status, detail, started_at, finished_at, "
+                    "duration_ms) VALUES "
                     "(:execution, :org, :run, :attempt, :parent, :role, 'succeeded', "
                     "'headshot', 'fixture-engine-v1', 'deterministic', 1, :input_hash, "
-                    ':output_hash, 0, :trace, \'{"phase":"recorded_fixture"}\'::jsonb, '
-                    "TIMESTAMPTZ '2026-07-23 18:00:00+00' + :offset * INTERVAL '1 second', "
-                    "TIMESTAMPTZ '2026-07-23 18:00:00+00' + "
-                    "(:offset + 1) * INTERVAL '1 second', 1000)"
+                    ":output_hash, :cost, :trace, 'exported', "
+                    '\'{"phase":"recorded_fixture"}\'::jsonb, '
+                    "clock_timestamp() - (:offset + 2) * INTERVAL '1 second', "
+                    "clock_timestamp() - (:offset + 1) * INTERVAL '1 second', :duration_ms)"
                 ),
                 {
                     "execution": execution_id,
@@ -295,8 +339,29 @@ def test_birdseye_projects_security_outcomes_and_recorded_agent_causality(
                     "output_hash": str(offset + 1) * 64,
                     "trace": str(offset) * 32,
                     "offset": offset,
+                    "duration_ms": duration_ms,
+                    "cost": cost,
                 },
             )
+        connection.execute(
+            text(
+                "UPDATE agent_executions SET langfuse_status = 'queued' "
+                "WHERE execution_id = 'birdseye-exec-orchestrator'"
+            )
+        )
+        connection.execute(
+            text(
+                "INSERT INTO runtime_component_status "
+                "(environment, component_id, name, kind, availability, detail, heartbeat_at) "
+                "VALUES ('local', 'runner', 'Campaign runner', 'worker', "
+                "'operational and evidenced', 'private runner heartbeat', clock_timestamp()), "
+                "('local', 'langfuse', 'Langfuse tracing', 'telemetry', "
+                "'operational and evidenced', 'authenticated export heartbeat', "
+                "clock_timestamp()) ON CONFLICT (environment, component_id) DO UPDATE SET "
+                "availability = EXCLUDED.availability, detail = EXCLUDED.detail, "
+                "heartbeat_at = EXCLUDED.heartbeat_at"
+            )
+        )
 
     with migrated_db.connect() as connection:
         snapshot = build_birdseye_snapshot(
@@ -312,7 +377,23 @@ def test_birdseye_projects_security_outcomes_and_recorded_agent_causality(
     assert snapshot["security_posture"]["priority_source"] == "orchestrator_decision"
     assert snapshot["security_posture"]["cost_per_attempt_usd"] == 0.25
     assert snapshot["security_posture"]["cost_velocity_usd_per_minute"] == 0.5
+    assert snapshot["instrumentation"]["measured_cost_usd"] == 0.25
+    assert snapshot["instrumentation"]["budget_utilization"] == 0.05
+    assert snapshot["instrumentation"]["confirmed_count"] == 1
+    assert snapshot["instrumentation"]["likely_count"] == 0
+    assert snapshot["instrumentation"]["review_count"] == 0
+    assert snapshot["instrumentation"]["confirmed_finding_count"] == 1
+    assert snapshot["instrumentation"]["system_state"] == "nominal"
     assert len(snapshot["category_outcomes"]) == 3
-    assert len(snapshot["agent_activity"]) == 3
+    assert len(snapshot["agent_activity"]) == 4
     assert snapshot["agent_activity"][2]["parent_execution_id"] == "birdseye-exec-red-team"
     assert snapshot["agent_activity"][2]["verdict_state"] == "EXPLOIT_CONFIRMED"
+    nodes = {node["component_id"]: node for node in snapshot["nodes"]}
+    assert nodes["agent:orchestrator"]["p50_latency_ms"] == 12.0
+    assert nodes["agent:red_team"]["p95_latency_ms"] == 120.0
+    assert nodes["agent:judge"]["measured_cost_usd"] == 0.0
+    assert nodes["agent:documentation"]["measured_cost_usd"] == 0.01
+    assert nodes["agent:documentation"]["execution_count"] == 1
+    assert nodes["agent:documentation"]["langfuse_exported_count"] == 1
+    assert nodes["agent:documentation"]["langfuse_status"] == "exported"
+    assert nodes["langfuse"]["queue_depth"] == 1

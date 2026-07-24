@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import pytest
 from sqlalchemy import Engine, text
 
+from agentforge.control_plane.store import ControlPlaneStore
 from agentforge.secrets import Secret
 from agentforge.target.base import TargetRequest
 from agentforge.target.openemr_adapter import OpenEmrAdapter
 from agentforge.telemetry import OutboundHttpTelemetry
+from agentforge.telemetry.outbound import _LangfuseBridge, _sanitize_text
 
 
 class _Response:
@@ -32,6 +35,8 @@ class _Langfuse:
     def __init__(self) -> None:
         self.started: list[dict] = []
         self.finished: list[dict] = []
+        self.agent_started: list[dict] = []
+        self.agent_finished: list[dict] = []
         self.flushed = False
 
     @staticmethod
@@ -48,6 +53,14 @@ class _Langfuse:
 
     def finish(self, _state, **values) -> None:
         self.finished.append(values)
+
+    def start_agent(self, **values):
+        self.agent_started.append(values)
+        observation_id = f"{len(self.agent_started):016x}"
+        return (object(), object(), "deterministic_zero", observation_id)
+
+    def finish_agent(self, _state, **values) -> None:
+        self.agent_finished.append(values)
 
     def flush(self) -> None:
         self.flushed = True
@@ -140,6 +153,104 @@ def test_physical_target_request_is_persisted_and_exported_without_credential(
     assert langfuse.started[0]["metadata"]["deployment.environment"] == "staging"
     assert langfuse.started[0]["metadata"]["http.request.body.size"] == row["request_bytes"]
     assert langfuse.finished[0]["metadata"]["http.response.body.size"] == row["response_bytes"]
+    assert set(langfuse.started[0]["request_payload"]) == {"sha256", "bytes"}
+    assert set(langfuse.finished[0]["output"]) == {"sha256", "bytes"}
+
+
+def test_many_requests_share_one_campaign_trace_and_reconcile_individually(
+    migrated_db: Engine,
+) -> None:
+    organization_id, run_id = _seed_campaign(migrated_db)
+    ticks = iter((10.0, 10.010, 11.0, 11.020))
+    telemetry = OutboundHttpTelemetry(
+        migrated_db,
+        environment="staging",
+        monotonic=lambda: next(ticks),
+    )
+    langfuse = _Langfuse()
+    telemetry.langfuse = langfuse  # type: ignore[assignment]
+    adapter = OpenEmrAdapter(
+        base_url="https://target.example.test",
+        relative_path="chat",
+        payload_profile="copilot_chat",
+        credential=Secret("bounded-test-session"),
+        client=_Client(_Response('{"answer":"bounded response"}')),
+        telemetry=telemetry,
+    )
+
+    for index in range(2):
+        adapter.send(
+            TargetRequest(
+                turns=(f"reviewed adversarial prompt {index}",),
+                metadata={
+                    "organization_id": organization_id,
+                    "campaign_run_id": run_id,
+                    "attempt_id": f"attempt-shared-trace-{index}",
+                },
+            )
+        )
+    telemetry.flush()
+
+    with migrated_db.connect() as connection:
+        rows = (
+            connection.execute(
+                text(
+                    "SELECT request_id, trace_id, langfuse_status "
+                    "FROM outbound_http_requests WHERE campaign_run_id = :run_id "
+                    "ORDER BY started_at"
+                ),
+                {"run_id": run_id},
+            )
+            .mappings()
+            .all()
+        )
+    assert len(rows) == 2
+    assert len({row["request_id"] for row in rows}) == 2
+    assert len({row["trace_id"] for row in rows}) == 1
+    assert all(row["langfuse_status"] == "exported" for row in rows)
+    assert len(langfuse.started) == 2
+    assert {item["trace_id"] for item in langfuse.started} == {rows[0]["trace_id"]}
+
+
+def test_sanitizer_removes_opaque_authorization_cookie_and_url_credentials() -> None:
+    opaque = "opaque-access-value-abcdefghijklmnop"
+    cookie = "secondary-cookie-abcdefghijklmnop"
+    password = "userinfo-password-abcdefghijklmnop"
+    value = (
+        f"Authorization: Bearer {opaque}\n"
+        f"Cookie: session=first; secondary={cookie}\n"
+        f"https://operator:{password}@target.example.test/chat"
+    )
+
+    sanitized = _sanitize_text(value, ())
+
+    assert opaque not in sanitized
+    assert cookie not in sanitized
+    assert password not in sanitized
+    assert "REDACTED_AUTHORIZATION" in sanitized
+    assert "REDACTED_COOKIE" in sanitized
+    assert "REDACTED_USERINFO" in sanitized
+
+
+@pytest.mark.parametrize(
+    "base_url,expected",
+    [
+        ("https://us.cloud.langfuse.com", True),
+        ("http://langfuse.internal", False),
+        ("https://user:password@langfuse.invalid", False),
+        ("https://langfuse.invalid?credential=unsafe", False),
+    ],
+)
+def test_langfuse_export_requires_a_safe_https_endpoint(
+    monkeypatch: pytest.MonkeyPatch,
+    base_url: str,
+    expected: bool,
+) -> None:
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-lf-public")
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-lf-secret")
+    monkeypatch.setenv("LANGFUSE_BASE_URL", base_url)
+
+    assert _LangfuseBridge.configured() is expected
 
 
 def test_runner_and_langfuse_connection_heartbeat_is_persisted(migrated_db: Engine) -> None:
@@ -159,3 +270,104 @@ def test_runner_and_langfuse_connection_heartbeat_is_persisted(migrated_db: Engi
         "runner": "operational and evidenced",
         "langfuse": "operational and evidenced",
     }
+
+
+def test_all_agent_roles_are_exported_with_observed_latency_and_spend(
+    migrated_db: Engine,
+) -> None:
+    organization_id, run_id = _seed_campaign(migrated_db)
+    telemetry = OutboundHttpTelemetry(migrated_db, environment="staging")
+    langfuse = _Langfuse()
+    telemetry.langfuse = langfuse  # type: ignore[assignment]
+    store = ControlPlaneStore(migrated_db, environment="staging")
+    parent: str | None = None
+
+    for index, role in enumerate(("orchestrator", "red_team", "judge", "documentation")):
+        execution_id = store.start_agent_execution(
+            run_id=run_id,
+            agent_role=role,
+            attempt_id=f"attempt-{index}" if role in {"judge", "documentation"} else None,
+            parent_execution_id=parent,
+            input_payload={"role": role, "fixture_classification": "synthetic"},
+        )
+        with migrated_db.connect() as connection:
+            assert (
+                connection.execute(
+                    text(
+                        "SELECT langfuse_status FROM agent_executions "
+                        "WHERE execution_id = :execution_id"
+                    ),
+                    {"execution_id": execution_id},
+                ).scalar_one()
+                == "not_attempted"
+            )
+        telemetry.begin_agent(
+            execution_id=execution_id,
+            input_payload={"role": role, "fixture_classification": "synthetic"},
+        )
+        with migrated_db.connect() as connection:
+            assert (
+                connection.execute(
+                    text(
+                        "SELECT langfuse_status FROM agent_executions "
+                        "WHERE execution_id = :execution_id"
+                    ),
+                    {"execution_id": execution_id},
+                ).scalar_one()
+                == "queued"
+            )
+        measured_cost = 0.0 if role in {"orchestrator", "judge"} else 0.01 * index
+        store.finish_agent_execution(
+            execution_id=execution_id,
+            status="succeeded",
+            output_payload={"role": role, "result": "complete"},
+            measured_cost=measured_cost,
+        )
+        telemetry.finish_agent(
+            execution_id=execution_id,
+            output_payload={"role": role, "result": "complete"},
+        )
+        parent = execution_id
+
+    telemetry.flush()
+
+    with migrated_db.connect() as connection:
+        rows = (
+            connection.execute(
+                text(
+                    "SELECT agent_role, duration_ms, measured_cost, langfuse_status "
+                    "FROM agent_executions WHERE campaign_run_id = :run_id ORDER BY id"
+                ),
+                {"run_id": run_id},
+            )
+            .mappings()
+            .all()
+        )
+    assert {row["agent_role"] for row in rows} == {
+        "orchestrator",
+        "red_team",
+        "judge",
+        "documentation",
+    }
+    assert all(float(row["duration_ms"]) >= 0 for row in rows)
+    assert all(row["langfuse_status"] == "exported" for row in rows)
+    assert float(rows[0]["measured_cost"]) == 0.0
+    assert float(rows[2]["measured_cost"]) == 0.0
+    assert [item["role"] for item in langfuse.agent_started] == [
+        "orchestrator",
+        "red_team",
+        "judge",
+        "documentation",
+    ]
+    assert [item["parent_observation_id"] for item in langfuse.agent_started] == [
+        None,
+        "0000000000000001",
+        "0000000000000002",
+        "0000000000000003",
+    ]
+    assert [item["measured_cost"] for item in langfuse.agent_finished] == [
+        0.0,
+        0.01,
+        0.0,
+        0.03,
+    ]

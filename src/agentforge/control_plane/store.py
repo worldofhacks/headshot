@@ -62,6 +62,7 @@ from agentforge.control_plane.serialization import (
     target_from_payload,
     target_payload,
 )
+from agentforge.correlation import campaign_trace_id
 from agentforge.policy.recorder import (
     PERSISTED_EVIDENCE_COLUMNS,
     EvidenceIntegrityError,
@@ -608,10 +609,7 @@ class ControlPlaneStore:
                     connection, principal.organization_id, existing["request_id"]
                 )
             database_now = connection.execute(text("SELECT clock_timestamp()")).scalar_one()
-            if (
-                expiry <= database_now
-                or expiry - database_now > _MAX_AUTHORIZATION_LIFETIME
-            ):
+            if expiry <= database_now or expiry - database_now > _MAX_AUTHORIZATION_LIFETIME:
                 raise InvalidControlPlaneInput(
                     "authorization expiry must be future and within 24 hours"
                 )
@@ -1789,6 +1787,26 @@ class ControlPlaneStore:
             )
             if run is None:
                 raise RecordNotFoundError("campaign run does not exist")
+            if parent_execution_id is not None:
+                parent = (
+                    connection.execute(
+                        text(
+                            "SELECT organization_id, campaign_run_id FROM agent_executions "
+                            "WHERE execution_id = :execution_id"
+                        ),
+                        {"execution_id": parent_execution_id},
+                    )
+                    .mappings()
+                    .one_or_none()
+                )
+                if (
+                    parent is None
+                    or parent["organization_id"] != run["organization_id"]
+                    or parent["campaign_run_id"] != run_id
+                ):
+                    raise InvalidControlPlaneInput(
+                        "parent agent execution must belong to the same campaign"
+                    )
             assignment_row = (
                 connection.execute(
                     text(
@@ -1807,7 +1825,7 @@ class ControlPlaneStore:
                 else self._agent_assignment_from_row(assignment_row)
             )
             execution_id = uuid.uuid4().hex
-            trace_id = uuid.uuid4().hex
+            trace_id = campaign_trace_id(run_id)
             input_sha256 = content_hash(sanitized_input)
             connection.execute(
                 text(

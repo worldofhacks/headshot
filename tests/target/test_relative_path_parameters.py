@@ -2,9 +2,10 @@
 
 Some targets expose sub-resources whose path carries a server-issued resource id (and an index),
 e.g. ``documents/{document_id}/status`` and ``documents/{document_id}/pages/{page}``. A surface must
-declare that shape as a trusted, immutable ``relative_path`` while still refusing traversal, absolute
-paths, URL-override syntax, and any second authority. Concrete values are substituted only at the
-dispatch boundary from the authorized attempt — the surface path itself stays a stable template.
+declare that shape as a trusted, immutable ``relative_path`` while still refusing traversal,
+absolute paths, URL-override syntax, and any second authority. Concrete values are substituted
+only at the dispatch boundary from the authorized attempt — the surface path itself stays a stable
+template.
 """
 
 from __future__ import annotations

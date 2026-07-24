@@ -10,6 +10,7 @@ copied into either store.
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import json
 import logging
 import os
@@ -22,6 +23,7 @@ from urllib.parse import urlsplit
 
 from sqlalchemy import Engine, text
 
+from agentforge.correlation import campaign_trace_id
 from agentforge.secrets import looks_like_provider_key, redact_mapping
 from agentforge.target.base import TargetRequest
 
@@ -33,6 +35,11 @@ _LABELED_SECRET = re.compile(
     r"\s*[:=]\s*[^\s;,]+"
 )
 _PROVIDER_KEY = re.compile(r"\bsk-(?:lf-|ant-|or-|proj-)?[A-Za-z0-9_-]{8,}\b")
+_AUTHORIZATION_SECRET = re.compile(
+    r"(?i)\b(?:authorization\s*[:=]\s*)?(?:bearer|basic)\s+[A-Za-z0-9._~+/=-]+"
+)
+_COOKIE_SECRET = re.compile(r"(?i)\b(?:cookie|set-cookie)\s*:\s*[^\r\n]*")
+_URL_USERINFO_SECRET = re.compile(r"(?i)https?://[^\s/@:]+:[^\s/@]+@")
 _STATUS_VALUES = {
     "operational and evidenced",
     "adapter integrated, execution deferred",
@@ -47,6 +54,9 @@ def _sanitize_text(value: str, redactions: tuple[str, ...]) -> str:
         if secret:
             safe = safe.replace(secret, "***REDACTED***")
     safe = _JWT.sub("***REDACTED***", safe)
+    safe = _AUTHORIZATION_SECRET.sub("***REDACTED_AUTHORIZATION***", safe)
+    safe = _COOKIE_SECRET.sub("***REDACTED_COOKIE***", safe)
+    safe = _URL_USERINFO_SECRET.sub("https://***REDACTED_USERINFO***@", safe)
     safe = _LABELED_SECRET.sub("***REDACTED_LABELED_SECRET***", safe)
     safe = _PROVIDER_KEY.sub("***REDACTED***", safe)
     if looks_like_provider_key(safe.strip()):
@@ -76,9 +86,23 @@ class _LangfuseBridge:
 
     @staticmethod
     def configured() -> bool:
-        return all(
+        if not all(
             os.environ.get(name, "").strip()
             for name in ("LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY", "LANGFUSE_BASE_URL")
+        ):
+            return False
+        try:
+            base = urlsplit(os.environ["LANGFUSE_BASE_URL"].strip())
+            _ = base.port
+        except (KeyError, ValueError):
+            return False
+        return bool(
+            base.scheme == "https"
+            and base.hostname
+            and not base.username
+            and not base.password
+            and not base.query
+            and not base.fragment
         )
 
     def _client(self) -> Any:
@@ -92,9 +116,6 @@ class _LangfuseBridge:
 
     def auth_check(self) -> bool:
         if not self.configured():
-            return False
-        base = urlsplit(os.environ.get("LANGFUSE_BASE_URL", ""))
-        if base.scheme != "https" or not base.hostname or base.username or base.password:
             return False
         return bool(self._client().auth_check())
 
@@ -149,6 +170,125 @@ class _LangfuseBridge:
                 manager.__exit__(RuntimeError, error, error.__traceback__)
             else:
                 manager.__exit__(None, None, None)
+
+    def start_agent(
+        self,
+        *,
+        trace_id: str,
+        role: str,
+        provider: str,
+        model: str,
+        execution_mode: str,
+        version: str,
+        input_payload: dict[str, Any],
+        metadata: dict[str, Any],
+        parent_observation_id: str | None = None,
+    ) -> tuple[Any, Any, str, str] | None:
+        """Start an agent root plus a cost-bearing runtime generation."""
+
+        if not self.configured():
+            return None
+        client = self._client()
+        trace_context = {"trace_id": trace_id}
+        if parent_observation_id is not None:
+            trace_context["parent_span_id"] = parent_observation_id
+        agent = client.start_observation(
+            trace_context=trace_context,
+            as_type="agent",
+            name=f"agent.{role}",
+            input=input_payload,
+            metadata=metadata,
+            version=version,
+        )
+        cost_source = (
+            "provider_pending" if execution_mode == "hosted_advisory" else "deterministic_zero"
+        )
+        try:
+            generation = agent.start_observation(
+                as_type="generation",
+                name=f"agent.{role}.runtime",
+                model=model,
+                input=input_payload,
+                metadata={
+                    **metadata,
+                    "agent.provider": provider,
+                    "agent.execution_mode": execution_mode,
+                    "cost.source": cost_source,
+                },
+                version=version,
+            )
+        except Exception:
+            with contextlib.suppress(Exception):
+                agent.end()
+            raise
+        return agent, generation, cost_source, str(agent.id)
+
+    def finish_agent(
+        self,
+        state: tuple[Any, Any, str, str] | None,
+        *,
+        output: Any,
+        metadata: dict[str, Any],
+        error_code: str | None,
+        status: str,
+        input_tokens: int | None,
+        output_tokens: int | None,
+        measured_cost: float,
+    ) -> None:
+        if state is None:
+            return
+        agent, generation, cost_source, _observation_id = state
+        generation_values: dict[str, Any] = {
+            "output": output,
+            "metadata": metadata,
+            "level": "ERROR" if error_code else "DEFAULT",
+            "status_message": error_code or status,
+        }
+        usage_details = {
+            key: value
+            for key, value in (
+                ("input", input_tokens),
+                ("output", output_tokens),
+            )
+            if value is not None
+        }
+        if usage_details:
+            usage_details["total"] = sum(usage_details.values())
+            generation_values["usage_details"] = usage_details
+        final_cost_source = (
+            "deterministic_zero"
+            if cost_source == "deterministic_zero"
+            else ("provider_measured" if measured_cost > 0 or usage_details else "unavailable")
+        )
+        generation_values["metadata"] = {
+            **metadata,
+            "cost.source": final_cost_source,
+        }
+        # A deterministic execution has a real, observed cost of zero. For a hosted execution,
+        # only attach cost when provider usage/cost accounting was actually returned.
+        if final_cost_source != "unavailable":
+            generation_values["cost_details"] = {"total": measured_cost}
+        generation_ended = False
+        agent_ended = False
+        try:
+            generation.update(**generation_values).end()
+            generation_ended = True
+            agent.update(
+                output=output,
+                metadata=metadata,
+                level="ERROR" if error_code else "DEFAULT",
+                status_message=error_code or status,
+            ).end()
+            agent_ended = True
+        finally:
+            # The SDK is fail-soft, but ensure a partially updated pair does not remain open if a
+            # custom/test bridge raises between child and parent completion.
+            if not generation_ended:
+                with contextlib.suppress(Exception):
+                    generation.end()
+            if not agent_ended:
+                with contextlib.suppress(Exception):
+                    agent.end()
 
     def flush(self) -> None:
         if self.client is not None:
@@ -223,10 +363,18 @@ class _RequestHandle:
             "request_id": self.request_id,
             "error_code": error_code,
         }
+        langfuse_output = (
+            None
+            if sanitized_response is None
+            else {
+                "sha256": hashlib.sha256(sanitized_response.encode("utf-8")).hexdigest(),
+                "bytes": response_bytes,
+            }
+        )
         try:
             self.owner.langfuse.finish(
                 self.langfuse_state,
-                output=sanitized_response,
+                output=langfuse_output,
                 metadata=metadata,
                 error_code=error_code,
                 measured_cost=self.owner.per_request_cost_usd,
@@ -241,10 +389,21 @@ class _RequestHandle:
                     ),
                     {"request_id": self.request_id},
                 )
+        else:
+            if self.langfuse_state is not None and self.langfuse_status == "queued":
+                self.owner._queued_request_ids.add(self.request_id)
+
+
+@dataclass
+class _AgentHandle:
+    execution_id: str
+    trace_id: str
+    redactions: tuple[str, ...]
+    langfuse_state: tuple[Any, Any, str, str] | None
 
 
 class OutboundHttpTelemetry:
-    """Tracks every physical live-target request in PostgreSQL and Langfuse."""
+    """Tracks physical target requests and every runtime agent in PostgreSQL and Langfuse."""
 
     def __init__(
         self,
@@ -259,7 +418,12 @@ class OutboundHttpTelemetry:
         self.per_request_cost_usd = max(0.0, float(per_request_cost_usd))
         self.monotonic = monotonic
         self.langfuse = _LangfuseBridge()
-        self._queued_trace_ids: set[str] = set()
+        # One campaign trace contains many observations, so delivery is acknowledged by the
+        # observation's durable primary key rather than by trace_id.
+        self._queued_request_ids: set[str] = set()
+        self._queued_agent_execution_ids: set[str] = set()
+        self._agent_handles: dict[str, _AgentHandle] = {}
+        self._agent_observation_ids: dict[str, str] = {}
         self._last_connection_check = 0.0
 
     def begin(
@@ -279,9 +443,10 @@ class OutboundHttpTelemetry:
             raise RuntimeError("outbound telemetry correlation context is incomplete")
         parsed = urlsplit(url)
         request_id = uuid.uuid4().hex
-        trace_id = uuid.uuid4().hex
+        trace_id = campaign_trace_id(campaign_run_id)
         payload = _sanitize({"turns": list(request.turns)}, redactions)
         encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        request_sha256 = hashlib.sha256(encoded).hexdigest()
         configured = self.langfuse.configured()
         with self.engine.begin() as connection:
             connection.execute(
@@ -319,20 +484,23 @@ class OutboundHttpTelemetry:
                     trace_id=trace_id,
                     model=provider,
                     version=metadata.get("target_version", "unknown"),
-                    request_payload=payload,
+                    request_payload={
+                        "sha256": request_sha256,
+                        "bytes": len(encoded),
+                    },
                     metadata={
                         **metadata,
                         "deployment.environment": self.environment,
                         "target.provider": provider,
                         "http.method": method,
                         "http.request.body.size": len(encoded),
+                        "http.request.body.sha256": request_sha256,
                         "server.address": parsed.hostname,
                         "url.path": parsed.path,
                         "cost.usd": self.per_request_cost_usd,
                     },
                     measured_cost=self.per_request_cost_usd,
                 )
-                self._queued_trace_ids.add(trace_id)
             except Exception:
                 _logger.warning("Langfuse observation start failed")
                 langfuse_status = "error"
@@ -355,9 +523,176 @@ class OutboundHttpTelemetry:
             langfuse_status=langfuse_status,
         )
 
+    def begin_agent(
+        self,
+        *,
+        execution_id: str,
+        input_payload: dict[str, Any],
+        redactions: tuple[str, ...] = (),
+    ) -> None:
+        """Project a durable agent start without making Langfuse authoritative."""
+
+        try:
+            with self.engine.begin() as connection:
+                row = (
+                    connection.execute(
+                        text(
+                            "SELECT execution_id, organization_id, campaign_run_id, attempt_id, "
+                            "parent_execution_id, agent_role, provider, model, execution_mode, "
+                            "configuration_version, trace_id, input_sha256 "
+                            "FROM agent_executions WHERE execution_id = :execution_id"
+                        ),
+                        {"execution_id": execution_id},
+                    )
+                    .mappings()
+                    .one()
+                )
+                configured = self.langfuse.configured()
+                connection.execute(
+                    text(
+                        "UPDATE agent_executions SET langfuse_status = :status "
+                        "WHERE execution_id = :execution_id"
+                    ),
+                    {
+                        "execution_id": execution_id,
+                        "status": "queued" if configured else "disabled",
+                    },
+                )
+        except Exception:
+            _logger.warning("agent telemetry start persistence failed")
+            return
+
+        _sanitize(input_payload, redactions)
+        metadata = {
+            "deployment.environment": self.environment,
+            "organization_id": str(row["organization_id"]),
+            "campaign_run_id": str(row["campaign_run_id"]),
+            "attempt_id": (str(row["attempt_id"]) if row["attempt_id"] is not None else None),
+            "parent_execution_id": (
+                str(row["parent_execution_id"]) if row["parent_execution_id"] is not None else None
+            ),
+            "agent.execution_id": execution_id,
+            "agent.role": str(row["agent_role"]),
+            "agent.provider": str(row["provider"]),
+            "agent.model": str(row["model"]),
+            "agent.execution_mode": str(row["execution_mode"]),
+            "agent.input_sha256": str(row["input_sha256"]),
+        }
+        langfuse_state = None
+        if configured:
+            try:
+                parent_execution_id = (
+                    str(row["parent_execution_id"])
+                    if row["parent_execution_id"] is not None
+                    else None
+                )
+                langfuse_state = self.langfuse.start_agent(
+                    trace_id=str(row["trace_id"]),
+                    role=str(row["agent_role"]),
+                    provider=str(row["provider"]),
+                    model=str(row["model"]),
+                    execution_mode=str(row["execution_mode"]),
+                    version=str(row["configuration_version"]),
+                    input_payload={"sha256": str(row["input_sha256"])},
+                    metadata=metadata,
+                    parent_observation_id=(
+                        self._agent_observation_ids.get(parent_execution_id)
+                        if parent_execution_id is not None
+                        else None
+                    ),
+                )
+            except Exception:
+                _logger.warning("Langfuse agent observation start failed")
+                with contextlib.suppress(Exception), self.engine.begin() as connection:
+                    connection.execute(
+                        text(
+                            "UPDATE agent_executions SET langfuse_status = 'error' "
+                            "WHERE execution_id = :execution_id"
+                        ),
+                        {"execution_id": execution_id},
+                    )
+                return
+        if langfuse_state is not None:
+            self._agent_observation_ids[execution_id] = langfuse_state[3]
+            if parent_execution_id is not None:
+                self._agent_observation_ids.pop(parent_execution_id, None)
+        self._agent_handles[execution_id] = _AgentHandle(
+            execution_id=execution_id,
+            trace_id=str(row["trace_id"]),
+            redactions=redactions,
+            langfuse_state=langfuse_state,
+        )
+
+    def finish_agent(
+        self,
+        *,
+        execution_id: str,
+        output_payload: dict[str, Any],
+        error_code: str | None = None,
+    ) -> None:
+        """Finish one agent observation from the already-terminal durable accounting row."""
+
+        handle = self._agent_handles.get(execution_id)
+        if handle is None or handle.langfuse_state is None:
+            return
+        try:
+            with self.engine.connect() as connection:
+                row = (
+                    connection.execute(
+                        text(
+                            "SELECT status, duration_ms, input_tokens, output_tokens, "
+                            "measured_cost, currency, output_sha256 "
+                            "FROM agent_executions WHERE execution_id = :execution_id"
+                        ),
+                        {"execution_id": execution_id},
+                    )
+                    .mappings()
+                    .one()
+                )
+        except Exception:
+            _logger.warning("agent telemetry completion persistence read failed")
+            return
+        metadata = {
+            "agent.execution_id": execution_id,
+            "agent.status": str(row["status"]),
+            "agent.duration_ms": (
+                float(row["duration_ms"]) if row["duration_ms"] is not None else None
+            ),
+            "agent.output_sha256": str(row["output_sha256"]),
+            "cost.usd": float(row["measured_cost"] or 0.0),
+            "currency": str(row["currency"]),
+            "error_code": error_code,
+        }
+        try:
+            self.langfuse.finish_agent(
+                handle.langfuse_state,
+                output={"sha256": str(row["output_sha256"])},
+                metadata=metadata,
+                error_code=error_code,
+                status=str(row["status"]),
+                input_tokens=row["input_tokens"],
+                output_tokens=row["output_tokens"],
+                measured_cost=float(row["measured_cost"] or 0.0),
+            )
+        except Exception:
+            _logger.warning("Langfuse agent observation completion failed")
+            with contextlib.suppress(Exception), self.engine.begin() as connection:
+                connection.execute(
+                    text(
+                        "UPDATE agent_executions SET langfuse_status = 'error' "
+                        "WHERE execution_id = :execution_id"
+                    ),
+                    {"execution_id": execution_id},
+                )
+            self._agent_handles.pop(execution_id, None)
+            return
+        self._agent_handles.pop(execution_id, None)
+        self._queued_agent_execution_ids.add(execution_id)
+
     def flush(self) -> None:
-        trace_ids = tuple(self._queued_trace_ids)
-        if not trace_ids:
+        request_ids = tuple(self._queued_request_ids)
+        agent_execution_ids = tuple(self._queued_agent_execution_ids)
+        if not request_ids and not agent_execution_ids:
             return
         try:
             self.langfuse.flush()
@@ -366,15 +701,35 @@ class OutboundHttpTelemetry:
             status = "error"
         else:
             status = "exported"
-        with contextlib.suppress(Exception), self.engine.begin() as connection:
-            connection.execute(
-                text(
-                    "UPDATE outbound_http_requests SET langfuse_status = :status "
-                    "WHERE trace_id = ANY(:trace_ids) AND langfuse_status = 'queued'"
-                ),
-                {"status": status, "trace_ids": list(trace_ids)},
-            )
-        self._queued_trace_ids.difference_update(trace_ids)
+        try:
+            with self.engine.begin() as connection:
+                if request_ids:
+                    connection.execute(
+                        text(
+                            "UPDATE outbound_http_requests SET langfuse_status = :status "
+                            "WHERE request_id = ANY(:request_ids) AND langfuse_status = 'queued'"
+                        ),
+                        {"status": status, "request_ids": list(request_ids)},
+                    )
+                if agent_execution_ids:
+                    connection.execute(
+                        text(
+                            "UPDATE agent_executions SET langfuse_status = :status "
+                            "WHERE execution_id = ANY(:execution_ids) "
+                            "AND langfuse_status = 'queued'"
+                        ),
+                        {
+                            "status": status,
+                            "execution_ids": list(agent_execution_ids),
+                        },
+                    )
+        except Exception:
+            # Keep the identifiers in memory. The SDK flush may already have succeeded, but
+            # retrying its empty queue is safer than losing durable delivery reconciliation.
+            _logger.warning("Langfuse delivery status persistence failed")
+            return
+        self._queued_request_ids.difference_update(request_ids)
+        self._queued_agent_execution_ids.difference_update(agent_execution_ids)
 
     def heartbeat(self, *, force_connection_check: bool = False) -> None:
         now = self.monotonic()

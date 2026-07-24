@@ -187,3 +187,98 @@ main first), or C (explicitly authorize an isolated worktree at a named base, wa
 Precondition #2's sequencing and accepting future-merge-conflict risk). Until then, held at Wave
 0. The tracked target authorization will be consumed by WP-21A once the build reaches the live
 phase and the §2 platform-deployment surface is present.
+
+---
+
+## 9. Session update — base largely cleared; one temporary blocker (active live run)
+
+Re-inventoried live state. **Major progress:**
+
+- HEAD advanced `66e670f → 54b3a4d3` (branch `swarm/final-submission-gap-closure`, now **5 ahead
+  of `main`**). New commits: `efd5ce3` register authorized targets · `23fbdfe` authorized
+  synthetic live campaign (target config/scan/draft reports) · `54b3a4d3` final live findings +
+  target config + 4 vuln reports.
+- **Protected `.tdd-swarm/prompts/` namespace is now 0 dirty** (committed). Dirty count fell
+  ~215 → **9**.
+- **Secret hygiene verified solid:** `54b3a4d3` gitignores `**/Runtime.bru`,
+  `**/adversarial-smart-bruno-*/`, `**/claude-adversarial-run/`, `tmp/`; SIDs stay in gitignored
+  `.env.campaign`/`.env.local`. Working-tree SID sweep = clean (no SID string anywhere in-repo).
+
+**One remaining, temporary blocker — an active live campaign is mutating the tree:**
+
+- Process **PID 61972** `python scripts/platform_live_run.py`, `LC_CAMPAIGN_RUN_ID=
+  platform-live-20260724b-week1` (paced), is **running now**. The 9 dirty entries are its output
+  (old `…20260724-week1` manifests deleted, new `…20260724b-week1/` attempts DX-001/DX-002 being
+  written, `approval.json` + `scripts/platform_live_run.py` modified).
+- Therefore **no clean base exists yet** and starting the gap-swarm now is unsafe: worker
+  branches, `scripts/check.sh`, `git diff --check`, and frozen-hash freezes cannot run against a
+  tree a live process is actively rewriting, and the swarm must not interfere with a live run.
+
+**Base-SHA decision (resolved in principle):** the owner effectively chose path A/B-hybrid by
+committing the active work to the branch. Intended `<RED_TEAM_GAP_BASE_SHA> = 54b3a4d3` (or its
+clean successor once the in-flight live-run output is committed/stashed). **Awaiting a clean
+tree** (live run finishes or is paused → its 9 entries committed/stashed).
+
+**Live-phase closure caveats (unchanged; block WP-21 closure, NOT the WP-01→20 build):** platform
+Railway SHA + dual-remote/CI-green for it + Clerk/Headshot + separate two-person approver +
+platform budgets/rate/abort + observation points still required; and the capabilities WP-01→20
+build do not exist yet, so live "through production code paths" comes only after the build.
+
+**Ready-to-start trigger:** clean working tree at `54b3a4d3` (or successor) → I lock the base,
+reserve no migration until WP-02's wave, and dispatch Wave 0 (WP-01 physical dispatch gate;
+WP-07 public shell; WP-08 ownership authorization) under the Test → Test-Review/freeze →
+Implement → Code+Security review sequence, ≤3 workers.
+
+---
+
+## 10. Gap analysis outcome — DE-SCOPED execution plan (do the biggest/best only)
+
+Ran a 7-agent grounded gap analysis (workflow `wf_3207c24e-216`) against current code, through two
+lenses: expand security-SCAN capability + use ALL tools fully on every user-engaged run.
+
+**Core finding:** a user-engaged run today **VALIDATES a fixed ~14-case corpus; it does not
+red-team generatively and invokes ZERO security tools live.** Garak/PyRIT/Giskard/Promptfoo
+contribute only 5 pre-baked single-turn prompt-injection candidates frozen offline by sha256;
+ZAP/fuzzer/OAST/browser never run; only 1 oracle fires (substring canary) so 7/9 seeds →
+permanent `INDETERMINATE`. The web findings (AF-VULN-004/005/006) came from an **external Bruno
+client, not the platform scanner.**
+
+**Hard ordering rule:** decisiveness gates breadth. More tools/corpus before oracles = more
+INDETERMINATE, not more findings. **WP-11 oracles/instrumentation MUST precede all breadth work.**
+
+**Ranked focus (execute these):**
+1. WP-11 — deterministic recorder/tool-call + state-diff oracles & trusted observation. *Value
+   gate for everything.* (L)
+2. WP-13 + WP-13E — tool broker + wire the 4 adapters into the run behind `target_scope:none`,
+   dispatch via existing PolicyGateway. *Seed-replay → generative scan; per-run tool use 0→N.* (L)
+3. WP-14 — full-spectrum corpus (all 6 PRD categories + OWASP Agentic ASI) as default workload. (L)
+4. WP-13A/13B/13C — Garak multi-family · PyRIT multi-turn (Crescendo/TAP) · Giskard RAG/agent. (M/L)
+5. WP-12(config-unpin, S) + WP-16B fuzzer + WP-17 BOLA/BFLA matrix over the **already-built** Week2
+   upload/read/RAG surfaces (currently `enabled:false`). *Highest find-power vs the real target.*
+6. WP-03 + WP-16D — pin validated destination (DNS-rebind TOCTOU) + governed process-egress.
+   *Prerequisite that gates all live active-process/web scanning.*
+7. WP-15 — authorized feedback mutation loop (new hash + 2nd authorization). *After 1,2,4.*
+8. WP-05 — expired-lease reaper loop (crash self-heal for long autonomous scans). (M)
+
+**Deliberately DEFER/SKIP (not the biggest levers now):**
+- **Already done:** WP-01 (RT-09 abort/lease/scope re-check); the live-coordinator run + AF-VULN-004/5/6.
+- **Hardening, not capability:** WP-02 DB roles, WP-04 idempotency (fold into 13B), WP-06/07/08
+  readiness/public-shell/ownership-auth. WP-09 = 1-line ZAP evidence-drift truthfulness fix (do
+  inline, not as a lever).
+- **Low-ROI this window:** WP-13D Promptfoo (overlaps Garak), WP-16A/16C workbench/checks,
+  WP-18A OAST, WP-18B WebSocket/DOM, WP-19A report export. WP-19 regression loop → re-open only
+  AFTER rank-1 oracles make replays decisive.
+
+**Sequence (honoring ≤3 workers + serialized contract/migration):** W0 parallel {WP-09 fix ·
+WP-12 config-unpin · WP-03 pin} → W1 lead {WP-11 via contract-steward} → W2 {WP-13/13E broker ‖
+WP-14 corpus; serialize the two schema migrations} → W3 {13A‖13B(+WP-04)‖13C behind broker} →
+W4 {WP-16D egress first, then WP-16B‖WP-17‖passive-ZAP live} → W5 {WP-15 → WP-05 → reopen WP-19}.
+
+**Caveats:** live-web scan needs a separate persisted ZAP/target authorization (campaign approval
+is insufficient); the "Week2 surfaces already addressed" analyst flag was WRONG — surfaces built
+but still `enabled:false`, so config-unpin is genuinely not-done; two-person + gateway-owned
+dispatch invariants must hold through every lever; WP-13/WP-15 each add a new inter-agent contract
+(serialization tax not in the L estimate).
+
+**Base/live status:** live run finished (0 processes); HEAD `1ac3ee0`, 6 ahead of main, tree DIRTY
+(25 entries = completed run output). Ready to lock base + start W0 the moment the tree is clean.

@@ -300,9 +300,7 @@ def test_agent_models_and_tool_scope_are_real_configurable_projections(
     )
     assert staged.status_code == 200, staged.text
     configuration_sha256 = staged.json()["resource_id"]
-    projection = client.get(
-        f"/api/v1/hosted-configuration-sets/{configuration_sha256}"
-    )
+    projection = client.get(f"/api/v1/hosted-configuration-sets/{configuration_sha256}")
     assert projection.status_code == 200
     assert projection.json()["state"] == "ready"
     assert projection.json()["data"]["activation_state"] == "staged_pending_authorization"
@@ -310,12 +308,9 @@ def test_agent_models_and_tool_scope_are_real_configurable_projections(
     assert len(projection.json()["data"]["roles"]) == 4
     assert "secretref://" not in projection.text
     assert all(
-        role["provider_reference_bound"] is True
-        for role in projection.json()["data"]["roles"]
+        role["provider_reference_bound"] is True for role in projection.json()["data"]["roles"]
     )
-    preflight = client.get(
-        f"/api/v1/hosted-configuration-sets/{configuration_sha256}/preflight"
-    )
+    preflight = client.get(f"/api/v1/hosted-configuration-sets/{configuration_sha256}/preflight")
     assert preflight.status_code == 200
     assert preflight.json()["state"] == "degraded"
     assert preflight.json()["reason_code"] == "hosted_runtime_not_composed"
@@ -622,9 +617,7 @@ def test_hosted_authorization_is_bound_but_launch_stays_unavailable_until_compos
         "provider_timeout_seconds": 30.0,
     }
     assert "credential_ref" not in json.dumps(approval_scope)
-    preflight = client.get(
-        f"/api/v1/campaign-authorization-requests/{request_id}/preflight"
-    )
+    preflight = client.get(f"/api/v1/campaign-authorization-requests/{request_id}/preflight")
     assert preflight.status_code == 200
     assert preflight.json()["state"] == "degraded"
     assert preflight.json()["reason_code"] == "hosted_runtime_not_composed"
@@ -683,10 +676,7 @@ def test_hosted_authorization_is_bound_but_launch_stays_unavailable_until_compos
         headers=_headers("hosted-launch-unverified-bindings-0001"),
     )
     assert unverified.status_code == 503
-    assert (
-        unverified.json()["reason_code"]
-        == "provider_credentials_runner_unverified"
-    )
+    assert unverified.json()["reason_code"] == "provider_credentials_runner_unverified"
     with migrated_db.connect() as connection:
         assert connection.execute(text("SELECT count(*) FROM campaign_runs")).scalar_one() == 0
         assert connection.execute(text("SELECT count(*) FROM jobs")).scalar_one() == 0
@@ -917,12 +907,18 @@ def test_costs_projection_is_ready_from_persisted_run_summary(migrated_db: Engin
         "accounting_id",
         "campaign_id",
         "provider",
+        "agent_role",
+        "record_kind",
         "measured_cost",
         "currency",
         "request_count",
+        "execution_count",
         "attempt_count",
         "confirmed_finding_count",
         "average_cost_per_request",
+        "input_tokens",
+        "output_tokens",
+        "token_observation_count",
         "budget_usd",
         "budget_utilization",
         "duration_ms",
@@ -934,6 +930,8 @@ def test_costs_projection_is_ready_from_persisted_run_summary(migrated_db: Engin
     assert row["accounting_id"] == "run-cost-projection-0001"
     assert row["campaign_id"] == "run-cost-projection-0001"
     assert row["provider"] == "synthetic_offline"
+    assert row["agent_role"] is None
+    assert row["record_kind"] == "campaign"
     # Numeric(14,6) must be projected as a JSON number, never a stringified Decimal.
     assert isinstance(row["measured_cost"], (int, float))
     assert row["measured_cost"] == 1.234567
@@ -980,11 +978,15 @@ def test_traces_projection_is_ready_from_persisted_attempt_and_verdict(
     row = body["data"][0]
     assert set(row) == {
         "request_id",
+        "execution_id",
+        "parent_execution_id",
         "trace_id",
         "campaign_id",
         "attempt_id",
         "operation",
         "provider",
+        "agent_role",
+        "execution_mode",
         "method",
         "destination_host",
         "relative_path",
@@ -998,6 +1000,8 @@ def test_traces_projection_is_ready_from_persisted_attempt_and_verdict(
         "response_bytes",
         "measured_cost",
         "currency",
+        "input_tokens",
+        "output_tokens",
         "langfuse_status",
         "request_preview",
         "response_preview",
@@ -1008,6 +1012,8 @@ def test_traces_projection_is_ready_from_persisted_attempt_and_verdict(
     }
     assert row["trace_id"] == "trace-projection-0001"
     assert row["operation"] == "attempt:copilot-api@1.0.0"
+    assert row["agent_role"] is None
+    assert row["execution_mode"] is None
     assert row["status"] == "NO_EXPLOIT_OBSERVED"
     # verdict.created_at (10:00:02.500) - attempt_result.executed_at (10:00:00) == 2500 ms.
     assert row["duration_ms"] == 2500.0

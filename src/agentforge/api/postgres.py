@@ -36,6 +36,7 @@ from agentforge.control_plane.errors import (
     RecordConflictError,
     RecordNotFoundError,
 )
+from agentforge.correlation import campaign_trace_id
 from agentforge.migration_config import normalize_psycopg_url
 from agentforge.policy.recorder import (
     PERSISTED_EVIDENCE_COLUMNS,
@@ -281,7 +282,13 @@ class PostgresApiBackend(ApiBackend):
                         "count(*) FILTER (WHERE input_tokens IS NOT NULL "
                         "OR output_tokens IS NOT NULL) AS token_observation_count, "
                         "avg(duration_ms) FILTER (WHERE duration_ms IS NOT NULL) "
-                        "AS average_duration_ms, max(started_at) AS last_activity_at, "
+                        "AS average_duration_ms, "
+                        "percentile_cont(0.5) WITHIN GROUP (ORDER BY duration_ms) "
+                        "FILTER (WHERE duration_ms IS NOT NULL) AS p50_duration_ms, "
+                        "percentile_cont(0.95) WITHIN GROUP (ORDER BY duration_ms) "
+                        "FILTER (WHERE duration_ms IS NOT NULL) AS p95_duration_ms, "
+                        "count(*) FILTER (WHERE langfuse_status = 'exported') "
+                        "AS langfuse_exported_count, max(started_at) AS last_activity_at, "
                         "(array_agg(status ORDER BY started_at DESC))[1] AS last_status, "
                         "(array_agg(campaign_run_id ORDER BY started_at DESC))[1] "
                         "AS last_campaign_run_id, "
@@ -361,6 +368,19 @@ class PostgresApiBackend(ApiBackend):
                                     if stats.get("average_duration_ms") is not None
                                     else None
                                 ),
+                                "p50_duration_ms": (
+                                    float(stats["p50_duration_ms"])
+                                    if stats.get("p50_duration_ms") is not None
+                                    else None
+                                ),
+                                "p95_duration_ms": (
+                                    float(stats["p95_duration_ms"])
+                                    if stats.get("p95_duration_ms") is not None
+                                    else None
+                                ),
+                                "langfuse_exported_count": int(
+                                    stats.get("langfuse_exported_count", 0)
+                                ),
                                 "last_activity_at": stats.get("last_activity_at"),
                                 "last_status": stats.get("last_status"),
                                 "last_campaign_run_id": stats.get("last_campaign_run_id"),
@@ -371,18 +391,22 @@ class PostgresApiBackend(ApiBackend):
                     "hosted_configuration_set",
                     "hosted_configuration_preflight",
                 }:
-                    row = connection.execute(
-                        text(
-                            "SELECT configuration_sha256, schema_version, release_sha256, "
-                            "payload, actor_user_id, created_at FROM hosted_configuration_sets "
-                            "WHERE organization_id = :org "
-                            "AND configuration_sha256 = :configuration"
-                        ),
-                        {
-                            "org": principal.organization_id,
-                            "configuration": identifiers.get("configuration_sha256", ""),
-                        },
-                    ).mappings().one_or_none()
+                    row = (
+                        connection.execute(
+                            text(
+                                "SELECT configuration_sha256, schema_version, release_sha256, "
+                                "payload, actor_user_id, created_at FROM hosted_configuration_sets "
+                                "WHERE organization_id = :org "
+                                "AND configuration_sha256 = :configuration"
+                            ),
+                            {
+                                "org": principal.organization_id,
+                                "configuration": identifiers.get("configuration_sha256", ""),
+                            },
+                        )
+                        .mappings()
+                        .one_or_none()
+                    )
                     if row is None:
                         rows = []
                     else:
@@ -445,9 +469,10 @@ class PostgresApiBackend(ApiBackend):
                         "SELECT execution_id, campaign_run_id, attempt_id, parent_execution_id, "
                         "agent_role, status, provider, model, execution_mode, "
                         "configuration_version, input_sha256, output_sha256, input_tokens, "
-                        "output_tokens, measured_cost, currency, trace_id, detail, error_code, "
+                        "output_tokens, measured_cost, currency, trace_id, langfuse_status, "
+                        "detail, error_code, "
                         "started_at, finished_at, duration_ms FROM agent_executions "
-                        "WHERE organization_id = :org ORDER BY id DESC LIMIT 300",
+                        "WHERE organization_id = :org ORDER BY id DESC LIMIT 1000",
                         {"org": principal.organization_id},
                     )
                     for row in rows:
@@ -1016,12 +1041,15 @@ class PostgresApiBackend(ApiBackend):
                                 "accounting_id": source["accounting_id"],
                                 "campaign_id": source["campaign_id"],
                                 "provider": source["provider"],
+                                "agent_role": None,
+                                "record_kind": "campaign",
                                 # measured_cost is a Numeric(14,6) -> Decimal; the console/pydantic
                                 # contract requires a JSON number, so coerce it to float here rather
                                 # than letting _safe stringify the Decimal.
                                 "measured_cost": float(cost) if cost is not None else 0.0,
                                 "currency": source["currency"],
                                 "request_count": source["request_count"],
+                                "execution_count": 0,
                                 "attempt_count": source["attempt_count"],
                                 "confirmed_finding_count": source["confirmed_finding_count"],
                                 "average_cost_per_request": (
@@ -1029,6 +1057,9 @@ class PostgresApiBackend(ApiBackend):
                                     if cost is not None and source["request_count"]
                                     else 0.0
                                 ),
+                                "input_tokens": None,
+                                "output_tokens": None,
+                                "token_observation_count": 0,
                                 "budget_usd": source["budget_usd"],
                                 "budget_utilization": (
                                     float(cost) / source["budget_usd"]
@@ -1048,6 +1079,11 @@ class PostgresApiBackend(ApiBackend):
                         "e.execution_mode, "
                         "sum(e.measured_cost) AS measured_cost, e.currency, "
                         "count(*) AS executions, "
+                        "count(DISTINCT e.attempt_id) AS attempt_count, "
+                        "sum(e.input_tokens) AS input_tokens, "
+                        "sum(e.output_tokens) AS output_tokens, "
+                        "count(*) FILTER (WHERE e.input_tokens IS NOT NULL "
+                        "OR e.output_tokens IS NOT NULL) AS token_observation_count, "
                         "min(e.started_at) AS started_at, max(e.finished_at) AS ended_at, "
                         "extract(epoch FROM (max(e.finished_at) - min(e.started_at))) * 1000 "
                         "AS duration_ms, q.scope_payload->>'execution_profile' "
@@ -1072,7 +1108,8 @@ class PostgresApiBackend(ApiBackend):
                         accounting_id = hashlib.sha256(
                             (
                                 f"agent-cost:{source['campaign_run_id']}:"
-                                f"{source['agent_role']}:{source['provider']}:{source['model']}"
+                                f"{source['agent_role']}:{source['provider']}:{source['model']}:"
+                                f"{source['execution_mode']}"
                             ).encode()
                         ).hexdigest()
                         rows.append(
@@ -1083,15 +1120,21 @@ class PostgresApiBackend(ApiBackend):
                                     f"agent:{source['agent_role']}:"
                                     f"{source['provider']}/{source['model']}"
                                 ),
+                                "agent_role": source["agent_role"],
+                                "record_kind": "agent",
                                 "measured_cost": cost,
                                 "currency": source["currency"],
                                 # Agent executions are logical spans, not physical provider
                                 # requests. Until provider request IDs are durably correlated,
                                 # never infer a request count from execution count.
                                 "request_count": 0,
-                                "attempt_count": int(source["executions"]),
+                                "execution_count": int(source["executions"]),
+                                "attempt_count": int(source["attempt_count"]),
                                 "confirmed_finding_count": 0,
                                 "average_cost_per_request": 0.0,
+                                "input_tokens": source["input_tokens"],
+                                "output_tokens": source["output_tokens"],
+                                "token_observation_count": int(source["token_observation_count"]),
                                 "budget_usd": None,
                                 "budget_utilization": None,
                                 "duration_ms": float(source["duration_ms"] or 0.0),
@@ -1131,6 +1174,12 @@ class PostgresApiBackend(ApiBackend):
                             {
                                 **source,
                                 **inspection,
+                                "execution_id": None,
+                                "parent_execution_id": None,
+                                "agent_role": None,
+                                "execution_mode": None,
+                                "input_tokens": None,
+                                "output_tokens": None,
                                 "duration_ms": duration_ms,
                                 "measured_cost": float(source["measured_cost"] or 0.0),
                             }
@@ -1157,6 +1206,8 @@ class PostgresApiBackend(ApiBackend):
                         rows.append(
                             {
                                 "request_id": None,
+                                "execution_id": None,
+                                "parent_execution_id": None,
                                 "trace_id": source["trace_id"],
                                 "campaign_id": source["campaign_id"],
                                 "attempt_id": source["attempt_id"],
@@ -1164,6 +1215,8 @@ class PostgresApiBackend(ApiBackend):
                                     f"attempt:{source['target_id']}@{source['target_version']}"
                                 ),
                                 "provider": source["target_id"] or "target",
+                                "agent_role": None,
+                                "execution_mode": None,
                                 "method": None,
                                 "destination_host": None,
                                 "relative_path": None,
@@ -1180,6 +1233,8 @@ class PostgresApiBackend(ApiBackend):
                                 "response_bytes": None,
                                 "measured_cost": 0.0,
                                 "currency": "USD",
+                                "input_tokens": None,
+                                "output_tokens": None,
                                 "langfuse_status": "historical_not_instrumented",
                                 "request_preview": None,
                                 "response_preview": None,
@@ -1201,13 +1256,15 @@ class PostgresApiBackend(ApiBackend):
                         rows.append(
                             {
                                 "request_id": None,
-                                "trace_id": hashlib.sha256(
-                                    f"campaign:{source['run_id']}".encode()
-                                ).hexdigest()[:32],
+                                "execution_id": None,
+                                "parent_execution_id": None,
+                                "trace_id": campaign_trace_id(source["run_id"]),
                                 "campaign_id": source["run_id"],
                                 "attempt_id": None,
                                 "operation": "campaign.run",
                                 "provider": source["provenance"],
+                                "agent_role": None,
+                                "execution_mode": None,
                                 "method": None,
                                 "destination_host": None,
                                 "relative_path": None,
@@ -1225,6 +1282,8 @@ class PostgresApiBackend(ApiBackend):
                                 "response_bytes": None,
                                 "measured_cost": float(source["measured_cost"] or 0.0),
                                 "currency": source["currency"],
+                                "input_tokens": None,
+                                "output_tokens": None,
                                 "langfuse_status": "historical_not_instrumented",
                                 "request_preview": None,
                                 "response_preview": None,
@@ -1236,22 +1295,28 @@ class PostgresApiBackend(ApiBackend):
                         )
                     agent_rows = _rows(
                         connection,
-                        "SELECT execution_id, trace_id, campaign_run_id, attempt_id, agent_role, "
-                        "status, provider, model, execution_mode, input_sha256, output_sha256, "
-                        "error_code, started_at, finished_at, duration_ms, measured_cost, currency "
+                        "SELECT execution_id, parent_execution_id, trace_id, campaign_run_id, "
+                        "attempt_id, agent_role, status, provider, model, execution_mode, "
+                        "input_sha256, output_sha256, input_tokens, output_tokens, error_code, "
+                        "started_at, finished_at, duration_ms, measured_cost, currency, "
+                        "langfuse_status "
                         "FROM agent_executions WHERE organization_id = :org "
-                        "ORDER BY started_at DESC LIMIT 300",
+                        "ORDER BY started_at DESC LIMIT 1000",
                         {"org": principal.organization_id},
                     )
                     for source in agent_rows:
                         rows.append(
                             {
-                                "request_id": source["execution_id"],
+                                "request_id": None,
+                                "execution_id": source["execution_id"],
+                                "parent_execution_id": source["parent_execution_id"],
                                 "trace_id": source["trace_id"],
                                 "campaign_id": source["campaign_run_id"],
                                 "attempt_id": source["attempt_id"],
                                 "operation": f"agent.{source['agent_role']}",
                                 "provider": f"{source['provider']}/{source['model']}",
+                                "agent_role": source["agent_role"],
+                                "execution_mode": source["execution_mode"],
                                 "method": None,
                                 "destination_host": None,
                                 "relative_path": None,
@@ -1260,16 +1325,18 @@ class PostgresApiBackend(ApiBackend):
                                 "error_code": source["error_code"],
                                 "started_at": source["started_at"],
                                 "finished_at": source["finished_at"],
-                                "duration_ms": float(source["duration_ms"] or 0.0),
+                                "duration_ms": (
+                                    float(source["duration_ms"])
+                                    if source["duration_ms"] is not None
+                                    else None
+                                ),
                                 "request_bytes": 0,
                                 "response_bytes": None,
                                 "measured_cost": float(source["measured_cost"] or 0.0),
                                 "currency": source["currency"],
-                                "langfuse_status": (
-                                    "not_applicable_deterministic"
-                                    if source["execution_mode"] == "deterministic"
-                                    else "hosted_export_not_observed"
-                                ),
+                                "input_tokens": source["input_tokens"],
+                                "output_tokens": source["output_tokens"],
+                                "langfuse_status": source["langfuse_status"],
                                 "request_preview": None,
                                 "response_preview": None,
                                 "request_sha256": source["input_sha256"],
@@ -1498,9 +1565,7 @@ class PostgresApiBackend(ApiBackend):
                     ),
                 )
                 with self._engine.connect() as connection:
-                    database_now = connection.execute(
-                        text("SELECT clock_timestamp()")
-                    ).scalar_one()
+                    database_now = connection.execute(text("SELECT clock_timestamp()")).scalar_one()
                 expiry = database_now + datetime.timedelta(
                     seconds=int(payload["expires_in_seconds"])
                 )
@@ -1528,13 +1593,8 @@ class PostgresApiBackend(ApiBackend):
                 )
                 if not self._hosted_runtime_available and requires_hosted_runtime:
                     return CommandResult.unavailable("hosted_runtime_not_composed")
-                if (
-                    not self._hosted_provider_bindings_verified
-                    and requires_hosted_runtime
-                ):
-                    return CommandResult.unavailable(
-                        "provider_credentials_runner_unverified"
-                    )
+                if not self._hosted_provider_bindings_verified and requires_hosted_runtime:
+                    return CommandResult.unavailable("provider_credentials_runner_unverified")
                 if not self._runner_heartbeat_is_fresh():
                     return CommandResult.unavailable("runner_heartbeat_stale")
                 record = self._store.launch_campaign(
@@ -1565,13 +1625,9 @@ class PostgresApiBackend(ApiBackend):
             if command == "request_live_probe_authorization":
                 return CommandResult.unavailable("distinct_live_probe_workflow_missing")
             if command == "configure_agent":
-                return CommandResult.unavailable(
-                    "atomic_hosted_configuration_set_required"
-                )
+                return CommandResult.unavailable("atomic_hosted_configuration_set_required")
             if command == "stage_hosted_configuration_set":
-                configuration = HostedConfigurationSet.from_payload(
-                    dict(payload["configuration"])
-                )
+                configuration = HostedConfigurationSet.from_payload(dict(payload["configuration"]))
                 configuration_sha256 = self._store.stage_hosted_configuration_set(
                     principal=principal,
                     configuration=configuration,
@@ -1624,52 +1680,60 @@ class PostgresApiBackend(ApiBackend):
         """Project every launch gate without resolving a secret or making an external call."""
 
         with self._engine.connect() as connection:
-            row = connection.execute(
-                text(
-                    "SELECT q.scope_hash, q.scope_payload, q.launcher_user_id, q.expires_at, "
-                    "d.decision, d.approver_user_id, clock_timestamp() AS database_now, "
-                    "EXISTS (SELECT 1 FROM campaign_runs r "
-                    "WHERE r.organization_id = q.organization_id "
-                    "AND r.authorization_request_id = q.request_id) AS consumed "
-                    "FROM campaign_authorization_requests q "
-                    "LEFT JOIN campaign_authorization_decisions d "
-                    "ON d.organization_id = q.organization_id AND d.request_id = q.request_id "
-                    "WHERE q.organization_id = :org AND q.request_id = :request_id"
-                ),
-                {"org": organization_id, "request_id": request_id},
-            ).mappings().one_or_none()
+            row = (
+                connection.execute(
+                    text(
+                        "SELECT q.scope_hash, q.scope_payload, q.launcher_user_id, q.expires_at, "
+                        "d.decision, d.approver_user_id, clock_timestamp() AS database_now, "
+                        "EXISTS (SELECT 1 FROM campaign_runs r "
+                        "WHERE r.organization_id = q.organization_id "
+                        "AND r.authorization_request_id = q.request_id) AS consumed "
+                        "FROM campaign_authorization_requests q "
+                        "LEFT JOIN campaign_authorization_decisions d "
+                        "ON d.organization_id = q.organization_id AND d.request_id = q.request_id "
+                        "WHERE q.organization_id = :org AND q.request_id = :request_id"
+                    ),
+                    {"org": organization_id, "request_id": request_id},
+                )
+                .mappings()
+                .one_or_none()
+            )
             if row is None:
                 return ResourceResult.empty()
             scope = dict(row["scope_payload"])
             hosted = scope.get("hosted_run")
             hosted = dict(hosted) if isinstance(hosted, Mapping) else None
-            target_state = connection.execute(
-                text(
-                    "SELECT "
-                    "(SELECT e.to_lifecycle FROM target_lifecycle_events e "
-                    "WHERE e.organization_id = t.organization_id "
-                    "AND e.target_id = t.target_id AND e.target_version = t.version "
-                    "ORDER BY e.id DESC LIMIT 1) AS lifecycle, "
-                    "(SELECT e.to_enabled FROM surface_state_events e "
-                    "WHERE e.organization_id = s.organization_id "
-                    "AND e.surface_id = s.surface_id AND e.surface_version = s.version "
-                    "ORDER BY e.id DESC LIMIT 1) AS surface_enabled, "
-                    "(t.payload->>'synthetic_data_only')::boolean AS synthetic_data_only "
-                    "FROM target_definitions t JOIN attack_surface_definitions s "
-                    "ON s.organization_id = t.organization_id "
-                    "AND s.target_id = t.target_id AND s.target_version = t.version "
-                    "WHERE t.organization_id = :org AND t.target_id = :target "
-                    "AND t.version = :target_version AND s.surface_id = :surface "
-                    "AND s.version = :surface_version"
-                ),
-                {
-                    "org": organization_id,
-                    "target": scope.get("target_id", ""),
-                    "target_version": scope.get("target_version", ""),
-                    "surface": scope.get("surface_id", ""),
-                    "surface_version": scope.get("surface_version", ""),
-                },
-            ).mappings().one_or_none()
+            target_state = (
+                connection.execute(
+                    text(
+                        "SELECT "
+                        "(SELECT e.to_lifecycle FROM target_lifecycle_events e "
+                        "WHERE e.organization_id = t.organization_id "
+                        "AND e.target_id = t.target_id AND e.target_version = t.version "
+                        "ORDER BY e.id DESC LIMIT 1) AS lifecycle, "
+                        "(SELECT e.to_enabled FROM surface_state_events e "
+                        "WHERE e.organization_id = s.organization_id "
+                        "AND e.surface_id = s.surface_id AND e.surface_version = s.version "
+                        "ORDER BY e.id DESC LIMIT 1) AS surface_enabled, "
+                        "(t.payload->>'synthetic_data_only')::boolean AS synthetic_data_only "
+                        "FROM target_definitions t JOIN attack_surface_definitions s "
+                        "ON s.organization_id = t.organization_id "
+                        "AND s.target_id = t.target_id AND s.target_version = t.version "
+                        "WHERE t.organization_id = :org AND t.target_id = :target "
+                        "AND t.version = :target_version AND s.surface_id = :surface "
+                        "AND s.version = :surface_version"
+                    ),
+                    {
+                        "org": organization_id,
+                        "target": scope.get("target_id", ""),
+                        "target_version": scope.get("target_version", ""),
+                        "surface": scope.get("surface_id", ""),
+                        "surface_version": scope.get("surface_version", ""),
+                    },
+                )
+                .mappings()
+                .one_or_none()
+            )
             runner_heartbeat_fresh = bool(
                 connection.execute(
                     text(
@@ -1704,9 +1768,8 @@ class PostgresApiBackend(ApiBackend):
                 if payload is not None:
                     try:
                         configuration = HostedConfigurationSet.from_payload(dict(payload))
-                        configuration_valid = (
-                            configuration.configuration_sha256
-                            == hosted.get("configuration_set_sha256")
+                        configuration_valid = configuration.configuration_sha256 == hosted.get(
+                            "configuration_set_sha256"
                         )
                         distinct_references = len(
                             {role.credential_reference for role in configuration.roles}
@@ -1726,9 +1789,8 @@ class PostgresApiBackend(ApiBackend):
 
         database_now = row["database_now"]
         timeout_seconds = float(dict(scope.get("caps") or {}).get("run_timeout_seconds", 0))
-        authorization_window_covers_run = (
-            row["expires_at"]
-            > database_now + datetime.timedelta(seconds=timeout_seconds)
+        authorization_window_covers_run = row["expires_at"] > database_now + datetime.timedelta(
+            seconds=timeout_seconds
         )
         two_person_approval = (
             row["decision"] == "approved"
@@ -1747,9 +1809,7 @@ class PostgresApiBackend(ApiBackend):
                 scope.get("auth_mode") != "session"
                 or (
                     isinstance(scope.get("credential_ref"), str)
-                    and scope["credential_ref"].endswith(
-                        f"/{hosted.get('session_generation', '')}"
-                    )
+                    and scope["credential_ref"].endswith(f"/{hosted.get('session_generation', '')}")
                 )
             )
         )

@@ -20,6 +20,7 @@ from agentforge.security_tools.active_authorization import (
     ActiveScanAuthorization,
     ActiveScanAuthorizationError,
     ActiveScanCaps,
+    ActiveScanScope,
     active_scan_operation_hash,
 )
 
@@ -50,6 +51,18 @@ def _scope_kwargs() -> dict[str, object]:
         "caps": _caps(),
         "scope_nonce": "nonce-0123456789ab",
     }
+
+
+def test_scope_operation_hash_matches_the_pure_function() -> None:
+    kwargs = _scope_kwargs()
+    scope = ActiveScanScope(**kwargs)
+    assert scope.operation_hash() == active_scan_operation_hash(**kwargs)
+
+
+def test_scope_is_frozen_immutable() -> None:
+    scope = ActiveScanScope(**_scope_kwargs())
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        scope.origin = "https://evil.test"  # type: ignore[misc]
 
 
 def test_operation_hash_is_deterministic_and_order_independent() -> None:

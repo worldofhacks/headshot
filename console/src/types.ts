@@ -9,6 +9,17 @@ export interface SafetyCapsReadModel extends JsonRecord {
   run_timeout_seconds: number;
 }
 
+export interface HostedRunBindingReadModel extends JsonRecord {
+  configuration_set_sha256: string;
+  generation_policy_sha256: string;
+  session_generation: string;
+  provider_model_call_limit: number;
+  provider_model_spend_limit_usd: string;
+  provider_max_retries: number;
+  provider_max_concurrency: 1;
+  provider_timeout_seconds: number;
+}
+
 export interface AuthorizationScopeReadModel extends JsonRecord {
   target_id: string;
   target_version: string;
@@ -29,6 +40,7 @@ export interface AuthorizationScopeReadModel extends JsonRecord {
   caps: SafetyCapsReadModel;
   run_nonce: string;
   execution_profile: "synthetic" | "live";
+  hosted_run: HostedRunBindingReadModel | null;
 }
 
 export interface CampaignReadModel extends AuthorizationScopeReadModel {
@@ -138,11 +150,15 @@ export interface ResilienceReadModel extends JsonRecord {
 
 export interface TraceReadModel extends JsonRecord {
   request_id: string | null;
+  execution_id: string | null;
+  parent_execution_id: string | null;
   trace_id: string;
   campaign_id: string;
   attempt_id: string | null;
   operation: string;
   provider: string;
+  agent_role: "orchestrator" | "red_team" | "judge" | "documentation" | null;
+  execution_mode: "deterministic" | "hosted_advisory" | null;
   method: string | null;
   destination_host: string | null;
   relative_path: string | null;
@@ -151,11 +167,13 @@ export interface TraceReadModel extends JsonRecord {
   error_code: string | null;
   started_at: string;
   finished_at: string | null;
-  duration_ms: number;
+  duration_ms: number | null;
   request_bytes: number;
   response_bytes: number | null;
   measured_cost: number;
   currency: string;
+  input_tokens: number | null;
+  output_tokens: number | null;
   langfuse_status: string;
   request_preview: string | null;
   response_preview: string | null;
@@ -169,12 +187,18 @@ export interface CostReadModel extends JsonRecord {
   accounting_id: string;
   campaign_id: string;
   provider: string;
+  agent_role: "orchestrator" | "red_team" | "judge" | "documentation" | null;
+  record_kind: "campaign" | "agent";
   measured_cost: number;
   currency: string;
   request_count: number;
+  execution_count: number;
   attempt_count: number;
   confirmed_finding_count: number;
   average_cost_per_request: number;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  token_observation_count: number;
   budget_usd: number | null;
   budget_utilization: number | null;
   duration_ms: number;
@@ -294,6 +318,9 @@ export interface AgentReadModel extends JsonRecord {
   output_tokens: number | null;
   token_observation_count: number;
   average_duration_ms: number | null;
+  p50_duration_ms: number | null;
+  p95_duration_ms: number | null;
+  langfuse_exported_count: number;
   last_activity_at: string | null;
   last_status: string | null;
   last_campaign_run_id: string | null;
@@ -318,6 +345,7 @@ export interface AgentActivityReadModel extends JsonRecord {
   measured_cost: number;
   currency: string;
   trace_id: string;
+  langfuse_status: "not_attempted" | "disabled" | "queued" | "exported" | "error";
   detail: JsonRecord;
   error_code: string | null;
   started_at: string;
@@ -373,6 +401,7 @@ export interface BirdseyeInstrumentationReadModel extends JsonRecord {
   queue_leased: number;
   queue_dead_letter: number;
   confirmed_count: number;
+  confirmed_finding_count: number;
   likely_count: number;
   review_count: number;
   healthy_components: number;
@@ -468,6 +497,11 @@ export interface BirdseyeNodeReadModel extends JsonRecord {
   total_instances: number;
   p50_latency_ms: number | null;
   p95_latency_ms: number | null;
+  execution_count: number | null;
+  measured_cost_usd: number | null;
+  currency: string | null;
+  langfuse_exported_count: number | null;
+  langfuse_status: string | null;
   queue_depth: number | null;
   target_access: string;
 }

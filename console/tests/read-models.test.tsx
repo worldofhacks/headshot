@@ -49,6 +49,7 @@ const scope = {
   caps,
   run_nonce: "nonce-1",
   execution_profile: "live",
+  hosted_run: null,
 };
 const finding = {
   finding_id: "finding-1",
@@ -116,12 +117,12 @@ const validResources: Array<[string, (value: unknown) => unknown, unknown]> = [
   [
     "traces",
     decodeTraces,
-    [{ request_id: "request-1", trace_id: "trace-1", campaign_id: "run-1", attempt_id: "attempt-1", operation: "target.http", provider: "openemr", method: "POST", destination_host: "target.invalid", relative_path: "chat", status: "succeeded", status_code: 200, error_code: null, started_at: at, finished_at: "2026-07-21T00:00:00.012Z", duration_ms: 12.5, request_bytes: 25, response_bytes: 50, measured_cost: 0.01, currency: "USD", langfuse_status: "exported", request_preview: '{"turns":["synthetic"]}', response_preview: '{"answer":"safe"}', request_sha256: "a".repeat(64), response_sha256: "b".repeat(64), inspection_flags: [], inspection_owasp_mappings: [] }],
+    [{ request_id: "request-1", execution_id: null, parent_execution_id: null, trace_id: "trace-1", campaign_id: "run-1", attempt_id: "attempt-1", operation: "target.http", provider: "openemr", agent_role: null, execution_mode: null, method: "POST", destination_host: "target.invalid", relative_path: "chat", status: "succeeded", status_code: 200, error_code: null, started_at: at, finished_at: "2026-07-21T00:00:00.012Z", duration_ms: 12.5, request_bytes: 25, response_bytes: 50, measured_cost: 0.01, currency: "USD", input_tokens: null, output_tokens: null, langfuse_status: "exported", request_preview: '{"turns":["synthetic"]}', response_preview: '{"answer":"safe"}', request_sha256: "a".repeat(64), response_sha256: "b".repeat(64), inspection_flags: [], inspection_owasp_mappings: [] }],
   ],
   [
     "costs",
     decodeCosts,
-    [{ accounting_id: "accounting-1", campaign_id: "run-1", provider: "provider", measured_cost: 0.25, currency: "USD", request_count: 5, attempt_count: 5, confirmed_finding_count: 1, average_cost_per_request: 0.05, budget_usd: 1, budget_utilization: 0.25, duration_ms: 2500, execution_profile: "live", started_at: at, ended_at: "2026-07-21T00:00:02.500Z", recorded_at: at }],
+    [{ accounting_id: "accounting-1", campaign_id: "run-1", provider: "provider", agent_role: null, record_kind: "campaign", measured_cost: 0.25, currency: "USD", request_count: 5, execution_count: 0, attempt_count: 5, confirmed_finding_count: 1, average_cost_per_request: 0.05, input_tokens: null, output_tokens: null, token_observation_count: 0, budget_usd: 1, budget_utilization: 0.25, duration_ms: 2500, execution_profile: "live", started_at: at, ended_at: "2026-07-21T00:00:02.500Z", recorded_at: at }],
   ],
   [
     "targets and surfaces",
@@ -161,6 +162,7 @@ const validResources: Array<[string, (value: unknown) => unknown, unknown]> = [
         queue_leased: 1,
         queue_dead_letter: 0,
         confirmed_count: 1,
+        confirmed_finding_count: 1,
         likely_count: 0,
         review_count: 1,
         healthy_components: 2,
@@ -232,6 +234,11 @@ const validResources: Array<[string, (value: unknown) => unknown, unknown]> = [
         total_instances: 1,
         p50_latency_ms: 10,
         p95_latency_ms: 25,
+        execution_count: null,
+        measured_cost_usd: null,
+        currency: null,
+        langfuse_exported_count: null,
+        langfuse_status: null,
         queue_depth: 2,
         target_access: "policy-gated",
       }],
@@ -285,6 +292,36 @@ describe("v1 read-model decoders", () => {
   it.each(validResources)("rejects malformed ready %s data", (_name, decode, value) => {
     const malformed = Array.isArray(value) ? [{ unexpected: true }] : { unexpected: true };
     expect(() => decode(malformed)).toThrow("Invalid");
+  });
+
+  it("decodes a non-null hosted campaign binding without weakening exact keys", () => {
+    const hostedRun = {
+      configuration_set_sha256: "a".repeat(64),
+      generation_policy_sha256: "b".repeat(64),
+      session_generation: "generation-1",
+      provider_model_call_limit: 8,
+      provider_model_spend_limit_usd: "1.250000",
+      provider_max_retries: 1,
+      provider_max_concurrency: 1,
+      provider_timeout_seconds: 45,
+    };
+    const campaign = {
+      ...scope,
+      hosted_run: hostedRun,
+      run_id: "run-hosted-1",
+      authorization_request_id: "request-hosted-1",
+      state: "queued",
+      scope_hash: "scope-hosted-1",
+      launcher_user_id: "user-1",
+      attempt_count: 0,
+      created_at: at,
+    };
+
+    expect(decodeCampaigns([campaign])).toEqual([campaign]);
+    expect(() => decodeCampaigns([{
+      ...campaign,
+      hosted_run: { ...hostedRun, unexpected: true },
+    }])).toThrow("Invalid hosted run binding read model");
   });
 
   it("fails a malformed ready envelope closed without exposing its payload", async () => {

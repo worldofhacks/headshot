@@ -26,6 +26,7 @@ const snapshot: BirdseyeSnapshotReadModel = {
     queue_leased: 1,
     queue_dead_letter: 0,
     confirmed_count: 1,
+    confirmed_finding_count: 1,
     likely_count: 1,
     review_count: 0,
     healthy_components: 2,
@@ -98,6 +99,11 @@ const snapshot: BirdseyeSnapshotReadModel = {
       total_instances: 1,
       p50_latency_ms: null,
       p95_latency_ms: null,
+      execution_count: null,
+      measured_cost_usd: null,
+      currency: null,
+      langfuse_exported_count: null,
+      langfuse_status: null,
       queue_depth: null,
       target_access: "none",
     },
@@ -117,8 +123,37 @@ const snapshot: BirdseyeSnapshotReadModel = {
       total_instances: 1,
       p50_latency_ms: 18,
       p95_latency_ms: 40,
+      execution_count: null,
+      measured_cost_usd: null,
+      currency: null,
+      langfuse_exported_count: null,
+      langfuse_status: null,
       queue_depth: 3,
       target_access: "policy-gated",
+    },
+    {
+      component_id: "agent:red_team",
+      name: "Red Team",
+      kind: "agent:red_team",
+      trust_zone: "untrusted",
+      availability: "operational and evidenced",
+      runtime_state: "ready",
+      detail: "headshot/full-scan-corpus-v1 · deterministic",
+      current_task: "Latest execution succeeded",
+      heartbeat_at: at,
+      freshness_seconds: 3,
+      is_fresh: true,
+      healthy_instances: 1,
+      total_instances: 1,
+      p50_latency_ms: 125,
+      p95_latency_ms: 280,
+      execution_count: 4,
+      measured_cost_usd: 0.04,
+      currency: "USD",
+      langfuse_exported_count: 4,
+      langfuse_status: "exported",
+      queue_depth: null,
+      target_access: "policy-gated-through-runner",
     },
   ],
   edges: [{
@@ -177,6 +212,11 @@ describe("Birdseye", () => {
     fireEvent.click(screen.getByRole("button", { name: /Campaign runner/ }));
     expect(screen.getByText("18.0 ms / 40.0 ms")).toBeTruthy();
     expect(screen.getByText("policy-gated")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: /Red Team/ }));
+    expect(screen.getByText("125.0 ms / 280.0 ms")).toBeTruthy();
+    expect(screen.getByText("$0.0400")).toBeTruthy();
+    expect(screen.getByText("exported · 4/4 exported")).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", {
       name: /Campaign authorization requires a decision/,

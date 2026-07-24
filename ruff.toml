@@ -8,6 +8,12 @@ src = ["src", "tests"]
 select = ["E", "F", "I", "UP", "B", "SIM"]
 ignore = []
 
+[lint.per-file-ignores]
+# Operational red-team / live-campaign scripts embed long adversarial PAYLOAD STRINGS and verbose
+# banner comments; wrapping a payload literal at 100 cols is noise (and risks altering the payload).
+# Library code (src/) and tests stay strict — this relaxation is scoped to scripts/ only.
+"scripts/*" = ["E501", "E741"]
+
 [lint.isort]
 known-first-party = ["agentforge"]
 

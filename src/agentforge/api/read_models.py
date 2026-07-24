@@ -191,7 +191,6 @@ class AuditReadModel(_ReadModel):
     created_at: datetime.datetime
 
 
-# Contracts reserved for repositories that currently return ``unavailable``.
 class FindingHistoryReadModel(_ReadModel):
     decision: str
     actor_user_id: str
@@ -240,11 +239,15 @@ class ResilienceReadModel(_ReadModel):
 
 class TraceReadModel(_ReadModel):
     request_id: str | None
+    execution_id: str | None = None
+    parent_execution_id: str | None = None
     trace_id: str
     campaign_id: str
     attempt_id: str | None
     operation: str
     provider: str
+    agent_role: Literal["orchestrator", "red_team", "judge", "documentation"] | None = None
+    execution_mode: Literal["deterministic", "hosted_advisory"] | None = None
     method: str | None
     destination_host: str | None
     relative_path: str | None
@@ -253,11 +256,13 @@ class TraceReadModel(_ReadModel):
     error_code: str | None
     started_at: datetime.datetime
     finished_at: datetime.datetime | None
-    duration_ms: float = Field(ge=0)
+    duration_ms: float | None = Field(default=None, ge=0)
     request_bytes: int = Field(ge=0)
     response_bytes: int | None = Field(default=None, ge=0)
     measured_cost: float = Field(ge=0)
     currency: str
+    input_tokens: int | None = Field(default=None, ge=0)
+    output_tokens: int | None = Field(default=None, ge=0)
     langfuse_status: str
     request_preview: str | None
     response_preview: str | None
@@ -271,12 +276,18 @@ class CostReadModel(_ReadModel):
     accounting_id: str
     campaign_id: str
     provider: str
+    agent_role: Literal["orchestrator", "red_team", "judge", "documentation"] | None = None
+    record_kind: Literal["campaign", "agent"]
     measured_cost: float = Field(ge=0)
     currency: str
     request_count: int = Field(ge=0)
+    execution_count: int = Field(ge=0)
     attempt_count: int = Field(ge=0)
     confirmed_finding_count: int = Field(ge=0)
     average_cost_per_request: float = Field(ge=0)
+    input_tokens: int | None = Field(default=None, ge=0)
+    output_tokens: int | None = Field(default=None, ge=0)
+    token_observation_count: int = Field(ge=0)
     budget_usd: float | None = Field(default=None, ge=0)
     budget_utilization: float | None = Field(default=None, ge=0)
     duration_ms: float = Field(ge=0)
@@ -351,6 +362,9 @@ class AgentReadModel(_ReadModel):
     output_tokens: int | None = Field(default=None, ge=0)
     token_observation_count: int = Field(ge=0)
     average_duration_ms: float | None = Field(default=None, ge=0)
+    p50_duration_ms: float | None = Field(default=None, ge=0)
+    p95_duration_ms: float | None = Field(default=None, ge=0)
+    langfuse_exported_count: int = Field(ge=0)
     last_activity_at: datetime.datetime | None = None
     last_status: str | None = None
     last_campaign_run_id: str | None = None
@@ -375,6 +389,7 @@ class AgentActivityReadModel(_ReadModel):
     measured_cost: float = Field(ge=0)
     currency: str
     trace_id: str
+    langfuse_status: Literal["not_attempted", "disabled", "queued", "exported", "error"]
     detail: dict[str, Any]
     error_code: str | None = None
     started_at: datetime.datetime
@@ -436,6 +451,7 @@ class BirdseyeInstrumentationReadModel(_ReadModel):
     queue_leased: int = Field(ge=0)
     queue_dead_letter: int = Field(ge=0)
     confirmed_count: int = Field(ge=0)
+    confirmed_finding_count: int = Field(ge=0)
     likely_count: int = Field(ge=0)
     review_count: int = Field(ge=0)
     healthy_components: int = Field(ge=0)
@@ -529,6 +545,11 @@ class BirdseyeNodeReadModel(_ReadModel):
     total_instances: int = Field(ge=1)
     p50_latency_ms: float | None = Field(default=None, ge=0)
     p95_latency_ms: float | None = Field(default=None, ge=0)
+    execution_count: int | None = Field(default=None, ge=0)
+    measured_cost_usd: float | None = Field(default=None, ge=0)
+    currency: str | None = None
+    langfuse_exported_count: int | None = Field(default=None, ge=0)
+    langfuse_status: str | None = None
     queue_depth: int | None = Field(default=None, ge=0)
     target_access: str
 

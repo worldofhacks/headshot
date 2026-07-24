@@ -36,10 +36,14 @@ def validate(environment: str, config: Path) -> int:
 
     catalog = TrustedTargetCatalog.from_environment(environment)
     live = [e for e in catalog.entries if e.target.target_id != "synthetic-copilot"]
-    print(f"[{environment}] {config.name}: {len(catalog.entries)} entries ({len(live)} live-configured)")
+    print(
+        f"[{environment}] {config.name}: {len(catalog.entries)} entries ({len(live)} live-configured)"
+    )
     for entry in live:
         target = entry.target
-        assert target.environment.value == environment, "entry environment must match the selected env"
+        assert target.environment.value == environment, (
+            "entry environment must match the selected env"
+        )
         assert EXPECTED_HOST in target.allowlisted_hosts, "base_url host must be allowlisted"
         assert target.credential_ref and target.credential_ref.startswith(
             f"secretref://{environment}/"
@@ -58,7 +62,9 @@ def validate(environment: str, config: Path) -> int:
 
 def main() -> int:
     counts = {env: validate(env, config) for env, config in CONFIGS.items()}
-    assert counts["staging"] == counts["production"], "both environments must expose the same targets"
+    assert counts["staging"] == counts["production"], (
+        "both environments must expose the same targets"
+    )
     print(
         "VALID: both environments load identically; all four target ids "
         "(copilot-week1/2 + clinical-copilot-week1/2 alias) resolve; credentials by secretref only."

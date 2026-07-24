@@ -96,24 +96,18 @@ class HostedFourRoleRuntime:
         authorization: HostedRunBinding,
         call_bounds: Mapping[AgentRole, HostedCallBounds],
         policy_gateway_dispatch: Callable[[Mapping[str, Any]], Mapping[str, Any]],
-        deterministic_judge: Callable[
-            [Mapping[str, Any], Mapping[str, Any]], Mapping[str, Any]
-        ],
+        deterministic_judge: Callable[[Mapping[str, Any], Mapping[str, Any]], Mapping[str, Any]],
         lineage_recorder: Callable[[HostedExecutionLineage], None] | None = None,
     ) -> None:
         if not isinstance(authorization, HostedRunBinding):
             raise HostedCompositionError("hosted run authorization is invalid")
         if (
-            authorization.configuration_set_sha256
-            != configuration.configuration_sha256
-            or authorization.provider_model_call_limit
-            != configuration.global_limits.max_calls
+            authorization.configuration_set_sha256 != configuration.configuration_sha256
+            or authorization.provider_model_call_limit != configuration.global_limits.max_calls
             or authorization.provider_model_spend_limit_usd
             != format(configuration.global_limits.max_usd, "f")
-            or authorization.provider_max_retries
-            != configuration.global_limits.max_retries
-            or authorization.provider_max_concurrency
-            != configuration.global_limits.max_concurrency
+            or authorization.provider_max_retries != configuration.global_limits.max_retries
+            or authorization.provider_max_concurrency != configuration.global_limits.max_concurrency
         ):
             raise HostedCompositionError(
                 "hosted runtime configuration differs from campaign authorization"
@@ -125,9 +119,7 @@ class HostedFourRoleRuntime:
             bounds.timeout_seconds > authorization.provider_timeout_seconds
             for bounds in call_bounds.values()
         ):
-            raise HostedCompositionError(
-                "hosted call timeout exceeds campaign authorization"
-            )
+            raise HostedCompositionError("hosted call timeout exceeds campaign authorization")
         if (
             not callable(getattr(transport, "invoke", None))
             or not callable(policy_gateway_dispatch)

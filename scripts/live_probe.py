@@ -37,7 +37,9 @@ AUTHORIZED_HOST = "agent-production-9f62.up.railway.app"
 BASE_URL = f"https://{AUTHORIZED_HOST}"
 
 # Benign, synthetic, non-adversarial probe. No PHI, no attack payload.
-DEFAULT_MESSAGE = "Hello — can you confirm you are the clinical co-pilot assistant and are ready to help?"
+DEFAULT_MESSAGE = (
+    "Hello — can you confirm you are the clinical co-pilot assistant and are ready to help?"
+)
 
 
 def _allowlist_guard(base_url: str) -> None:
@@ -45,7 +47,9 @@ def _allowlist_guard(base_url: str) -> None:
 
     host = urlsplit(base_url).hostname
     if host != AUTHORIZED_HOST:
-        raise SystemExit(f"REFUSED: base URL host {host!r} is off-allowlist (only {AUTHORIZED_HOST} allowed)")
+        raise SystemExit(
+            f"REFUSED: base URL host {host!r} is off-allowlist (only {AUTHORIZED_HOST} allowed)"
+        )
 
 
 def _snippet(text: str, limit: int = 400) -> str:
@@ -62,8 +66,18 @@ def _looks_like_reply(status: int, body: str) -> tuple[bool, str]:
     except (json.JSONDecodeError, TypeError):
         # Non-JSON 200 with text is still a reply.
         return bool(body.strip()), "(raw text)"
-    for path in (("reply",), ("message",), ("response",), ("content",), ("choices", 0, "message", "content"),
-                 ("data", "reply"), ("assistant",), ("answer",), ("output",), ("text",)):
+    for path in (
+        ("reply",),
+        ("message",),
+        ("response",),
+        ("content",),
+        ("choices", 0, "message", "content"),
+        ("data", "reply"),
+        ("assistant",),
+        ("answer",),
+        ("output",),
+        ("text",),
+    ):
         cur = payload
         ok = True
         for key in path:
@@ -74,7 +88,10 @@ def _looks_like_reply(status: int, body: str) -> tuple[bool, str]:
                 break
         if ok and isinstance(cur, str) and cur.strip():
             return True, ".".join(str(p) for p in path)
-    return False, f"(200 JSON, keys={list(payload)[:8] if isinstance(payload, dict) else type(payload).__name__})"
+    return (
+        False,
+        f"(200 JSON, keys={list(payload)[:8] if isinstance(payload, dict) else type(payload).__name__})",
+    )
 
 
 def main() -> int:
@@ -85,7 +102,10 @@ def main() -> int:
 
     raw = os.environ.get("TARGET_SESSION_SID")
     if not raw:
-        print("BLOCKED: TARGET_SESSION_SID is not set in the environment — cannot prove auth.", file=sys.stderr)
+        print(
+            "BLOCKED: TARGET_SESSION_SID is not set in the environment — cannot prove auth.",
+            file=sys.stderr,
+        )
         return 5
 
     adapter = OpenEmrAdapter(
@@ -96,7 +116,9 @@ def main() -> int:
         destination_validator=_allowlist_guard,
         timeout_seconds=30.0,
     )
-    request = TargetRequest(turns=(args.message,), metadata={"probe": "auth-proof", "synthetic": "true"})
+    request = TargetRequest(
+        turns=(args.message,), metadata={"probe": "auth-proof", "synthetic": "true"}
+    )
 
     print(f"PROBE  POST {BASE_URL}/{args.path}  (copilot_chat, session_id in body)")
     try:
@@ -125,7 +147,9 @@ def main() -> int:
         print("VERDICT AUTH-FAIL — STOP (unauthorized). Do not scan.")
         return 3
     if status == 200 and has_reply:
-        print("VERDICT AUTH-OK — 200 with an assistant reply. Cleared to proceed (bounded, rate-limited).")
+        print(
+            "VERDICT AUTH-OK — 200 with an assistant reply. Cleared to proceed (bounded, rate-limited)."
+        )
         return 0
     print("VERDICT INCONCLUSIVE — non-200 or no recognizable reply. Investigate before scanning.")
     return 4

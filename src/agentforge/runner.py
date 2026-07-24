@@ -359,6 +359,38 @@ class DurableCampaignRunner:
         )
         self._campaign_adapter: Any | None = None
 
+    def _start_agent_execution(self, **values: Any) -> str:
+        """Start the durable ledger row, then fail-soft project the same work to Langfuse."""
+
+        execution_id = self.store.start_agent_execution(**values)
+        input_payload = values.get("input_payload")
+        if isinstance(input_payload, Mapping):
+            with contextlib.suppress(Exception):
+                self.telemetry.begin_agent(
+                    execution_id=execution_id,
+                    input_payload=dict(input_payload),
+                )
+        return execution_id
+
+    def _finish_agent_execution(self, **values: Any) -> None:
+        """Make accounting authoritative before completing its external projection."""
+
+        self.store.finish_agent_execution(**values)
+        output_payload = values.get("output_payload")
+        if isinstance(output_payload, Mapping):
+            with contextlib.suppress(Exception):
+                self.telemetry.finish_agent(
+                    execution_id=str(values["execution_id"]),
+                    output_payload=dict(output_payload),
+                    error_code=values.get("error_code"),
+                )
+            # Bounded checkpoints make agent and preceding target spans visible during a long
+            # campaign instead of keeping all delivery state queued until the job returns.
+            with contextlib.suppress(Exception):
+                self.telemetry.flush()
+            with contextlib.suppress(Exception):
+                self.telemetry.heartbeat()
+
     def preflight(self, job: JobRecord) -> tuple[PreflightReport, PreparedRun | None]:
         """Report every blocker without constructing an adapter or opening a target socket."""
 
@@ -635,7 +667,7 @@ class DurableCampaignRunner:
                 low_signal_streak=low_signal_streak,
                 previous_category=previous_category,
             )
-            orchestrator_execution = self.store.start_agent_execution(
+            orchestrator_execution = self._start_agent_execution(
                 run_id=authorized.run.run_id,
                 agent_role="orchestrator",
                 input_payload={
@@ -651,7 +683,7 @@ class DurableCampaignRunner:
             try:
                 decision = self.orchestrator.decide(snapshot)
             except OrchestratorHalt as exc:
-                self.store.finish_agent_execution(
+                self._finish_agent_execution(
                     execution_id=orchestrator_execution,
                     status="failed",
                     output_payload={"cycle": orchestration_cycle, "halt_code": exc.code},
@@ -662,7 +694,7 @@ class DurableCampaignRunner:
                     f"Orchestrator halted before dispatch: {exc.code}", code=exc.code
                 ) from exc
             except Exception as exc:
-                self.store.finish_agent_execution(
+                self._finish_agent_execution(
                     execution_id=orchestrator_execution,
                     status="failed",
                     output_payload={"cycle": orchestration_cycle},
@@ -705,7 +737,7 @@ class DurableCampaignRunner:
                     directive["mutation_policy"] = "preserve_authorized_manifest_order"
                     priority_reason = f"{priority_reason}_manifest_order"
 
-            self.store.finish_agent_execution(
+            self._finish_agent_execution(
                 execution_id=orchestrator_execution,
                 status="succeeded",
                 output_payload={
@@ -730,7 +762,7 @@ class DurableCampaignRunner:
                 )
                 first_decision_recorded = True
 
-            red_team_execution = self.store.start_agent_execution(
+            red_team_execution = self._start_agent_execution(
                 run_id=authorized.run.run_id,
                 agent_role="red_team",
                 input_payload={
@@ -753,7 +785,7 @@ class DurableCampaignRunner:
                     corpus_id=prepared.corpus.corpus_id,
                 )
             except Exception as exc:
-                self.store.finish_agent_execution(
+                self._finish_agent_execution(
                     execution_id=red_team_execution,
                     status="failed",
                     output_payload={"cycle": orchestration_cycle},
@@ -779,7 +811,7 @@ class DurableCampaignRunner:
                 source_tool=case.source_tool,
                 source_technique=case.source_technique,
             )
-            self.store.finish_agent_execution(
+            self._finish_agent_execution(
                 execution_id=red_team_execution,
                 status="succeeded",
                 output_payload={
@@ -873,7 +905,7 @@ class DurableCampaignRunner:
         judge_executions: dict[str, str] = {}
 
         def start_coordinator_agent_execution(**values: Any) -> str:
-            execution_id = self.store.start_agent_execution(
+            execution_id = self._start_agent_execution(
                 run_id=authorized.run.run_id,
                 parent_execution_id=current_red_team_execution,
                 **values,
@@ -913,7 +945,7 @@ class DurableCampaignRunner:
                     "correlation_id": authorized.run.run_id,
                 },
                 agent_execution_start=start_coordinator_agent_execution,
-                agent_execution_finish=self.store.finish_agent_execution,
+                agent_execution_finish=self._finish_agent_execution,
                 dispatch_sleeper=self.sleeper,
             ),
             adapter=adapter,
@@ -939,7 +971,7 @@ class DurableCampaignRunner:
                 evidence_content_hash=outcome.result.content_hash,
             )
             if finding_id is not None:
-                documentation_execution = self.store.start_agent_execution(
+                documentation_execution = self._start_agent_execution(
                     run_id=authorized.run.run_id,
                     agent_role="documentation",
                     input_payload={
@@ -982,7 +1014,7 @@ class DurableCampaignRunner:
                         regression_disposition=disposition,
                     )
                 except Exception:
-                    self.store.finish_agent_execution(
+                    self._finish_agent_execution(
                         execution_id=documentation_execution,
                         status="failed",
                         output_payload={
@@ -993,7 +1025,7 @@ class DurableCampaignRunner:
                         detail={"phase": "draft_and_regression_admission"},
                     )
                     raise
-                self.store.finish_agent_execution(
+                self._finish_agent_execution(
                     execution_id=documentation_execution,
                     status="succeeded",
                     output_payload={

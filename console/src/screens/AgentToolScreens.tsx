@@ -178,8 +178,9 @@ export function AgentsScreen({
               ]} />
               <dl className="agent-ledger-summary">
                 <div><dt>Engine</dt><dd className="mono">{selected.active_assignment.provider}/{selected.active_assignment.model}</dd></div>
-                <div><dt>Average latency</dt><dd className="mono">{selected.average_duration_ms === null ? "not observed" : `${selected.average_duration_ms.toFixed(1)} ms`}</dd></div>
+                <div><dt>p50 / p95 latency</dt><dd className="mono">{selected.p50_duration_ms === null || selected.p95_duration_ms === null ? "not observed" : `${selected.p50_duration_ms.toFixed(1)} / ${selected.p95_duration_ms.toFixed(1)} ms`}</dd></div>
                 <div><dt>Measured cost</dt><dd className="mono">{money(selected.measured_cost)}</dd></div>
+                <div><dt>Langfuse delivery</dt><dd className="mono">{selected.execution_count > 0 ? `${selected.langfuse_exported_count}/${selected.execution_count} exported` : "not observed"}</dd></div>
                 <div><dt>Last activity</dt><dd className="mono">{selected.last_activity_at ? time(selected.last_activity_at) : "not yet executed"}</dd></div>
               </dl>
               {selected.staged_assignment && (
@@ -312,6 +313,7 @@ export function AgentsScreen({
                 { key: "duration_ms", label: "Latency ms", mono: true },
                 { key: "measured_cost", label: "Cost USD", mono: true },
                 { key: "trace_id", label: "Trace", mono: true },
+                { key: "langfuse_status", label: "Langfuse", mono: true },
               ]}
             />
           )}

@@ -142,6 +142,41 @@ def active_scan_operation_hash(
 
 
 @dataclass(frozen=True, slots=True)
+class ActiveScanScope:
+    """The immutable, content-addressed scope of one active scan.
+
+    A single value object shared by the grant minter and every active-scan executor
+    (zap_profiles / scan_egress / api_discovery / auth_matrix / oast), so the operation hash is
+    computed one way and can never drift between the grant and the command it authorizes.
+    """
+
+    origin: str
+    http_methods: tuple[str, ...]
+    path_patterns: tuple[str, ...]
+    principals: tuple[str, ...]
+    image_sha256: str
+    addon_sha256s: tuple[str, ...]
+    rule_sha256s: tuple[str, ...]
+    callback_domains: tuple[str, ...]
+    caps: ActiveScanCaps
+    scope_nonce: str
+
+    def operation_hash(self) -> str:
+        return active_scan_operation_hash(
+            origin=self.origin,
+            http_methods=self.http_methods,
+            path_patterns=self.path_patterns,
+            principals=self.principals,
+            image_sha256=self.image_sha256,
+            addon_sha256s=self.addon_sha256s,
+            rule_sha256s=self.rule_sha256s,
+            callback_domains=self.callback_domains,
+            caps=self.caps,
+            scope_nonce=self.scope_nonce,
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class ActiveScanAuthorization:
     """A minted, immutable authorization for exactly one active scan.
 
@@ -201,5 +236,6 @@ __all__ = [
     "ActiveScanAuthorization",
     "ActiveScanAuthorizationError",
     "ActiveScanCaps",
+    "ActiveScanScope",
     "active_scan_operation_hash",
 ]

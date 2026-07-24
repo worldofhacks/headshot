@@ -198,8 +198,7 @@ class SealedEnvironmentCredentialResolver:
                 not isinstance(reference, str)
                 or not reference.startswith(_REF_PREFIX)
                 or not isinstance(value, dict)
-                or set(value)
-                != {"generation", "expires_at", "value_sha256", "expiry_source"}
+                or set(value) != {"generation", "expires_at", "value_sha256", "expiry_source"}
             ):
                 raise CredentialResolutionError("session lease metadata configuration is invalid")
             try:

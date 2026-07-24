@@ -25,6 +25,7 @@ import type {
   EvidenceReadModel,
   FindingHistoryReadModel,
   FindingReadModel,
+  HostedRunBindingReadModel,
   ResilienceReadModel,
   SafetyCapsReadModel,
   TargetReadModel,
@@ -168,6 +169,7 @@ const scopeKeys = [
   "caps",
   "run_nonce",
   "execution_profile",
+  "hosted_run",
 ] as const;
 
 const decodeCaps = (value: unknown): SafetyCapsReadModel => {
@@ -184,6 +186,36 @@ const decodeCaps = (value: unknown): SafetyCapsReadModel => {
   number(result, "target_requests_per_second", name);
   number(result, "run_timeout_seconds", name);
   return result as SafetyCapsReadModel;
+};
+
+const decodeHostedRun = (value: unknown): HostedRunBindingReadModel => {
+  const name = "hosted run binding";
+  const result = record(value, name);
+  exactKeys(result, [
+    "configuration_set_sha256",
+    "generation_policy_sha256",
+    "session_generation",
+    "provider_model_call_limit",
+    "provider_model_spend_limit_usd",
+    "provider_max_retries",
+    "provider_max_concurrency",
+    "provider_timeout_seconds",
+  ], name);
+  for (const key of [
+    "configuration_set_sha256",
+    "generation_policy_sha256",
+    "session_generation",
+    "provider_model_spend_limit_usd",
+  ]) {
+    string(result, key, name);
+  }
+  number(result, "provider_model_call_limit", name, { integer: true, minimum: 1 });
+  number(result, "provider_max_retries", name, { integer: true, minimum: 0 });
+  if (number(result, "provider_max_concurrency", name, { integer: true }) !== 1) {
+    invalid(name);
+  }
+  number(result, "provider_timeout_seconds", name, { minimum: 0 });
+  return result as HostedRunBindingReadModel;
 };
 
 const validateScope = (result: JsonRecord, name: string, extraKeys: readonly string[]): void => {
@@ -211,6 +243,7 @@ const validateScope = (result: JsonRecord, name: string, extraKeys: readonly str
   boolean(result, "explicit_no_auth", name);
   literal(result, "execution_profile", ["synthetic", "live"], name);
   result.caps = decodeCaps(result.caps);
+  result.hosted_run = result.hosted_run === null ? null : decodeHostedRun(result.hosted_run);
 };
 
 export const decodePrincipal: ReadModelDecoder<Principal> = (value) => {
@@ -481,11 +514,15 @@ const decodeTrace = (value: unknown): TraceReadModel => {
   const result = record(value, name);
   exactKeys(result, [
     "request_id",
+    "execution_id",
+    "parent_execution_id",
     "trace_id",
     "campaign_id",
     "attempt_id",
     "operation",
     "provider",
+    "agent_role",
+    "execution_mode",
     "method",
     "destination_host",
     "relative_path",
@@ -499,6 +536,8 @@ const decodeTrace = (value: unknown): TraceReadModel => {
     "response_bytes",
     "measured_cost",
     "currency",
+    "input_tokens",
+    "output_tokens",
     "langfuse_status",
     "request_preview",
     "response_preview",
@@ -508,14 +547,18 @@ const decodeTrace = (value: unknown): TraceReadModel => {
     "inspection_owasp_mappings",
   ], name);
   for (const key of ["trace_id", "campaign_id", "operation", "provider", "status", "currency", "langfuse_status"]) string(result, key, name);
-  for (const key of ["request_id", "attempt_id", "method", "destination_host", "relative_path", "error_code", "request_preview", "response_preview", "request_sha256", "response_sha256"]) nullableString(result, key, name);
+  nullableLiteral(result, "agent_role", agentRoles, name);
+  nullableLiteral(result, "execution_mode", ["deterministic", "hosted_advisory"], name);
+  for (const key of ["request_id", "execution_id", "parent_execution_id", "attempt_id", "method", "destination_host", "relative_path", "error_code", "request_preview", "response_preview", "request_sha256", "response_sha256"]) nullableString(result, key, name);
   nullableNumber(result, "status_code", name);
   timestamp(result, "started_at", name);
   nullableTimestamp(result, "finished_at", name);
-  number(result, "duration_ms", name, { minimum: 0 });
+  if (result.duration_ms !== null) number(result, "duration_ms", name, { minimum: 0 });
   number(result, "request_bytes", name, { integer: true, minimum: 0 });
   if (result.response_bytes !== null) number(result, "response_bytes", name, { integer: true, minimum: 0 });
   number(result, "measured_cost", name, { minimum: 0 });
+  nullableNumber(result, "input_tokens", name);
+  nullableNumber(result, "output_tokens", name);
   stringArray(result, "inspection_flags", name);
   stringArray(result, "inspection_owasp_mappings", name);
   return result as TraceReadModel;
@@ -531,12 +574,18 @@ const decodeCost = (value: unknown): CostReadModel => {
     "accounting_id",
     "campaign_id",
     "provider",
+    "agent_role",
+    "record_kind",
     "measured_cost",
     "currency",
     "request_count",
+    "execution_count",
     "attempt_count",
     "confirmed_finding_count",
     "average_cost_per_request",
+    "input_tokens",
+    "output_tokens",
+    "token_observation_count",
     "budget_usd",
     "budget_utilization",
     "duration_ms",
@@ -548,11 +597,17 @@ const decodeCost = (value: unknown): CostReadModel => {
   for (const key of ["accounting_id", "campaign_id", "provider", "currency"]) {
     string(result, key, name);
   }
+  nullableLiteral(result, "agent_role", agentRoles, name);
+  literal(result, "record_kind", ["campaign", "agent"], name);
   number(result, "measured_cost", name, { minimum: 0 });
   number(result, "request_count", name, { integer: true, minimum: 0 });
+  number(result, "execution_count", name, { integer: true, minimum: 0 });
   number(result, "attempt_count", name, { integer: true, minimum: 0 });
   number(result, "confirmed_finding_count", name, { integer: true, minimum: 0 });
   number(result, "average_cost_per_request", name, { minimum: 0 });
+  nullableNumber(result, "input_tokens", name);
+  nullableNumber(result, "output_tokens", name);
+  number(result, "token_observation_count", name, { integer: true, minimum: 0 });
   nullableNumber(result, "budget_usd", name);
   nullableNumber(result, "budget_utilization", name);
   number(result, "duration_ms", name, { minimum: 0 });
@@ -765,6 +820,9 @@ const decodeAgent = (value: unknown): AgentReadModel => {
     "output_tokens",
     "token_observation_count",
     "average_duration_ms",
+    "p50_duration_ms",
+    "p95_duration_ms",
+    "langfuse_exported_count",
     "last_activity_at",
     "last_status",
     "last_campaign_run_id",
@@ -791,11 +849,14 @@ const decodeAgent = (value: unknown): AgentReadModel => {
     "failed_count",
     "skipped_count",
     "token_observation_count",
+    "langfuse_exported_count",
   ]) number(result, key, name, { integer: true, minimum: 0 });
   number(result, "measured_cost", name, { minimum: 0 });
   nullableNumber(result, "input_tokens", name);
   nullableNumber(result, "output_tokens", name);
   nullableNumber(result, "average_duration_ms", name);
+  nullableNumber(result, "p50_duration_ms", name);
+  nullableNumber(result, "p95_duration_ms", name);
   nullableTimestamp(result, "last_activity_at", name);
   nullableString(result, "last_status", name);
   nullableString(result, "last_campaign_run_id", name);
@@ -827,6 +888,7 @@ const decodeAgentActivityRecord = (value: unknown): AgentActivityReadModel => {
     "measured_cost",
     "currency",
     "trace_id",
+    "langfuse_status",
     "detail",
     "error_code",
     "started_at",
@@ -841,6 +903,7 @@ const decodeAgentActivityRecord = (value: unknown): AgentActivityReadModel => {
     "input_sha256",
     "currency",
     "trace_id",
+    "langfuse_status",
   ]) string(result, key, name);
   for (const key of [
     "attempt_id",
@@ -851,6 +914,12 @@ const decodeAgentActivityRecord = (value: unknown): AgentActivityReadModel => {
   literal(result, "agent_role", agentRoles, name);
   literal(result, "status", ["running", "succeeded", "failed", "skipped"], name);
   literal(result, "execution_mode", ["deterministic", "hosted_advisory"], name);
+  literal(
+    result,
+    "langfuse_status",
+    ["not_attempted", "disabled", "queued", "exported", "error"],
+    name,
+  );
   number(result, "configuration_version", name, { integer: true, minimum: 1 });
   nullableNumber(result, "input_tokens", name);
   nullableNumber(result, "output_tokens", name);
@@ -970,6 +1039,7 @@ const decodeBirdseyeInstrumentation = (
     "queue_leased",
     "queue_dead_letter",
     "confirmed_count",
+    "confirmed_finding_count",
     "likely_count",
     "review_count",
     "healthy_components",
@@ -989,6 +1059,7 @@ const decodeBirdseyeInstrumentation = (
     "queue_leased",
     "queue_dead_letter",
     "confirmed_count",
+    "confirmed_finding_count",
     "likely_count",
     "review_count",
     "healthy_components",
@@ -1163,6 +1234,11 @@ const decodeBirdseyeNode = (value: unknown): BirdseyeNodeReadModel => {
     "total_instances",
     "p50_latency_ms",
     "p95_latency_ms",
+    "execution_count",
+    "measured_cost_usd",
+    "currency",
+    "langfuse_exported_count",
+    "langfuse_status",
     "queue_depth",
     "target_access",
   ], name);
@@ -1207,6 +1283,17 @@ const decodeBirdseyeNode = (value: unknown): BirdseyeNodeReadModel => {
   for (const key of ["p50_latency_ms", "p95_latency_ms"]) {
     if (result[key] !== null) number(result, key, name, { minimum: 0 });
   }
+  if (result.execution_count !== null) {
+    number(result, "execution_count", name, { integer: true, minimum: 0 });
+  }
+  if (result.measured_cost_usd !== null) {
+    number(result, "measured_cost_usd", name, { minimum: 0 });
+  }
+  nullableString(result, "currency", name);
+  if (result.langfuse_exported_count !== null) {
+    number(result, "langfuse_exported_count", name, { integer: true, minimum: 0 });
+  }
+  nullableString(result, "langfuse_status", name);
   if (result.queue_depth !== null) {
     number(result, "queue_depth", name, { integer: true, minimum: 0 });
   }

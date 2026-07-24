@@ -169,12 +169,12 @@ function Instrumentation({
       aria-label="Operational constraints and liveness"
     >
       <div>
-        <span>Authorized budget</span>
+        <span>Target-dispatch budget</span>
         <strong className="mono">
           {money(data.measured_cost_usd)} / {money(data.budget_usd)}
         </strong>
         <small>
-          {data.budget_usd > 0 ? percent(data.budget_utilization) : "No campaign budget"}
+          {data.budget_usd > 0 ? percent(data.budget_utilization) : "No dispatch budget"}
         </small>
       </div>
       <div>
@@ -196,6 +196,11 @@ function Instrumentation({
           {data.confirmed_count} / {data.likely_count} / {data.review_count}
         </strong>
         <small>Confirmed · likely · review</small>
+      </div>
+      <div>
+        <span>Durable findings</span>
+        <strong className="mono">{count(data.confirmed_finding_count)}</strong>
+        <small>Confirmed findings linked to persisted evidence</small>
       </div>
       <div>
         <span>Runtime evidence</span>
@@ -500,6 +505,26 @@ function NodeInspector({ node }: { node: BirdseyeNodeReadModel | null }) {
             {latency(node.p50_latency_ms)} / {latency(node.p95_latency_ms)}
           </dd>
         </div>
+        {node.execution_count !== null && (
+          <>
+            <div><dt>Observed executions</dt><dd className="mono">{count(node.execution_count)}</dd></div>
+            <div>
+              <dt>Measured agent spend</dt>
+              <dd className="mono">
+                {node.measured_cost_usd === null ? "Not observed" : money(node.measured_cost_usd)}
+              </dd>
+            </div>
+            <div>
+              <dt>Langfuse delivery</dt>
+              <dd className="mono">
+                {node.langfuse_status ?? "Not observed"}
+                {node.langfuse_exported_count === null
+                  ? ""
+                  : ` · ${node.langfuse_exported_count}/${node.execution_count} exported`}
+              </dd>
+            </div>
+          </>
+        )}
         <div>
           <dt>Queue depth</dt>
           <dd className="mono">
