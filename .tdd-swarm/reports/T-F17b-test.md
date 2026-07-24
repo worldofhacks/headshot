@@ -9,6 +9,8 @@ Status: `DONE`
   `c135b1b31de3956dd3272e84cc6c525219344224`
 - Test-review repair base:
   `0bb876fdbc8008d1dd511e1c3624e2701a013ef7`
+- Final re-review repair base:
+  `a1e2777118c930c7ddfdf35fd684248d2250c330`
 - Branch: `ticket/T-F17b-provider-call-lineage`
 - Worktree: `/Users/quietguy/Documents/Dev/Gauntlet/wt-T-F17b`
 - Test ownership: `tests/test_provider_call_lineage.py`
@@ -40,9 +42,10 @@ This revision remains explicitly **not frozen**. It repairs all four Important f
 
 1. all six AC-2 failure variants now round-trip through `finish_physical_attempt` and PostgreSQL,
    including exact stored typed errors, observed identity shape, nullable usage, and nullable cost;
-2. ordinary `final=True` terminal failure now terminalizes the logical row, while a test-installed
-   PostgreSQL trigger proves a terminal event is visible before the logical transition and that
-   both roll back when that transition fails;
+2. ordinary `final=True` terminal failure now terminalizes the logical row, while complementary
+   test-installed PostgreSQL triggers fail the logical UPDATE and terminal-event INSERT
+   independently; each proves both writes roll back without prescribing which valid write occurs
+   first;
 3. schema and direct-INSERT probes require the event's composite organization/invocation owner and
    at most one terminal event per invocation, rejecting both duplicate and cross-organization
    reattribution; and
@@ -86,9 +89,10 @@ This revision remains explicitly **not frozen**. It repairs all four Important f
 - AC-7: exact terminal replay is idempotent, changed replay conflicts without changing the stored
   row, retryable non-final versus final logical state is explicit, and crash recovery creates
   exactly one `outcome_unknown` event for an already committed invocation. An ordinary terminal
-  failure atomically writes one event and a failed logical row with its source id. The rollback
-  probe raises SQLSTATE `23514` only after the just-inserted event is transaction-visible, then
-  proves the event and logical mutation both disappeared while the pre-call invocation remains.
+  failure atomically writes one event and a failed logical row with its source id. Order-agnostic
+  rollback probes independently raise SQLSTATE `23514` from the logical UPDATE and event INSERT;
+  both require the terminal event and logical mutation to disappear while the pre-call invocation
+  remains.
   Recovery is network denied, cannot invent an unreserved sequence, and leaves exactly one
   invocation/event.
 - AC-8: `measured`, `partial`, `not_observed`, and `invalid` are the only cost states; amounts are
@@ -107,16 +111,16 @@ Focused command:
 python -m pytest -o addopts='' tests/test_provider_call_lineage.py -q --tb=short
 ```
 
-Result: exit `1`; `28 failed`.
+Result: exit `1`; `29 failed`.
 
-- 25 cases fail only at the explicit
+- 26 cases fail only at the explicit
   `T-F17b provider-call lineage module is missing` assertion.
 - The three migration/grant/schema cases fail only at
   `T-F17b migration has not created lineage tables:
   ['provider_call_events', 'provider_call_invocations']`.
 - There are no collection, import, fixture, PostgreSQL-connectivity, seed-data, isolated-migration
   setup, teardown, provider, target, or external-network errors.
-- Collection is healthy: `28 tests collected`; all eight ticket criteria are mapped.
+- Collection is healthy: `29 tests collected`; all eight ticket criteria are mapped.
 
 ## Preservation and gates
 
@@ -146,13 +150,13 @@ Result: exit `1`; `28 failed`.
 pwd: /Users/quietguy/Documents/Dev/Gauntlet/wt-T-F17b
 top-level: /Users/quietguy/Documents/Dev/Gauntlet/wt-T-F17b
 branch: ticket/T-F17b-provider-call-lineage
-review-repair base: 0bb876fdbc8008d1dd511e1c3624e2701a013ef7
+final-review-repair base: a1e2777118c930c7ddfdf35fd684248d2250c330
 allowed changes:
   M .tdd-swarm/reports/T-F17b-test.md
   M tests/test_provider_call_lineage.py
 ```
 
-Verdict: all 28 criterion-tagged cases are clean missing-feature RED, while the complete
+Verdict: all 29 criterion-tagged cases are clean missing-feature RED, while the complete
 pre-existing baseline and focused storage/control-plane regressions remain green. The candidate is
 ready for independent test-design review and remains explicitly **not frozen** until that reviewer
 passes and records its hashes.

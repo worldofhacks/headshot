@@ -664,8 +664,10 @@ def test_spec_T_F17b_AC_7_final_terminal_failure_atomically_terminalizes_logical
 
 
 # spec(T-F17b:AC-7)
-def test_spec_T_F17b_AC_7_terminal_event_rolls_back_if_logical_terminalization_fails(
+@pytest.mark.parametrize("failure_target", ("logical", "event"))
+def test_spec_T_F17b_AC_7_terminal_event_and_logical_transition_roll_back_if_either_write_fails(
     migrated_db: Engine,
+    failure_target: str,
 ) -> None:
     module = _lineage_api()
     _seed_logical_execution(migrated_db)
@@ -687,34 +689,29 @@ def test_spec_T_F17b_AC_7_terminal_event_rolls_back_if_logical_terminalization_f
         error_code="provider_terminal",
     )
     suffix = uuid.uuid4().hex
-    function_name = f"fail_lineage_terminal_{suffix}"
-    trigger_name = f"trg_fail_lineage_terminal_{suffix}"
+    function_name = f"fail_lineage_{failure_target}_{suffix}"
+    trigger_name = f"trg_fail_lineage_{failure_target}_{suffix}"
+    table_name = "agent_executions" if failure_target == "logical" else "provider_call_events"
+    timing = (
+        "BEFORE UPDATE ON agent_executions"
+        if failure_target == "logical"
+        else "BEFORE INSERT ON provider_call_events"
+    )
     with migrated_db.begin() as connection:
         connection.execute(
             text(
                 f"CREATE FUNCTION {function_name}() RETURNS trigger "
                 "LANGUAGE plpgsql AS $body$ "
                 "BEGIN "
-                "IF NEW.status IS DISTINCT FROM OLD.status THEN "
-                "IF NOT EXISTS ("
-                "SELECT 1 FROM provider_call_events "
-                "WHERE organization_id = NEW.organization_id "
-                "AND logical_execution_id = NEW.execution_id"
-                ") THEN "
-                "RAISE EXCEPTION 'terminal event was not inserted before logical update' "
-                "USING ERRCODE = '23503'; "
-                "END IF; "
-                "RAISE EXCEPTION 'injected logical terminalization failure' "
+                f"RAISE EXCEPTION 'injected {failure_target} persistence failure' "
                 "USING ERRCODE = '23514'; "
-                "END IF; "
-                "RETURN NEW; "
                 "END "
                 "$body$"
             )
         )
         connection.execute(
             text(
-                f"CREATE TRIGGER {trigger_name} BEFORE UPDATE ON agent_executions "
+                f"CREATE TRIGGER {trigger_name} {timing} "
                 f"FOR EACH ROW EXECUTE FUNCTION {function_name}()"
             )
         )
@@ -722,10 +719,7 @@ def test_spec_T_F17b_AC_7_terminal_event_rolls_back_if_logical_terminalization_f
     try:
         with pytest.raises((DBAPIError, RecordConflictError)) as caught:
             _finish_physical_attempt(store, invocation, event, final=True)
-        assert _sqlstate(caught.value) == "23514", (
-            "the injected failure must occur only after the terminal event is visible "
-            "inside the same transaction"
-        )
+        assert _sqlstate(caught.value) == "23514"
 
         counts = _row(
             migrated_db,
@@ -752,7 +746,7 @@ def test_spec_T_F17b_AC_7_terminal_event_rolls_back_if_logical_terminalization_f
         }
     finally:
         with migrated_db.begin() as connection:
-            connection.execute(text(f"DROP TRIGGER IF EXISTS {trigger_name} ON agent_executions"))
+            connection.execute(text(f"DROP TRIGGER IF EXISTS {trigger_name} ON {table_name}"))
             connection.execute(text(f"DROP FUNCTION IF EXISTS {function_name}()"))
 
 
