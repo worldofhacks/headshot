@@ -1,0 +1,122 @@
+# Dependency and version inventory
+
+Inventory baseline: `17019f28c606e9d3a799073f80f2437ee2e98ff6`
+
+This inventory distinguishes an exact pin from a lower-bound constraint. A lower bound is not a
+reproducible resolution.
+
+## Runtime and container substrate
+
+| Component | Declared version | Pin quality | Source |
+|---|---|---|---|
+| AgentForge package | `0.1.0` | Exact application version | [`../../../pyproject.toml`](../../../pyproject.toml) |
+| Python | `>=3.12`; container `3.12.11-slim-bookworm` | Container tag pinned, image digest not pinned | [`../../../pyproject.toml`](../../../pyproject.toml), [`../../../Dockerfile`](../../../Dockerfile) |
+| Node build stage | `22.17.1-bookworm-slim` | Tag pinned, image digest not pinned | [`../../../Dockerfile`](../../../Dockerfile) |
+| PostgreSQL | `16` | Major version only, image digest not pinned | [`../../../compose.yaml`](../../../compose.yaml), GitHub CI |
+| Railway processes | Web, Runner, Scheduler from the same image | Commands pinned in repository; external deployment revision pending | [`../../../railway/`](../../../railway/) |
+| OWASP ZAP image | `2.17.0`, Linux AMD64 digest `sha256:c558ee87358911ab17278c70991e856f57793e115d9cd0f88ca475cf82907a1a` | Exact digest | [`../../../security-tools/toolchain.lock.json`](../../../security-tools/toolchain.lock.json) |
+
+## Python direct dependencies
+
+| Dependency | Manifest constraint | Use |
+|---|---|---|
+| FastAPI | `>=0.111` | Web API and dependency enforcement |
+| Uvicorn | `>=0.30` | ASGI server |
+| psycopg binary | `>=3.1` | PostgreSQL driver and readiness |
+| python-dotenv | `>=1.0` | Explicit local environment-file loading |
+| SQLAlchemy | `>=2.0` | Storage and repositories |
+| Alembic | `>=1.13` | Single schema migration path |
+| jsonschema | `>=4` | Runtime inter-agent/eval contract validation |
+| httpx | `>=0.27` | Target adapter HTTP transport |
+| clerk-backend-api | `6.0.1` | Networkless human request authentication |
+| langfuse | `4.14.1` | OTEL-native agent/target observation projection and query-back |
+
+Development constraints are Ruff `>=0.6`, pytest `>=8`, and pre-commit `>=3`.
+
+**Supply-chain limitation:** the repository has no committed Python resolution lock or hashes for the
+application dependency graph. Only Clerk and Langfuse are exact direct pins; the remaining direct and
+all transitive Python versions may change on a fresh build. Before production, generate and review a
+hash-locked Python resolution for Python 3.12, rebuild from it, rerun `pip-audit`, and bind the resulting
+image digest to the release.
+
+## Frontend direct dependencies
+
+`console/package-lock.json` uses lockfile version 3 and contains 765 package entries, including the
+root package. Direct versions are exact:
+
+| Runtime dependency | Version |
+|---|---:|
+| `@clerk/clerk-js` | `6.25.6` |
+| `@clerk/react` | `6.12.6` |
+| `@clerk/ui` | `1.25.6` |
+| `react` | `18.3.1` |
+| `react-dom` | `18.3.1` |
+
+| Development dependency | Version |
+|---|---:|
+| `@playwright/test` | `1.61.1` |
+| `@testing-library/react` | `16.3.2` |
+| `@types/react` | `18.3.31` |
+| `@types/react-dom` | `18.3.7` |
+| `@vitejs/plugin-react` | `5.2.0` |
+| `jsdom` | `29.1.1` |
+| `typescript` | `5.9.3` |
+| `vite` | `7.3.6` |
+| `vitest` | `4.1.10` |
+
+The lock also overrides `uuid` to `11.1.1`.
+
+## Security-tool inventory
+
+| Tool | Exact version or artifact |
+|---|---|
+| Garak | `0.15.1` with LiteLLM constraint `1.84.0` |
+| Giskard Scan | `1.0.0b3`; wheel SHA-256 `38ecd28d91e2f28962b413545b76030db2081ff142aa140dd36f5539a77b0da3` |
+| Gitleaks | `8.30.1` |
+| pip-audit | `2.10.1` |
+| Promptfoo | `0.121.19` |
+| PyRIT | `0.14.0` |
+| Semgrep | `1.170.0` |
+| OWASP ZAP | `2.17.0`; exact image digest listed above |
+
+Exact execution scope and evidence are in
+[`SECURITY_TOOL_EVIDENCE.md`](SECURITY_TOOL_EVIDENCE.md).
+
+## Manifest integrity hashes
+
+These SHA-256 values identify the files in the inspected source baseline; they are not substitutes
+for a signed release or container digest.
+
+| Manifest | SHA-256 |
+|---|---|
+| `pyproject.toml` | `26987706721f5ff1658a503bf940f61e2f697d13f6385e186f9c30f1d33001c5` |
+| `console/package-lock.json` | `67ba981b416804eb6aff511d8a3c95044475ca8bc304ea70e4f1df15aa1494ae` |
+| `security-tools/toolchain.lock.json` | `c35dd73014dc72d3455de93ae685c8d669ebfc92ff78c33a5d91168fdc094d95` |
+| `Dockerfile` | `12384162042ec58870c8f6cb73d2893a46590535f5557cc43b3af6ca53e672fd` |
+| `compose.yaml` | `425732f0633b503d415b2ddac8a6a95bb604e6ad938f511b9bc7bfde0e4f59cb` |
+
+## Versioning and migration posture
+
+The package ships 18 v1 JSON Schemas under
+[`../../../src/agentforge/contracts/v1/`](../../../src/agentforge/contracts/v1/). Producer and
+consumer conformance is exercised by `tests/contract`. Breaking inter-agent changes require a new
+schema version, compatibility analysis, migration note, and updated both-sided tests.
+
+Alembic has one serialized head at `0017` in the inspected source. Migration notes are indexed in
+[`../../integration/INTEGRATION_PACKET.md`](../../integration/INTEGRATION_PACKET.md). Deployed
+environments remain at `0013` according to the current live review and must not be described as
+running `0014`-`0017`.
+
+## Architecture-to-manifest reconciliation
+
+- No LangGraph package or Postgres checkpoint dependency is declared in `pyproject.toml`. The current
+  source uses its own durable coordinator/queue/runtime composition; any older architecture statement
+  that presents LangGraph as an installed runtime is planned/stale, not manifest evidence.
+- No Anthropic or OpenAI SDK is declared. Hosted role calls in this baseline use the OpenRouter
+  transport through `httpx`; provider/model identity must come from the returned response and durable
+  lineage rather than an inferred architecture label.
+- Redis, ClickHouse, and S3 are not application dependencies because this release uses Langfuse
+  Cloud. They belong only to a future self-hosted Langfuse topology.
+- GitHub Actions references `actions/checkout@v4`, `actions/setup-python@v5`,
+  `actions/setup-node@v4`, and `actions/upload-artifact@v4` by major tag rather than immutable commit
+  SHA. Pinning CI actions by commit is a release supply-chain hardening item.
