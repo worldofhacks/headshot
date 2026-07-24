@@ -1,0 +1,503 @@
+From 98d3c40922419206af6eb06afd9089f264a513c8 Mon Sep 17 00:00:00 2001
+From: alex <amilleralbany@gmail.com>
+Date: Fri, 24 Jul 2026 14:54:09 -0400
+Subject: [PATCH 1/6] test(console): define T-F18a canonical navigation RED
+
+---
+ .tdd-swarm/reports/T-F18a-test.md     |  84 ++++++++++
+ console/tests/browser/console.spec.ts |  64 ++++++++
+ console/tests/contracts.test.ts       | 228 +++++++++++++++++++++++++-
+ console/tests/router.test.ts          |  62 +++++--
+ 4 files changed, 426 insertions(+), 12 deletions(-)
+ create mode 100644 .tdd-swarm/reports/T-F18a-test.md
+
+diff --git a/.tdd-swarm/reports/T-F18a-test.md b/.tdd-swarm/reports/T-F18a-test.md
+new file mode 100644
+index 0000000..5500847
+--- /dev/null
++++ b/.tdd-swarm/reports/T-F18a-test.md
+@@ -0,0 +1,84 @@
++# T-F18a Test Agent report
++
++Status: **DONE**
++
++- Worktree: `/Users/quietguy/Documents/Dev/Gauntlet/wt-T-F18a`
++- Branch: `ticket/T-F18a-canonical-console-navigation`
++- Base: `7838a5fc3d0e667913adc38785374e9cd8d1288c`
++- Scope changed: `console/tests/router.test.ts`, `console/tests/contracts.test.ts`,
++  `console/tests/browser/console.spec.ts`, and this report only.
++- Production source, network, deployment, live target, and browser execution: untouched.
++
++## Baseline
++
++Before adding T-F18a tests:
++
++```text
++cd console
++npm test -- --run tests/router.test.ts tests/contracts.test.ts
++PASS: 2 files, 18 tests
++
++npm test
++PASS: 12 files, 75 tests
++```
++
++After adding T-F18a tests, the ten unaffected unit/component files remain green:
++
++```text
++npm test -- --run tests/adversarial-text.test.tsx tests/analytics.test.tsx \
++  tests/api-client.test.ts tests/birdseye.test.tsx tests/command-button.test.tsx \
++  tests/console-events.test.tsx tests/observability.test.ts \
++  tests/production-policy.test.ts tests/read-models.test.tsx tests/stream.test.ts
++PASS: 10 files, 57 tests
++```
++
++## Intentional RED
++
++```text
++cd console
++npm test -- --run tests/router.test.ts tests/contracts.test.ts --reporter=dot
++RED as intended: 2 files failed; 19 tests failed and 23 passed
++```
++
++All failures are assertions against missing T-F18a behavior, not import, transform, fixture, or
++setup errors:
++
++| Criterion | RED failures | Missing behavior proved |
++|---|---:|---|
++| AC-1 | 5 | Desktop/mobile still expose `Coverage` plus `Resilience`, the desktop route list lacks an accessible navigation name, and the canonical mobile current-route state cannot be reached. |
++| AC-2 | 3 | `/resilience` still parses/renders as its own screen and neither query/hash nor history entry is replace-normalized to `/coverage`. |
++| AC-3 | 6 | Invalid URLs, including a prefixed `/resilience/extra`, render a fallback without replacing the misleading URL; malformed entity decoding is also accepted as Findings with a null identity. |
++| AC-4 | 5 | Dot-segment entity IDs are emitted/accepted even though browsers interpret them as path traversal. Valid Unicode, slash, query, fragment, and authority-shaped identities already round-trip on the same origin and remain passing controls. |
++
++The Playwright additions independently cover desktop/mobile navigation, the compatibility
++redirect's back/forward behavior, and each invalid-route family. They were authored but not run
++because this Test Agent was explicitly prohibited from browser access.
++
++## Static and safety checks
++
++```text
++cd console
++npm run typecheck
++PASS
++
++npm run check:forbidden
++PASS
++
++git diff --check
++PASS
++
++bash scripts/secret_scan.sh
++PASS: secret scan clean (930 files)
++
++gitleaks dir . --redact --no-banner --exit-code 1
++PASS: no leaks found
++```
++
++There is no console lint script in `console/package.json` or the console CI job. The repository
++Python lint commands were still checked and fail on the unchanged base: `ruff check .` reports 116
++pre-existing Python findings, and `ruff format --check .` reports 19 pre-existing Python files.
++None is in this ticket's TypeScript/Markdown diff.
++
++The suite is intentionally left RED for the independent test-design review and subsequent
++Implementation Agent. Resilience/regression data and its API were not deleted or changed; T-F18c
++retains ownership of the merged Coverage & Regression page contents.
+diff --git a/console/tests/browser/console.spec.ts b/console/tests/browser/console.spec.ts
+index 4cb0c96..ad98ad8 100644
+--- a/console/tests/browser/console.spec.ts
++++ b/console/tests/browser/console.spec.ts
+@@ -18,6 +18,70 @@ test("direct routes and browser history restore authoritative screens", async ({
+   await expect(page.getByRole("heading", { name: "Risk distribution", exact: true })).toBeVisible();
+ });
+ 
++test("spec(T-F18a:AC-1) desktop and mobile expose one canonical Coverage route", async ({ page }) => {
++  await page.goto("/live");
++  const desktop = page.getByRole("navigation", { name: "Primary navigation" });
++  const desktopCoverage = desktop.getByRole("button", {
++    name: "Coverage & Regression",
++    exact: true,
++  });
++
++  await expect(desktopCoverage).toHaveCount(1);
++  await expect(desktop.getByRole("button", { name: "Resilience" })).toHaveCount(0);
++  await desktopCoverage.click();
++  await expect(page).toHaveURL(/\/coverage$/);
++  await expect(desktopCoverage).toHaveAttribute("aria-current", "page");
++
++  await page.setViewportSize({ width: 390, height: 844 });
++  const mobile = page.getByRole("navigation", { name: "Mobile navigation" });
++  await mobile.getByRole("button", { name: "More", exact: true }).click();
++  const mobileCoverage = mobile.getByRole("button", {
++    name: "Coverage & Regression",
++    exact: true,
++  });
++
++  await expect(mobileCoverage).toHaveCount(1);
++  await expect(mobile.getByRole("button", { name: "Resilience" })).toHaveCount(0);
++  await mobileCoverage.click();
++  await expect(page).toHaveURL(/\/coverage$/);
++  await expect(mobileCoverage).toHaveAttribute("aria-current", "page");
++});
++
++test("spec(T-F18a:AC-2) resilience replaces to Coverage without a history loop", async ({ page }) => {
++  await page.goto("/live");
++  await page.evaluate(() => {
++    window.history.pushState(null, "", "/resilience?window=30d#latest-regression");
++    window.dispatchEvent(new PopStateEvent("popstate"));
++  });
++
++  await expect(page).toHaveURL(/\/coverage$/);
++  await expect(page.getByRole("heading", { name: "Coverage", exact: true, level: 1 })).toBeVisible();
++
++  await page.goBack();
++  await expect(page).toHaveURL(/\/live$/);
++  await page.goForward();
++  await expect(page).toHaveURL(/\/coverage$/);
++});
++
++test("spec(T-F18a:AC-3) invalid route families replace-normalize to Live", async ({ page }) => {
++  await page.goto("/live");
++  for (const invalidPath of [
++    "/unknown?next=/findings#fragment",
++    "/findings/%E0%A4%A?next=/findings#fragment",
++    "/live/attempt-1/extra?next=/findings#fragment",
++    "/resilience/extra?next=/findings#fragment",
++    "/coverage/case-1?next=/findings#fragment",
++  ]) {
++    await page.evaluate((path) => {
++      window.history.pushState(null, "", path);
++      window.dispatchEvent(new PopStateEvent("popstate"));
++    }, invalidPath);
++
++    await expect(page).toHaveURL(/\/live$/);
++    await expect(page.getByRole("heading", { name: "Live operations", exact: true })).toBeVisible();
++  }
++});
++
+ test("390px navigation exposes every screen without application overflow", async ({ page }) => {
+   await page.setViewportSize({ width: 390, height: 844 });
+   await page.goto("/live");
+diff --git a/console/tests/contracts.test.ts b/console/tests/contracts.test.ts
+index 1a3438b..d237dd4 100644
+--- a/console/tests/contracts.test.ts
++++ b/console/tests/contracts.test.ts
+@@ -1,7 +1,76 @@
+-import { describe, expect, it } from "vitest";
++import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
++import { createElement } from "react";
++import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+ 
++import { App } from "../src/App";
+ import { decodeResourceEnvelope } from "../src/api/contracts";
+ 
++vi.mock("@clerk/react", () => ({
++  SignIn: () => null,
++  TaskChooseOrganization: () => null,
++  TaskResetPassword: () => null,
++  TaskSetupMFA: () => null,
++  UserButton: () => null,
++  useAuth: () => ({
++    actor: null,
++    getToken: async () => "test-session-token",
++    isLoaded: true,
++    isSignedIn: true,
++    orgId: "org-headshot",
++  }),
++  useClerk: () => ({ status: "loaded" }),
++}));
++
++vi.mock("../src/api/client", () => ({
++  createApiClient: () => ({ read: vi.fn() }),
++}));
++
++vi.mock("../src/hooks/useResource", () => ({
++  useResource: (_client: unknown, path: string) => {
++    if (path === "principal") {
++      return {
++        result: {
++          state: "ready",
++          data: {
++            user_id: "operator-1",
++            session_id: "session-1",
++            organization_id: "org-headshot",
++            organization_role: "org:operator",
++            organization_permissions: ["org:console:read"],
++          },
++        },
++        refresh: () => undefined,
++      };
++    }
++    if (path === "campaigns" || path === "approvals") {
++      return { result: { state: "ready", data: [] }, refresh: () => undefined };
++    }
++    return { result: { state: "unavailable", data: null }, refresh: () => undefined };
++  },
++}));
++
++vi.mock("../src/screens/ConsoleScreens", async () => {
++  const { createElement: element } = await import("react");
++  const heading = (title: string) => element("h1", null, title);
++  return {
++    ApprovalsScreen: () => heading("Approvals"),
++    ConfigurationScreen: () => heading("Configuration"),
++    FindingsScreen: () => heading("Findings"),
++    LiveScreen: () => heading("Live operations"),
++    SimpleResourceScreen: ({ resource }: { resource: string }) =>
++      heading(resource === "coverage" ? "Coverage" : resource),
++    TargetsScreen: () => heading("Targets"),
++  };
++});
++
++vi.mock("../src/screens/AgentToolScreens", async () => {
++  const { createElement: element } = await import("react");
++  return {
++    AgentsScreen: () => element("h1", null, "Agents"),
++    ToolingScreen: () => element("h1", null, "Tooling"),
++  };
++});
++
+ describe("resource envelopes", () => {
+   it.each(["ready", "empty", "unavailable", "stale", "degraded", "error"])(
+     "accepts the backend %s state",
+@@ -16,3 +85,160 @@ describe("resource envelopes", () => {
+     );
+   });
+ });
++
++const canonicalDesktopLabels = [
++  "Live",
++  "Findings",
++  "Approvals",
++  "Coverage & Regression",
++  "Agents",
++  "Tooling",
++  "Traces",
++  "Costs",
++  "Targets",
++  "Configuration",
++];
++
++beforeEach(() => {
++  window.history.replaceState(null, "", "/live");
++});
++
++afterEach(() => {
++  cleanup();
++});
++
++describe("canonical console navigation contract", () => {
++  it("spec(T-F18a:AC-1) exposes the canonical desktop labels once and in order", () => {
++    render(createElement(App));
++    const desktop = screen.getAllByRole("navigation")[0];
++    const labels = within(desktop)
++      .getAllByRole("button")
++      .map((button) => button.textContent?.trim());
++
++    expect(labels).toEqual(canonicalDesktopLabels);
++    expect(
++      within(desktop).getAllByRole("button", {
++        name: "Coverage & Regression",
++        exact: true,
++      }),
++    ).toHaveLength(1);
++    expect(within(desktop).queryByRole("button", { name: "Resilience" })).toBeNull();
++  });
++
++  it("spec(T-F18a:AC-1) gives the desktop route list an accessible navigation name", () => {
++    render(createElement(App));
++
++    expect(
++      screen.getByRole("navigation", { name: "Primary navigation" }),
++    ).not.toBeNull();
++  });
++
++  it("spec(T-F18a:AC-1) targets /coverage from the canonical desktop item", () => {
++    render(createElement(App));
++    const desktop = screen.getAllByRole("navigation")[0];
++    const coverage = within(desktop).getByRole("button", {
++      name: "Coverage & Regression",
++      exact: true,
++    });
++
++    fireEvent.click(coverage);
++
++    expect(window.location.pathname).toBe("/coverage");
++    expect(coverage.getAttribute("aria-current")).toBe("page");
++  });
++
++  it("spec(T-F18a:AC-1) exposes the same retired-page contract in mobile More", () => {
++    render(createElement(App));
++    const mobile = screen.getByRole("navigation", { name: "Mobile navigation" });
++
++    fireEvent.click(within(mobile).getByRole("button", { name: "More", exact: true }));
++
++    expect(
++      within(mobile)
++        .getAllByRole("button")
++        .map((button) => button.textContent?.trim()),
++    ).toEqual([
++      "Live",
++      "Findings",
++      "Approvals",
++      "Targets",
++      "More",
++      "Coverage & Regression",
++      "Agents",
++      "Tooling",
++      "Traces",
++      "Costs",
++      "Configuration",
++    ]);
++    expect(
++      within(mobile).getAllByRole("button", {
++        name: "Coverage & Regression",
++        exact: true,
++      }),
++    ).toHaveLength(1);
++    expect(within(mobile).queryByRole("button", { name: "Resilience" })).toBeNull();
++  });
++
++  it("spec(T-F18a:AC-1) marks the selected mobile route for assistive technology", () => {
++    render(createElement(App));
++    const mobile = screen.getByRole("navigation", { name: "Mobile navigation" });
++    fireEvent.click(within(mobile).getByRole("button", { name: "More", exact: true }));
++    const coverage = within(mobile).getByRole("button", {
++      name: "Coverage & Regression",
++      exact: true,
++    });
++
++    fireEvent.click(coverage);
++
++    expect(window.location.pathname).toBe("/coverage");
++    expect(coverage.getAttribute("aria-current")).toBe("page");
++  });
++});
++
++describe("replace-normalized browser route contract", () => {
++  it("spec(T-F18a:AC-2) replaces a resilience query/hash with canonical Coverage once", () => {
++    window.history.replaceState(null, "", "/live");
++    window.history.pushState(null, "", "/resilience?window=30d#latest-regression");
++    const historyLength = window.history.length;
++    const replace = vi.spyOn(window.history, "replaceState");
++    const push = vi.spyOn(window.history, "pushState");
++
++    render(createElement(App));
++
++    expect(replace.mock.calls.map((call) => call[2])).toEqual(["/coverage"]);
++    expect(push).not.toHaveBeenCalled();
++    expect(window.location.pathname).toBe("/coverage");
++    expect(window.location.search).toBe("");
++    expect(window.location.hash).toBe("");
++    expect(window.history.length).toBe(historyLength);
++    expect(screen.getByRole("heading", { name: "Coverage", exact: true })).not.toBeNull();
++
++    act(() => window.dispatchEvent(new PopStateEvent("popstate")));
++    expect(replace.mock.calls.map((call) => call[2])).toEqual(["/coverage"]);
++  });
++
++  it.each([
++    ["/unknown?next=/findings#fragment", "unknown screen"],
++    ["/findings/%E0%A4%A?next=/findings#fragment", "malformed escape"],
++    ["/live/attempt-1/extra?next=/findings#fragment", "extra segment"],
++    ["/resilience/extra?next=/findings#fragment", "compatibility-route prefix"],
++    ["/coverage/case-1?next=/findings#fragment", "unsupported entity"],
++  ])("spec(T-F18a:AC-3) replaces a %s URL with canonical Live", (path) => {
++    window.history.replaceState(null, "", path);
++    const historyLength = window.history.length;
++    const replace = vi.spyOn(window.history, "replaceState");
++    const push = vi.spyOn(window.history, "pushState");
++
++    render(createElement(App));
++
++    expect(replace.mock.calls.map((call) => call[2])).toEqual(["/live"]);
++    expect(push).not.toHaveBeenCalled();
++    expect(`${window.location.pathname}${window.location.search}${window.location.hash}`).toBe(
++      "/live",
++    );
++    expect(window.history.length).toBe(historyLength);
++    expect(
++      screen.getByRole("heading", { name: "Live operations", exact: true }),
++    ).not.toBeNull();
++  });
++});
+diff --git a/console/tests/router.test.ts b/console/tests/router.test.ts
+index a09a399..5b8af3b 100644
+--- a/console/tests/router.test.ts
++++ b/console/tests/router.test.ts
+@@ -2,26 +2,66 @@ import { describe, expect, it } from "vitest";
+ 
+ import { parseConsoleRoute, routePath } from "../src/router";
+ 
+-describe("frozen direct routes", () => {
++describe("canonical console routes", () => {
+   it.each([
+     ["/live", { screen: "live", entityId: null }],
+-    ["/live/attempt-id", { screen: "live", entityId: "attempt-id" }],
+-    ["/findings/finding-id", { screen: "findings", entityId: "finding-id" }],
+-    ["/approvals/approval-id", { screen: "approvals", entityId: "approval-id" }],
+     ["/coverage", { screen: "coverage", entityId: null }],
+-    ["/resilience", { screen: "resilience", entityId: null }],
++    ["/agents", { screen: "agents", entityId: null }],
++    ["/tooling", { screen: "tooling", entityId: null }],
+     ["/traces", { screen: "traces", entityId: null }],
+     ["/costs", { screen: "costs", entityId: null }],
+     ["/targets", { screen: "targets", entityId: null }],
+     ["/config", { screen: "config", entityId: null }],
+-  ])("parses %s", (path, expected) => {
++  ])("spec(T-F18a:AC-3) preserves the canonical collection route %s", (path, expected) => {
+     expect(parseConsoleRoute(path)).toEqual(expected);
+   });
+ 
+-  it("encodes entity identifiers and defaults unknown routes to Live", () => {
+-    expect(routePath({ screen: "findings", entityId: "finding / one" })).toBe(
+-      "/findings/finding%20%2F%20one",
+-    );
+-    expect(parseConsoleRoute("/not-a-screen")).toEqual({ screen: "live", entityId: null });
++  it.each([
++    ["/resilience", { screen: "coverage", entityId: null }],
++    ["/resilience/", { screen: "coverage", entityId: null }],
++  ])("spec(T-F18a:AC-2) resolves the retired compatibility route %s to Coverage", (path, expected) => {
++    expect(parseConsoleRoute(path)).toEqual(expected);
++  });
++
++  it.each([
++    ["/not-a-screen", "unknown screen"],
++    ["/findings/%E0%A4%A", "malformed entity escape"],
++    ["/live/attempt-id/extra", "extra path segment"],
++    ["/resilience/extra", "extra segment on the compatibility route"],
++    ["/coverage/case-id", "entity on a collection-only screen"],
++    ["/agents/agent-id", "entity on an unsupported screen"],
++  ])("spec(T-F18a:AC-3) defaults a %s to canonical Live", (path) => {
++    expect(parseConsoleRoute(path)).toEqual({ screen: "live", entityId: null });
++  });
++
++  it.each([
++    ["live", "attempt / one"],
++    ["findings", "finding://external.example/患者?next=/config#evidence"],
++    ["approvals", "//external.example/approval α"],
++  ] as const)(
++    "spec(T-F18a:AC-4) round-trips an encoded %s identity without changing origin",
++    (screen, entityId) => {
++      const path = routePath({ screen, entityId });
++      const url = new URL(path, "https://console.example.test/live");
++
++      expect(url.origin).toBe("https://console.example.test");
++      expect(url.pathname.startsWith(`/${screen}/`)).toBe(true);
++      expect(parseConsoleRoute(url.pathname)).toEqual({ screen, entityId });
++    },
++  );
++
++  it.each([".", ".."])(
++    "spec(T-F18a:AC-4) rejects the path-traversal entity identity %s",
++    (entityId) => {
++      expect(() => routePath({ screen: "findings", entityId })).toThrow();
++    },
++  );
++
++  it.each([
++    "/live/%2e%2e",
++    "/findings/%2E%2E",
++    "/approvals/%2e",
++  ])("spec(T-F18a:AC-4) does not accept a percent-encoded dot segment at %s", (path) => {
++    expect(parseConsoleRoute(path)).toEqual({ screen: "live", entityId: null });
+   });
+ });

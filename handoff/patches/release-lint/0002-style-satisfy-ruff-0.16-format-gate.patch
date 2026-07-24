@@ -1,0 +1,668 @@
+From 2187fbf6d5a0561cdf630978477d837299558113 Mon Sep 17 00:00:00 2001
+From: alex <amilleralbany@gmail.com>
+Date: Fri, 24 Jul 2026 14:27:43 -0400
+Subject: [PATCH 2/2] style: satisfy ruff 0.16 format gate
+
+---
+ .../reports/openrouter-readiness-fresh.md     |  13 +-
+ .../0015_hosted_configuration_sets.py         |   4 +-
+ src/agentforge/agents/hosted.py               |   8 +-
+ src/agentforge/agents/hosted_runtime.py       |  20 +--
+ src/agentforge/api/postgres.py                | 153 +++++++++---------
+ src/agentforge/control_plane/store.py         |   5 +-
+ src/agentforge/policy/scoped_credentials.py   |   3 +-
+ src/agentforge/providers/openrouter.py        |  42 ++---
+ tests/test_hosted_runtime.py                  |  27 ++--
+ tests/test_postgres_api_m1d.py                |  20 +--
+ tests/test_queue.py                           |  14 +-
+ tests/test_workload_registry.py               |   8 +-
+ 12 files changed, 128 insertions(+), 189 deletions(-)
+
+diff --git a/.tdd-swarm/reports/openrouter-readiness-fresh.md b/.tdd-swarm/reports/openrouter-readiness-fresh.md
+index 9fd2e88..bd29be4 100644
+--- a/.tdd-swarm/reports/openrouter-readiness-fresh.md
++++ b/.tdd-swarm/reports/openrouter-readiness-fresh.md
+@@ -154,18 +154,20 @@ class TokenPriceVector:
+     output_usd_per_token: Decimal
+     reasoning_usd_per_token: Decimal
+ 
++
+ @dataclass(frozen=True, slots=True)
+ class HostedLimits:
+     max_calls: int
+     max_retries: int
+     max_input_tokens: int
+-    max_output_tokens: int       # visible completion, excluding reasoning
++    max_output_tokens: int  # visible completion, excluding reasoning
+     max_reasoning_tokens: int
+     max_usd: Decimal
+     max_wall_clock_seconds: int
+     max_requests_per_second: Decimal
+     max_concurrency: int
+ 
++
+ @dataclass(frozen=True, slots=True)
+ class HostedRoleConfiguration:
+     role: AgentRole
+@@ -189,6 +191,7 @@ class HostedRoleConfiguration:
+     global_limits: HostedLimits
+     role_configuration_sha256: str
+ 
++
+ @dataclass(frozen=True, slots=True)
+ class HostedConfigurationSet:
+     release_sha: str
+@@ -284,9 +287,12 @@ Use existing `httpx` through an injected narrow transport rather than adding an
+ class ProviderCredentialResolver(Protocol):
+     def resolve_for_role(self, role: AgentRole, reference_id: str) -> Secret: ...
+ 
++
+ class OpenRouterWireTransport(Protocol):
+-    def post(self, *, url: str, headers: Mapping[str, str], json: Mapping[str, Any],
+-             timeout_seconds: int) -> Mapping[str, Any]: ...
++    def post(
++        self, *, url: str, headers: Mapping[str, str], json: Mapping[str, Any], timeout_seconds: int
++    ) -> Mapping[str, Any]: ...
++
+ 
+ class ReservationLedger(Protocol):
+     def reserve(self, estimate: AttemptEstimate) -> Reservation: ...
+@@ -294,6 +300,7 @@ class ReservationLedger(Protocol):
+     def retain_unknown(self, reservation: Reservation, reason: str) -> None: ...
+     def abort(self, reason: str) -> None: ...
+ 
++
+ class OpenRouterRoleClient:
+     def complete(self, request: RoleRequest) -> OpenRouterResult: ...
+ ```
+diff --git a/migrations/versions/0015_hosted_configuration_sets.py b/migrations/versions/0015_hosted_configuration_sets.py
+index 90a8579..800eb98 100644
+--- a/migrations/versions/0015_hosted_configuration_sets.py
++++ b/migrations/versions/0015_hosted_configuration_sets.py
+@@ -77,9 +77,7 @@ def upgrade() -> None:
+         "REVOKE ALL PRIVILEGES ON TABLE hosted_configuration_sets "
+         "FROM PUBLIC, headshot_redteam, headshot_recorder, headshot_judge, headshot_scheduler"
+     )
+-    op.execute(
+-        "GRANT SELECT ON TABLE hosted_configuration_sets TO headshot_web, headshot_runner"
+-    )
++    op.execute("GRANT SELECT ON TABLE hosted_configuration_sets TO headshot_web, headshot_runner")
+     op.execute("GRANT INSERT ON TABLE hosted_configuration_sets TO headshot_web")
+ 
+ 
+diff --git a/src/agentforge/agents/hosted.py b/src/agentforge/agents/hosted.py
+index 7d5eddf..3c80789 100644
+--- a/src/agentforge/agents/hosted.py
++++ b/src/agentforge/agents/hosted.py
+@@ -361,12 +361,8 @@ class HostedRoleConfiguration:
+             raise ValueError("hosted role prices payload has an invalid shape")
+         try:
+             token_prices = TokenPrices(
+-                input_usd_per_million_tokens=Decimal(
+-                    prices["input_usd_per_million_tokens"]
+-                ),
+-                output_usd_per_million_tokens=Decimal(
+-                    prices["output_usd_per_million_tokens"]
+-                ),
++                input_usd_per_million_tokens=Decimal(prices["input_usd_per_million_tokens"]),
++                output_usd_per_million_tokens=Decimal(prices["output_usd_per_million_tokens"]),
+                 reasoning_usd_per_million_tokens=Decimal(
+                     prices["reasoning_usd_per_million_tokens"]
+                 ),
+diff --git a/src/agentforge/agents/hosted_runtime.py b/src/agentforge/agents/hosted_runtime.py
+index 8316066..6f668ad 100644
+--- a/src/agentforge/agents/hosted_runtime.py
++++ b/src/agentforge/agents/hosted_runtime.py
+@@ -96,24 +96,18 @@ class HostedFourRoleRuntime:
+         authorization: HostedRunBinding,
+         call_bounds: Mapping[AgentRole, HostedCallBounds],
+         policy_gateway_dispatch: Callable[[Mapping[str, Any]], Mapping[str, Any]],
+-        deterministic_judge: Callable[
+-            [Mapping[str, Any], Mapping[str, Any]], Mapping[str, Any]
+-        ],
++        deterministic_judge: Callable[[Mapping[str, Any], Mapping[str, Any]], Mapping[str, Any]],
+         lineage_recorder: Callable[[HostedExecutionLineage], None] | None = None,
+     ) -> None:
+         if not isinstance(authorization, HostedRunBinding):
+             raise HostedCompositionError("hosted run authorization is invalid")
+         if (
+-            authorization.configuration_set_sha256
+-            != configuration.configuration_sha256
+-            or authorization.provider_model_call_limit
+-            != configuration.global_limits.max_calls
++            authorization.configuration_set_sha256 != configuration.configuration_sha256
++            or authorization.provider_model_call_limit != configuration.global_limits.max_calls
+             or authorization.provider_model_spend_limit_usd
+             != format(configuration.global_limits.max_usd, "f")
+-            or authorization.provider_max_retries
+-            != configuration.global_limits.max_retries
+-            or authorization.provider_max_concurrency
+-            != configuration.global_limits.max_concurrency
++            or authorization.provider_max_retries != configuration.global_limits.max_retries
++            or authorization.provider_max_concurrency != configuration.global_limits.max_concurrency
+         ):
+             raise HostedCompositionError(
+                 "hosted runtime configuration differs from campaign authorization"
+@@ -125,9 +119,7 @@ class HostedFourRoleRuntime:
+             bounds.timeout_seconds > authorization.provider_timeout_seconds
+             for bounds in call_bounds.values()
+         ):
+-            raise HostedCompositionError(
+-                "hosted call timeout exceeds campaign authorization"
+-            )
++            raise HostedCompositionError("hosted call timeout exceeds campaign authorization")
+         if (
+             not callable(getattr(transport, "invoke", None))
+             or not callable(policy_gateway_dispatch)
+diff --git a/src/agentforge/api/postgres.py b/src/agentforge/api/postgres.py
+index 6d13ef9..02d43df 100644
+--- a/src/agentforge/api/postgres.py
++++ b/src/agentforge/api/postgres.py
+@@ -371,18 +371,22 @@ class PostgresApiBackend(ApiBackend):
+                     "hosted_configuration_set",
+                     "hosted_configuration_preflight",
+                 }:
+-                    row = connection.execute(
+-                        text(
+-                            "SELECT configuration_sha256, schema_version, release_sha256, "
+-                            "payload, actor_user_id, created_at FROM hosted_configuration_sets "
+-                            "WHERE organization_id = :org "
+-                            "AND configuration_sha256 = :configuration"
+-                        ),
+-                        {
+-                            "org": principal.organization_id,
+-                            "configuration": identifiers.get("configuration_sha256", ""),
+-                        },
+-                    ).mappings().one_or_none()
++                    row = (
++                        connection.execute(
++                            text(
++                                "SELECT configuration_sha256, schema_version, release_sha256, "
++                                "payload, actor_user_id, created_at FROM hosted_configuration_sets "
++                                "WHERE organization_id = :org "
++                                "AND configuration_sha256 = :configuration"
++                            ),
++                            {
++                                "org": principal.organization_id,
++                                "configuration": identifiers.get("configuration_sha256", ""),
++                            },
++                        )
++                        .mappings()
++                        .one_or_none()
++                    )
+                     if row is None:
+                         rows = []
+                     else:
+@@ -1498,9 +1502,7 @@ class PostgresApiBackend(ApiBackend):
+                     ),
+                 )
+                 with self._engine.connect() as connection:
+-                    database_now = connection.execute(
+-                        text("SELECT clock_timestamp()")
+-                    ).scalar_one()
++                    database_now = connection.execute(text("SELECT clock_timestamp()")).scalar_one()
+                 expiry = database_now + datetime.timedelta(
+                     seconds=int(payload["expires_in_seconds"])
+                 )
+@@ -1528,13 +1530,8 @@ class PostgresApiBackend(ApiBackend):
+                 )
+                 if not self._hosted_runtime_available and requires_hosted_runtime:
+                     return CommandResult.unavailable("hosted_runtime_not_composed")
+-                if (
+-                    not self._hosted_provider_bindings_verified
+-                    and requires_hosted_runtime
+-                ):
+-                    return CommandResult.unavailable(
+-                        "provider_credentials_runner_unverified"
+-                    )
++                if not self._hosted_provider_bindings_verified and requires_hosted_runtime:
++                    return CommandResult.unavailable("provider_credentials_runner_unverified")
+                 if not self._runner_heartbeat_is_fresh():
+                     return CommandResult.unavailable("runner_heartbeat_stale")
+                 record = self._store.launch_campaign(
+@@ -1565,13 +1562,9 @@ class PostgresApiBackend(ApiBackend):
+             if command == "request_live_probe_authorization":
+                 return CommandResult.unavailable("distinct_live_probe_workflow_missing")
+             if command == "configure_agent":
+-                return CommandResult.unavailable(
+-                    "atomic_hosted_configuration_set_required"
+-                )
++                return CommandResult.unavailable("atomic_hosted_configuration_set_required")
+             if command == "stage_hosted_configuration_set":
+-                configuration = HostedConfigurationSet.from_payload(
+-                    dict(payload["configuration"])
+-                )
++                configuration = HostedConfigurationSet.from_payload(dict(payload["configuration"]))
+                 configuration_sha256 = self._store.stage_hosted_configuration_set(
+                     principal=principal,
+                     configuration=configuration,
+@@ -1624,52 +1617,60 @@ class PostgresApiBackend(ApiBackend):
+         """Project every launch gate without resolving a secret or making an external call."""
+ 
+         with self._engine.connect() as connection:
+-            row = connection.execute(
+-                text(
+-                    "SELECT q.scope_hash, q.scope_payload, q.launcher_user_id, q.expires_at, "
+-                    "d.decision, d.approver_user_id, clock_timestamp() AS database_now, "
+-                    "EXISTS (SELECT 1 FROM campaign_runs r "
+-                    "WHERE r.organization_id = q.organization_id "
+-                    "AND r.authorization_request_id = q.request_id) AS consumed "
+-                    "FROM campaign_authorization_requests q "
+-                    "LEFT JOIN campaign_authorization_decisions d "
+-                    "ON d.organization_id = q.organization_id AND d.request_id = q.request_id "
+-                    "WHERE q.organization_id = :org AND q.request_id = :request_id"
+-                ),
+-                {"org": organization_id, "request_id": request_id},
+-            ).mappings().one_or_none()
++            row = (
++                connection.execute(
++                    text(
++                        "SELECT q.scope_hash, q.scope_payload, q.launcher_user_id, q.expires_at, "
++                        "d.decision, d.approver_user_id, clock_timestamp() AS database_now, "
++                        "EXISTS (SELECT 1 FROM campaign_runs r "
++                        "WHERE r.organization_id = q.organization_id "
++                        "AND r.authorization_request_id = q.request_id) AS consumed "
++                        "FROM campaign_authorization_requests q "
++                        "LEFT JOIN campaign_authorization_decisions d "
++                        "ON d.organization_id = q.organization_id AND d.request_id = q.request_id "
++                        "WHERE q.organization_id = :org AND q.request_id = :request_id"
++                    ),
++                    {"org": organization_id, "request_id": request_id},
++                )
++                .mappings()
++                .one_or_none()
++            )
+             if row is None:
+                 return ResourceResult.empty()
+             scope = dict(row["scope_payload"])
+             hosted = scope.get("hosted_run")
+             hosted = dict(hosted) if isinstance(hosted, Mapping) else None
+-            target_state = connection.execute(
+-                text(
+-                    "SELECT "
+-                    "(SELECT e.to_lifecycle FROM target_lifecycle_events e "
+-                    "WHERE e.organization_id = t.organization_id "
+-                    "AND e.target_id = t.target_id AND e.target_version = t.version "
+-                    "ORDER BY e.id DESC LIMIT 1) AS lifecycle, "
+-                    "(SELECT e.to_enabled FROM surface_state_events e "
+-                    "WHERE e.organization_id = s.organization_id "
+-                    "AND e.surface_id = s.surface_id AND e.surface_version = s.version "
+-                    "ORDER BY e.id DESC LIMIT 1) AS surface_enabled, "
+-                    "(t.payload->>'synthetic_data_only')::boolean AS synthetic_data_only "
+-                    "FROM target_definitions t JOIN attack_surface_definitions s "
+-                    "ON s.organization_id = t.organization_id "
+-                    "AND s.target_id = t.target_id AND s.target_version = t.version "
+-                    "WHERE t.organization_id = :org AND t.target_id = :target "
+-                    "AND t.version = :target_version AND s.surface_id = :surface "
+-                    "AND s.version = :surface_version"
+-                ),
+-                {
+-                    "org": organization_id,
+-                    "target": scope.get("target_id", ""),
+-                    "target_version": scope.get("target_version", ""),
+-                    "surface": scope.get("surface_id", ""),
+-                    "surface_version": scope.get("surface_version", ""),
+-                },
+-            ).mappings().one_or_none()
++            target_state = (
++                connection.execute(
++                    text(
++                        "SELECT "
++                        "(SELECT e.to_lifecycle FROM target_lifecycle_events e "
++                        "WHERE e.organization_id = t.organization_id "
++                        "AND e.target_id = t.target_id AND e.target_version = t.version "
++                        "ORDER BY e.id DESC LIMIT 1) AS lifecycle, "
++                        "(SELECT e.to_enabled FROM surface_state_events e "
++                        "WHERE e.organization_id = s.organization_id "
++                        "AND e.surface_id = s.surface_id AND e.surface_version = s.version "
++                        "ORDER BY e.id DESC LIMIT 1) AS surface_enabled, "
++                        "(t.payload->>'synthetic_data_only')::boolean AS synthetic_data_only "
++                        "FROM target_definitions t JOIN attack_surface_definitions s "
++                        "ON s.organization_id = t.organization_id "
++                        "AND s.target_id = t.target_id AND s.target_version = t.version "
++                        "WHERE t.organization_id = :org AND t.target_id = :target "
++                        "AND t.version = :target_version AND s.surface_id = :surface "
++                        "AND s.version = :surface_version"
++                    ),
++                    {
++                        "org": organization_id,
++                        "target": scope.get("target_id", ""),
++                        "target_version": scope.get("target_version", ""),
++                        "surface": scope.get("surface_id", ""),
++                        "surface_version": scope.get("surface_version", ""),
++                    },
++                )
++                .mappings()
++                .one_or_none()
++            )
+             runner_heartbeat_fresh = bool(
+                 connection.execute(
+                     text(
+@@ -1704,9 +1705,8 @@ class PostgresApiBackend(ApiBackend):
+                 if payload is not None:
+                     try:
+                         configuration = HostedConfigurationSet.from_payload(dict(payload))
+-                        configuration_valid = (
+-                            configuration.configuration_sha256
+-                            == hosted.get("configuration_set_sha256")
++                        configuration_valid = configuration.configuration_sha256 == hosted.get(
++                            "configuration_set_sha256"
+                         )
+                         distinct_references = len(
+                             {role.credential_reference for role in configuration.roles}
+@@ -1726,9 +1726,8 @@ class PostgresApiBackend(ApiBackend):
+ 
+         database_now = row["database_now"]
+         timeout_seconds = float(dict(scope.get("caps") or {}).get("run_timeout_seconds", 0))
+-        authorization_window_covers_run = (
+-            row["expires_at"]
+-            > database_now + datetime.timedelta(seconds=timeout_seconds)
++        authorization_window_covers_run = row["expires_at"] > database_now + datetime.timedelta(
++            seconds=timeout_seconds
+         )
+         two_person_approval = (
+             row["decision"] == "approved"
+@@ -1747,9 +1746,7 @@ class PostgresApiBackend(ApiBackend):
+                 scope.get("auth_mode") != "session"
+                 or (
+                     isinstance(scope.get("credential_ref"), str)
+-                    and scope["credential_ref"].endswith(
+-                        f"/{hosted.get('session_generation', '')}"
+-                    )
++                    and scope["credential_ref"].endswith(f"/{hosted.get('session_generation', '')}")
+                 )
+             )
+         )
+diff --git a/src/agentforge/control_plane/store.py b/src/agentforge/control_plane/store.py
+index 3289991..d2a0b6a 100644
+--- a/src/agentforge/control_plane/store.py
++++ b/src/agentforge/control_plane/store.py
+@@ -608,10 +608,7 @@ class ControlPlaneStore:
+                     connection, principal.organization_id, existing["request_id"]
+                 )
+             database_now = connection.execute(text("SELECT clock_timestamp()")).scalar_one()
+-            if (
+-                expiry <= database_now
+-                or expiry - database_now > _MAX_AUTHORIZATION_LIFETIME
+-            ):
++            if expiry <= database_now or expiry - database_now > _MAX_AUTHORIZATION_LIFETIME:
+                 raise InvalidControlPlaneInput(
+                     "authorization expiry must be future and within 24 hours"
+                 )
+diff --git a/src/agentforge/policy/scoped_credentials.py b/src/agentforge/policy/scoped_credentials.py
+index b4ac8ed..12b5389 100644
+--- a/src/agentforge/policy/scoped_credentials.py
++++ b/src/agentforge/policy/scoped_credentials.py
+@@ -198,8 +198,7 @@ class SealedEnvironmentCredentialResolver:
+                 not isinstance(reference, str)
+                 or not reference.startswith(_REF_PREFIX)
+                 or not isinstance(value, dict)
+-                or set(value)
+-                != {"generation", "expires_at", "value_sha256", "expiry_source"}
++                or set(value) != {"generation", "expires_at", "value_sha256", "expiry_source"}
+             ):
+                 raise CredentialResolutionError("session lease metadata configuration is invalid")
+             try:
+diff --git a/src/agentforge/providers/openrouter.py b/src/agentforge/providers/openrouter.py
+index ee93319..5f93916 100644
+--- a/src/agentforge/providers/openrouter.py
++++ b/src/agentforge/providers/openrouter.py
+@@ -75,9 +75,7 @@ class HostedUsageLedger:
+         self._role_calls = {role: 0 for role in self._roles}
+         self._role_measured_usd = {role: Decimal(0) for role in self._roles}
+         self._role_unresolved_usd = {role: Decimal(0) for role in self._roles}
+-        self._tokens = {
+-            role: {"input": 0, "output": 0, "reasoning": 0} for role in self._roles
+-        }
++        self._tokens = {role: {"input": 0, "output": 0, "reasoning": 0} for role in self._roles}
+         self._global_tokens = {"input": 0, "output": 0, "reasoning": 0}
+         self._lock = threading.Lock()
+ 
+@@ -127,9 +125,7 @@ class HostedUsageLedger:
+                 raise HostedBudgetExceeded("role physical model-call cap is exhausted")
+             projected_global = self._measured_usd + self._unresolved_usd + maximum_cost
+             projected_role = (
+-                self._role_measured_usd[role]
+-                + self._role_unresolved_usd[role]
+-                + maximum_cost
++                self._role_measured_usd[role] + self._role_unresolved_usd[role] + maximum_cost
+             )
+             if projected_global > global_limits.max_usd:
+                 raise HostedBudgetExceeded("shared measured-spend exposure cap would be exceeded")
+@@ -256,9 +252,7 @@ class OpenRouterTransport:
+         self._sleeper = sleeper
+         self._monotonic = monotonic
+         self._last_request_at: float | None = None
+-        self._concurrency = threading.BoundedSemaphore(
+-            configuration.global_limits.max_concurrency
+-        )
++        self._concurrency = threading.BoundedSemaphore(configuration.global_limits.max_concurrency)
+ 
+     @property
+     def ledger(self) -> HostedUsageLedger:
+@@ -392,12 +386,8 @@ class OpenRouterTransport:
+                     # million tokens and refuses the request if no endpoint satisfies
+                     # them. Per-request pricing is disallowed.
+                     "max_price": {
+-                        "prompt": float(
+-                            configuration.prices.input_usd_per_million_tokens
+-                        ),
+-                        "completion": float(
+-                            configuration.prices.output_usd_per_million_tokens
+-                        ),
++                        "prompt": float(configuration.prices.input_usd_per_million_tokens),
++                        "completion": float(configuration.prices.output_usd_per_million_tokens),
+                         "request": 0,
+                     },
+                 },
+@@ -463,8 +453,7 @@ class OpenRouterTransport:
+         """
+ 
+         content_bytes = sum(
+-            len(message["role"].encode("utf-8"))
+-            + len(message["content"].encode("utf-8"))
++            len(message["role"].encode("utf-8")) + len(message["content"].encode("utf-8"))
+             for message in messages
+         )
+         return content_bytes + (64 * len(messages)) + 4096
+@@ -518,15 +507,12 @@ class OpenRouterTransport:
+         generation_policy_sha256: str,
+         timeout_seconds: float,
+     ) -> None:
+-        if (
+-            not messages
+-            or any(
+-                set(message) != {"role", "content"}
+-                or message["role"] not in {"system", "user", "assistant"}
+-                or not isinstance(message["content"], str)
+-                or not message["content"]
+-                for message in messages
+-            )
++        if not messages or any(
++            set(message) != {"role", "content"}
++            or message["role"] not in {"system", "user", "assistant"}
++            or not isinstance(message["content"], str)
++            or not message["content"]
++            for message in messages
+         ):
+             raise HostedProviderError("hosted messages have an invalid shape")
+         if (
+@@ -538,9 +524,7 @@ class OpenRouterTransport:
+         try:
+             Draft202012Validator.check_schema(dict(output_schema))
+         except Exception as exc:
+-            raise HostedProviderError(
+-                "hosted structured-output schema is invalid"
+-            ) from exc
++            raise HostedProviderError("hosted structured-output schema is invalid") from exc
+         if (
+             not isinstance(generation_policy_sha256, str)
+             or len(generation_policy_sha256) != 64
+diff --git a/tests/test_hosted_runtime.py b/tests/test_hosted_runtime.py
+index 4443fd4..fdfd3eb 100644
+--- a/tests/test_hosted_runtime.py
++++ b/tests/test_hosted_runtime.py
+@@ -150,13 +150,11 @@ def _runtime(
+         configuration=configuration,
+         transport=transport,
+         authorization=authorization,
+-        call_bounds={
+-            role.role: HostedCallBounds(100, 50, 25, 10)
+-            for role in configuration.roles
+-        },
++        call_bounds={role.role: HostedCallBounds(100, 50, 25, 10) for role in configuration.roles},
+         policy_gateway_dispatch=target,
+-        deterministic_judge=lambda _attempt, _evidence: deterministic_verdict
+-        or {"state": "NO_EXPLOIT_OBSERVED"},
++        deterministic_judge=lambda _attempt, _evidence: (
++            deterministic_verdict or {"state": "NO_EXPLOIT_OBSERVED"}
++        ),
+         lineage_recorder=recorded.append,
+     )
+     return runtime, transport
+@@ -182,13 +180,10 @@ def test_runtime_refuses_configuration_not_bound_by_campaign_authorization() ->
+             transport=transport,
+             authorization=authorization,
+             call_bounds={
+-                role.role: HostedCallBounds(100, 50, 25, 10)
+-                for role in configuration.roles
++                role.role: HostedCallBounds(100, 50, 25, 10) for role in configuration.roles
+             },
+             policy_gateway_dispatch=lambda _attempt: {},
+-            deterministic_judge=lambda _attempt, _evidence: {
+-                "state": "NO_EXPLOIT_OBSERVED"
+-            },
++            deterministic_judge=lambda _attempt, _evidence: {"state": "NO_EXPLOIT_OBSERVED"},
+         )
+ 
+ 
+@@ -197,8 +192,9 @@ def test_confirmed_deterministic_exploit_cannot_be_laundered_safe_and_docs_stay_
+     recorded: list[Any] = []
+     runtime, transport = _runtime(
+         outputs=_outputs(judge_state="NO_EXPLOIT_OBSERVED"),
+-        target=lambda attempt: target_calls.append(dict(attempt))
+-        or {"status_code": 200, "canary_observed": True},
++        target=lambda attempt: (
++            target_calls.append(dict(attempt)) or {"status_code": 200, "canary_observed": True}
++        ),
+         recorded=recorded,
+         deterministic_verdict={
+             "state": "EXPLOIT_CONFIRMED",
+@@ -215,10 +211,7 @@ def test_confirmed_deterministic_exploit_cannot_be_laundered_safe_and_docs_stay_
+     assert outcome.verdict["deterministic_precedence"] is True
+     assert outcome.documentation_draft is not None
+     assert outcome.documentation_draft["draft_unpublished"] is True
+-    assert (
+-        outcome.documentation_draft["publication_status"]
+-        == "blocked_pending_human_approval"
+-    )
++    assert outcome.documentation_draft["publication_status"] == "blocked_pending_human_approval"
+     assert len(outcome.lineage) == len(recorded) == 4
+     assert outcome.lineage[1].parent_request_id == "provider-request-orchestrator"
+     assert outcome.lineage[2].parent_request_id == "provider-request-red_team"
+diff --git a/tests/test_postgres_api_m1d.py b/tests/test_postgres_api_m1d.py
+index a123bf4..83b84e1 100644
+--- a/tests/test_postgres_api_m1d.py
++++ b/tests/test_postgres_api_m1d.py
+@@ -300,9 +300,7 @@ def test_agent_models_and_tool_scope_are_real_configurable_projections(
+     )
+     assert staged.status_code == 200, staged.text
+     configuration_sha256 = staged.json()["resource_id"]
+-    projection = client.get(
+-        f"/api/v1/hosted-configuration-sets/{configuration_sha256}"
+-    )
++    projection = client.get(f"/api/v1/hosted-configuration-sets/{configuration_sha256}")
+     assert projection.status_code == 200
+     assert projection.json()["state"] == "ready"
+     assert projection.json()["data"]["activation_state"] == "staged_pending_authorization"
+@@ -310,12 +308,9 @@ def test_agent_models_and_tool_scope_are_real_configurable_projections(
+     assert len(projection.json()["data"]["roles"]) == 4
+     assert "secretref://" not in projection.text
+     assert all(
+-        role["provider_reference_bound"] is True
+-        for role in projection.json()["data"]["roles"]
+-    )
+-    preflight = client.get(
+-        f"/api/v1/hosted-configuration-sets/{configuration_sha256}/preflight"
++        role["provider_reference_bound"] is True for role in projection.json()["data"]["roles"]
+     )
++    preflight = client.get(f"/api/v1/hosted-configuration-sets/{configuration_sha256}/preflight")
+     assert preflight.status_code == 200
+     assert preflight.json()["state"] == "degraded"
+     assert preflight.json()["reason_code"] == "hosted_runtime_not_composed"
+@@ -622,9 +617,7 @@ def test_hosted_authorization_is_bound_but_launch_stays_unavailable_until_compos
+         "provider_timeout_seconds": 30.0,
+     }
+     assert "credential_ref" not in json.dumps(approval_scope)
+-    preflight = client.get(
+-        f"/api/v1/campaign-authorization-requests/{request_id}/preflight"
+-    )
++    preflight = client.get(f"/api/v1/campaign-authorization-requests/{request_id}/preflight")
+     assert preflight.status_code == 200
+     assert preflight.json()["state"] == "degraded"
+     assert preflight.json()["reason_code"] == "hosted_runtime_not_composed"
+@@ -683,10 +676,7 @@ def test_hosted_authorization_is_bound_but_launch_stays_unavailable_until_compos
+         headers=_headers("hosted-launch-unverified-bindings-0001"),
+     )
+     assert unverified.status_code == 503
+-    assert (
+-        unverified.json()["reason_code"]
+-        == "provider_credentials_runner_unverified"
+-    )
++    assert unverified.json()["reason_code"] == "provider_credentials_runner_unverified"
+     with migrated_db.connect() as connection:
+         assert connection.execute(text("SELECT count(*) FROM campaign_runs")).scalar_one() == 0
+         assert connection.execute(text("SELECT count(*) FROM jobs")).scalar_one() == 0
+diff --git a/tests/test_queue.py b/tests/test_queue.py
+index 04a923a..f030711 100644
+--- a/tests/test_queue.py
++++ b/tests/test_queue.py
+@@ -51,20 +51,10 @@ def _schema_for(queue: LogicalQueue) -> str:
+ def _empty_jobs(migrated_db: Engine):
+     """Keep the session-scoped database deterministic across queue tests."""
+     with migrated_db.begin() as conn:
+-        conn.execute(
+-            text(
+-                "TRUNCATE TABLE campaign_work_unit_reservations, jobs "
+-                "RESTART IDENTITY"
+-            )
+-        )
++        conn.execute(text("TRUNCATE TABLE campaign_work_unit_reservations, jobs RESTART IDENTITY"))
+     yield
+     with migrated_db.begin() as conn:
+-        conn.execute(
+-            text(
+-                "TRUNCATE TABLE campaign_work_unit_reservations, jobs "
+-                "RESTART IDENTITY"
+-            )
+-        )
++        conn.execute(text("TRUNCATE TABLE campaign_work_unit_reservations, jobs RESTART IDENTITY"))
+ 
+ 
+ @pytest.fixture
+diff --git a/tests/test_workload_registry.py b/tests/test_workload_registry.py
+index 755c10f..90dd8d8 100644
+--- a/tests/test_workload_registry.py
++++ b/tests/test_workload_registry.py
+@@ -339,9 +339,7 @@ def test_live_100_rejects_generation_record_not_bound_to_case(tmp_path: Path) ->
+     generation_record = json.loads(generation_path.read_text(encoding="utf-8"))
+     generation_record["case_sha256"] = "0" * 64
+     generation_path.write_text(json.dumps(generation_record, sort_keys=True), encoding="utf-8")
+-    review["source_generation_sha256"] = hashlib.sha256(
+-        generation_path.read_bytes()
+-    ).hexdigest()
++    review["source_generation_sha256"] = hashlib.sha256(generation_path.read_bytes()).hexdigest()
+     review_path = eval_root / review["review_record_path"]
+     review_record = json.loads(review_path.read_text(encoding="utf-8"))
+     review_record["source_generation_sha256"] = review["source_generation_sha256"]
+@@ -364,9 +362,7 @@ def test_live_100_rejects_baseline_source_misclassification(tmp_path: Path) -> N
+     generation_record = json.loads(generation_path.read_text(encoding="utf-8"))
+     generation_record["source_kind"] = review["source_kind"]
+     generation_path.write_text(json.dumps(generation_record, sort_keys=True), encoding="utf-8")
+-    review["source_generation_sha256"] = hashlib.sha256(
+-        generation_path.read_bytes()
+-    ).hexdigest()
++    review["source_generation_sha256"] = hashlib.sha256(generation_path.read_bytes()).hexdigest()
+ 
+     review_path = eval_root / review["review_record_path"]
+     review_record = json.loads(review_path.read_text(encoding="utf-8"))
