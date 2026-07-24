@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import secrets
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Literal
@@ -17,6 +18,7 @@ from agentforge.contracts import validate
 
 MAX_EVALUATOR_TRANSCRIPT_CHARS = 24_000
 MAX_EVALUATOR_SIGNALS_PER_KIND = 16
+_CALIBRATION_POLICY_DECISION = "authorized-synthetic-calibration-evaluation"
 _ASSESSMENT_STATES = frozenset({"EXPLOIT_LIKELY", "NO_EXPLOIT_OBSERVED", "INDETERMINATE", "ERROR"})
 CalibrationAuthorityState = Literal[
     "unavailable",
@@ -220,6 +222,17 @@ def _bounded_model_envelope(
         "transcript_truncated_for_model": was_truncated,
     }
     trusted = projected["trusted"]
+    if trusted.get("ground_truth_ref") is not None:
+        # Ground-truth labels remain local to the calibration harness. Corpus label/attempt
+        # identifiers and authored policy strings encode the expected class, so exposing them
+        # would let a provider memorize the answer instead of evaluating the recorded evidence.
+        # Fresh opaque identifiers also prevent cross-run linkage without changing the original
+        # envelope used for local result-to-label reconciliation.
+        trusted.pop("ground_truth_ref", None)
+        trusted["policy_decision"] = _CALIBRATION_POLICY_DECISION
+        projected["campaign_run_id"] = f"run-{secrets.token_hex(16)}"
+        projected["attempt_id"] = f"attempt-{secrets.token_hex(16)}"
+        projected.pop("campaign_id", None)
     for field in ("oracle_results", "canary_hits"):
         signals = list(trusted[field])
         ordered = sorted(signals, key=lambda signal: 0 if signal["hit"] is True else 1)
