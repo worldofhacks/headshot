@@ -2,7 +2,7 @@
 id: T-F17f
 title: Show configured versus observed agent provenance and exact prompts
 status: backlog
-wave: 30
+wave: 31
 depends_on: [T-F17b, T-F17c, T-F17e]
 branch: ticket/T-F17f-agents-provenance-ui
 file_scopes:
@@ -46,10 +46,14 @@ records are authoritative only for configured state. Clerk custom permissions ar
   assigned zero cost.
 - **AC-4**: Given `org:console:read`, when agent metadata is requested, then prompt version/hash and
   verification state are visible but prompt text is absent; given backend-verified
-  `org:config:manage`, the dedicated role endpoint returns the exact packaged prompt text.
+  `org:config:manage`, `GET /api/v1/agent-prompts/{role}/{version}/{sha256}` with the exact
+  configuration-set hash returns re-hashed exact packaged prompt bytes only when that identity is
+  referenced by the authenticated organization's staged configuration or provider event, with
+  `Cache-Control: no-store`.
 - **AC-5**: Given an unauthorized, wrong-organization, missing-permission, malformed-role, or
-  prompt-hash-mismatch request, when the prompt endpoint is called, then it fails closed without
-  prompt fragments, provider data, or existence leakage.
+  unreferenced/stale role-version-hash/configuration, same-role alternate version, or package/hash
+  mismatch request, when the prompt endpoint is called, then one generic authorization/not-found
+  failure prevents prompt fragments, provider data, or existence leakage.
 - **AC-6**: Given prompt text or any hostile/provider-supplied field, when the React screen renders,
   then it is escaped as text with bounded layout and no `innerHTML`, remote asset, or executable link.
 - **AC-7**: Given deterministic activity, hosted activity, no activity, stale capability, API
@@ -59,8 +63,8 @@ records are authoritative only for configured state. Clerk custom permissions ar
   Python and TypeScript decoders fail closed rather than silently dropping provenance.
 
 ## Test Plan
-- Python API/auth: org scoping, permission matrix, prompt hash verification, exact observed fields,
-  missing/failed/retry states.
+- Python API/auth: org-reference scoping, permission matrix, content-addressed same-role versions,
+  exact package re-hash, generic failures, no-store, exact observed fields, missing/failed/retries.
 - TypeScript unit/component: strict decoders; configured vs observed labels; exact prompt rendering;
   loading/empty/degraded/error/restricted/accessibility/XSS cases.
 - Browser smoke: authenticated operator inspects all four roles after deployment; no credentials or

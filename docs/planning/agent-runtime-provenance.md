@@ -4,6 +4,12 @@ Status: planning only
 Base: `1ac3ee02be7855b638dd1fa43bb0612a3db5f025`
 Posture: production-grade
 
+The base above is the planning/audit seed, not T-F17d's implementation base. T-F17d may start RED
+only after the accepted T-F16f final two-target composition commit is mechanically recorded, and
+its GREEN branch must be cut from that commit plus accepted T-F17a-c. T-F17d is then the sole
+post-T-F16 owner of `runner.py` and the Policy Gateway mutation seam; T-F16e/f and T-F17d must never
+run or merge in parallel. T-F17e is the next serialized `runner.py` owner.
+
 ## Outcome
 
 [locked-decision] Production campaigns with a `HostedRunBinding` will execute the real
@@ -18,9 +24,10 @@ Posture: production-grade
 
 [locked-decision] The Web service will not construct an OpenRouter client, resolve a provider
 credential, or execute an agent. It will derive hosted-runtime availability from a fresh,
-Runner-owned, secret-free capability heartbeat in PostgreSQL and expose only authenticated,
-permission-checked projections. This is how Web participates in the production composition
-without violating the Runner-only credential boundary.
+Runner-owned, secret-free, content-addressed capability observation in PostgreSQL that exactly
+matches the campaign's organization, configuration, release, image, deployed revision, prompt
+registry, credential-reference set, environment, and Runner generation. It exposes only
+authenticated, permission-checked projections.
 
 [locked-decision] A configured assignment and an observed execution are different facts. The
 console will never label a requested or staged model as the model that ran. A provider-confirmed
@@ -66,13 +73,15 @@ authorized HostedRunBinding ──caps/policy──────┤
 Runner-only secret resolver ──OpenRouter key───┤
                                                 v
                                    HostedFourRoleRuntime
-                        Orchestrator -> Red Team -> trusted evaluator
+                  authorized snapshot/candidates -> Orchestrator select/halt
+                                                -> Red Team mutation envelope
+                                                -> per-surface Policy Gateway
                                                 -> Judge -> Documentation
                                                       |
                    +----------------------------------+------------------+
                    |                                                     |
-          provider_call_events                                  agent_executions
-    observed response/error lineage                         logical role lifecycle
+ provider_call_invocations/events                            agent_executions
+ reserved + terminal physical lineage                    logical role lifecycle
                    |                                                     |
                    +---------------- PostgreSQL -------------------------+
                                              |
@@ -91,8 +100,9 @@ role-mismatched, altered, oversized, non-UTF-8, or secret-shaped prompt resource
 
 [locked-decision] Each role prompt must encode its trust boundary:
 
-- Orchestrator may prioritize only the supplied authorized case/snapshot and cannot widen target,
-  corpus, surface, caps, approval, publication, or remediation authority.
+- Orchestrator may select or halt only within the supplied authorized candidate set and fresh
+  coverage/cost/regression snapshot; it cannot widen target, corpus, surface, caps, approval,
+  publication, or remediation authority.
 - Red Team treats retrieved/target content as hostile, mutates only authorized work, never judges,
   approves, publishes, or opens a target connection.
 - Judge is independent of attack generation, treats evidence as hostile, preserves deterministic
@@ -108,8 +118,17 @@ system messages before network I/O.
 
 ### Durable provider-call lineage
 
-[locked-decision] Logical activity remains in `agent_executions`. A new append-only
-`provider_call_events` relation records one terminal fact per physical OpenRouter attempt:
+[locked-decision] Logical activity remains in `agent_executions`. Before reservation or network
+I/O, the Runner transactionally creates the logical execution and an immutable
+`ProviderInvocationContextV1`/`provider_call_invocation` containing organization, campaign, campaign
+attempt, logical execution id, parent logical execution id, role, physical sequence, idempotency
+key, and all bound configuration/prompt/policy hashes. The transport receives that context; it
+cannot invent or repair identity after a response. Composite organization/execution foreign keys
+and unique `(organization_id, logical_execution_id, physical_sequence)` prevent cross-org or
+duplicate attribution.
+
+[locked-decision] A new append-only `provider_call_events` relation records exactly one terminal
+fact per committed physical invocation:
 
 - organization, campaign, logical agent execution, attempt sequence, and role;
 - requested model and configured upstream;
@@ -120,10 +139,31 @@ system messages before network I/O.
 - physical status, sanitized typed error code, start/finish timestamps, and duration.
 
 [locked-decision] Failed calls never manufacture a provider identity, token count, or zero cost.
-Transient retry attempts remain individually visible. Raw provider bodies, messages, prompt text,
-credentials, target sessions, hostile evidence, and exception strings are never stored in this
-table. Database grants permit only the private Runner to insert and authenticated Web/Runner roles
-to read; UPDATE/DELETE/TRUNCATE are rejected.
+Transient retry attempts remain individually visible. The store writes the terminal provider event
+and logical terminalization in one transaction. Replaying the same canonical terminalization is
+idempotent; changed facts conflict. A crash after send with no durable response is reconciled as
+`outcome_unknown` and is never retried. Recovery can terminalize a committed invocation but cannot
+create an unreserved physical sequence. Raw provider bodies, messages, prompt text, credentials,
+target sessions, hostile evidence, and exception strings are never stored. Database grants permit
+only the private Runner to insert and authenticated Web/Runner roles to read;
+UPDATE/DELETE/TRUNCATE are rejected.
+
+### Canonical cost measurement
+
+[locked-decision] Logical and physical cost use one closed measurement contract:
+`measured`, `partial`, `not_observed`, or `invalid`; a numeric value is permitted only for
+`measured` or the known subtotal of `partial`. Unknown is SQL `NULL`, never `0`. Existing unproven
+logical zeros are migrated to `not_observed`, not treated as free calls. Provider events are the
+only hosted currency-cost aggregate source; logical summaries reference their source event ids and
+cannot be added again.
+
+[locked-decision] Every Costs, Birdseye, campaign-total, report, and Agents projection returns
+`known_sum`, `measured_count`, and `unknown_count`. Mixed evidence renders a partial known subtotal
+plus the unknown count; it never presents a complete total. T-F18j, based on accepted T-F17b/c,
+owns the shared Costs/Birdseye/campaign consumer migration and must include
+`src/agentforge/api/birdseye.py`. T-F17e production promotion mechanically depends on the accepted
+T-F18j commit. Partial usage, timeout-after-send, mixed known/unknown, and no-double-count tests are
+deployment blockers.
 
 ### Hosted Runner path
 
@@ -133,34 +173,98 @@ there is no deterministic fallback.
 
 [locked-decision] Hosted preflight must:
 
-1. load the exact staged configuration set by organization and bound hash;
+1. load the exact staged configuration set, final T-F16f scan plan, parent/eight-child decisions,
+   and per-surface gateway policies by organization and bound hashes;
 2. validate configuration content, fixed role models, limits, generation policy, and prompt hashes;
 3. verify all four Runner-only credential references are distinct and resolvable without exposing
    values;
 4. verify current campaign authorization, target/session binding, caps, queue lease, and synthetic
    data controls already required by the Runner;
-5. construct one shared OpenRouter usage ledger and concurrency-one transport; and
-6. refuse with a typed, sanitized blocker before any provider or target call if any fact differs.
+5. construct one shared OpenRouter usage ledger and concurrency-one transport;
+6. verify the exact bounded provider-call formula and reserve its token/cost/time maximum; and
+7. refuse with a typed, sanitized blocker before any provider or target call if any fact differs.
 
-[locked-decision] The runtime's target seam becomes one typed
-`trusted_target_evaluator(attack_attempt)` call. It delegates to the existing Policy Gateway,
-evidence persistence/re-read, and deterministic oracle path and returns verified target evidence
-plus the deterministic verdict as one value. This prevents independent target-dispatch and
-deterministic-Judge callbacks from observing different evidence and proves exactly one target
-dispatch path. The interface change receives a migration note and contract tests.
+#### Coverage-driven Orchestrator
+
+[locked-decision] The deterministic coordinator creates an immutable, secret-free
+`OrchestrationSnapshotV1` and authorized candidate set before each selection. The content-addressed
+snapshot binds organization/campaign/scan-plan revision, remaining candidate ids and parent seed
+hashes, boundary/invariant/regression and OWASP gaps, open finding severities, regression history,
+recent signal, known/unknown cost state, remaining provider/target/token/time caps, and expiry.
+The hosted Orchestrator returns exactly `select(candidate_id, reason_codes)` or
+`halt(reason_code)`. Runner rejects stale snapshots, a candidate not in the set, exhausted caps,
+and changed hashes before later I/O; it persists the snapshot, candidate-set, decision, and
+signal-state hashes. Selection drives the next case, so the role is operational, not advisory.
+No-priority, stale-snapshot, unauthorized-selection, cost-without-signal, and regression-trigger
+tests are mandatory.
+
+#### Authorized mutation envelope
+
+[locked-decision] The Red Team never submits an unbound replacement case. It returns a versioned
+`HostedMutationEnvelopeV1` that binds organization/campaign, selected candidate, parent seed bytes
+hash, orchestration snapshot/decision, generation policy, target/surface/version/policy, method/path
+template, credential-reference, category/class/OWASP mappings, mutation ordinal, generated byte
+length, turn/string limits, and reserved physical maximum. The mutation-policy hash enumerates the
+only mutable JSON pointers and permits exactly: bounded replacement of a declared mutable string;
+bounded prefix/suffix insertion at that string; or substitution of a named token from a closed
+value set. It cannot add/delete object fields or change host, method, path/query, headers,
+credentials, session/patient binding, target, surface, policy, or fixture.
+
+[locked-decision] The final T-F16 Policy Gateway validates the original parent against the exact
+authorized corpus seed, validates the envelope and derivation against the versioned mutation
+policy, and only then evaluates the derived request. The runtime's one typed
+`trusted_target_evaluator(envelope)` delegates through the final per-surface Policy Gateway,
+persists/re-reads evidence, runs deterministic oracles, and returns evidence plus deterministic
+verdict from that same dispatch. Seed substitution, metadata drift, oversized/unbounded sequences,
+undeclared transforms, and host/method/path/query/header/credential changes fail before target I/O.
+
+#### Exact 100-case hosted profile
+
+[locked-decision] The Week 3 100-case baseline is an explicitly authorized hosted profile, not a
+deterministic run relabeled as hosted. It fixes `N=100`, provider retries `R=0`, and at most one
+Documentation call per case. Preflight reserves the hard physical maximum
+`P_max = N × (Orchestrator + Red Team + Judge + Documentation_max) × (1 + R) = 400`.
+Actual provider calls must reconcile to `P_actual = 300 + F`, where `F` is the number of cases
+whose verified verdict requires Documentation (`0 <= F <= 100`). The platform ceiling is 400 for
+this profile; the old 56-call ceiling cannot admit it. A provider failure makes that case/run
+partial and is not hidden by retry.
+
+[locked-decision] A report or UI may claim `hosted_100_case_complete` only when the ledger proves
+100 terminal Orchestrator, 100 Red Team, and 100 Judge calls; Documentation count equals eligible
+verdicts; every call belongs to one of the 100 authorized cases; `physical_count = 300 + F`; there
+are no retries or unmatched invocations; and all 100 cases have terminal target/verdict records.
+Any halt, cap exhaustion, provider unknown outcome, or missing reconciliation is explicitly
+partial and cannot satisfy the requirement.
 
 ### Web and UI boundary
 
-[locked-decision] The Runner emits a fresh `hosted-four-role-runtime` component heartbeat only after
-prompt/configuration verification and Runner-only credential-reference resolution succeed. Web
-uses the database timestamp and environment to derive availability; a stale/missing heartbeat
-degrades preflight and blocks a hosted launch. No boolean environment flag can assert composition.
+[locked-decision] T-F17e adds a dedicated append-only capability contract rather than overloading
+the environment-only component table. On every Runner startup, a new instance/generation
+immediately supersedes prior operational evidence and publishes `verifying`; failure publishes
+`unavailable` or `degraded`. `operational` is allowed only after prompt/configuration verification
+and Runner-only credential-reference resolution. Every observation binds organization, exact
+configuration-set hash, release id, image digest, deployed revision, prompt-registry hash, hashes
+of credential references (never values), environment, Runner instance/generation, database time,
+status, and bounded reason.
+
+[locked-decision] Web hosted preflight derives the expected identity from the campaign binding and
+requires an exact fresh operational match on every field. Wrong organization, configuration,
+release, image, revision, prompt registry, credential-reference set, environment, instance, or
+generation blocks launch. A static flag or another configuration's heartbeat proves nothing.
+Rollout overlap and rollback require a new explicitly selected generation; superseded generations
+cannot admit work.
 
 [locked-decision] `GET /api/v1/agents` and `GET /api/v1/agent-activity` remain available to
 `org:console:read` and return only secret-free configured and observed metadata. Exact prompt text
-is returned by a dedicated role prompt endpoint requiring backend-verified
-`org:config:manage`; other Headshot users see prompt version/hash plus an explicit restricted state.
-Prompt text is rendered as escaped text, never HTML.
+is returned only by
+`GET /api/v1/agent-prompts/{role}/{version}/{sha256}?configuration_set_sha256=...`, requiring
+backend-verified `org:config:manage`. The authenticated organization must reference that exact
+role/version/hash/configuration identity in its staged configuration or immutable provider event.
+The endpoint re-hashes exact package bytes before return, uses a generic authorization/not-found
+failure for unauthorized, unreferenced, cross-org, or mismatched identities, and sets
+`Cache-Control: no-store`. A role-only or browser-selected identity is never authoritative. Other
+Headshot users see prompt version/hash plus an explicit restricted state. Prompt text is rendered
+as escaped text, never HTML.
 
 The Agents screen must show:
 
@@ -177,12 +281,16 @@ The Agents screen must show:
 | 26 | T-F17a | versioned four-role prompt registry and wheel packaging | T-F00 |
 | 26 | T-F17b | append-only provider-call lineage contract and persistence | T-F00 |
 | 27 | T-F17c | hash-bound system messages and physical-call observations | T-F17a, T-F17b |
-| 28 | T-F17d | authorization-bound HostedFourRoleRuntime Runner composition | T-F17c |
-| 29 | T-F17e | Runner capability heartbeat, Web truth, and deployment controls | T-F17d |
-| 30 | T-F17f | Agents API/UI configured-versus-observed provenance and prompt view | T-F17b, T-F17c, T-F17e |
+| 28 | T-F17d | coverage-driven runtime, authorized mutation, final gateway/Runner composition | T-F17c, accepted T-F16f |
+| 29 | T-F18j | canonical unknown-cost consumer migration | T-F17b, T-F17c, accepted T-F18i |
+| 30 | T-F17e | content-addressed Runner capability, Web truth, deployment controls | T-F17d, accepted T-F18j |
+| 31 | T-F17f | Agents API/UI configured-versus-observed provenance and content-addressed prompts | T-F17b, T-F17c, T-F17e |
 
 T-F17a and T-F17b have disjoint production/test scopes and may use two workers in parallel.
-Every later ticket is serialized because it consumes or renders the preceding contract.
+T-F17a-c can land independently of T-F16. T-F17d starts only from the accepted T-F16f integration
+commit and becomes the sole shared `runner.py`/gateway owner. T-F18j starts only after T-F17b/c,
+owns the shared cost consumers, and must be accepted before T-F17e. T-F17e is the next sole
+`runner.py` owner. T-F17f follows capability acceptance.
 
 ## TDD and review gates
 
@@ -210,19 +318,22 @@ No production provider or target traffic is part of the deterministic tickets. P
 1. owner-approved PR; equal commit on GitHub and GitLab; both CI systems green;
 2. one reviewed image digest for Web and Runner;
 3. additive migration validation and backup evidence;
-4. exact staged configuration and prompt hashes matching that image;
+4. exact staged configuration, prompt, release, image, deployed-revision, credential-reference,
+   organization, environment, and Runner-generation hashes matching the campaign;
 5. Runner-only OpenRouter credential bindings with no values in Web;
-6. Runner deployment first and a fresh hosted-runtime capability heartbeat;
+6. Runner deployment first and a fresh exact-match hosted-runtime capability observation;
 7. Web deployment from the same image and authenticated Agents/preflight smoke;
 8. a separately authorized, two-person-approved, synthetic-only bounded campaign;
-9. one observed successful provider event for every invoked role, exact returned
-   model/upstream match, measured usage/cost, intact parent lineage, and one Policy Gateway target
-   path; Documentation may be correctly skipped when no finding exists; and
-10. no critical finding publication or remediation without its separate human approval gate.
+9. accepted T-F18j proof that Costs, Birdseye, campaign totals, and Agents preserve unknown/partial
+   cost without zero coercion or double counting;
+10. one observed successful provider event for every invoked role, exact returned model/upstream
+    match, intact invocation lineage, and one final T-F16 per-surface Policy Gateway target path;
+    missing measured usage/cost remains unknown and Documentation may be correctly skipped; and
+11. no critical finding publication or remediation without its separate human approval gate.
 
 Rollback stops new hosted admissions, lets the hard-abort path terminate active work, deploys the
-previous reviewed image to Runner and Web, and retains the additive lineage table as evidence. A
-stale Runner heartbeat makes Web fail closed. Production schema downgrade is not an emergency
+previous reviewed image to Runner and Web, and retains the additive lineage tables as evidence. A
+superseded or nonmatching capability makes Web fail closed. Production schema downgrade is not an emergency
 rollback mechanism; downgrade is verified only on an isolated copy and performed later under a
 separate reviewed maintenance change if required.
 
@@ -233,9 +344,11 @@ separate reviewed maintenance change if required.
 | Week 3 distinct agents, models, and trust levels | T-F17a, T-F17c, T-F17d |
 | Judge independence and consistent criteria | T-F17a, T-F17c, T-F17d |
 | What each agent is doing and in what order | T-F17b, T-F17d, T-F17f |
-| Cost tracking at agent level | T-F17b, T-F17c, T-F17f |
+| Cost tracking at agent level and honest aggregates | T-F17b, T-F17c, T-F18j, T-F17f |
 | Versioned contracts, migration notes, lineage | T-F17b, T-F17c |
 | External API auth/rate/error behavior | T-F17c, T-F17d, T-F17e |
+| Coverage-driven orchestration and authorized mutation | T-F17d |
+| Exact hosted 100-case provider budget/reconciliation | T-F17c, T-F17d |
 | AI-use disclosure and residual risk | T-F17a, T-F17e |
 | User requirement: actual OpenRouter model and prompt in Agents | T-F17f |
 

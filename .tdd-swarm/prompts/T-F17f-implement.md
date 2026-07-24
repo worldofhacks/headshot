@@ -1,5 +1,7 @@
 # T-F17f Implementation Agent — model: gpt-5.6-sol, reasoning: ultra
 
+Implement content-addressed, org-referenced prompt retrieval with package rehash and no-store;
+role, browser state, or permission alone is not content authority.
 Work only in `<WORKTREE>` on `ticket/T-F17f-agents-provenance-ui`. Read ticket, frozen tests/review,
 T-F17 dependencies, design conventions, and lessons. Write only the ticket's Python API, TypeScript,
 screen, and CSS scopes; never edit tests. Prompt content must require backend `org:config:manage`;

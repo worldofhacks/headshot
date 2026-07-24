@@ -1,5 +1,7 @@
 # T-F17c Implementation Agent — model: gpt-5.6-sol, reasoning: ultra
 
+Thread committed invocation context through runtime/transport/event persistence and implement the
+bounded no-retry hosted-100 formula, not a free-form cap increase.
 Work only in `<WORKTREE>` on `ticket/T-F17c-hosted-system-messages`. Read ticket, frozen tests/review,
 T-F17a/T-F17b interfaces, and lessons. Write only `src/agentforge/agents/hosted.py`,
 `src/agentforge/agents/hosted_runtime.py`, `src/agentforge/providers/openrouter.py`, and the declared

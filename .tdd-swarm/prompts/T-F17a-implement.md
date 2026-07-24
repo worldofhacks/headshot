@@ -1,5 +1,7 @@
 # T-F17a Implementation Agent — model: gpt-5.6-sol, reasoning: ultra
 
+Encode bounded authoritative Orchestrator select/halt and exact-seed-derived mutation-envelope
+boundaries in the package-owned role prompts.
 Work only in `<WORKTREE>` on `ticket/T-F17a-agent-prompt-registry`. Read the ticket, frozen tests,
 test review, and `.tdd-swarm/LESSONS.md`. Write only `src/agentforge/agents/prompts/**`,
 `pyproject.toml`, and `docs/integration/migrations/hosted-prompt-registry-v1.md`; never edit tests.

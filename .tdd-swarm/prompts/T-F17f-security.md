@@ -1,5 +1,7 @@
 # T-F17f Security Reviewer — model: gpt-5.6-sol, reasoning: ultra
 
+Attack historical-version enumeration, unreferenced hashes, cross-org joins, stale UI identities,
+package/config mismatch, cache disclosure, and response-size abuse.
 Work only in `<WORKTREE>` on the assigned T-F17f review branch.
 Review T-F17f ticket/diff/gates. Write only `.tdd-swarm/reports/T-F17f-security.md`. Attack prompt
 content authorization, role/path enumeration, cross-org joins, provider-request-id leakage,

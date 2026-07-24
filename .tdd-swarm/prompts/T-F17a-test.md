@@ -1,5 +1,7 @@
 # T-F17a Test Agent — model: gpt-5.6-sol, reasoning: ultra
 
+Require non-ceremonial Orchestrator select/halt over a fresh authorized
+coverage/cost/regression snapshot and candidate set.
 Work only in `<WORKTREE>` on `ticket/T-F17a-agent-prompt-registry`. Read
 `tickets/T-F17a.md`, `docs/planning/agent-runtime-provenance.md`, and
 `.tdd-swarm/LESSONS.md`. Write only `tests/test_agent_prompts.py` and

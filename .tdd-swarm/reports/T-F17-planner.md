@@ -30,15 +30,19 @@ Branch: `codex/agent-runtime-provenance-plan`
 
 ## Key decisions
 
-- Runner constructs the executable runtime; Web consumes only a secret-free fresh capability
-  heartbeat.
+- T-F17d mechanically follows accepted T-F16f and exclusively owns the post-T-F16 Runner/gateway
+  integration seam; T-F17e is the next serialized Runner owner.
+- Runner constructs the executable runtime; Web consumes only exact organization/config/release/
+  image/revision/prompt/reference/environment/generation capability evidence.
 - Raw package-resource bytes are the prompt hash authority.
-- Prompt content requires `org:config:manage`; prompt version/hash remains visible with
-  `org:console:read` pending owner confirmation.
-- `provider_call_events` stores one terminal append-only event per physical attempt; missing
-  provider measurements stay unavailable.
-- Hosted target dispatch and deterministic verdict are returned from one typed trusted evaluator,
-  preventing two evidence paths.
+- Prompt content requires `org:config:manage`, content-addressed identity, and an authenticated-org
+  configuration/event reference; prompt version/hash remains visible with `org:console:read`.
+- A durable pre-call invocation context correlates each terminal physical event to its logical
+  execution; unknown cost is nullable and T-F18j closes all shared consumers before deployment.
+- The Orchestrator selects/halts from a fresh authorized coverage/cost/regression snapshot. Red Team
+  mutations use an exact-seed-derived bounded envelope validated by the final per-surface gateway.
+- The hosted 100-case profile fixes zero retries, reserves at most 400 calls, and reconciles exactly
+  `300 + eligible_documentation_count`; incomplete ledgers cannot claim completion.
 - Deterministic campaigns remain compatible; hosted failures never fall back.
 
 ## Safety boundary
@@ -53,5 +57,6 @@ touched.
   branch / report references, no T-F16 change, and `git diff --check` all passed.
 - `gitleaks dir . --redact --no-banner --no-color --max-target-megabytes 2`: no leaks found.
 
-[open-question] An independent Plan Reviewer must still issue `REVIEW_PASS` before any T-F17 RED
-dispatch. This Planner does not approve its own plan.
+[open-question] The initial independent review issued `REVIEW_CHANGES_REQUIRED`; all eight findings
+are addressed in this repair. A new independent Plan Reviewer must still issue `REVIEW_PASS` before
+any T-F17 RED dispatch. This Planner does not approve its own repair.

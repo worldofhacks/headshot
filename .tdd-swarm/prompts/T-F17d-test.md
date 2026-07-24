@@ -1,7 +1,10 @@
 # T-F17d Test Agent — model: gpt-5.6-sol, reasoning: ultra
 
-Work only in `<WORKTREE>` on `ticket/T-F17d-runner-hosted-composition`. Read ticket, T-F17c contract,
-Runner/Coordinator/Policy Gateway, plan, and lessons. Write only `tests/test_runner_hosted_runtime.py`.
+Branch only from accepted T-F16f plus T-F17c. Freeze RED for authoritative coverage-driven
+select/halt, bounded exact-seed mutation envelopes through both final per-surface gateways,
+invocation lineage, mutation-smuggling negatives, and hosted-100 reconciliation.
+Work only in `<WORKTREE>` on `ticket/T-F17d-runner-hosted-composition`. Read ticket, accepted T-F16f,
+T-F17c, Runner/Coordinator/Policy Gateway, plan, and lessons. Write only the four declared test files.
 Produce criterion-tagged RED using local Postgres, fake provider, and fake target. Prove zero-I/O
 blockers, exact hosted path, role order/parents, one trusted target evaluator/one target exit,
 deterministic precedence, conditional draft, deterministic compatibility, no fallback, and terminal

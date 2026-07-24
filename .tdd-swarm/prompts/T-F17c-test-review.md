@@ -1,5 +1,7 @@
 # T-F17c Test Reviewer — model: gpt-5.6-sol, reasoning: ultra
 
+Require end-to-end invocation-context preservation and both 400-call reservation and `300+F`
+reconciliation; a raised constant or mocked label is insufficient.
 Work only in `<WORKTREE>` on the assigned T-F17c review branch.
 Review T-F17c ticket, RED tests/output, and test report. Write only
 `.tdd-swarm/reports/T-F17c-test-review.md`. Verify tests prove byte-exact role/hash binding before

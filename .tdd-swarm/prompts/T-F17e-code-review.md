@@ -1,5 +1,7 @@
 # T-F17e Code Reviewer — model: gpt-5.6-sol, reasoning: ultra
 
+Verify exact campaign/capability identity, immediate supersession, deployed-revision binding,
+rollback generation selection, and accepted T-F18j unknown-cost proof.
 Work only in `<WORKTREE>` on the assigned T-F17e review branch.
 Review T-F17e ticket/diff/frozen tests/gates/report. Write only
 `.tdd-swarm/reports/T-F17e-code-review.md`. Verify Runner-owned heartbeat reachability, database-time

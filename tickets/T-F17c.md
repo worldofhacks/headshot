@@ -39,18 +39,25 @@ is not asserted with mocked output.
   model is exactly the locked model for that role, its configured upstream is the only permitted
   upstream, fallback/aliases remain disabled, and the Judge and Red Team stay independent.
 - **AC-4**: Given every physical success or failure including retries, when OpenRouter transport
-  terminates the attempt, then it emits exactly one T-F17b provider event with sanitized typed error
-  or provider-confirmed identity/usage/cost and the correct prompt/configuration/generation hashes.
+  is invoked, then it requires the Runner-created T-F17b invocation context, preserves its logical
+  and physical identity through reservation/network/event sink, and emits exactly one terminal
+  event with sanitized typed error or provider-confirmed identity/usage/cost and the correct
+  prompt/configuration/generation hashes.
 - **AC-5**: Given a returned model/upstream mismatch, missing request id/usage/cost, or invalid
   structured output, when processed, then the call fails closed, never becomes a successful
   execution, and preserves the failure event without raw response content.
 - **AC-6**: Given system-prompt bytes in the request, when token/cost exposure is reserved, then the
   conservative input bound includes them and can only widen the authorized reservation.
+- **AC-7**: Given the exact hosted 100-case profile, when configuration validates, then `N=100`,
+  `R=0`, Documentation maximum is one per case, the hard physical maximum is 400, and actual calls
+  must equal `300 + eligible_documentation_count`; the legacy 56-call cap cannot reject this
+  profile, and hidden provider retries are impossible.
 
 ## Test Plan
 - Unit: message order/cardinality/hash, locked models/upstreams, callback cardinality, typed errors.
-- Integration: fake HTTP transport covers success, all terminal failures, and retry-then-success;
-  assert exact sanitized provider events.
+- Integration: fake HTTP transport covers success, all terminal failures, retry behavior outside
+  the 100-case profile, invocation correlation, crash reconciliation, and exact sanitized events;
+  validate the 100-case 400 maximum and `300 + F` actual formula.
 - Eval: later authorized campaign verifies actual provider responses; no mocked behavior claim.
 
 ## Definition of Done

@@ -34,7 +34,9 @@ caller-supplied string is not. T-F00 supplies the local gate/spec-lint contract.
   provider call and exposes no prompt fragment in the error.
 - **AC-3**: Given each role prompt, when its trust-boundary assertions are inspected, then it
   forbids authority expansion and encodes that role's specific boundaries from the planning
-  document, including independent/fail-closed Judge and draft-only Documentation behavior.
+  document, including Orchestrator select/halt only over a fresh authorized
+  coverage/cost/regression snapshot and candidate set, bounded mutation-only Red Team,
+  independent/fail-closed Judge, and draft-only Documentation behavior.
 - **AC-4**: Given a wheel installed outside the repository, when prompt resources are resolved
   through `importlib.resources`, then all four version/hash/content records are byte-identical to
   the build inputs without filesystem fallback.
