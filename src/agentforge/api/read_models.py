@@ -19,7 +19,6 @@ class _ReadModel(BaseModel):
 
 class PrincipalReadModel(_ReadModel):
     user_id: str
-    session_id: str
     organization_id: str
     organization_role: str
     organization_permissions: tuple[str, ...]
@@ -205,7 +204,7 @@ class FindingReadModel(_ReadModel):
     category: str
     target_version: str
     publication_status: str
-    evidence_integrity: str
+    evidence_integrity: Literal["verified"]
     source_kind: str
     execution_profile: Literal["synthetic", "live"]
     evidence_provenance: str
@@ -213,6 +212,113 @@ class FindingReadModel(_ReadModel):
     attempt_id: str | None
     evidence_content_hash: str
     history: tuple[FindingHistoryReadModel, ...]
+
+
+class AttackCaseEvidenceReadModel(_ReadModel):
+    case_id: str
+    case_content_sha256: str | None = None
+    category: str | None = None
+    attack_class: Literal["boundary", "invariant", "regression"] | None = None
+    owasp_mappings: tuple[dict[str, Any], ...]
+    oracle_expectation: dict[str, Any] | None = None
+    corpus_reconciliation: Literal["verified", "unavailable"]
+
+
+class JudgeBasisReadModel(_ReadModel):
+    state: str
+    confidence: float | None = Field(default=None, ge=0, le=1)
+    reason_codes: tuple[str, ...]
+    confirmation_source: Literal["oracle", "canary", "calibrated_model", "human"] | None = None
+    error_code: str | None = None
+
+
+class EvidenceIntegrityReadModel(_ReadModel):
+    stored_content_sha256: str
+    finding_link_sha256: str
+    recomputed_content_sha256: str
+    evidence_record: Literal["verified"]
+    finding_link: Literal["verified"]
+    observability_reconciliation: Literal["unavailable"]
+    observability_detail: str
+
+
+class RegressionDispositionReadModel(_ReadModel):
+    disposition_id: str
+    state: str
+    reason_codes: tuple[str, ...]
+    reproduction_attempted: bool
+    deterministic_reproduction: bool
+    passes_for_right_reason: bool
+    human_approved: bool
+    admitted: bool
+
+
+class FindingVerificationReadModel(_ReadModel):
+    availability: Literal["ready", "unavailable"]
+    reason_code: str | None = None
+    finding_id: str
+    campaign_run_id: str | None = None
+    attempt_id: str | None = None
+    attack_case: AttackCaseEvidenceReadModel | None = None
+    attack_attempt: dict[str, Any] | None = None
+    input_sequence: tuple[str, ...]
+    request_transcript: dict[str, Any] | None = None
+    response_transcript: str | None = None
+    policy_decision_id: str | None = None
+    executed_at: datetime.datetime | None = None
+    trace_id: str | None = None
+    judge: JudgeBasisReadModel | None = None
+    report_id: str | None = None
+    minimal_reproduction: tuple[str, ...]
+    reproduction_sha256: str | None = None
+    regression: RegressionDispositionReadModel | None = None
+    integrity: EvidenceIntegrityReadModel | None = None
+    redaction_state: Literal["synthetic_identifiers_redacted"]
+
+
+class FindingDetailReadModel(FindingReadModel):
+    verification: FindingVerificationReadModel
+
+
+class ApprovalDetailReadModel(ApprovalReadModel):
+    campaign_run_id: str | None = None
+    verification_chain: tuple[FindingVerificationReadModel, ...]
+
+
+class ReportReadModel(_ReadModel):
+    schema_version: Literal["1"]
+    report_id: str
+    finding_id: str
+    campaign_run_id: str
+    attempt_id: str
+    source_case_id: str
+    severity: Literal["low", "medium", "high", "critical"]
+    category: str
+    description: str
+    clinical_impact: str
+    minimal_reproduction: tuple[str, ...]
+    reproduction_sha256: str
+    observed_behavior: str
+    expected_behavior: str
+    recommended_remediation: str
+    status: Literal[
+        "draft",
+        "validated",
+        "remediation_pending",
+        "fix_pending",
+        "fixed",
+        "regressed",
+    ]
+    fix_validation: dict[str, Any]
+    evidence_references: tuple[str, ...]
+    publication_state: Literal[
+        "draft_unpublished",
+        "blocked_pending_human_approval",
+    ]
+    regression: RegressionDispositionReadModel | None = None
+    report_integrity: Literal["verified"]
+    created_at: datetime.datetime
+    verification: FindingVerificationReadModel
 
 
 class CoverageReadModel(_ReadModel):
@@ -333,6 +439,10 @@ class AgentAssignmentReadModel(_ReadModel):
     role: str
     provider: str
     model: str
+    resolved_model: str
+    upstream_provider: str | None = None
+    prompt_sha256: str
+    prompt_version: str
     execution_mode: Literal["deterministic", "hosted_advisory"]
     activation_state: Literal["active", "staged_pending_authorization"]
     version: int = Field(ge=1)
@@ -369,6 +479,13 @@ class AgentReadModel(_ReadModel):
     last_status: str | None = None
     last_campaign_run_id: str | None = None
     last_attempt_id: str | None = None
+
+
+class AgentPromptReadModel(_ReadModel):
+    role: Literal["orchestrator", "red_team", "judge", "documentation"]
+    prompt_version: str
+    prompt_sha256: str
+    system_prompt: str
 
 
 class AgentActivityReadModel(_ReadModel):
@@ -609,6 +726,7 @@ _LIST_ADAPTERS = {
     "targets": TypeAdapter(list[TargetReadModel]),
     "audit": TypeAdapter(list[AuditReadModel]),
     "findings": TypeAdapter(list[FindingReadModel]),
+    "reports": TypeAdapter(list[ReportReadModel]),
     "coverage": TypeAdapter(list[CoverageReadModel]),
     "resilience": TypeAdapter(list[ResilienceReadModel]),
     "costs": TypeAdapter(list[CostReadModel]),
@@ -623,7 +741,10 @@ _SINGLE_ADAPTERS = {
     "campaign": TypeAdapter(CampaignReadModel),
     "evidence": TypeAdapter(EvidenceReadModel),
     "target": TypeAdapter(TargetReadModel),
-    "finding": TypeAdapter(FindingReadModel),
+    "finding": TypeAdapter(FindingDetailReadModel),
+    "approval": TypeAdapter(ApprovalDetailReadModel),
+    "report": TypeAdapter(ReportReadModel),
+    "agent_prompt": TypeAdapter(AgentPromptReadModel),
     "configuration": TypeAdapter(ConfigurationReadModel),
     "birdseye": TypeAdapter(BirdseyeSnapshotReadModel),
 }
@@ -640,6 +761,7 @@ def validate_ready_data(resource: str, data: Any) -> Any:
 
 __all__ = [
     "ApprovalReadModel",
+    "ApprovalDetailReadModel",
     "AgentActivityReadModel",
     "AgentAssignmentReadModel",
     "AgentReadModel",
@@ -663,7 +785,10 @@ __all__ = [
     "CoverageReadModel",
     "EvidenceReadModel",
     "FindingReadModel",
+    "FindingDetailReadModel",
+    "FindingVerificationReadModel",
     "PrincipalReadModel",
+    "ReportReadModel",
     "ResilienceReadModel",
     "SurfaceReadModel",
     "TargetReadModel",
