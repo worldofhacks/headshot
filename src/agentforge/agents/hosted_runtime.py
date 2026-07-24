@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 
 from agentforge.agents.hosted import HostedConfigurationSet
+from agentforge.agents.hosted_prompts import hosted_prompt
 from agentforge.agents.runtime import AgentRole
 from agentforge.providers.openrouter import OpenRouterResult
 from agentforge.target.spec import HostedRunBinding
@@ -296,9 +297,19 @@ class HostedFourRoleRuntime:
         lineage: list[HostedExecutionLineage],
     ) -> OpenRouterResult:
         bounds = self._call_bounds[role]
+        prompt = hosted_prompt(role)
+        configuration = next(item for item in self._configuration.roles if item.role == role)
+        if configuration.prompt_sha256 != prompt.prompt_sha256:
+            raise HostedCompositionError(
+                "configured prompt identity differs from the server-owned role prompt"
+            )
         result = self._transport.invoke(
             role=role,
             messages=(
+                {
+                    "role": "system",
+                    "content": prompt.system_prompt,
+                },
                 {
                     "role": "user",
                     "content": json.dumps(

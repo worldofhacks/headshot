@@ -94,10 +94,10 @@ def _assert_observations(rows: list[dict[str, Any]], observations: list[Any]) ->
         if not isinstance(execution_id, str):
             continue
         name = _field(observation, "name")
-        if name == f"agent.{metadata.get('agent.role')}":
-            agents_by_execution[execution_id] = observation
-        elif name == f"agent.{metadata.get('agent.role')}.runtime":
+        if isinstance(name, str) and name.startswith("agent.") and name.endswith(".runtime"):
             generations_by_execution[execution_id] = observation
+        elif isinstance(name, str) and name.startswith("agent."):
+            agents_by_execution[execution_id] = observation
 
     missing_agents = sorted(
         row["execution_id"] for row in rows if row["execution_id"] not in agents_by_execution
@@ -209,6 +209,8 @@ def main() -> int:
         engine.dispose()
 
     roles = {row["agent_role"] for row in rows}
+    if not rows:
+        raise SystemExit("completed live campaign has no durable agent executions")
     if roles != set(AGENT_ROLES):
         raise SystemExit(f"durable agent role coverage is incomplete: {sorted(roles)}")
     trace_id = campaign_trace_id(args.campaign_run_id)

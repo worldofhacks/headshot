@@ -8,7 +8,7 @@ repository.
 > **Delivery status — 2026-07-23:** the Clerk-backed React console, protected FastAPI `/api/v1`,
 > organization-scoped PostgreSQL control plane, private Runner, live target adapter, and Langfuse
 > telemetry projection have a provisioned Railway baseline. The current release adds the private
-> regression planner and migrations through `0013`; its exact deployment evidence is recorded
+> regression planner and migrations through `0016`; its exact deployment evidence is recorded
 > separately after promotion. Live campaigns remain bounded by persisted exact-scope authorization,
 > synthetic-only evidence, rate/budget/timeout caps, and abort controls.
 
@@ -176,7 +176,7 @@ agent, runner, scheduler, model-provider, or target credentials.
 
 ## Current local availability
 
-Revisions through `0013` add authoritative results, exact two-role authorization, regression replay
+Revisions through `0016` add authoritative results, exact two-role authorization, regression replay
 planning, and four-agent runtime observability to the exact-scope control plane. A trusted server
 catalog prepares immutable campaign scopes; a private durable Runner claims the PostgreSQL queue,
 revalidates authorization immediately before every dispatch, resolves scoped credentials only at that

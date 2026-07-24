@@ -371,3 +371,58 @@ def test_all_agent_roles_are_exported_with_observed_latency_and_spend(
         0.0,
         0.03,
     ]
+
+
+def test_repeated_children_keep_native_parentage_until_campaign_release(
+    migrated_db: Engine,
+) -> None:
+    _organization_id, run_id = _seed_campaign(migrated_db)
+    telemetry = OutboundHttpTelemetry(migrated_db, environment="staging")
+    langfuse = _Langfuse()
+    telemetry.langfuse = langfuse  # type: ignore[assignment]
+    store = ControlPlaneStore(migrated_db, environment="staging")
+    parent = store.start_agent_execution(
+        run_id=run_id,
+        agent_role="orchestrator",
+        input_payload={"cycle": 0},
+    )
+    telemetry.begin_agent(execution_id=parent, input_payload={"cycle": 0})
+    store.finish_agent_execution(
+        execution_id=parent,
+        status="succeeded",
+        output_payload={"selected": "authorized-case"},
+    )
+    telemetry.finish_agent(
+        execution_id=parent,
+        output_payload={"selected": "authorized-case"},
+    )
+
+    children: list[str] = []
+    for cycle in (1, 2):
+        child = store.start_agent_execution(
+            run_id=run_id,
+            agent_role="red_team",
+            parent_execution_id=parent,
+            input_payload={"cycle": cycle},
+        )
+        telemetry.begin_agent(execution_id=child, input_payload={"cycle": cycle})
+        store.finish_agent_execution(
+            execution_id=child,
+            status="succeeded",
+            output_payload={"cycle": cycle, "selected": "authorized-case"},
+        )
+        telemetry.finish_agent(
+            execution_id=child,
+            output_payload={"cycle": cycle, "selected": "authorized-case"},
+        )
+        children.append(child)
+
+    assert [item["parent_observation_id"] for item in langfuse.agent_started] == [
+        None,
+        "0000000000000001",
+        "0000000000000001",
+    ]
+    telemetry.flush()
+    telemetry.release_campaign(run_id)
+    assert not telemetry._agent_observation_ids
+    assert not telemetry._agent_campaign_ids

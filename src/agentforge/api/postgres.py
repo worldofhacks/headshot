@@ -26,7 +26,8 @@ from agentforge.api.birdseye import build_birdseye_snapshot
 from agentforge.api.read_models import validate_ready_data
 from agentforge.api.schemas import CommandResult, EventBatch, ResourceResult
 from agentforge.auth.errors import AuthorizationError
-from agentforge.campaign.corpus import AuthoredCorpus, resolve_workload
+from agentforge.campaign.corpus import AuthoredCorpus, resolve_workload, verified_case_payload
+from agentforge.contracts import validate as validate_contract
 from agentforge.control_plane import ControlPlaneStore
 from agentforge.control_plane.errors import (
     AuthorizationDeniedError,
@@ -73,6 +74,20 @@ _LABELED_SECRET = re.compile(
     r"password|refresh[_ -]?token|secret|session[_ -]?token)\b"
     r"\s*[:=]\s*[^\s;,]+"
 )
+_DISPLAY_SENSITIVE_KEY = re.compile(
+    r"(?i)(?:^|_)(?:sid|session_id|patient_id|patient_name|pid|mrn|ssn|"
+    r"date_of_birth|birth_date|dob|address|email|phone)(?:$|_)"
+)
+_DISPLAY_SYNTHETIC_IDENTIFIER = re.compile(
+    r"(?i)\bSYNTH-(?:PATIENT|PERSON|SUBJECT)-[A-Z0-9_-]+\b"
+)
+_DISPLAY_SYNTHETIC_CANARY = re.compile(r"(?i)\bSYNTH_CANARY_[A-Z0-9_-]+\b")
+_DISPLAY_LABELED_IDENTIFIER = re.compile(
+    r"(?i)\b(?:sid|session[_ -]?id|patient[_ -]?id|mrn|ssn|date[_ -]?of[_ -]?birth|dob)"
+    r"\s*[:=]\s*[\"']?[A-Za-z0-9._:/@+-]+[\"']?"
+)
+_DISPLAY_EMAIL = re.compile(r"(?i)\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b")
+_DISPLAY_SSN = re.compile(r"\b\d{3}-\d{2}-\d{4}\b")
 _ALLOWED_LIFECYCLE_TRANSITIONS = {
     "draft": ["validating"],
     "validating": ["ready"],
@@ -140,7 +155,7 @@ def _rows(connection, statement: str, parameters: Mapping[str, Any]) -> list[dic
     return [dict(row) for row in connection.execute(text(statement), parameters).mappings().all()]
 
 
-def _evidence_verified(row: Mapping[str, Any]) -> bool:
+def _evidence_hash_fields(row: Mapping[str, Any]) -> dict[str, Any]:
     fields: dict[str, Any] = {}
     for column in PERSISTED_EVIDENCE_COLUMNS:
         value = row.get(column)
@@ -148,11 +163,64 @@ def _evidence_verified(row: Mapping[str, Any]) -> bool:
             value = value.astimezone(datetime.UTC).isoformat()
         fields[column] = value
     fields["content_hash"] = row.get("content_hash")
+    return fields
+
+
+def _evidence_verified(row: Mapping[str, Any]) -> bool:
     try:
-        ExecutionRecorder().verify(fields)
+        ExecutionRecorder().verify(_evidence_hash_fields(row))
     except (EvidenceIntegrityError, TypeError, ValueError):
         return False
     return True
+
+
+def _redact_evidence_display(value: Any) -> Any:
+    """Redact patient/session identifiers from evidence after integrity verification."""
+
+    if isinstance(value, Mapping):
+        projected: dict[str, Any] = {}
+        for key, item in value.items():
+            label = str(key)
+            projected[label] = (
+                "***REDACTED_IDENTIFIER***"
+                if _DISPLAY_SENSITIVE_KEY.search(label)
+                else _redact_evidence_display(item)
+            )
+        return projected
+    if isinstance(value, (tuple, list)):
+        return [_redact_evidence_display(item) for item in value]
+    if not isinstance(value, str):
+        return value
+    stripped = value.strip()
+    if stripped[:1] in {"{", "["}:
+        try:
+            parsed = json.loads(stripped)
+        except (TypeError, ValueError):
+            parsed = None
+        if isinstance(parsed, (dict, list)):
+            return json.dumps(
+                _redact_evidence_display(parsed),
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            )
+    value = _DISPLAY_SYNTHETIC_IDENTIFIER.sub("SYNTH-PATIENT-[REDACTED]", value)
+    value = _DISPLAY_SYNTHETIC_CANARY.sub("SYNTH_CANARY_[REDACTED]", value)
+    value = _DISPLAY_LABELED_IDENTIFIER.sub("***REDACTED_IDENTIFIER***", value)
+    value = _DISPLAY_EMAIL.sub("***REDACTED_EMAIL***", value)
+    return _DISPLAY_SSN.sub("***REDACTED_SSN***", value)
+
+
+def _reproduction_sha256(steps: Any) -> str | None:
+    if not isinstance(steps, list) or not steps or not all(isinstance(step, str) for step in steps):
+        return None
+    canonical = json.dumps(
+        steps,
+        allow_nan=False,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest()
 
 
 def _scope_projection(value: Any, *, target_base_url: Any = None) -> dict[str, Any]:
@@ -235,6 +303,169 @@ class PostgresApiBackend(ApiBackend):
         self._hosted_provider_bindings_verified = hosted_provider_bindings_verified
         self._corpus = corpus
 
+    def _attack_case_evidence(self, source: Mapping[str, Any]) -> dict[str, Any]:
+        case_id = str(source.get("case_id") or "unavailable")
+        case_hash = source.get("case_content_hash")
+        oracle_expectation = None
+        corpus_reconciliation = "unavailable"
+        if self._corpus is not None and isinstance(case_hash, str):
+            authored = next(
+                (
+                    case
+                    for case in self._corpus.cases
+                    if case.payload.get("case_id") == case_id and case.content_hash == case_hash
+                ),
+                None,
+            )
+            if authored is not None:
+                payload = verified_case_payload(authored)
+                oracle_expectation = _redact_evidence_display(payload.get("oracle_expectation"))
+                corpus_reconciliation = "verified"
+        mappings = source.get("owasp_mappings")
+        return {
+            "case_id": case_id,
+            "case_content_sha256": case_hash if isinstance(case_hash, str) else None,
+            "category": source.get("case_category"),
+            "attack_class": source.get("attack_class"),
+            "owasp_mappings": mappings if isinstance(mappings, list) else [],
+            "oracle_expectation": oracle_expectation,
+            "corpus_reconciliation": corpus_reconciliation,
+        }
+
+    def _verification_projection(
+        self,
+        source: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        finding_id = str(source.get("linked_finding_id") or source.get("finding_id") or "")
+        content_hash = source.get("content_hash")
+        linked_hash = source.get("evidence_content_hash")
+        if (
+            not isinstance(content_hash, str)
+            or content_hash != linked_hash
+            or not _evidence_verified(source)
+        ):
+            raise EvidenceIntegrityError("finding evidence cannot be verified")
+        recomputed_hash = ExecutionRecorder().canonical_hash(_evidence_hash_fields(source))
+        attack_attempt = source.get("attack_attempt")
+        redacted_attempt = (
+            _redact_evidence_display(attack_attempt)
+            if isinstance(attack_attempt, Mapping)
+            else None
+        )
+        input_sequence: list[str] = []
+        if isinstance(redacted_attempt, Mapping):
+            candidate = redacted_attempt.get("input_sequence")
+            if isinstance(candidate, list) and all(isinstance(item, str) for item in candidate):
+                input_sequence = candidate
+
+        report_payload = source.get("report_payload")
+        report_id = source.get("vuln_report_id")
+        minimal_reproduction: list[str] = []
+        reproduction_hash = None
+        if isinstance(report_payload, Mapping):
+            reproduction = report_payload.get("minimal_reproduction")
+            if isinstance(reproduction, list) and all(
+                isinstance(item, str) for item in reproduction
+            ):
+                minimal_reproduction = [
+                    str(_redact_evidence_display(item)) for item in reproduction
+                ]
+            reproduction_hash = report_payload.get("reproduction_sha256")
+
+        regression = None
+        regression_payload = source.get("regression_payload")
+        if isinstance(regression_payload, Mapping):
+            regression = {
+                "disposition_id": regression_payload.get("disposition_id"),
+                "state": regression_payload.get("state"),
+                "reason_codes": regression_payload.get("reason_codes", []),
+                "reproduction_attempted": regression_payload.get("reproduction_attempted"),
+                "deterministic_reproduction": regression_payload.get(
+                    "deterministic_reproduction"
+                ),
+                "passes_for_right_reason": regression_payload.get("passes_for_right_reason"),
+                "human_approved": regression_payload.get("human_approved"),
+                "admitted": regression_payload.get("admitted"),
+            }
+
+        return {
+            "availability": "ready",
+            "reason_code": None,
+            "finding_id": finding_id,
+            "campaign_run_id": source.get("campaign_run_id"),
+            "attempt_id": source.get("attempt_id"),
+            "attack_case": self._attack_case_evidence(source),
+            "attack_attempt": redacted_attempt,
+            "input_sequence": input_sequence,
+            "request_transcript": (
+                _redact_evidence_display(source.get("request_transcript"))
+                if isinstance(source.get("request_transcript"), Mapping)
+                else None
+            ),
+            "response_transcript": (
+                str(_redact_evidence_display(source.get("response_transcript")))
+                if isinstance(source.get("response_transcript"), str)
+                else None
+            ),
+            "policy_decision_id": source.get("policy_decision_id"),
+            "executed_at": source.get("executed_at"),
+            "trace_id": source.get("trace_id"),
+            "judge": {
+                "state": source.get("verdict_state"),
+                "confidence": source.get("verdict_confidence"),
+                "reason_codes": source.get("verdict_reason_codes") or [],
+                "confirmation_source": source.get("verdict_confirmation_source"),
+                "error_code": source.get("verdict_error_code"),
+            },
+            "report_id": report_id if isinstance(report_id, str) else None,
+            "minimal_reproduction": minimal_reproduction,
+            "reproduction_sha256": (
+                reproduction_hash if isinstance(reproduction_hash, str) else None
+            ),
+            "regression": regression,
+            "integrity": {
+                "stored_content_sha256": content_hash,
+                "finding_link_sha256": linked_hash,
+                "recomputed_content_sha256": recomputed_hash,
+                "evidence_record": "verified",
+                "finding_link": "verified",
+                "observability_reconciliation": "unavailable",
+                "observability_detail": (
+                    "No durable observability transcript hash is stored for this attempt."
+                ),
+            },
+            "redaction_state": "synthetic_identifiers_redacted",
+        }
+
+    @staticmethod
+    def _unavailable_verification(
+        finding_id: str,
+        *,
+        reason_code: str,
+    ) -> dict[str, Any]:
+        return {
+            "availability": "unavailable",
+            "reason_code": reason_code,
+            "finding_id": finding_id,
+            "campaign_run_id": None,
+            "attempt_id": None,
+            "attack_case": None,
+            "attack_attempt": None,
+            "input_sequence": [],
+            "request_transcript": None,
+            "response_transcript": None,
+            "policy_decision_id": None,
+            "executed_at": None,
+            "trace_id": None,
+            "judge": None,
+            "report_id": None,
+            "minimal_reproduction": [],
+            "reproduction_sha256": None,
+            "regression": None,
+            "integrity": None,
+            "redaction_state": "synthetic_identifiers_redacted",
+        }
+
     def read(self, resource, principal, *, identifiers=None):
         identifiers = dict(identifiers or {})
         if resource == "principal":
@@ -243,7 +474,6 @@ class PostgresApiBackend(ApiBackend):
                     "principal",
                     {
                         "user_id": principal.user_id,
-                        "session_id": principal.session_id,
                         "organization_id": principal.organization_id,
                         "organization_role": principal.organization_role,
                         "organization_permissions": sorted(principal.organization_permissions),
@@ -802,15 +1032,31 @@ class PostgresApiBackend(ApiBackend):
                         "f.severity AS finding_severity, f.category AS finding_category, "
                         "f.target_version AS finding_target_version, f.source_kind, "
                         "f.execution_profile AS finding_execution_profile, f.published, "
-                        "vr.report_id AS vuln_report_id, "
+                        "a.case_id, a.case_content_hash, a.category AS case_category, "
+                        "a.attack_class, a.owasp_mappings, "
+                        "v.state AS verdict_state, v.confidence AS verdict_confidence, "
+                        "v.reason_codes AS verdict_reason_codes, "
+                        "v.confirmation_source AS verdict_confirmation_source, "
+                        "v.error_code AS verdict_error_code, "
+                        "vr.report_id AS vuln_report_id, vr.contract_payload AS report_payload, "
+                        "rd.contract_payload AS regression_payload, "
                         "l.evidence_content_hash, l.provenance AS linked_provenance "
                         "FROM finding f JOIN finding_evidence_links l "
                         "ON l.organization_id = f.organization_id AND l.finding_id = f.finding_id "
                         "JOIN attempt_result ar ON ar.organization_id = l.organization_id "
                         "AND ar.campaign_run_id = l.campaign_run_id "
-                        "AND ar.attempt_id = l.attempt_id LEFT JOIN vuln_reports vr "
+                        "AND ar.attempt_id = l.attempt_id "
+                        "JOIN campaign_attempts a ON a.organization_id = l.organization_id "
+                        "AND a.run_id = l.campaign_run_id AND a.attempt_id = l.attempt_id "
+                        "JOIN verdict v ON v.id = l.verdict_id "
+                        "LEFT JOIN vuln_reports vr "
                         "ON vr.organization_id = f.organization_id "
-                        "AND vr.finding_id = f.finding_id WHERE "
+                        "AND vr.finding_id = f.finding_id "
+                        "LEFT JOIN LATERAL (SELECT d.contract_payload "
+                        "FROM regression_dispositions d "
+                        "WHERE d.organization_id = f.organization_id "
+                        "AND d.finding_id = f.finding_id "
+                        "ORDER BY d.created_at DESC LIMIT 1) rd ON true WHERE "
                         + where
                         + " ORDER BY f.created_at DESC",
                         parameters,
@@ -841,8 +1087,7 @@ class PostgresApiBackend(ApiBackend):
                             publication_status = "rejected_unpublished"
                         elif latest == "resolved":
                             publication_status = "resolved_unpublished"
-                        rows.append(
-                            {
+                        projection = {
                                 "finding_id": source["linked_finding_id"],
                                 "state": "resolved"
                                 if latest == "resolved"
@@ -864,7 +1109,9 @@ class PostgresApiBackend(ApiBackend):
                                 "evidence_content_hash": source["evidence_content_hash"],
                                 "history": history,
                             }
-                        )
+                        if resource == "finding":
+                            projection["verification"] = self._verification_projection(source)
+                        rows.append(projection)
                     tool_where = "organization_id = :org"
                     tool_parameters = {"org": principal.organization_id}
                     if resource == "finding":
@@ -879,8 +1126,7 @@ class PostgresApiBackend(ApiBackend):
                     for source in tool_rows:
                         payload = source["contract_payload"]
                         reproduction = payload.get("reproduction_evidence", {})
-                        rows.append(
-                            {
+                        projection = {
                                 "finding_id": payload["finding_id"],
                                 "state": payload["validation_state"],
                                 "severity": payload["severity"],
@@ -897,6 +1143,106 @@ class PostgresApiBackend(ApiBackend):
                                 "attempt_id": None,
                                 "evidence_content_hash": source["raw_artifact_sha256"],
                                 "history": [],
+                            }
+                        if resource == "finding":
+                            projection["verification"] = self._unavailable_verification(
+                                payload["finding_id"],
+                                reason_code="campaign_transcript_not_applicable",
+                            )
+                        rows.append(projection)
+                elif resource in {"reports", "report"}:
+                    where = "vr.organization_id = :org"
+                    parameters = {"org": principal.organization_id}
+                    if resource == "report":
+                        where += " AND vr.report_id = :report_id"
+                        parameters["report_id"] = identifiers.get("report_id")
+                    source_rows = _rows(
+                        connection,
+                        "SELECT ar.*, f.finding_id AS linked_finding_id, "
+                        "a.case_id, a.case_content_hash, a.category AS case_category, "
+                        "a.attack_class, a.owasp_mappings, "
+                        "v.state AS verdict_state, v.confidence AS verdict_confidence, "
+                        "v.reason_codes AS verdict_reason_codes, "
+                        "v.confirmation_source AS verdict_confirmation_source, "
+                        "v.error_code AS verdict_error_code, "
+                        "vr.report_id AS vuln_report_id, vr.contract_payload AS report_payload, "
+                        "vr.created_at AS report_created_at, "
+                        "rd.contract_payload AS regression_payload, "
+                        "l.evidence_content_hash "
+                        "FROM vuln_reports vr JOIN finding f "
+                        "ON f.organization_id = vr.organization_id "
+                        "AND f.finding_id = vr.finding_id "
+                        "JOIN finding_evidence_links l "
+                        "ON l.organization_id = f.organization_id AND l.finding_id = f.finding_id "
+                        "JOIN attempt_result ar ON ar.organization_id = l.organization_id "
+                        "AND ar.campaign_run_id = l.campaign_run_id "
+                        "AND ar.attempt_id = l.attempt_id "
+                        "JOIN campaign_attempts a ON a.organization_id = l.organization_id "
+                        "AND a.run_id = l.campaign_run_id AND a.attempt_id = l.attempt_id "
+                        "JOIN verdict v ON v.id = l.verdict_id "
+                        "LEFT JOIN LATERAL (SELECT d.contract_payload "
+                        "FROM regression_dispositions d "
+                        "WHERE d.organization_id = vr.organization_id "
+                        "AND d.report_id = vr.report_id "
+                        "ORDER BY d.created_at DESC LIMIT 1) rd ON true WHERE "
+                        + where
+                        + " ORDER BY vr.created_at DESC",
+                        parameters,
+                    )
+                    rows = []
+                    for source in source_rows:
+                        report_payload = source.get("report_payload")
+                        regression_payload = source.get("regression_payload")
+                        try:
+                            if not isinstance(report_payload, Mapping):
+                                raise ValueError("report payload is absent")
+                            report_payload = dict(report_payload)
+                            validate_contract("vuln_report", report_payload)
+                            if (
+                                report_payload.get("report_id") != source["vuln_report_id"]
+                                or report_payload.get("finding_id")
+                                != source["linked_finding_id"]
+                                or report_payload.get("campaign_run_id")
+                                != source["campaign_run_id"]
+                                or report_payload.get("attempt_id") != source["attempt_id"]
+                                or _reproduction_sha256(
+                                    report_payload.get("minimal_reproduction")
+                                )
+                                != report_payload.get("reproduction_sha256")
+                                or f"evidence://sha256/{source['evidence_content_hash']}"
+                                not in report_payload.get("evidence_references", [])
+                            ):
+                                raise ValueError("report correlation differs")
+                            if regression_payload is not None:
+                                if not isinstance(regression_payload, Mapping):
+                                    raise ValueError("regression payload is invalid")
+                                regression_payload = dict(regression_payload)
+                                validate_contract(
+                                    "regression_disposition",
+                                    regression_payload,
+                                )
+                                if any(
+                                    regression_payload.get(key) != report_payload.get(key)
+                                    for key in (
+                                        "finding_id",
+                                        "report_id",
+                                        "campaign_run_id",
+                                        "attempt_id",
+                                    )
+                                ):
+                                    raise ValueError("regression correlation differs")
+                            verification = self._verification_projection(source)
+                        except Exception:
+                            return ResourceResult.unavailable("report_integrity_failed")
+                        display_payload = _redact_evidence_display(report_payload)
+                        regression = verification["regression"]
+                        rows.append(
+                            {
+                                **display_payload,
+                                "regression": regression,
+                                "report_integrity": "verified",
+                                "created_at": source["report_created_at"],
+                                "verification": verification,
                             }
                         )
                 elif resource == "coverage":
@@ -1346,7 +1692,12 @@ class PostgresApiBackend(ApiBackend):
                             }
                         )
                     rows.sort(key=lambda row: row["started_at"], reverse=True)
-                elif resource == "approvals":
+                elif resource in {"approvals", "approval"}:
+                    approval_where = "q.organization_id = :org"
+                    approval_parameters = {"org": principal.organization_id}
+                    if resource == "approval":
+                        approval_where += " AND q.request_id = :request_id"
+                        approval_parameters["request_id"] = identifiers.get("request_id")
                     rows = _rows(
                         connection,
                         "SELECT q.request_id, q.scope_hash, q.launcher_user_id, q.expires_at, "
@@ -1365,9 +1716,74 @@ class PostgresApiBackend(ApiBackend):
                         "FROM campaign_authorization_requests q "
                         "LEFT JOIN campaign_authorization_decisions d "
                         "ON d.organization_id = q.organization_id AND d.request_id = q.request_id "
-                        "WHERE q.organization_id = :org ORDER BY q.created_at DESC LIMIT 200",
-                        {"org": principal.organization_id},
+                        "WHERE "
+                        + approval_where
+                        + " ORDER BY q.created_at DESC LIMIT 200",
+                        approval_parameters,
                     )
+                    if resource == "approval" and rows:
+                        row = rows[0]
+                        run_id = connection.execute(
+                            text(
+                                "SELECT run_id FROM campaign_runs "
+                                "WHERE organization_id = :org "
+                                "AND authorization_request_id = :request_id "
+                                "ORDER BY created_at DESC LIMIT 1"
+                            ),
+                            {
+                                "org": principal.organization_id,
+                                "request_id": row["request_id"],
+                            },
+                        ).scalar_one_or_none()
+                        row["campaign_run_id"] = run_id
+                        verification_rows = []
+                        if isinstance(run_id, str):
+                            verification_rows = _rows(
+                                connection,
+                                "SELECT ar.*, f.finding_id AS linked_finding_id, "
+                                "a.case_id, a.case_content_hash, "
+                                "a.category AS case_category, a.attack_class, a.owasp_mappings, "
+                                "v.state AS verdict_state, "
+                                "v.confidence AS verdict_confidence, "
+                                "v.reason_codes AS verdict_reason_codes, "
+                                "v.confirmation_source AS verdict_confirmation_source, "
+                                "v.error_code AS verdict_error_code, "
+                                "vr.report_id AS vuln_report_id, "
+                                "vr.contract_payload AS report_payload, "
+                                "rd.contract_payload AS regression_payload, "
+                                "l.evidence_content_hash "
+                                "FROM finding f JOIN finding_evidence_links l "
+                                "ON l.organization_id = f.organization_id "
+                                "AND l.finding_id = f.finding_id "
+                                "JOIN attempt_result ar ON ar.organization_id = l.organization_id "
+                                "AND ar.campaign_run_id = l.campaign_run_id "
+                                "AND ar.attempt_id = l.attempt_id "
+                                "JOIN campaign_attempts a ON a.organization_id = l.organization_id "
+                                "AND a.run_id = l.campaign_run_id "
+                                "AND a.attempt_id = l.attempt_id "
+                                "JOIN verdict v ON v.id = l.verdict_id "
+                                "LEFT JOIN vuln_reports vr "
+                                "ON vr.organization_id = f.organization_id "
+                                "AND vr.finding_id = f.finding_id "
+                                "LEFT JOIN LATERAL (SELECT d.contract_payload "
+                                "FROM regression_dispositions d "
+                                "WHERE d.organization_id = f.organization_id "
+                                "AND d.finding_id = f.finding_id "
+                                "ORDER BY d.created_at DESC LIMIT 1) rd ON true "
+                                "WHERE f.organization_id = :org "
+                                "AND l.campaign_run_id = :run_id "
+                                "ORDER BY f.created_at DESC",
+                                {"org": principal.organization_id, "run_id": run_id},
+                            )
+                        try:
+                            row["verification_chain"] = [
+                                self._verification_projection(item)
+                                for item in verification_rows
+                            ]
+                        except EvidenceIntegrityError:
+                            return ResourceResult.unavailable(
+                                "approval_evidence_integrity_failed"
+                            )
                 elif resource in {"targets", "target"}:
                     where = "d.organization_id = :org"
                     parameters: dict[str, Any] = {"org": principal.organization_id}
@@ -1457,7 +1873,7 @@ class PostgresApiBackend(ApiBackend):
         except Exception:
             return ResourceResult.unavailable("database_projection_unavailable")
 
-        if resource in {"campaigns", "campaign", "approvals"}:
+        if resource in {"campaigns", "campaign", "approvals", "approval"}:
             for row in rows:
                 row.update(
                     _scope_projection(
@@ -1465,7 +1881,7 @@ class PostgresApiBackend(ApiBackend):
                         target_base_url=row.pop("target_base_url", None),
                     )
                 )
-                if resource == "approvals":
+                if resource in {"approvals", "approval"}:
                     row["status"] = row.get("decision") or "pending"
 
         sanitized = _safe(rows)
@@ -1474,6 +1890,9 @@ class PostgresApiBackend(ApiBackend):
             "evidence",
             "target",
             "finding",
+            "approval",
+            "report",
+            "agent_prompt",
             "configuration",
             "birdseye",
             "hosted_configuration_set",

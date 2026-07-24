@@ -38,6 +38,10 @@ router = APIRouter(prefix="/api/v1")
 ConsolePrincipal = Annotated[Principal, Depends(require_permissions(CONSOLE_READ))]
 FindingPrincipal = Annotated[Principal, Depends(require_permissions(CONSOLE_READ, FINDINGS_READ))]
 EvidencePrincipal = Annotated[Principal, Depends(require_permissions(CONSOLE_READ, EVIDENCE_READ))]
+FindingEvidencePrincipal = Annotated[
+    Principal,
+    Depends(require_permissions(CONSOLE_READ, FINDINGS_READ, EVIDENCE_READ)),
+]
 AuditPrincipal = Annotated[Principal, Depends(require_permissions(CONSOLE_READ, AUDIT_READ))]
 LaunchPrincipal = Annotated[Principal, Depends(require_permissions(CAMPAIGN_LAUNCH))]
 AuthorizePrincipal = Annotated[Principal, Depends(require_permissions(CAMPAIGN_AUTHORIZE))]
@@ -336,13 +340,28 @@ def findings(request: Request, principal: FindingPrincipal) -> JSONResponse:
 
 
 @router.get("/findings/{finding_id}")
-def finding(request: Request, finding_id: str, principal: FindingPrincipal) -> JSONResponse:
+def finding(request: Request, finding_id: str, principal: FindingEvidencePrincipal) -> JSONResponse:
     return _read(request, "finding", principal, {"finding_id": finding_id})
 
 
 @router.get("/approvals")
 def approvals(request: Request, principal: ConsolePrincipal) -> JSONResponse:
     return _read(request, "approvals", principal)
+
+
+@router.get("/approvals/{request_id}")
+def approval(request: Request, request_id: str, principal: EvidencePrincipal) -> JSONResponse:
+    return _read(request, "approval", principal, {"request_id": request_id})
+
+
+@router.get("/reports")
+def reports(request: Request, principal: FindingEvidencePrincipal) -> JSONResponse:
+    return _read(request, "reports", principal)
+
+
+@router.get("/reports/{report_id}")
+def report(request: Request, report_id: str, principal: FindingEvidencePrincipal) -> JSONResponse:
+    return _read(request, "report", principal, {"report_id": report_id})
 
 
 @router.get("/campaign-authorization-requests/{request_id}/preflight")
@@ -430,6 +449,11 @@ def components(request: Request, principal: ConsolePrincipal) -> JSONResponse:
 @router.get("/agents")
 def agents(request: Request, principal: ConsolePrincipal) -> JSONResponse:
     return _read(request, "agents", principal)
+
+
+@router.get("/agents/{agent_role}/prompt")
+def agent_prompt(request: Request, agent_role: str, principal: ConfigPrincipal) -> JSONResponse:
+    return _read(request, "agent_prompt", principal, {"agent_role": agent_role})
 
 
 @router.get("/agent-activity")

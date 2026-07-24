@@ -1151,6 +1151,8 @@ class DurableCampaignRunner:
         finally:
             with contextlib.suppress(Exception):
                 self.telemetry.flush()
+            with contextlib.suppress(Exception):
+                self.telemetry.release_campaign(job.campaign_run_id)
         return True
 
 

@@ -35,7 +35,6 @@ export interface CommandAcknowledgement {
 
 export interface Principal {
   user_id: string;
-  session_id: string;
   organization_id: string;
   organization_role: string | null;
   organization_permissions: string[];

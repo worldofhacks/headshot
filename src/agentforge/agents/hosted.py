@@ -16,6 +16,7 @@ from decimal import Decimal
 from typing import Any
 from urllib.parse import urlsplit
 
+from agentforge.agents.hosted_prompts import hosted_prompt
 from agentforge.agents.runtime import AGENT_ROLES, AgentRole
 from agentforge.secrets import looks_like_provider_key
 
@@ -310,6 +311,10 @@ class HostedRoleConfiguration:
         _validate_upstream_provider(self.upstream_provider)
         _validate_credential_reference(self.credential_reference)
         _require_sha256("prompt identity", self.prompt_sha256)
+        if self.prompt_sha256 != hosted_prompt(self.role).prompt_sha256:
+            raise ValueError(
+                "configured prompt identity does not match the server-owned role prompt"
+            )
         _require_sha256("policy identity", self.policy_sha256)
         if not isinstance(self.prices, TokenPrices):
             raise TypeError("hosted prices must use TokenPrices")
@@ -324,6 +329,10 @@ class HostedRoleConfiguration:
     @property
     def model_family(self) -> str:
         return self.model_id.split("/", 1)[0]
+
+    @property
+    def prompt_version(self) -> str:
+        return hosted_prompt(self.role).version
 
     def canonical_payload(self) -> dict[str, Any]:
         return {

@@ -14,6 +14,7 @@ from agentforge.agents.hosted import (
     HostedRoleConfiguration,
     TokenPrices,
 )
+from agentforge.agents.hosted_prompts import hosted_prompt
 from agentforge.agents.hosted_runtime import (
     HostedCallBounds,
     HostedCompositionError,
@@ -42,7 +43,7 @@ def _configuration() -> HostedConfigurationSet:
                 model_id=model,
                 upstream_provider=provider,
                 credential_reference=f"secretref://production/openrouter/{role}/generation-1",
-                prompt_sha256=_digest(f"{role}:prompt"),
+                prompt_sha256=hosted_prompt(role).prompt_sha256,
                 policy_sha256=_digest(f"{role}:policy"),
                 prices=TokenPrices(Decimal("1"), Decimal("2"), Decimal("3")),
                 limits=HostedLimits(
@@ -80,10 +81,12 @@ class _FakeTransport:
         self.configuration = configuration
         self.outputs = outputs
         self.calls: list[str] = []
+        self.invocations: list[dict[str, Any]] = []
 
     def invoke(self, **kwargs: Any) -> OpenRouterResult:
         role = kwargs["role"]
         self.calls.append(role)
+        self.invocations.append(dict(kwargs))
         configuration = next(item for item in self.configuration.roles if item.role == role)
         return OpenRouterResult(
             output=self.outputs[role],
@@ -216,6 +219,29 @@ def test_confirmed_deterministic_exploit_cannot_be_laundered_safe_and_docs_stay_
     assert outcome.lineage[1].parent_request_id == "provider-request-orchestrator"
     assert outcome.lineage[2].parent_request_id == "provider-request-red_team"
     assert all(item.requested_model == item.returned_model for item in outcome.lineage)
+
+
+def test_runtime_sends_the_exact_registry_prompt_as_the_system_message() -> None:
+    runtime, transport = _runtime(
+        outputs=_outputs(judge_state="EXPLOIT_LIKELY"),
+        target=lambda _attempt: {"status_code": 200},
+        recorded=[],
+    )
+
+    runtime.run_attempt(authorized_case={"case_id": "case-1"})
+
+    assert transport.calls == ["orchestrator", "red_team", "judge", "documentation"]
+    for invocation in transport.invocations:
+        role = invocation["role"]
+        prompt = hosted_prompt(role)
+        messages = invocation["messages"]
+        assert messages[0] == {
+            "role": "system",
+            "content": prompt.system_prompt,
+        }
+        assert messages[1]["role"] == "user"
+        configured = next(item for item in transport.configuration.roles if item.role == role)
+        assert configured.prompt_sha256 == prompt.prompt_sha256
 
 
 def test_deterministic_error_remains_error_and_skips_documentation() -> None:

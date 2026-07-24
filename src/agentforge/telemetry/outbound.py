@@ -329,6 +329,7 @@ class _RequestHandle:
         )
         terminal_status = "failed" if error_code else "succeeded"
         langfuse_status = self.langfuse_status
+        persisted = True
         try:
             with self.owner.engine.begin() as connection:
                 connection.execute(
@@ -353,6 +354,7 @@ class _RequestHandle:
         except Exception:
             # The target call already happened. Never turn a telemetry completion failure into a
             # retry that would send the adversarial request twice.
+            persisted = False
             _logger.warning("outbound telemetry completion persistence failed")
 
         metadata = {
@@ -362,6 +364,7 @@ class _RequestHandle:
             "duration_ms": duration_ms,
             "request_id": self.request_id,
             "error_code": error_code,
+            "ledger.persisted": persisted,
         }
         langfuse_output = (
             None
@@ -376,7 +379,7 @@ class _RequestHandle:
                 self.langfuse_state,
                 output=langfuse_output,
                 metadata=metadata,
-                error_code=error_code,
+                error_code=error_code if persisted else "telemetry_persistence_failed",
                 measured_cost=self.owner.per_request_cost_usd,
             )
         except Exception:
@@ -390,13 +393,15 @@ class _RequestHandle:
                     {"request_id": self.request_id},
                 )
         else:
-            if self.langfuse_state is not None and self.langfuse_status == "queued":
+            if persisted and self.langfuse_state is not None and self.langfuse_status == "queued":
                 self.owner._queued_request_ids.add(self.request_id)
 
 
 @dataclass
 class _AgentHandle:
     execution_id: str
+    campaign_run_id: str
+    role: str
     trace_id: str
     redactions: tuple[str, ...]
     langfuse_state: tuple[Any, Any, str, str] | None
@@ -424,6 +429,7 @@ class OutboundHttpTelemetry:
         self._queued_agent_execution_ids: set[str] = set()
         self._agent_handles: dict[str, _AgentHandle] = {}
         self._agent_observation_ids: dict[str, str] = {}
+        self._agent_campaign_ids: dict[str, str] = {}
         self._last_connection_check = 0.0
 
     def begin(
@@ -562,7 +568,6 @@ class OutboundHttpTelemetry:
             _logger.warning("agent telemetry start persistence failed")
             return
 
-        _sanitize(input_payload, redactions)
         metadata = {
             "deployment.environment": self.environment,
             "organization_id": str(row["organization_id"]),
@@ -614,10 +619,11 @@ class OutboundHttpTelemetry:
                 return
         if langfuse_state is not None:
             self._agent_observation_ids[execution_id] = langfuse_state[3]
-            if parent_execution_id is not None:
-                self._agent_observation_ids.pop(parent_execution_id, None)
+            self._agent_campaign_ids[execution_id] = str(row["campaign_run_id"])
         self._agent_handles[execution_id] = _AgentHandle(
             execution_id=execution_id,
+            campaign_run_id=str(row["campaign_run_id"]),
+            role=str(row["agent_role"]),
             trace_id=str(row["trace_id"]),
             redactions=redactions,
             langfuse_state=langfuse_state,
@@ -654,6 +660,7 @@ class OutboundHttpTelemetry:
             return
         metadata = {
             "agent.execution_id": execution_id,
+            "agent.role": handle.role,
             "agent.status": str(row["status"]),
             "agent.duration_ms": (
                 float(row["duration_ms"]) if row["duration_ms"] is not None else None
@@ -688,6 +695,15 @@ class OutboundHttpTelemetry:
             return
         self._agent_handles.pop(execution_id, None)
         self._queued_agent_execution_ids.add(execution_id)
+
+    def release_campaign(self, campaign_run_id: str) -> None:
+        """Release terminal parent-observation IDs after a campaign checkpoint is flushed."""
+
+        for execution_id, recorded_run_id in tuple(self._agent_campaign_ids.items()):
+            if recorded_run_id != campaign_run_id or execution_id in self._agent_handles:
+                continue
+            self._agent_campaign_ids.pop(execution_id, None)
+            self._agent_observation_ids.pop(execution_id, None)
 
     def flush(self) -> None:
         request_ids = tuple(self._queued_request_ids)

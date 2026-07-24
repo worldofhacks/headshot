@@ -16,6 +16,7 @@ from agentforge.agents.hosted import (
     TokenPrices,
     preflight_hosted_configuration_set,
 )
+from agentforge.agents.hosted_prompts import HOSTED_PROMPTS, hosted_prompt
 
 MODELS = {
     "orchestrator": "anthropic/claude-opus-4.8",
@@ -70,7 +71,7 @@ def _role(role: str) -> HostedRoleConfiguration:
         credential_reference=(
             f"secretref://staging/providers/openrouter/{role}/generation-20260724"
         ),
-        prompt_sha256=_digest(f"{role}:prompt:v1"),
+        prompt_sha256=hosted_prompt(role).prompt_sha256,
         policy_sha256=_digest(f"{role}:policy:v1"),
         prices=TokenPrices(
             input_usd_per_million_tokens=Decimal("1.25"),
@@ -182,9 +183,28 @@ def test_judge_and_red_team_require_frozen_independent_models_and_prompts() -> N
     with pytest.raises(ValueError, match="frozen recovery assignment"):
         replace(judge, model_id="qwen/gemini-2.5-pro")
 
-    same_prompt = replace(judge, prompt_sha256=red_team.prompt_sha256)
-    with pytest.raises(ValueError, match="prompt identities"):
-        _configuration((complete.roles[0], red_team, same_prompt, complete.roles[3]))
+    with pytest.raises(ValueError, match="server-owned role prompt"):
+        replace(judge, prompt_sha256=red_team.prompt_sha256)
+
+
+def test_prompt_registry_is_exact_content_addressed_and_versioned() -> None:
+    assert tuple(HOSTED_PROMPTS) == (
+        "orchestrator",
+        "red_team",
+        "judge",
+        "documentation",
+    )
+    for role in MODELS:
+        prompt = hosted_prompt(role)
+        assert prompt.role == role
+        assert prompt.version == _role(role).prompt_version
+        assert prompt.prompt_sha256 == hashlib.sha256(
+            prompt.system_prompt.encode("utf-8")
+        ).hexdigest()
+        assert prompt.system_prompt == prompt.system_prompt.strip()
+
+    with pytest.raises(ValueError, match="four-role catalog"):
+        hosted_prompt("unknown")
 
 
 def test_prices_and_limits_require_decimal_units_and_closed_bounds() -> None:

@@ -520,7 +520,7 @@ function NodeInspector({ node }: { node: BirdseyeNodeReadModel | null }) {
                 {node.langfuse_status ?? "Not observed"}
                 {node.langfuse_exported_count === null
                   ? ""
-                  : ` · ${node.langfuse_exported_count}/${node.execution_count} exported`}
+                  : ` · ${node.langfuse_exported_count}/${node.execution_count} submitted`}
               </dd>
             </div>
           </>

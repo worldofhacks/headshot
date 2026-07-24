@@ -139,9 +139,29 @@ Deploy the same reviewed commit through staging before production.
 
 The private Runner owns outbound telemetry. Configure `LANGFUSE_PUBLIC_KEY`,
 `LANGFUSE_SECRET_KEY`, `LANGFUSE_BASE_URL`, and `LANGFUSE_TRACING_ENVIRONMENT` on Runner only.
-Every physical target request is first recorded in PostgreSQL, then exported asynchronously to
-Langfuse with credential-free request content and redacted response content. Langfuse failure never
-causes a duplicate target retry; the console continues from the PostgreSQL system of record.
+`LANGFUSE_BASE_URL` must be an exact HTTPS origin without user information, query parameters, or a
+fragment. Every Orchestrator, Red Team, Judge, and Documentation execution and every physical target
+request is first recorded in PostgreSQL, then submitted asynchronously to one campaign-correlated
+Langfuse trace. Each agent is represented by a typed `agent` observation with a child `generation`
+observation so role-local latency, token usage, and cost remain queryable. Cross-agent
+`parent_execution_id` lineage is also native Langfuse parentage.
+
+Langfuse receives hashes, byte counts, stable identifiers, timing, usage, cost, and bounded status
+metadata—not prompts, target responses, clinical context, credentials, or evidence bodies. PostgreSQL
+remains the authoritative ledger. A durable `exported` status means the Runner successfully submitted
+and flushed the SDK queue; the console labels this state **submitted** because remote query visibility
+can lag. Langfuse failure never causes a duplicate target retry.
+
+After each deployed live campaign, verify remote visibility from the private Runner environment:
+
+```bash
+python scripts/verify_langfuse_campaign.py --campaign-run-id <completed-live-run-id>
+```
+
+The read-only verifier rejects non-live or incomplete campaigns and succeeds only when every durable
+agent execution is query-visible with its typed agent/generation pair, terminal state, native
+parentage, exact usage, and reconciled cost. Store its JSON output as deployment evidence; do not
+substitute local fixtures or an SDK `flush()` result for this query-back check.
 
 The process commands are fixed in the repository artifact table above. A command's presence is not
 evidence that its external Railway service exists or is healthy. In particular, do not point Runner at

@@ -14,6 +14,7 @@ from agentforge.agents.hosted import (
     HostedRoleConfiguration,
     TokenPrices,
 )
+from agentforge.agents.hosted_prompts import hosted_prompt
 from agentforge.providers.openrouter import (
     HostedBudgetExceeded,
     HostedProviderError,
@@ -42,7 +43,7 @@ def _configuration() -> HostedConfigurationSet:
             model_id=model,
             upstream_provider=upstream,
             credential_reference=f"secretref://production/openrouter/{role}/generation-1",
-            prompt_sha256=_digest(f"{role}:prompt"),
+            prompt_sha256=hosted_prompt(role).prompt_sha256,
             policy_sha256=_digest(f"{role}:policy"),
             prices=TokenPrices(
                 input_usd_per_million_tokens=Decimal("1"),

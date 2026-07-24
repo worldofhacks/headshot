@@ -99,7 +99,7 @@ export interface FindingReadModel extends JsonRecord {
   category: string;
   target_version: string;
   publication_status: string;
-  evidence_integrity: string;
+  evidence_integrity: "verified";
   source_kind: string;
   execution_profile: "synthetic" | "live";
   evidence_provenance: string;
@@ -109,7 +109,71 @@ export interface FindingReadModel extends JsonRecord {
   history: FindingHistoryReadModel[];
 }
 
-export type FindingDetailReadModel = FindingReadModel;
+export interface AttackCaseEvidenceReadModel extends JsonRecord {
+  case_id: string;
+  case_content_sha256: string | null;
+  category: string | null;
+  attack_class: "boundary" | "invariant" | "regression" | null;
+  owasp_mappings: JsonRecord[];
+  oracle_expectation: JsonRecord | null;
+  corpus_reconciliation: "verified" | "unavailable";
+}
+
+export interface JudgeBasisReadModel extends JsonRecord {
+  state: string;
+  confidence: number | null;
+  reason_codes: string[];
+  confirmation_source: "oracle" | "canary" | "calibrated_model" | "human" | null;
+  error_code: string | null;
+}
+
+export interface EvidenceIntegrityReadModel extends JsonRecord {
+  stored_content_sha256: string;
+  finding_link_sha256: string;
+  recomputed_content_sha256: string;
+  evidence_record: "verified";
+  finding_link: "verified";
+  observability_reconciliation: "unavailable";
+  observability_detail: string;
+}
+
+export interface RegressionDispositionReadModel extends JsonRecord {
+  disposition_id: string;
+  state: string;
+  reason_codes: string[];
+  reproduction_attempted: boolean;
+  deterministic_reproduction: boolean;
+  passes_for_right_reason: boolean;
+  human_approved: boolean;
+  admitted: boolean;
+}
+
+export interface FindingVerificationReadModel extends JsonRecord {
+  availability: "ready" | "unavailable";
+  reason_code: string | null;
+  finding_id: string;
+  campaign_run_id: string | null;
+  attempt_id: string | null;
+  attack_case: AttackCaseEvidenceReadModel | null;
+  attack_attempt: JsonRecord | null;
+  input_sequence: string[];
+  request_transcript: JsonRecord | null;
+  response_transcript: string | null;
+  policy_decision_id: string | null;
+  executed_at: string | null;
+  trace_id: string | null;
+  judge: JudgeBasisReadModel | null;
+  report_id: string | null;
+  minimal_reproduction: string[];
+  reproduction_sha256: string | null;
+  regression: RegressionDispositionReadModel | null;
+  integrity: EvidenceIntegrityReadModel | null;
+  redaction_state: "synthetic_identifiers_redacted";
+}
+
+export interface FindingDetailReadModel extends FindingReadModel {
+  verification: FindingVerificationReadModel;
+}
 
 export interface ApprovalReadModel extends AuthorizationScopeReadModel {
   request_id: string;
@@ -126,26 +190,35 @@ export interface ApprovalReadModel extends AuthorizationScopeReadModel {
   consumed: boolean;
 }
 
-export interface CoverageReadModel extends JsonRecord {
-  target_version: string;
-  verified_attempt_count: number;
-  total_case_count: number;
-  category_count: number;
-  execution_profile: "synthetic" | "live";
-  evidence_provenance: string;
-  classifications: string[];
-  owasp_web: string[];
-  owasp_llm: string[];
-  verdict_counts: JsonRecord;
-  covered: boolean;
-  as_of: string;
+export interface ApprovalDetailReadModel extends ApprovalReadModel {
+  campaign_run_id: string | null;
+  verification_chain: FindingVerificationReadModel[];
 }
 
-export interface ResilienceReadModel extends JsonRecord {
-  regression_id: string;
-  version: string;
-  status: string;
-  recorded_at: string;
+export interface ReportReadModel extends JsonRecord {
+  schema_version: "1";
+  report_id: string;
+  finding_id: string;
+  campaign_run_id: string;
+  attempt_id: string;
+  source_case_id: string;
+  severity: "low" | "medium" | "high" | "critical";
+  category: string;
+  description: string;
+  clinical_impact: string;
+  minimal_reproduction: string[];
+  reproduction_sha256: string;
+  observed_behavior: string;
+  expected_behavior: string;
+  recommended_remediation: string;
+  status: "draft" | "validated" | "remediation_pending" | "fix_pending" | "fixed" | "regressed";
+  fix_validation: JsonRecord;
+  evidence_references: string[];
+  publication_state: "draft_unpublished" | "blocked_pending_human_approval";
+  regression: RegressionDispositionReadModel | null;
+  report_integrity: "verified";
+  created_at: string;
+  verification: FindingVerificationReadModel;
 }
 
 export interface TraceReadModel extends JsonRecord {
@@ -289,12 +362,23 @@ export interface AgentAssignmentReadModel extends JsonRecord {
   role: "orchestrator" | "red_team" | "judge" | "documentation";
   provider: string;
   model: string;
+  resolved_model: string;
+  upstream_provider: string | null;
+  prompt_sha256: string;
+  prompt_version: string;
   execution_mode: "deterministic" | "hosted_advisory";
   activation_state: "active" | "staged_pending_authorization";
   version: number;
   configuration_sha256: string;
   configured_at: string | null;
   configured_by: string | null;
+}
+
+export interface AgentPromptReadModel extends JsonRecord {
+  role: "orchestrator" | "red_team" | "judge" | "documentation";
+  prompt_version: string;
+  prompt_sha256: string;
+  system_prompt: string;
 }
 
 export interface AgentReadModel extends JsonRecord {

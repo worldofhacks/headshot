@@ -1,9 +1,12 @@
 import { isJsonRecord, type JsonRecord, type Principal } from "./contracts";
 import type {
   ApprovalReadModel,
+  ApprovalDetailReadModel,
   AgentActivityReadModel,
   AgentAssignmentReadModel,
+  AgentPromptReadModel,
   AgentReadModel,
+  AttackCaseEvidenceReadModel,
   AttackSurfaceReadModel,
   AttemptReadModel,
   AuditReadModel,
@@ -21,12 +24,15 @@ import type {
   ComponentReadModel,
   ConfigurationReadModel,
   CostReadModel,
-  CoverageReadModel,
   EvidenceReadModel,
+  EvidenceIntegrityReadModel,
+  FindingDetailReadModel,
   FindingHistoryReadModel,
   FindingReadModel,
+  FindingVerificationReadModel,
   HostedRunBindingReadModel,
-  ResilienceReadModel,
+  RegressionDispositionReadModel,
+  ReportReadModel,
   SafetyCapsReadModel,
   TargetReadModel,
   ToolScopeReadModel,
@@ -251,12 +257,11 @@ export const decodePrincipal: ReadModelDecoder<Principal> = (value) => {
   const result = record(value, name);
   exactKeys(result, [
     "user_id",
-    "session_id",
     "organization_id",
     "organization_role",
     "organization_permissions",
   ], name);
-  for (const key of ["user_id", "session_id", "organization_id", "organization_role"]) {
+  for (const key of ["user_id", "organization_id", "organization_role"]) {
     string(result, key, name);
   }
   stringArray(result, "organization_permissions", name);
@@ -384,7 +389,156 @@ const decodeFindingHistory = (value: unknown): FindingHistoryReadModel => {
   return result as FindingHistoryReadModel;
 };
 
-const decodeFindingRecord = (value: unknown): FindingReadModel => {
+const decodeAttackCaseEvidence = (value: unknown): AttackCaseEvidenceReadModel => {
+  const name = "attack case evidence";
+  const result = record(value, name);
+  exactKeys(result, [
+    "case_id",
+    "case_content_sha256",
+    "category",
+    "attack_class",
+    "owasp_mappings",
+    "oracle_expectation",
+    "corpus_reconciliation",
+  ], name);
+  string(result, "case_id", name);
+  nullableString(result, "case_content_sha256", name);
+  nullableString(result, "category", name);
+  nullableLiteral(result, "attack_class", ["boundary", "invariant", "regression"], name);
+  objectArray(result, "owasp_mappings", name);
+  nullableObject(result, "oracle_expectation", name);
+  literal(result, "corpus_reconciliation", ["verified", "unavailable"], name);
+  return result as AttackCaseEvidenceReadModel;
+};
+
+const decodeRegressionDisposition = (value: unknown): RegressionDispositionReadModel => {
+  const name = "regression disposition";
+  const result = record(value, name);
+  exactKeys(result, [
+    "disposition_id",
+    "state",
+    "reason_codes",
+    "reproduction_attempted",
+    "deterministic_reproduction",
+    "passes_for_right_reason",
+    "human_approved",
+    "admitted",
+  ], name);
+  for (const key of ["disposition_id", "state"]) string(result, key, name);
+  stringArray(result, "reason_codes", name);
+  for (const key of [
+    "reproduction_attempted",
+    "deterministic_reproduction",
+    "passes_for_right_reason",
+    "human_approved",
+    "admitted",
+  ]) boolean(result, key, name);
+  return result as RegressionDispositionReadModel;
+};
+
+const decodeEvidenceIntegrity = (value: unknown): EvidenceIntegrityReadModel => {
+  const name = "evidence integrity";
+  const result = record(value, name);
+  exactKeys(result, [
+    "stored_content_sha256",
+    "finding_link_sha256",
+    "recomputed_content_sha256",
+    "evidence_record",
+    "finding_link",
+    "observability_reconciliation",
+    "observability_detail",
+  ], name);
+  for (const key of [
+    "stored_content_sha256",
+    "finding_link_sha256",
+    "recomputed_content_sha256",
+    "observability_detail",
+  ]) string(result, key, name);
+  literal(result, "evidence_record", ["verified"], name);
+  literal(result, "finding_link", ["verified"], name);
+  literal(result, "observability_reconciliation", ["unavailable"], name);
+  return result as EvidenceIntegrityReadModel;
+};
+
+const decodeFindingVerification = (value: unknown): FindingVerificationReadModel => {
+  const name = "finding verification";
+  const result = record(value, name);
+  exactKeys(result, [
+    "availability",
+    "reason_code",
+    "finding_id",
+    "campaign_run_id",
+    "attempt_id",
+    "attack_case",
+    "attack_attempt",
+    "input_sequence",
+    "request_transcript",
+    "response_transcript",
+    "policy_decision_id",
+    "executed_at",
+    "trace_id",
+    "judge",
+    "report_id",
+    "minimal_reproduction",
+    "reproduction_sha256",
+    "regression",
+    "integrity",
+    "redaction_state",
+  ], name);
+  literal(result, "availability", ["ready", "unavailable"], name);
+  nullableString(result, "reason_code", name);
+  string(result, "finding_id", name);
+  for (const key of [
+    "campaign_run_id",
+    "attempt_id",
+    "response_transcript",
+    "policy_decision_id",
+    "trace_id",
+    "report_id",
+    "reproduction_sha256",
+  ]) nullableString(result, key, name);
+  nullableTimestamp(result, "executed_at", name);
+  const attackCase = nullableObject(result, "attack_case", name);
+  result.attack_case = attackCase === null ? null : decodeAttackCaseEvidence(attackCase);
+  nullableObject(result, "attack_attempt", name);
+  stringArray(result, "input_sequence", name);
+  nullableObject(result, "request_transcript", name);
+  stringArray(result, "minimal_reproduction", name);
+  const judge = nullableObject(result, "judge", name);
+  if (judge !== null) {
+    exactKeys(judge, [
+      "state",
+      "confidence",
+      "reason_codes",
+      "confirmation_source",
+      "error_code",
+    ], "Judge basis");
+    string(judge, "state", "Judge basis");
+    nullableNumber(judge, "confidence", "Judge basis");
+    if (typeof judge.confidence === "number" && (judge.confidence < 0 || judge.confidence > 1)) {
+      invalid("Judge basis");
+    }
+    stringArray(judge, "reason_codes", "Judge basis");
+    nullableLiteral(
+      judge,
+      "confirmation_source",
+      ["oracle", "canary", "calibrated_model", "human"],
+      "Judge basis",
+    );
+    nullableString(judge, "error_code", "Judge basis");
+  }
+  const regression = nullableObject(result, "regression", name);
+  result.regression = regression === null ? null : decodeRegressionDisposition(regression);
+  const integrity = nullableObject(result, "integrity", name);
+  result.integrity = integrity === null ? null : decodeEvidenceIntegrity(integrity);
+  literal(result, "redaction_state", ["synthetic_identifiers_redacted"], name);
+  return result as FindingVerificationReadModel;
+};
+
+const decodeFindingRecord = (
+  value: unknown,
+  detail = false,
+): FindingReadModel | FindingDetailReadModel => {
   const name = "finding";
   const result = record(value, name);
   exactKeys(result, [
@@ -402,6 +556,7 @@ const decodeFindingRecord = (value: unknown): FindingReadModel => {
     "attempt_id",
     "evidence_content_hash",
     "history",
+    ...(detail ? ["verification"] : []),
   ], name);
   for (const key of [
     "finding_id",
@@ -410,7 +565,6 @@ const decodeFindingRecord = (value: unknown): FindingReadModel => {
     "category",
     "target_version",
     "publication_status",
-    "evidence_integrity",
     "source_kind",
     "evidence_provenance",
     "evidence_content_hash",
@@ -419,17 +573,23 @@ const decodeFindingRecord = (value: unknown): FindingReadModel => {
   }
   nullableString(result, "campaign_run_id", name);
   nullableString(result, "attempt_id", name);
+  literal(result, "evidence_integrity", ["verified"], name);
   literal(result, "execution_profile", ["synthetic", "live"], name);
   result.history = records(result.history, "finding history", decodeFindingHistory);
-  return result as FindingReadModel;
+  if (detail) result.verification = decodeFindingVerification(result.verification);
+  return result as FindingReadModel | FindingDetailReadModel;
 };
 
 export const decodeFindings: ReadModelDecoder<FindingReadModel[]> = (value) =>
-  records(value, "findings", decodeFindingRecord);
+  records(value, "findings", (entry) => decodeFindingRecord(entry) as FindingReadModel);
 
-export const decodeFinding: ReadModelDecoder<FindingReadModel> = decodeFindingRecord;
+export const decodeFinding: ReadModelDecoder<FindingDetailReadModel> = (value) =>
+  decodeFindingRecord(value, true) as FindingDetailReadModel;
 
-const decodeApproval = (value: unknown): ApprovalReadModel => {
+const decodeApproval = (
+  value: unknown,
+  detail = false,
+): ApprovalReadModel | ApprovalDetailReadModel => {
   const name = "approval";
   const result = record(value, name);
   validateScope(result, name, [
@@ -445,6 +605,7 @@ const decodeApproval = (value: unknown): ApprovalReadModel => {
     "decided_at",
     "expired",
     "consumed",
+    ...(detail ? ["campaign_run_id", "verification_chain"] : []),
   ]);
   for (const key of ["request_id", "scope_hash", "launcher_user_id"]) string(result, key, name);
   timestamp(result, "expires_at", name);
@@ -456,58 +617,103 @@ const decodeApproval = (value: unknown): ApprovalReadModel => {
   boolean(result, "expired", name);
   boolean(result, "consumed", name);
   nullableTimestamp(result, "decided_at", name);
-  return result as ApprovalReadModel;
+  if (detail) {
+    nullableString(result, "campaign_run_id", name);
+    result.verification_chain = records(
+      result.verification_chain,
+      "approval verification chain",
+      decodeFindingVerification,
+    );
+  }
+  return result as ApprovalReadModel | ApprovalDetailReadModel;
 };
 
 export const decodeApprovals: ReadModelDecoder<ApprovalReadModel[]> = (value) =>
-  records(value, "approvals", decodeApproval);
+  records(value, "approvals", (entry) => decodeApproval(entry) as ApprovalReadModel);
 
-const decodeCoverageRecord = (value: unknown): CoverageReadModel => {
-  const name = "coverage";
+export const decodeApprovalDetail: ReadModelDecoder<ApprovalDetailReadModel> = (value) =>
+  decodeApproval(value, true) as ApprovalDetailReadModel;
+
+const decodeReport = (value: unknown): ReportReadModel => {
+  const name = "report";
   const result = record(value, name);
   exactKeys(result, [
-    "target_version",
-    "verified_attempt_count",
-    "total_case_count",
-    "category_count",
-    "execution_profile",
-    "evidence_provenance",
-    "classifications",
-    "owasp_web",
-    "owasp_llm",
-    "verdict_counts",
-    "covered",
-    "as_of",
+    "schema_version",
+    "report_id",
+    "finding_id",
+    "campaign_run_id",
+    "attempt_id",
+    "source_case_id",
+    "severity",
+    "category",
+    "description",
+    "clinical_impact",
+    "minimal_reproduction",
+    "reproduction_sha256",
+    "observed_behavior",
+    "expected_behavior",
+    "recommended_remediation",
+    "status",
+    "fix_validation",
+    "evidence_references",
+    "publication_state",
+    "regression",
+    "report_integrity",
+    "created_at",
+    "verification",
   ], name);
-  string(result, "target_version", name);
-  number(result, "verified_attempt_count", name, { integer: true, minimum: 0 });
-  number(result, "total_case_count", name, { integer: true, minimum: 0 });
-  number(result, "category_count", name, { integer: true, minimum: 0 });
-  literal(result, "execution_profile", ["synthetic", "live"], name);
-  string(result, "evidence_provenance", name);
-  stringArray(result, "classifications", name);
-  stringArray(result, "owasp_web", name);
-  stringArray(result, "owasp_llm", name);
-  object(result, "verdict_counts", name);
-  boolean(result, "covered", name);
-  timestamp(result, "as_of", name);
-  return result as CoverageReadModel;
+  literal(result, "schema_version", ["1"], name);
+  for (const key of [
+    "report_id",
+    "finding_id",
+    "campaign_run_id",
+    "attempt_id",
+    "source_case_id",
+    "category",
+    "description",
+    "clinical_impact",
+    "reproduction_sha256",
+    "observed_behavior",
+    "expected_behavior",
+    "recommended_remediation",
+  ]) string(result, key, name);
+  literal(result, "severity", ["low", "medium", "high", "critical"], name);
+  literal(result, "status", [
+    "draft",
+    "validated",
+    "remediation_pending",
+    "fix_pending",
+    "fixed",
+    "regressed",
+  ], name);
+  literal(result, "publication_state", [
+    "draft_unpublished",
+    "blocked_pending_human_approval",
+  ], name);
+  literal(result, "report_integrity", ["verified"], name);
+  stringArray(result, "minimal_reproduction", name);
+  stringArray(result, "evidence_references", name);
+  const fixValidation = object(result, "fix_validation", name);
+  exactKeys(fixValidation, ["state", "summary", "evidence_references"], "fix validation");
+  literal(
+    fixValidation,
+    "state",
+    ["not_run", "failed", "passed_for_right_reason"],
+    "fix validation",
+  );
+  string(fixValidation, "summary", "fix validation");
+  stringArray(fixValidation, "evidence_references", "fix validation");
+  const regression = nullableObject(result, "regression", name);
+  result.regression = regression === null ? null : decodeRegressionDisposition(regression);
+  timestamp(result, "created_at", name);
+  result.verification = decodeFindingVerification(result.verification);
+  return result as ReportReadModel;
 };
 
-export const decodeCoverage: ReadModelDecoder<CoverageReadModel[]> = (value) =>
-  records(value, "coverage", decodeCoverageRecord);
+export const decodeReports: ReadModelDecoder<ReportReadModel[]> = (value) =>
+  records(value, "reports", decodeReport);
 
-const decodeResilienceRecord = (value: unknown): ResilienceReadModel => {
-  const name = "resilience";
-  const result = record(value, name);
-  exactKeys(result, ["regression_id", "version", "status", "recorded_at"], name);
-  for (const key of ["regression_id", "version", "status"]) string(result, key, name);
-  timestamp(result, "recorded_at", name);
-  return result as ResilienceReadModel;
-};
-
-export const decodeResilience: ReadModelDecoder<ResilienceReadModel[]> = (value) =>
-  records(value, "resilience", decodeResilienceRecord);
+export const decodeReportDetail: ReadModelDecoder<ReportReadModel> = decodeReport;
 
 const decodeTrace = (value: unknown): TraceReadModel => {
   const name = "trace";
@@ -779,6 +985,10 @@ const decodeAgentAssignment = (value: unknown): AgentAssignmentReadModel => {
     "role",
     "provider",
     "model",
+    "resolved_model",
+    "upstream_provider",
+    "prompt_sha256",
+    "prompt_version",
     "execution_mode",
     "activation_state",
     "version",
@@ -787,7 +997,15 @@ const decodeAgentAssignment = (value: unknown): AgentAssignmentReadModel => {
     "configured_by",
   ], name);
   literal(result, "role", agentRoles, name);
-  for (const key of ["provider", "model", "configuration_sha256"]) string(result, key, name);
+  for (const key of [
+    "provider",
+    "model",
+    "resolved_model",
+    "prompt_sha256",
+    "prompt_version",
+    "configuration_sha256",
+  ]) string(result, key, name);
+  nullableString(result, "upstream_provider", name);
   literal(result, "execution_mode", ["deterministic", "hosted_advisory"], name);
   literal(result, "activation_state", ["active", "staged_pending_authorization"], name);
   number(result, "version", name, { integer: true, minimum: 1 });
@@ -866,6 +1084,22 @@ const decodeAgent = (value: unknown): AgentReadModel => {
 
 export const decodeAgents: ReadModelDecoder<AgentReadModel[]> = (value) =>
   records(value, "agents", decodeAgent);
+
+export const decodeAgentPrompt: ReadModelDecoder<AgentPromptReadModel> = (value) => {
+  const name = "agent prompt";
+  const result = record(value, name);
+  exactKeys(result, [
+    "role",
+    "prompt_version",
+    "prompt_sha256",
+    "system_prompt",
+  ], name);
+  literal(result, "role", agentRoles, name);
+  for (const key of ["prompt_version", "prompt_sha256", "system_prompt"]) {
+    string(result, key, name);
+  }
+  return result as AgentPromptReadModel;
+};
 
 const decodeAgentActivityRecord = (value: unknown): AgentActivityReadModel => {
   const name = "agent activity";
