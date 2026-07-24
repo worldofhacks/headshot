@@ -1,143 +1,100 @@
-# T-F17a Test Design Review
+# T-F17a Test Design Re-review
 
 Status: `REVIEW_CHANGES_REQUIRED`
 
-Freeze: `NOT_FROZEN`
+Freeze verdict: `NOT_FROZEN`
 
-Reviewed commit: `236774123bcbfbd5801b57fcc65939e17e8f58ae`
+Review attempt: `2/3`
+
+Reviewed commit: `ff36e0db89466eaf498b60057b607d89df18ec44`
 
 Reviewed test snapshot:
 
 - `tests/test_agent_prompts.py`:
-  `dfac53abf2900430d316234e7c2148c706847bd28d7878737abccd8b25ab6949`
+  `8e5b003c2160fdee2333e56da6c0e4e505708296f0325de76eb27262a15014bc`
 - `tests/test_packaging.py`:
-  `0177cf51e46a6711154dc58fd29b2696b5b2ad563bccd56c257bc4cd0377f424`
+  `e6ecca56d11be0b0ec0e7140f4dbdd040ba90f49c2fe8420a77ab59489c786cd`
 - `.tdd-swarm/reports/T-F17a-test.md`:
-  `bf83cbf02affc2893ed0fd330c38ab8943334bf11a1fec6f42d3b99aba43f66a`
+  `9f7f002156032365514c77c567574fe987f898d3b3a287be22b1ddfb9bd8f6b6`
 
-These hashes identify the rejected review snapshot; they are not frozen implementation
-contracts.
+These hashes identify the reviewed repair snapshot. They are not frozen implementation contracts.
 
-## Authority and scope
+## Prior finding closure
 
-The four exact role/model assignments in the tests match the locked table in
-`docs/planning/agent-runtime-provenance.md`:
+All five Important findings from `d630bbb` are materially closed:
 
-| role | model |
-|---|---|
-| `orchestrator` | `anthropic/claude-opus-4.8` |
-| `red_team` | `qwen/qwen3.5-397b-a17b` |
-| `judge` | `google/gemini-2.5-pro` |
-| `documentation` | `openai/gpt-5.4` |
+1. The exact hosted model table is now reached only after the missing prompt registry loads, so all
+   new tests are feature-missing RED.
+2. The new prompt-wheel test uses a deterministic stdlib wheel, `--no-index --no-deps`, disabled
+   pip configuration/version checks, and no build isolation or dependency acquisition. A separate
+   local-wheel install smoke exits `0`.
+3. An autouse socket/urllib/http.client denial guard covers every in-process registry, lookup,
+   validation, and trust-boundary test. The installed subprocess installs offline and applies the
+   same connection guards before importing the registry.
+4. All four record identity fields receive hostile mutation attempts; identity lookup spans every
+   role/version/hash combination; and all 23 non-identity role/resource/hash/content permutations
+   are rejected.
+5. Every role now carries a unique short canary. Hostile validation and lookup errors are checked
+   through both `str` and `repr` for prefix, middle, suffix, and canary fragments.
 
-The prompt-boundary clauses trace to the same plan and to the distinct-role, Judge-independence,
-model-choice, and AI-verification requirements in `Week_3_AgentForge.pdf`. The changed tests do
-not exercise provider-message transport (T-F17c) or prompt API/UI authorization and rendering
-(T-F17f).
+The unsupported public `MAX_PROMPT_BYTES` and 256-byte minimum from the prior Minor finding are
+also removed. The repaired private one-MiB-plus-one case proves a finite upper-bound rejection
+without prescribing a production constant.
 
-## Important findings
+## Important finding
 
-### I-1 — One new test is GREEN before T-F17a exists
+### I-6 — The AC-4 probe still allows a package-filesystem loader instead of `importlib.resources`
 
-`tests/test_agent_prompts.py:109-111` asserts only the already-landed
-`HOSTED_ROLE_MODELS`. It passes on the RED base:
+The test-review prompt explicitly requires proof that a lazy filesystem fallback cannot pass, and
+AC-4 requires resolution through `importlib.resources`. The repaired test verifies archive
+membership at `tests/test_packaging.py:322-338`, but then installs and unpacks the wheel at lines
+340-369. Its isolated probe imports that unpacked package directory at lines 405-447.
 
-```text
-tests/test_agent_prompts.py::test_spec_T_F17a_AC_1_locked_role_model_assignments_cannot_drift
-1 passed
-```
+Consequently, an implementation that reads
+`Path(__file__).parent / "registry.v1.json"` and
+`Path(__file__).parent / "v1" / f"{role}.txt"` passes this probe. Those files exist in the unpacked
+installation and are byte-identical to the archive. The decoy at lines 371-385 and environment
+variables at lines 425-431 rule out caller/environment override directories only; they do not
+distinguish package-relative filesystem reads from `importlib.resources`.
 
-The TDD-swarm Test Agent contract requires every new test to fail because the ticket feature is
-missing. The Test Agent report's `6 failed, 1 passed` therefore cannot support its final claim of
-clean RED.
+That is the exact lazy fallback the review prompt says must not pass. It also loses zip-safe
+resource behavior despite the otherwise correct installed-wheel assertions.
 
-Required repair: bind the exact model table assertion to the new four-role prompt-registry
-identity in a test that is RED while the registry is absent. Do not add any provider invocation or
-transport behavior.
-
-### I-2 — The purported offline wheel RED is environment-dependent and fails for the wrong reason
-
-`tests/test_packaging.py:160-165` uses an isolated pip build that may fetch build requirements, and
-`tests/test_packaging.py:202-209` asks the fresh environment to install `jsonschema>=4` from an
-index. Neither subprocess encodes the report's claimed local wheelhouse. With network disabled by
-`PIP_NO_INDEX=1`, the reviewed test fails before building the wheel:
-
-```text
-ERROR: Could not find a version that satisfies the requirement setuptools>=68
-FAILED at tests/test_packaging.py:165
-```
-
-That is setup/build-isolation RED, not T-F17a's missing manifest/resource RED. It also contradicts
-the deterministic zero-network contract.
-
-Required repair: make build and install mechanically offline and self-contained (for example,
-disable build isolation with already-verified local build tooling and install the produced wheel
-with `--no-index --no-deps`, while supplying `jsonschema` through a deterministic local
-environment). Re-run with network disabled and prove that the first failure is the missing prompt
-manifest/resource, not dependency acquisition.
-
-### I-3 — Zero-network behavior is guarded on only one in-process path
-
-The socket guard at `tests/test_agent_prompts.py:80-85` is installed only by the hostile-bundle
-test at lines 220-239. Normal registry loading, exact-identity lookup, trust-boundary inspection,
-unsafe-resource-name validation, and the installed-wheel probe execute without a network guard.
-A registry that performs network I/O only during `load_prompt_registry()` can pass the reviewed
-suite.
-
-Required repair: apply a zero-network guard to every new registry/lookup/validation path and make
-the isolated installed-wheel probe deny network before importing/loading the registry. Package
-build and install must also remain offline as required by I-2.
-
-### I-4 — Immutable identity and hostile swaps are under-tested
-
-At `tests/test_agent_prompts.py:104-105`, only `content` mutation is attempted and the test
-requires the dataclass-specific `FrozenInstanceError`; it does not prove that `role`, `version`,
-and `sha256` are immutable. The lookup test exercises only one cross-role combination at line 124,
-and bundle validation exercises only one Orchestrator/Judge content swap at lines 160-172. A lazy
-implementation can special-case those examples while accepting other role/resource/hash swaps.
-
-Required repair:
-
-- prove all four record identity fields remain unchanged after hostile mutation attempts without
-  prescribing a dataclass as the only valid immutable representation;
-- exercise every cross-role prompt identity swap, not one selected pair;
-- exercise manifest role/resource/hash swaps across the four-role catalog; and
-- connect each exact locked model assignment to its corresponding registry role identity.
-
-These remain pure registry/configuration tests; do not reach T-F17c transport.
-
-### I-5 — “No prompt fragment” assertions allow partial disclosure
-
-For missing, duplicate, and role-mismatched cases, `_invalid_bundles()` supplies an entire prompt
-as `private_fragment` (`tests/test_agent_prompts.py:141-147,160-172`). The assertion at lines
-235-239 rejects only disclosure of that complete byte sequence. An exception may reveal a prefix
-or any other proper substring and still pass. A bounded probe confirmed that leaking
-`AgentForge system role: judge\nPr` is not detected.
-
-Required repair: give every resource one or more short unique leak canaries and assert that none
-appears in either `str(error)` or `repr(error)` for every hostile case. Preserve generic,
-content-free failures for missing, duplicate, altered, mismatched, invalid-UTF-8, oversized,
-secret-shaped, unmanifested, and traversal-shaped inputs.
-
-## Minor finding
-
-`tests/test_agent_prompts.py:102,190-193` freezes an undocumented public
-`MAX_PROMPT_BYTES` symbol and an unexplained 256-byte minimum. The ticket requires bounded prompt
-size, but it does not define that public API or minimum. Either lock the numeric contract in the
-ticket/planning authority or express the oversized behavior without requiring an unrequested
-public implementation symbol.
+Required repair: retain the offline installed-wheel proof, and add a second isolated probe that
+imports directly from the `.whl` archive on `sys.path` (or another behaviorally equivalent
+zip-backed package-resource test). Assert all four manifest/content/hash records load there with
+network denied. A `Path(__file__)` reader will then fail while `importlib.resources` remains valid.
+The repair must stay deterministic and must not inspect production source text as a substitute for
+behavior.
 
 ## Bounded review evidence
 
-- Focused registry RED: `6 failed, 1 passed`; all six failures are the explicit missing-registry
-  assertion, with no collection or fixture error.
-- Offline wheel check with `PIP_NO_INDEX=1`: failed at build dependency acquisition, before the
-  prompt manifest assertion.
-- Existing hosted-configuration and non-wheel packaging checks: `14 passed`.
-- Collection: `tests/test_agent_prompts.py: 7`, `tests/test_packaging.py: 5`.
-- Ruff check on both owned test files: passed.
-- Diff check from the RED commit: passed.
+Focused zero-network RED:
 
-Verdict: Critical findings: `0`; Important findings: `5`; Minor findings: `1`.
-The tests must return to the Test Agent, then receive a fresh independent review and new hash
-freeze before implementation begins.
+```text
+PIP_NO_INDEX=1 python -m pytest -o addopts='' \
+  tests/test_agent_prompts.py \
+  tests/test_packaging.py::test_spec_T_F17a_AC_4_offline_installed_wheel_preserves_prompt_authority \
+  -q
+-> exit 1; 8 failed
+```
+
+All seven registry tests fail only at the explicit
+`T-F17a prompt registry package is missing` assertion. The wheel test builds without a frontend and
+fails only because `agentforge/agents/prompts/registry.v1.json` is absent. There are no collection,
+fixture, dependency-acquisition, provider, target, or network errors.
+
+Independent offline installation smoke of `_build_stdlib_test_wheel` with `--no-index --no-deps`
+exits `0`. Existing hosted-configuration and non-wheel packaging baseline:
+`14 passed, 2 deselected`.
+
+- Test collection: `tests/test_agent_prompts.py: 7`; `tests/test_packaging.py: 6`.
+- Ruff check on both test-owned files: pass.
+- Ruff format check on both test-owned files: pass.
+- `git diff --check d630bbb..ff36e0d`: pass.
+- Repair commit changes only the two test files and Test Agent report; no product file changed.
+- No test or product file was edited during this review.
+
+Verdict: Critical findings: `0`; Important findings: `1`; Minor findings: `0`.
+The repaired tests must return once more to the Test Agent, then receive a third independent review
+and new hash freeze before implementation begins.
