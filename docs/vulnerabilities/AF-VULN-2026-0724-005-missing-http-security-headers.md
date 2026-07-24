@@ -28,18 +28,20 @@ headers. The response header set was consistently limited to operational headers
   renders the model's `brief`/citations.
 - `X-Content-Type-Options: nosniff` — MIME-sniffing not disabled.
 - `X-Frame-Options` / `frame-ancestors` — clickjacking of the clinical UI not prevented.
-- `Referrer-Policy` — **directly compounds `AF-VULN-…-004`:** because the SID travels in the URL
-  (`/app?sid=…`, `.../status?session_id=…`) and no `Referrer-Policy` is set, the full URL — SID
-  included — leaks in the `Referer` header to any third-party resource the page loads.
+- `Referrer-Policy` — **directly compounds `AF-VULN-…-004`:** captured document requests put the
+  SID in the URL (`.../status?session_id=…`), while no `Referrer-Policy` is set. The run did not
+  capture `/app?sid=…`, a browser navigation, or an outbound `Referer` containing the SID; the
+  missing policy leaves a potential `Referer` exposure if such a page loads a third-party resource.
 - `Permissions-Policy` — browser feature surface not constrained.
 
 Clinical impact: the co-pilot renders model-produced text and cited evidence to a clinician's
 browser. Without a CSP/`X-Content-Type-Options` backstop, any future gap in server-side output
 sanitization becomes a stored/reflected-XSS path against the reviewing clinician; without HSTS the
-session is exposed to downgrade/interception; without `Referrer-Policy` the URL-borne SID leaks
-outbound. These are defense-in-depth controls that should not depend on the model always declining
-to emit markup. (Note: data responses did correctly set `cache-control: private, no-store`, and
-health/ready set `no-store, no-cache, must-revalidate` — caching hygiene is in place.)
+session is exposed to downgrade/interception; without `Referrer-Policy` a URL-borne SID could leak
+outbound in a browser flow. These are defense-in-depth controls that should not depend on the model
+always declining to emit markup. (Note: data responses did correctly set `cache-control: private,
+no-store`, and health/ready set `no-store, no-cache, must-revalidate` — caching hygiene is in
+place.)
 
 ## Minimal reproduction sequence
 ```

@@ -60,7 +60,7 @@ GET https://agent-production-9f62.up.railway.app/documents/<doc_id>/status?sessi
 | | |
 |---|---|
 | **Expected** | Session tokens are sent in a header or cookie (never the URL/query), are short-lived, are per-caller (not shared), and are paired with a second factor or bound to a device/origin for a system exposing clinical data. |
-| **Observed** | SID is the sole credential, travels in the URL query string and the UI address bar, is shared across callers, and remains valid for a 72-hour idle window; `POST /chat` returns clinical data on the SID alone. |
+| **Observed** | SID is the sole credential, travels in captured document-request URL query strings, is shared across callers, and remains valid for a 72-hour idle window; `POST /chat` returns clinical data on the SID alone. |
 
 ## Recommended remediation
 1. **Never place the session token in a URL/query string.** Move it to an `Authorization` header or
