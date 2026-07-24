@@ -39,6 +39,9 @@ test("direct routes and browser history restore authoritative screens", async ({
   await expect(page.getByText("unavailable — not durably recorded", { exact: true }).first()).toBeVisible();
   await expect(page.getByLabel("Execution mode")).toBeEnabled();
   await expect(page.getByRole("button", {
+    name: "Open four-role authorization",
+  })).toBeEnabled();
+  await expect(page.getByRole("button", {
     name: "Activate deterministic role engine",
   })).toBeDisabled();
   await page.getByLabel("Rationale").fill("Restore the reviewed deterministic planner engine.");

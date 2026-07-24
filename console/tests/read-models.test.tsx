@@ -696,6 +696,53 @@ describe("v1 read-model decoders", () => {
     expect(decodeCampaigns([campaign])).toEqual([campaign]);
   });
 
+  it("decodes only a secret-free server-derived hosted target template", () => {
+    const target = arrayFixtureRecord("targets and surfaces");
+    const hostedRun = {
+      configuration_set_sha256: "a".repeat(64),
+      generation_policy_sha256: "b".repeat(64),
+      session_generation: "generation-1",
+      provider_model_call_limit: 56,
+      provider_model_spend_limit_usd: "5",
+      provider_max_retries: 1,
+      provider_max_concurrency: 1,
+      provider_timeout_seconds: 180,
+    };
+    const campaignTemplate = {
+      target_id: "target-1",
+      target_version: "1.0.0",
+      surface_id: "surface-1",
+      surface_version: "1.0.0",
+      corpus_id: "m11-seed-corpus-v1",
+      corpus_hash: "c".repeat(64),
+      case_count: 2,
+      tool_sources: [],
+      execution_profile: "live",
+      maximum_caps: caps,
+      hosted_run: hostedRun,
+    };
+
+    expect(decodeTargets([{ ...target, campaign_template: campaignTemplate }]))
+      .toEqual([{ ...target, campaign_template: campaignTemplate }]);
+    expect(decodeTargets([{
+      ...target,
+      campaign_template: { ...campaignTemplate, hosted_run: null },
+    }])).toEqual([{
+      ...target,
+      campaign_template: { ...campaignTemplate, hosted_run: null },
+    }]);
+    expect(() => decodeTargets([{
+      ...target,
+      campaign_template: {
+        ...campaignTemplate,
+        hosted_run: {
+          ...hostedRun,
+          credential_reference: "secretref://staging/openrouter/generation-1",
+        },
+      },
+    }])).toThrow("Invalid hosted run binding read model");
+  });
+
   it("fails a malformed ready envelope closed without exposing its payload", async () => {
     const client = createApiClient({
       origin: "https://headshot.test",

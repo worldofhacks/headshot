@@ -29,6 +29,7 @@ import {
   LIVE_RESOURCE_POLL_INTERVAL_MS,
   useResource,
 } from "../hooks/useResource";
+import { navigateTo } from "../router";
 import {
   PERMISSIONS,
   type AgentActivityReadModel,
@@ -191,6 +192,11 @@ export function AgentsScreen({
   }), [records]);
   const selectedActivity = activities.filter((row) => row.agent_role === selectedRole);
   const canConfigure = principal.organization_permissions.includes(PERMISSIONS.configManage);
+  const hostedSetAvailable = records.some(
+    (agent) =>
+      agent.staged_assignment !== null
+      || agent.active_assignment.execution_mode === "hosted_advisory",
+  );
   const normalizedRationale = rationale.trim();
   const deterministicActivationReady =
     canConfigure
@@ -442,12 +448,23 @@ export function AgentsScreen({
                 agents.refresh();
               }}
             />
+            <button
+              type="button"
+              className="button button-primary"
+              disabled={!hostedSetAvailable}
+              title={hostedSetAvailable
+                ? undefined
+                : "A server-owned atomic four-role set must be staged first"}
+              onClick={() => navigateTo({ screen: "targets", entityId: null })}
+            >
+              Open four-role authorization
+            </button>
           </div>
           <p className="data-note">
             This per-role control can only restore a reviewed, server-owned deterministic engine.
-            Hosted assignments remain an immutable four-role configuration set and become active
-            only through an exact human-authorized campaign binding; this control cannot create
-            partial hosted authority.
+            A staged hosted set becomes active only through the exact target/corpus authorization
+            on Targets and a distinct human approval. The browser cannot select role models,
+            provider credentials, or partial hosted authority.
           </p>
         </Panel>
       </div>

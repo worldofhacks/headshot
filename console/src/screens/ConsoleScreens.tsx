@@ -284,7 +284,7 @@ export function LiveScreen({ client, principal, entityId, getToken }: ScreenProp
   // A persisted campaign is an immutable historical scope. A rerun must use the current
   // server-prepared target/corpus template, bounded by both that target and the prior run's
   // operator-selected budget/rate/timeout. A fresh nonce prevents authorization replay.
-  const preparedScope = effectiveCampaign && rerunTemplate
+  const preparedScope = effectiveCampaign && rerunTemplate && rerunTemplate.hosted_run
     && rerunTemplate.maximum_caps.max_attempts_per_run >= rerunTemplate.case_count
     ? {
         target_id: rerunTemplate.target_id,
@@ -310,6 +310,7 @@ export function LiveScreen({ client, principal, entityId, getToken }: ScreenProp
           ),
         },
         run_nonce: rerunNonce,
+        hosted_run: rerunTemplate.hosted_run,
         expires_in_seconds: 900,
       }
     : null;
@@ -1318,7 +1319,8 @@ function TargetManagement({
       && parsedCaps.target_requests_per_second <= template.maximum_caps.target_requests_per_second
       && parsedCaps.run_timeout_seconds <= template.maximum_caps.run_timeout_seconds
     : false;
-  const requestPayload = template && fullScanFitsTarget && capsValid && capsWithinTarget
+  const requestPayload = template && template.hosted_run
+    && fullScanFitsTarget && capsValid && capsWithinTarget
     && runNonce.trim().length >= 16
     ? {
         target_id: template.target_id,
@@ -1330,6 +1332,7 @@ function TargetManagement({
         execution_profile: template.execution_profile,
         caps: parsedCaps,
         run_nonce: runNonce.trim(),
+        hosted_run: template.hosted_run,
         expires_in_seconds: 900,
       }
     : null;
@@ -1436,6 +1439,32 @@ function TargetManagement({
               "maximum_caps",
             ]}
           />
+          {template.hosted_run ? (
+            <>
+              <StateNotice
+                state="ready"
+                detail="This request activates the latest staged four-role set only for the exact target, corpus, caps, and credential generation below. A distinct approver must still approve it."
+              />
+              <RecordDetails
+                data={template.hosted_run}
+                preferredKeys={[
+                  "configuration_set_sha256",
+                  "generation_policy_sha256",
+                  "session_generation",
+                  "provider_model_call_limit",
+                  "provider_model_spend_limit_usd",
+                  "provider_max_retries",
+                  "provider_max_concurrency",
+                  "provider_timeout_seconds",
+                ]}
+              />
+            </>
+          ) : (
+            <StateNotice
+              state="degraded"
+              detail="No server-owned atomic four-role configuration set is staged. Campaign authorization cannot activate hosted roles."
+            />
+          )}
           <div className="panel-grid">
             <label className="form-field">
               <span>Run nonce (16+ characters)</span>
@@ -1466,7 +1495,9 @@ function TargetManagement({
             allowed={Boolean(requestPayload) && hasPermission(principal, PERMISSIONS.campaignLaunch)}
             unavailableReason={requestPayload
               ? PERMISSIONS.campaignLaunch
-              : "a complete full-scan cap envelope and valid nonce"}
+              : template.hosted_run
+                ? "a complete full-scan cap envelope and valid nonce"
+                : "a staged server-owned four-role configuration set"}
             onAcknowledged={() => {
               // Roll a fresh unused nonce after each accepted request so the next campaign
               // can be requested immediately without a replayed-nonce rejection.

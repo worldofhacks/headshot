@@ -183,6 +183,7 @@ class CampaignTemplateReadModel(_ReadModel):
     tool_sources: tuple[str, ...]
     execution_profile: Literal["synthetic", "live"]
     maximum_caps: SafetyCapsReadModel
+    hosted_run: HostedRunBindingReadModel | None
 
 
 class TargetReadModel(_ReadModel):

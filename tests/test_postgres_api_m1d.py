@@ -357,6 +357,7 @@ def test_agent_models_and_tool_scope_are_real_configurable_projections(
     principal = _principal(
         LAUNCHER_ID,
         "org:console:read",
+        "org:campaign:launch",
         "org:targets:manage",
         "org:config:manage",
     )
@@ -442,6 +443,61 @@ def test_agent_models_and_tool_scope_are_real_configurable_projections(
     assert staged_red_team["prompt_version"] == hosted_prompt("red_team").version
     assert staged_red_team["configuration_sha256"] == configuration_sha256
     assert "system_prompt" not in staged_agents_response.text
+
+    targets_response = client.get("/api/v1/targets")
+    assert targets_response.status_code == 200
+    campaign_template = targets_response.json()["data"][0]["campaign_template"]
+    hosted_run = campaign_template["hosted_run"]
+    assert hosted_run == {
+        "configuration_set_sha256": configuration_sha256,
+        "generation_policy_sha256": DEFAULT_HOSTED_GENERATION_POLICY.policy_sha256,
+        "session_generation": "copilot-api",
+        "provider_model_call_limit": 56,
+        "provider_model_spend_limit_usd": "5",
+        "provider_max_retries": 1,
+        "provider_max_concurrency": 1,
+        "provider_timeout_seconds": 180.0,
+    }
+    assert "secretref://" not in targets_response.text
+    assert "credential_reference" not in targets_response.text
+    assert "claude-opus" not in targets_response.text
+
+    request_payload = {
+        "target_id": campaign_template["target_id"],
+        "target_version": campaign_template["target_version"],
+        "surface_id": campaign_template["surface_id"],
+        "surface_version": campaign_template["surface_version"],
+        "corpus_id": campaign_template["corpus_id"],
+        "corpus_hash": campaign_template["corpus_hash"],
+        "execution_profile": campaign_template["execution_profile"],
+        "caps": {
+            "budget_usd": 1.0,
+            "max_attempts_per_run": 1,
+            "target_requests_per_second": 0.5,
+            "run_timeout_seconds": 60.0,
+        },
+        "run_nonce": "hosted-template-nonce-0001",
+        "hosted_run": hosted_run,
+        "expires_in_seconds": 600,
+    }
+    substituted = client.post(
+        "/api/v1/campaign-authorization-requests",
+        json={
+            **request_payload,
+            "hosted_run": {
+                **hosted_run,
+                "generation_policy_sha256": "a" * 64,
+            },
+        },
+        headers=_headers("hosted-template-substitution-0001"),
+    )
+    assert substituted.status_code == 409
+    authorized = client.post(
+        "/api/v1/campaign-authorization-requests",
+        json=request_payload,
+        headers=_headers("hosted-template-authorization-0001"),
+    )
+    assert authorized.status_code == 200, authorized.text
 
     prompt = client.get("/api/v1/agents/red_team/prompt")
     assert prompt.status_code == 200
@@ -1238,13 +1294,13 @@ def test_hosted_authorization_is_bound_but_launch_stays_unavailable_until_compos
             },
             "hosted_run": {
                 "configuration_set_sha256": configuration_sha256,
-                "generation_policy_sha256": "d" * 64,
-                "session_generation": "generation-20260724",
+                "generation_policy_sha256": DEFAULT_HOSTED_GENERATION_POLICY.policy_sha256,
+                "session_generation": "copilot-api",
                 "provider_model_call_limit": 56,
                 "provider_model_spend_limit_usd": "5",
                 "provider_max_retries": 1,
                 "provider_max_concurrency": 1,
-                "provider_timeout_seconds": 30.0,
+                "provider_timeout_seconds": 180.0,
             },
             "expires_in_seconds": 600,
         },
@@ -1259,13 +1315,13 @@ def test_hosted_authorization_is_bound_but_launch_stays_unavailable_until_compos
     )
     assert approval_scope["hosted_run"] == {
         "configuration_set_sha256": configuration_sha256,
-        "generation_policy_sha256": "d" * 64,
-        "session_generation": "generation-20260724",
+        "generation_policy_sha256": DEFAULT_HOSTED_GENERATION_POLICY.policy_sha256,
+        "session_generation": "copilot-api",
         "provider_model_call_limit": 56,
         "provider_model_spend_limit_usd": "5",
         "provider_max_retries": 1,
         "provider_max_concurrency": 1,
-        "provider_timeout_seconds": 30.0,
+        "provider_timeout_seconds": 180.0,
     }
     assert "credential_ref" not in json.dumps(approval_scope)
     preflight = client.get(f"/api/v1/campaign-authorization-requests/{request_id}/preflight")
