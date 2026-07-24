@@ -11,6 +11,12 @@ Evidence date: 2026-07-22 (America/New_York)
 
 Branch: `codex/m1d-live-console-railway`
 
+> **Unreconciled retained Semgrep metadata.** The historical summary row below records 112 files
+> and one JSON digest, while the detailed retained section records 111 files and a different JSON
+> digest for what appears to be the same dated scan. Neither descriptor is final-release evidence.
+> The security owner must identify the authoritative artifact; this packet does not choose or
+> silently rewrite either record.
+
 Artifact policy: hashes and sanitized summaries are retained here; temporary raw reports are not
 committed.
 

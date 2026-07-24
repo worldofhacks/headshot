@@ -8,7 +8,8 @@ PostgreSQL is the authoritative audit and evidence store. A reviewer should be a
 2. the exact authorization request, scope hash, expiry, nonce, and different Approver decision;
 3. target, surface, corpus, configuration, prompt/policy, and release hashes;
 4. the queue job, lease, Runner, and physical work-unit reservation;
-5. ordered Orchestrator, Red Team, Judge, and Documentation execution rows and parent IDs;
+5. ordered Orchestrator, Red Team, and Judge execution rows and parent IDs, plus Documentation when
+   a validated finding triggered a draft;
 6. each physical provider invocation/event and target request, attempt/retry coordinate, outcome,
    latency, exact configured/observed endpoint identity, and safe hashes;
 7. recorder content hash and the Judge's oracle/model decision authority;

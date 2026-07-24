@@ -20,7 +20,10 @@ Stop if any prerequisite is missing:
    database through the single `0018` head. Confirm Railway Web, Runner, and Scheduler expose the same
    commit; only Web may be public.
 2. Load the security owner's exact **frozen 100-case corpus**. Record its corpus ID and SHA-256; do not
-   generate, expand, or substitute a corpus for the demo.
+   generate, expand, or substitute a corpus for the demo. The current closed hosted maximum is only
+   56 physical calls, while conservative four-role preflight reserves 400 logical calls for 100
+   cases before provider retries. Do not launch until reviewed code raises the role/global ceilings
+   to the exact frozen workload and retry policy, tests the bound, and obtains a fresh authorization.
 3. Stage the exact configuration and verify its immutable identities:
 
    | Role | Requested model | Exact upstream route |

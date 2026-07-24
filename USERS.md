@@ -91,7 +91,8 @@ Documentation runs only for a validated finding that can produce a draft report.
 lineage **Orchestrator → Red Team → Judge → Documentation** without letting unreviewed generation widen a
 campaign. Full adaptive mutation still requires review, a new corpus hash, and fresh authorization.
 
-The candidate pins each hosted role to one exact OpenRouter model/route pair: Orchestrator
+The intended final authorization-bound configuration selects one exact OpenRouter model/route pair
+for each hosted role: Orchestrator
 `anthropic/claude-opus-4.8` via `amazon-bedrock/eu-west-1`; Red Team
 `qwen/qwen3.5-397b-a17b` via `atlas-cloud/fp8`; Judge `google/gemini-2.5-pro` via
 `google-vertex/global`; and Documentation `openai/gpt-5.4` via `azure/eu`. The latest owner calibration
