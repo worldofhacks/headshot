@@ -1126,10 +1126,13 @@ def test_spec_t_f16a_ac_3_incomplete_mutable_or_duplicate_fixture_is_refused(
 def test_spec_t_f16a_ac_3_duplicate_opaque_ref_across_surfaces_is_catalog_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    entry = _v2_entry(
+    control = _v2_entry(
         version=_DOCUMENT_CANDIDATE_VERSION,
         documents_enabled=True,
     )
+    _load_canonical_catalog(monkeypatch, deepcopy(control))
+
+    entry = deepcopy(control)
     lab, intake = entry["surfaces"][-2:]
     intake["surface_policy"]["fixture_descriptors"][0]["opaque_ref"] = lab["surface_policy"][
         "fixture_descriptors"
@@ -1137,7 +1140,7 @@ def test_spec_t_f16a_ac_3_duplicate_opaque_ref_across_surfaces_is_catalog_error(
     intake["surface_policy_sha256"] = _canonical_sha256(intake["surface_policy"])
     monkeypatch.setenv(_CATALOG_ENV, json.dumps([entry]))
 
-    with pytest.raises(TargetCatalogError, match="(?i)(duplicate|opaque|fixture)"):
+    with pytest.raises(TargetCatalogError):
         TrustedTargetCatalog.from_environment("production")
 
 
@@ -1183,25 +1186,36 @@ def test_spec_t_f16a_ac_4_invalid_retry_scalar_is_refused(invalid: Any) -> None:
 
 
 @pytest.mark.parametrize(
-    ("operation_index", "retry_count"),
+    ("surface_name", "operation_index", "retry_count"),
     [
-        (0, 1),
-        (1, 2),
-        (2, 2),
-        (3, 2),
-        (4, 2),
+        ("lab", 0, 1),
+        ("lab", 1, 2),
+        ("lab", 2, 2),
+        ("lab", 3, 2),
+        ("lab", 4, 2),
+        ("intake", 0, 1),
+        ("intake", 1, 1),
     ],
-    ids=["upload", "status-poll", "report-read", "preview-read", "document-readback"],
+    ids=[
+        "lab-upload",
+        "lab-status-poll",
+        "lab-report-read",
+        "lab-preview-read",
+        "lab-document-readback",
+        "intake-upload",
+        "intake-duplicate-check",
+    ],
 )
 # spec(T-F16a:AC-4)
 def test_spec_t_f16a_ac_4_document_operation_retry_ceiling_is_specific(
+    surface_name: str,
     operation_index: int,
     retry_count: int,
 ) -> None:
     canonical = _surface_payloads(
         version=_DOCUMENT_CANDIDATE_VERSION,
         documents_enabled=True,
-    )["lab"]
+    )[surface_name]
     _parse_canonical_surface(canonical)
     hostile = _rehash_surface(
         canonical,
@@ -1362,8 +1376,6 @@ def test_spec_t_f16a_ac_5_each_policy_drift_fails_before_independent_side_effect
     registry = _ready_registry(target, [surfaces["lab"]])
     canonical = surface_payload(surfaces["lab"])
     hostile = _rehash_surface(canonical, mutation)
-    hostile_surface = _parse_canonical_surface(hostile)
-    scope = _scope(target, hostile_surface)
     side_effects = {"adapter": 0, "credential": 0, "fixture": 0}
 
     def adapter_construction_probe(_: Any) -> object:
@@ -1375,6 +1387,19 @@ def test_spec_t_f16a_ac_5_each_policy_drift_fails_before_independent_side_effect
 
     def fixture_resolution_probe(_: JsonObject) -> None:
         side_effects["fixture"] += 1
+
+    try:
+        hostile_surface = surface_from_payload(hostile)
+        scope = AuthorizationScope.for_definitions(
+            target=target,
+            surface=hostile_surface,
+            corpus_hash=_CORPUS_HASH,
+            caps=target.safety_caps,
+            run_nonce=_RUN_NONCE,
+        )
+    except DefinitionError:
+        assert side_effects == {"adapter": 0, "credential": 0, "fixture": 0}
+        return
 
     adapters = AdapterRegistry(registry, {"openemr": adapter_construction_probe})
 

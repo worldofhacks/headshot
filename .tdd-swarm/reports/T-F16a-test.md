@@ -56,9 +56,9 @@ The canonical placement table is:
 |---|---|
 | AC-1 | Catalog -> registry -> scope coverage for all eight final surfaces; Week 1 `/app`; `2.0.0` disabled documents and separately hashed `2.1.0` activation; complete policy shape/hash; missing, duplicate, forged-hash, and target-wide ambiguity refusals |
 | AC-2 | Exact credential-key table; UI `session_id` attack; document-upload `None`/`sid` attacks; placement alternates; isolated evidence auth-triad mutations plus combined authenticated downgrade before credential resolution |
-| AC-3 | Exact six-field fixture descriptor; omission of every field on both document surfaces; absolute/file/relative/traversal/HTTP/query locators; intra- and cross-surface duplicate refs; upload without descriptor |
-| AC-4 | Lab `34` logical / `67` physical and intake `2` / `2`; self-consistent upload/poll/read retry-ceiling attacks; boolean, negative, nonfinite, unbounded, understated, and overstated operation/top-level maxima; valid generic retry `2` control with exact arithmetic |
-| AC-5 | Exact policy/hash in canonical scope; independently rehashed method/path/profile/retry/fixture/credential drift; separate adapter, credential, and fixture boundary probes remain untouched; independent auth and path fallback refusals |
+| AC-3 | Exact six-field fixture descriptor; omission of every field on both document surfaces; absolute/file/relative/traversal/HTTP/query locators; intra- and cross-surface duplicate refs with typed rejection independent of message text; upload without descriptor |
+| AC-4 | Lab `34` logical / `67` physical and intake `2` / `2`; self-consistent retry-ceiling attacks for every lab operation and both intake uploads; boolean, negative, nonfinite, unbounded, understated, and overstated operation/top-level maxima; valid generic retry `2` control with exact arithmetic |
+| AC-5 | Exact policy/hash in canonical scope; independently rehashed method/path/profile/retry/fixture/credential drift; valid early `DefinitionError` or registry rejection leaves separate adapter, credential, and fixture probes untouched; independent auth and path fallback refusals |
 | AC-6 | Synthetic and legacy single-profile compatibility; otherwise-identical exact `54b3a4d` target-wide `payload_profiles` ambiguity rejection; executable v1 approval invalidation; exact `1.0.0 -> 2.0.0 -> 2.1.0` migration and rollback contract |
 
 ## RED evidence
@@ -70,7 +70,7 @@ Final focused command:
   -m pytest tests/test_final_target_surface_policy.py -q --tb=no
 ```
 
-Result after test-review repairs: exit `1`; `101` collected, `101` failed, `0` passed, `0`
+Result after final test-review repairs: exit `1`; `103` collected, `103` failed, `0` passed, `0`
 collection/setup errors.
 
 The failures are intentional and feature-specific:
@@ -97,6 +97,12 @@ The independent Test Reviewer then requested six bounded coverage repairs. The r
 was collected once as a whole (`101/101` intentional RED), followed by a three-test AC-6
 failure-causality sample. That sample confirmed the expected causes: current acceptance of the
 partial target-wide profile set, absent v2 policy support, and the absent migration note.
+
+The second re-review requested three final narrow corrections. The contract now loads the valid
+v2.1 control before a cross-surface duplicate mutation without constraining error prose, covers
+both intake operations' zero-retry rule, and accepts early definition rejection while proving all
+three side-effect probes remain untouched. The final whole-suite result is `103/103` intentional
+RED.
 
 ## Baseline and static checks
 
