@@ -37,7 +37,10 @@ def _write_ticket(repository: Path) -> None:
     ticket = repository / "tickets" / "T-F00.md"
     ticket.parent.mkdir(parents=True)
     ticket.write_text(
-        "---\nid: T-F00\ntest_scopes:\n  - tests/swarm/test_fixture.py\n---\n\n"
+        "---\nid: T-F00\ntest_scopes:\n"
+        "  - tests/swarm/test_secondary.py\n"
+        "  - tests/swarm/test_fixture.py\n"
+        "---\n\n"
         "## Acceptance Criteria\n- **AC-1**: Fixture.\n"
         "- **AC-2**: Fixture.\n- **AC-3**: Fixture.\n"
         "- **AC-4**: Fixture.\n- **AC-5**: Fixture.\n",
@@ -51,6 +54,10 @@ def _write_ticket(repository: Path) -> None:
         'def test_ac_3():\n    """spec(T-F00:AC-3)"""\n\n'
         'def test_ac_4():\n    """spec(T-F00:AC-4)"""\n\n'
         'def test_ac_5():\n    """spec(T-F00:AC-5)"""\n',
+        encoding="utf-8",
+    )
+    (repository / "tests" / "swarm" / "test_secondary.py").write_text(
+        'def test_secondary_evidence():\n    """spec(T-F00:AC-5)"""\n',
         encoding="utf-8",
     )
 
@@ -333,6 +340,45 @@ def _run_wrapper_with_test_deadline(
     )
 
 
+def _start_wrapper_at_failpoint(
+    repository: Path,
+    base: str,
+    *,
+    failpoint: str,
+    ready_file: Path,
+    continue_file: Path,
+) -> subprocess.Popen[str]:
+    environment = _wrapper_environment(repository)
+    environment.update(
+        {
+            "TDD_SWARM_TEST_FAILPOINT": failpoint,
+            "TDD_SWARM_TEST_FAILPOINT_READY_FILE": str(ready_file),
+            "TDD_SWARM_TEST_FAILPOINT_CONTINUE_FILE": str(continue_file),
+        }
+    )
+    return subprocess.Popen(
+        ["bash", ".tdd-swarm/run-local-gates.sh", "tickets/T-F00.md", base],
+        cwd=repository,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=environment,
+        start_new_session=True,
+    )
+
+
+def _terminate_process_group(process: subprocess.Popen[str]) -> tuple[str, str]:
+    if process.poll() is None:
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(process.pid, signal.SIGTERM)
+    try:
+        return process.communicate(timeout=2)
+    except subprocess.TimeoutExpired:
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(process.pid, signal.SIGKILL)
+        return process.communicate()
+
+
 def _pid_exists(pid: int) -> bool:
     try:
         os.kill(pid, 0)
@@ -368,6 +414,20 @@ def _write_secret_scan(repository: Path, body: str) -> None:
     script = repository / "scripts" / "secret_scan.sh"
     script.parent.mkdir(parents=True, exist_ok=True)
     script.write_text("#!/usr/bin/env bash\nset -euo pipefail\n" + body, encoding="utf-8")
+    if (repository / ".git").exists():
+        _run(["git", "add", "scripts/secret_scan.sh"], cwd=repository)
+        staged = subprocess.run(
+            ["git", "diff", "--cached", "--quiet", "--", "scripts/secret_scan.sh"],
+            cwd=repository,
+            check=False,
+        )
+        if staged.returncode == 1:
+            _run(["git", "commit", "-qm", "fixture secret-scan behavior"], cwd=repository)
+        else:
+            assert staged.returncode == 0
+        policy = repository / ".tdd-swarm" / "coverage-policy.md"
+        if policy.exists() and "decision: non-applicable" in policy.read_text(encoding="utf-8"):
+            _write_signed_approval(repository)
 
 
 def _report(repository: Path) -> str:
@@ -379,6 +439,7 @@ def _prepare_fixture(repository: Path) -> str:
     _install_gate_shims(repository)
     _write_ticket(repository)
     _write_gate_map(repository)
+    _write_secret_scan(repository, "printf 'secret-scan-ok\\n'\n")
     package = repository / "src" / "agentforge"
     package.mkdir(parents=True)
     (package / "__init__.py").write_text("", encoding="utf-8")
@@ -389,8 +450,12 @@ def _prepare_fixture(repository: Path) -> str:
 
 def _canonical_test_scope_hash(repository: Path, paths: tuple[str, ...]) -> str:
     """Hash sorted length-prefixed UTF-8 paths and length-prefixed raw file bytes."""
+    return _test_scope_hash_in_order(repository, tuple(sorted(paths)))
+
+
+def _test_scope_hash_in_order(repository: Path, paths: tuple[str, ...]) -> str:
     payload = bytearray()
-    for relative_path in sorted(paths):
+    for relative_path in paths:
         path_bytes = relative_path.encode("utf-8")
         file_bytes = (repository / relative_path).read_bytes()
         payload.extend(len(path_bytes).to_bytes(4, "big"))
@@ -631,8 +696,26 @@ def test_wrapper_rejects_mutated_arguments_of_a_sanctioned_gate_without_running_
     assert "argument" in output or "fixed" in output or "sanctioned" in output
 
 
-def test_wrapper_rejects_an_explicit_shell_gate_without_running_it(tmp_path: Path) -> None:
-    """spec(T-F00:AC-4) — shell interpreters cannot be selected as gate commands."""
+def test_wrapper_binds_each_sanctioned_vector_to_its_exact_gate_id(tmp_path: Path) -> None:
+    """spec(T-F00:AC-4) — a valid vector under the wrong valid gate ID is never executed."""
+    base = _prepare_fixture(tmp_path)
+    _write_policy(tmp_path, _approved_non_applicable_policy())
+    marker = tmp_path / "wrong-gate-id-ran"
+    _write_secret_scan(tmp_path, "printf unsafe > wrong-gate-id-ran\n")
+    _write_single_gate_map(tmp_path, "lint", SECRET_SCAN_COMMAND)
+
+    result = _run_wrapper(tmp_path, base)
+
+    assert result.returncode != 0
+    assert not marker.exists()
+    output = (result.stdout + result.stderr).lower()
+    assert "gate" in output and ("fixed" in output or "sanctioned" in output or "mapping" in output)
+
+
+def test_wrapper_rejects_an_unsanctioned_shell_vector_without_running_it(
+    tmp_path: Path,
+) -> None:
+    """spec(T-F00:AC-4) — an unsanctioned sh -c vector is rejected before execution."""
     base = _prepare_fixture(tmp_path)
     _write_policy(tmp_path, _approved_non_applicable_policy())
     marker = tmp_path / "shell-ran"
@@ -643,6 +726,40 @@ def test_wrapper_rejects_an_explicit_shell_gate_without_running_it(tmp_path: Pat
     assert result.returncode != 0
     assert not marker.exists()
     assert "shell" in (result.stdout + result.stderr).lower()
+
+
+def test_wrapper_rejects_an_unknown_marker_writing_coverage_adapter(
+    tmp_path: Path,
+) -> None:
+    """spec(T-F00:AC-3) — coverage adapter IDs are allowlisted and never executable paths."""
+    base = _prepare_fixture(tmp_path)
+    marker = tmp_path / "unknown-coverage-adapter-ran"
+    adapter = tmp_path / "scripts" / "marker-coverage-adapter"
+    adapter.parent.mkdir(exist_ok=True)
+    adapter.write_text(
+        "#!/usr/bin/env python3\n"
+        "from pathlib import Path\n"
+        "Path('unknown-coverage-adapter-ran').write_text('unsafe')\n"
+        "print('coverage=100')\n",
+        encoding="utf-8",
+    )
+    adapter.chmod(0o755)
+    _run(["git", "add", "scripts/marker-coverage-adapter"], cwd=tmp_path)
+    _run(["git", "commit", "-qm", "fixture unknown coverage adapter"], cwd=tmp_path)
+    _write_policy(
+        tmp_path,
+        "# Coverage policy\n\n"
+        "decision: executable\n"
+        "coverage-adapter: scripts/marker-coverage-adapter\n"
+        f"baseline-base-sha: {base}\n"
+        "baseline-percent: 99\n",
+    )
+
+    result = _run_wrapper(tmp_path, base)
+
+    assert result.returncode != 0
+    assert not marker.exists()
+    assert "coverage" in (result.stdout + result.stderr).lower()
 
 
 def test_wrapper_rejects_an_arbitrary_coverage_command_without_running_it(tmp_path: Path) -> None:
@@ -841,6 +958,28 @@ def test_wrapper_redacts_console_and_report_output_and_records_a_digest(tmp_path
     assert f"output-sha256: {hashlib.sha256(raw.encode()).hexdigest()}" in report
 
 
+def test_wrapper_rejects_a_post_commit_mapped_executable_mutation(
+    tmp_path: Path,
+) -> None:
+    """spec(T-F00:AC-5) — a fixed mapped script must still match its committed bytes."""
+    base = _prepare_fixture(tmp_path)
+    _write_policy(tmp_path, _approved_non_applicable_policy())
+    marker = tmp_path / "dirty-secret-scan-ran"
+    script = tmp_path / "scripts" / "secret_scan.sh"
+    script.write_text(
+        "#!/usr/bin/env bash\nset -euo pipefail\nprintf unsafe > dirty-secret-scan-ran\n",
+        encoding="utf-8",
+    )
+    _write_single_gate_map(tmp_path, "secret-scan", SECRET_SCAN_COMMAND)
+
+    result = _run_wrapper(tmp_path, base)
+
+    assert result.returncode != 0
+    assert not marker.exists()
+    output = (result.stdout + result.stderr).lower()
+    assert "secret_scan.sh" in output or "executable" in output or "integrity" in output
+
+
 def test_wrapper_distinguishes_exact_output_limit_from_one_byte_over(
     tmp_path: Path,
 ) -> None:
@@ -958,6 +1097,91 @@ def test_wrapper_atomically_replaces_a_preexisting_complete_report(tmp_path: Pat
     assert "prior-complete-report" not in report
 
 
+def test_wrapper_killed_before_publication_preserves_the_prior_complete_report(
+    tmp_path: Path,
+) -> None:
+    """spec(T-F00:AC-5) — failure before atomic publish cannot unlink or partially rewrite."""
+    base = _prepare_fixture(tmp_path)
+    _write_policy(tmp_path, _approved_non_applicable_policy())
+    report_directory = tmp_path / ".tdd-swarm" / "reports"
+    report_directory.mkdir()
+    report_path = report_directory / "T-F00-gates.md"
+    prior = b"prior-complete-report\n"
+    report_path.write_bytes(prior)
+    ready = tmp_path / "failpoint-ready"
+    resume = tmp_path / "failpoint-continue"
+    process = _start_wrapper_at_failpoint(
+        tmp_path,
+        base,
+        failpoint="before-report-publish",
+        ready_file=ready,
+        continue_file=resume,
+    )
+
+    try:
+        assert _poll_until(
+            lambda: ready.exists() or process.poll() is not None,
+            deadline_seconds=3,
+        )
+        assert ready.exists(), "wrapper did not expose the generic pre-publication failpoint"
+        _terminate_process_group(process)
+        assert report_path.read_bytes() == prior
+    finally:
+        if process.poll() is None:
+            _terminate_process_group(process)
+
+
+def test_wrapper_rejects_a_validated_gate_map_swapped_to_a_symlink_before_use(
+    tmp_path: Path,
+) -> None:
+    """spec(T-F00:AC-5) — validation and later use stay bound to the same gate-map object."""
+    base = _prepare_fixture(tmp_path)
+    _write_secret_scan(tmp_path, "printf unsafe > external-gate-ran\n")
+    _write_policy(tmp_path, _approved_non_applicable_policy())
+    outside = tmp_path.parent / f"{tmp_path.name}-outside-gates.md"
+    outside_content = (
+        "# External gate mapping\n\n"
+        "| gate | exact command | current status |\n"
+        "|---|---|---|\n"
+        f"| secret-scan | {SECRET_SCAN_COMMAND} | AVAILABLE |\n"
+    ).encode()
+    outside.write_bytes(outside_content)
+    ready = tmp_path / "failpoint-ready"
+    resume = tmp_path / "failpoint-continue"
+    process = _start_wrapper_at_failpoint(
+        tmp_path,
+        base,
+        failpoint="after-input-validation-before-use",
+        ready_file=ready,
+        continue_file=resume,
+    )
+
+    try:
+        assert _poll_until(
+            lambda: ready.exists() or process.poll() is not None,
+            deadline_seconds=3,
+        )
+        assert ready.exists(), "wrapper did not expose the generic validation/use failpoint"
+        gate_map = tmp_path / ".tdd-swarm" / "gates.md"
+        gate_map.rename(tmp_path / ".tdd-swarm" / "gates.validated.md")
+        gate_map.symlink_to(outside)
+        resume.touch()
+        try:
+            stdout, stderr = process.communicate(timeout=4)
+        except subprocess.TimeoutExpired:
+            stdout, stderr = _terminate_process_group(process)
+            raise AssertionError("wrapper did not leave the validation/use failpoint") from None
+    finally:
+        if process.poll() is None:
+            _terminate_process_group(process)
+
+    assert process.returncode != 0
+    assert not (tmp_path / "external-gate-ran").exists()
+    assert outside.read_bytes() == outside_content
+    output = (stdout + stderr).lower()
+    assert "symlink" in output or "changed" in output or "integrity" in output
+
+
 def test_wrapper_rejects_a_symlinked_ticket_parent_before_external_read(
     tmp_path: Path,
 ) -> None:
@@ -1067,6 +1291,14 @@ def test_report_hashes_every_input_and_declared_test_scope(tmp_path: Path) -> No
 
     assert result.returncode == 0, result.stdout + result.stderr
     report = _report(tmp_path)
+    declared_test_scopes = (
+        "tests/swarm/test_secondary.py",
+        "tests/swarm/test_fixture.py",
+    )
+    ticket = (tmp_path / "tickets" / "T-F00.md").read_text(encoding="utf-8")
+    assert ticket.index(declared_test_scopes[0]) < ticket.index(declared_test_scopes[1])
+    canonical_scope_hash = _canonical_test_scope_hash(tmp_path, declared_test_scopes)
+    assert canonical_scope_hash != _test_scope_hash_in_order(tmp_path, declared_test_scopes)
     expected_hashes = {
         "ticket-sha256": hashlib.sha256(
             (tmp_path / "tickets" / "T-F00.md").read_bytes()
@@ -1083,10 +1315,7 @@ def test_report_hashes_every_input_and_declared_test_scope(tmp_path: Path) -> No
         "import-cycle-tool-sha256": hashlib.sha256(
             (tmp_path / ".tdd-swarm" / "check-import-cycles.py").read_bytes()
         ).hexdigest(),
-        "test-scope-sha256": _canonical_test_scope_hash(
-            tmp_path,
-            ("tests/swarm/test_fixture.py",),
-        ),
+        "test-scope-sha256": canonical_scope_hash,
     }
     for label, expected_hash in expected_hashes.items():
         assert f"{label}: {expected_hash}" in report
