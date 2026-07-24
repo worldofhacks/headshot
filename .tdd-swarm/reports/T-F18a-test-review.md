@@ -1,83 +1,61 @@
-# T-F18a Test Design Re-review
+# T-F18a Test Design Final Blocker Re-review
 
-Verdict: **CHANGES_REQUIRED**
+Verdict: **DESIGN_PASS_PROVISIONAL_NOT_FROZEN**
 
-Reviewed repair commit: `f0b0a1450ac9be72be81be6ea4aa67a9212ce107`
+Reviewed candidate: `a4bf66815c99ac82a51251ac690396c12b2fdf6f`
 
-The repaired tests are not frozen. The prior accessibility RED, compatibility suffix/direct-route
-gap, self-generated bookmark check, unexecuted browser RED, and incomplete invalid-screen matrix are
-closed. Independent execution reproduced the claimed assertion-only RED. Two executable
-test-design gaps remain, and the missing dependency-integration SHA independently prohibits formal
-freeze or Implementation Agent dispatch.
+Implementation dispatch: **BLOCKED** pending a recorded dependency-integration SHA.
 
-## Findings
+This re-review is intentionally limited to the two remaining findings from
+`e563063e2f63a72e2f9c15f8a84792f81be854fa`. Both test-design blockers are closed.
+The suite is not frozen because T-F18a's mandatory dependency base does not yet exist.
 
-### Important — AC-1 still freezes CSS structure and an unspecified global order
+## Closed blockers
 
-The component tests locate navigation through `.sidebar nav` and `.mobile-nav`, then require every
-unrelated destination to appear in one exact order
-(`console/tests/contracts.test.ts:93-114,124-182`). The Playwright case repeats the CSS selectors
-(`console/tests/browser/console.spec.ts:21-39`). T-F18a AC-1 requires exactly one
-`Coverage & Regression` destination targeting `/coverage` and no `Resilience` destination; it does
-not require these CSS classes or freeze the order of Live, Findings, Approvals, Agents, Tooling,
-Traces, Costs, Targets, and Configuration. A semantically valid navigation refactor can therefore
-fail these tests without violating the ticket. This does not fully close the prior finding to avoid
-freezing a button role/order as the only valid implementation.
+### CSS and navigation-order overconstraint — closed
 
-Required change: scope through existing navigation semantics without requiring a new accessibility
-feature (for example, the first navigation landmark for desktop and the already-named mobile
-landmark), and assert only exact Coverage cardinality, Resilience absence, and activation to
-`/coverage`. Do not use CSS classes or global label order as the contract.
+The component tests now scope through navigation landmarks instead of `.sidebar` or `.mobile-nav`
+CSS structure (`console/tests/contracts.test.ts:101-143`). They assert only the exact
+`Coverage & Regression` cardinality, absence of `Resilience`, and activation to `/coverage`; the
+unrelated global destination order is no longer frozen. The browser test uses the same existing
+desktop/mobile navigation semantics and the same ticket-owned assertions
+(`console/tests/browser/console.spec.ts:21-40`).
 
-### Important — AC-4 still allows conditional open-redirect and traversal bugs
+This is faithful to AC-1 without imposing a class-name, DOM-layout, or global-order implementation.
 
-The new fixed bookmark and route-builder vectors correctly cover Unicode plus ordinary reserved
-characters (`console/tests/router.test.ts:49-74`; `console/tests/contracts.test.ts:247-268`), but none
-uses an authority-shaped identity such as `//external.example/...`, a scheme-shaped identity, or a
-traversal-prefix identity such as `../config`. The negative cases reject only the exact identities
-`.` and `..` (`console/tests/router.test.ts:85-98`). A lazy implementation can special-case a leading
-`//`, `https://`, or `../` by returning it unencoded while passing every current positive and
-negative assertion, violating AC-4's explicit no-open-redirect/no-path-traversal requirement.
+### Authority, scheme, and traversal-prefix identity cases — closed
 
-Required change: add independently authored route-builder and parser vectors for authority-shaped,
-scheme-shaped, and traversal-prefix opaque identities. Assert exact percent-encoded output,
-same-origin URL resolution, canonical screen-path containment, and unchanged decoded identity.
+The shared hostile-identity table now independently covers:
 
-### Blocking prerequisite — no dependency-integration SHA exists
+- authority-shaped `//external.example/records`;
+- scheme-shaped `https://external.example/steal?next=/config`;
+- traversal-prefix `../config`.
 
-The repaired report now states the provenance accurately
-(`.tdd-swarm/reports/T-F18a-test.md:5-22`). No local or remote ref reviewed here contains integrated
-T-F16f, T-F17f, and T-F19e commits, and no matching completion commit was found. The ticket forbids
-RED before that integration point (`tickets/T-F18a.md:5-6,24-27`), while the execution plan makes the
-single rebase a mechanical gate (`docs/planning/console-pages-remediation.md:156-159`).
+For every case, the tests require exact percent-encoded construction, same-origin resolution,
+containment beneath the canonical screen path, exact resolved pathname, and unchanged parser
+identity (`console/tests/router.test.ts:5-22,95-113`). These assertions reject the lazy conditional
+open-redirect and traversal implementations identified in the prior review while preserving valid
+opaque identities as AC-4 requires.
 
-No SHA may be invented. Even after the two test-design findings above are repaired, this suite may
-only remain a provisional candidate. It cannot be formally frozen or handed to an Implementation
-Agent. Once the real integration SHA exists, transplant/rebase the candidate tests onto it and
-rerun the parent baseline, deterministic RED, affected Playwright RED, typecheck, and independent
-test review. Only a PASS on that exact base freezes the tests.
+## Independent evidence
 
-## Closed findings and independent evidence
+- `git diff --check e563063..a4bf668` passed.
+- Focused Vitest RED reproduced the report exactly: `2` files failed, `30` tests failed, and `41`
+  passed. Failures were assertions against absent T-F18a behavior, not setup, import, transform, or
+  collection errors.
+- Focused Playwright RED reproduced all `3` expected failures at the AC-1, AC-2, and AC-3
+  assertions, with the local Vite server and browser fixtures starting successfully.
+- The repair changes only the three declared console test files and the Test Agent report. No
+  product source or test file was edited by this reviewer.
 
-- Accessibility-only RED was removed; T-F18l retains the full accessibility matrix.
-- Bare, query-only, hash-only, and combined `/resilience` cases require one replacement, no push,
-  stripped suffixes, stable history length, Coverage rendering, and no repeat replacement
-  (`console/tests/contracts.test.ts:186-211`).
-- The Playwright compatibility case now directly navigates to `/resilience` and checks back/forward
-  behavior (`console/tests/browser/console.spec.ts:42-53`).
-- Every collection-only screen and malformed entity-capable screen is covered by deterministic
-  invalid-route normalization (`console/tests/router.test.ts:26-47`;
-  `console/tests/contracts.test.ts:213-245`).
-- Fixed bookmarks, exact route-builder output, App identity propagation, and inbound-only
-  Resilience construction are now covered; the hostile-prefix extension above remains required.
-- Independent Vitest result: `2` files failed, `30` tests failed and `35` passed, matching the
-  report; failures were assertion-only and attributable to missing T-F18a behavior.
-- Independent local Playwright result: all `3` T-F18a tests failed at the intended AC-1, AC-2, and
-  AC-3 assertions, with no launch, fixture, collection, or setup error.
-- `npm run typecheck` and `git diff --check f0b0a145^ f0b0a145` passed.
-- The reviewed repair changes only the three declared console test files and the Test Agent report.
-  No product, deployment, live target, or external service was changed.
+## Mandatory dependency gate
 
-Coverage/regression data deletion and resilience-over-time contents remain correctly outside this
-ticket. The retained Coverage screen is still exercised, while T-F18c owns the merged
-resilience/regression projection and page heading.
+The Test Agent report records that no local or remote ref contains integrated T-F16f, T-F17f, and
+T-F19e commits (`.tdd-swarm/reports/T-F18a-test.md:18-22`). T-F18a explicitly forbids RED before
+that integration point (`tickets/T-F18a.md:23-27`), and the execution plan defines the exact rebase
+as a mechanical base gate (`docs/planning/console-pages-remediation.md:156-159`).
+
+No dependency SHA may be invented. Once the real integration commit exists, transplant/rebase this
+candidate onto that exact SHA and rerun the parent baseline, deterministic RED, affected
+Playwright RED, typecheck, and independent test review. Until a PASS on that exact base, these tests
+remain provisional, are not frozen, and must not be handed to an Implementation Agent.
