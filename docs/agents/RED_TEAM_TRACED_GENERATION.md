@@ -43,11 +43,14 @@ so it records real cost/tokens. Minimal shape for the generation step:
 ```python
 # construct once per run (composition root), from the same config/transport as the other roles:
 traced = TracedHostedRedTeamProvider(
-    transport=self.hosted_transport,                 # the shared OpenRouterTransport
-    lifecycle=..., role_identity=RedTeamRoleIdentity( # only needed for the self-recording generate()
-        provider=rt.provider, model=rt.model_id,
+    transport=self.hosted_transport,  # the shared OpenRouterTransport
+    lifecycle=...,
+    role_identity=RedTeamRoleIdentity(  # only needed for the self-recording generate()
+        provider=rt.provider,
+        model=rt.model_id,
         upstream_provider=rt.upstream_provider,
-        role_configuration_sha256=rt.configuration_sha256),
+        role_configuration_sha256=rt.configuration_sha256,
+    ),
     configuration_sha256=configuration.configuration_sha256,
     generation_policy_sha256=authorization.generation_policy_sha256,
     call_bounds=call_bounds["red_team"],
@@ -56,27 +59,39 @@ traced = TracedHostedRedTeamProvider(
 
 # in the generation step, using the runner's existing store seam:
 gen_execution = self._start_agent_execution(
-    run_id=run_id, agent_role="red_team",
+    run_id=run_id,
+    agent_role="red_team",
     input_payload={"phase": "generation", "category": category, "count": count},
-    parent_execution_id=orchestrator_execution, detail={"phase": "generation"})
+    parent_execution_id=orchestrator_execution,
+    detail={"phase": "generation"},
+)
 try:
     result = traced.generate_traced(seed, count=count, category=category)
-except Exception as exc:                              # budget/provider refusals are typed
+except Exception as exc:  # budget/provider refusals are typed
     self._fail_agent_execution_preserving_error(
-        primary_error=exc, execution_id=gen_execution, status="failed",
+        primary_error=exc,
+        execution_id=gen_execution,
+        status="failed",
         output_payload={"status": "failed"},
         error_code=getattr(exc, "code", "red_team_generation_failed"),
-        detail={"phase": "generation"})
+        detail={"phase": "generation"},
+    )
     raise
 self._finish_agent_execution(
-    execution_id=gen_execution, status="succeeded",
+    execution_id=gen_execution,
+    status="succeeded",
     output_payload={"variant_count": len(result.variants)},
-    measured_cost=float(Decimal(result.measured_cost_usd)),   # real qwen cost
-    input_tokens=result.input_tokens, output_tokens=result.output_tokens,
-    detail={"phase": "generation", "returned_model": result.returned_model,
-            "provider_request_id": result.provider_request_id,
-            "reasoning_tokens": result.reasoning_tokens,
-            "upstream_provider": result.upstream_provider})
+    measured_cost=float(Decimal(result.measured_cost_usd)),  # real qwen cost
+    input_tokens=result.input_tokens,
+    output_tokens=result.output_tokens,
+    detail={
+        "phase": "generation",
+        "returned_model": result.returned_model,
+        "provider_request_id": result.provider_request_id,
+        "reasoning_tokens": result.reasoning_tokens,
+        "upstream_provider": result.upstream_provider,
+    },
+)
 # result.variants then flow into mutate()/normalize -> review -> fresh authorization -> dispatch.
 ```
 
