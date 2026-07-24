@@ -34,6 +34,13 @@ Four slots total means coordinator + at most three workers. No deadline compress
 | 23 | T-F10c | Demo/social package after release/report evidence |
 | 24 | T-F15 | Project story after package |
 | 25 | T-F01b | Final matrix/doc reconciliation last |
+| 26 | T-F16a | Final-target surface-specific policy/auth contract after the original final packet |
+| 27 | T-F16b | Gateway-owned physical-operation accounting after the surface contract |
+| 28 | T-F16c, T-F16d | Evidence/UI probes and document workflow are disjoint new modules |
+| 29 | T-F16e | Runner/catalog composition after prior Runner owners and all adapter contracts |
+| 30 | T-F16f | Durable API authorization/approval/queue plus parent/child scan fanout |
+| 31 | T-F16g | Trusted state observer/attestation and side-effect-free deployment verifier |
+| 32 | T-F16h | Authorized staged deployment, verification, review, and rollback |
 
 ## Dependency graph
 
@@ -77,6 +84,8 @@ T-F07b -> T-F08
 {T-F08,T-F09a,T-F09b,T-F13} -> T-F10a
 {T-F10a,T-F10b} -> T-F10c -> T-F15
 {T-F05d,T-F05e,T-F05f,T-F05g,T-F05h,T-F05i,T-F05j,T-F05k,T-F05l,T-F05m,T-F05n,T-F05o,T-F05p,T-F10c,T-F11,T-F12,T-F13,T-F15} -> T-F01b
+T-F00 -> T-F16a -> T-F16b -> {T-F16c,T-F16d}
+{T-F05a,T-F06a,T-F16c,T-F16d} -> T-F16e -> T-F16f -> T-F16g -> T-F16h
 ```
 
 [locked-decision] T-F04h is target-free smoke only. T-F05p owns the one tracked non-secret
@@ -112,6 +121,14 @@ strictly earlier wave; same-wave prefix/glob scopes do not overlap.
 [locked-decision] External authority may block operational evidence, never deterministic contracts,
 tests, source channel, bounded history, event/evidence, delivery, Runner, rotation, or preflight.
 
+### Final-target adapter remediation
+
+[locked-decision] Integration commit `1ac3ee0` includes partial adapter commit `54b3a4d`; T-F16a-e harden, extract, or replace that baseline rather than building a parallel implementation. T-F16a replaces ambiguous target-wide profiles with authorization-bound per-surface policy, including exact UI query key `sid`. T-F16b makes the Policy Gateway owner of retry-inclusive physical reservations/accounting; lab is 34 logical/67 physical and intake 2/2. T-F16c/T-F16d are the only parallel implementation wave. T-F16e creates immutable environment-specific v2 catalogs: v2.0 leaves documents disabled and v2.1 cannot activate without mechanical private-fixture proof.
+
+[locked-decision] T-F16f owns the real API/control-plane/store/migration/queue launch path, not Runner-only expansion: one immutable parent and all eight child scopes receive separate durable approvals before enqueue/fanout. Results use `declared_scope_complete` and `active_surface_scan_complete`; `full_surface_scan` is unsupported, and inactive lab/intake always force declared-scope incompleteness. T-F16g supplies an injectable read-only observer, signed/fresh current-state attestation, exact `python3` bootstrap, and zero-action verifier. T-F16h is the only operational ticket and refreshes/validates state after every transition; one live-target worker, Runner before Web, independent reviews, and a distinct production grant.
+
+[open-question] T-F16h remains blocked until T-F16g accepts an exact immutable transition-grant version from a distinct approver binding the fresh attestation hash, trusted observer/signing identity, and deployed Runner-only private fixture proof. Conversation authorization, caller-written state, and an opaque catalog reference cannot bind release, environment/service, deployment monotonicity, session generation, fixture hash, retry-inclusive caps, expiry, two-person identity, bootstrap, and rollback.
+
 ### P1 — human/external evidence likely blocking noon
 
 T-F03b, T-F04b, T-F04e, actual T-F05l/T-F05i observations, activation receipt, T-F05b, T-F06b,
@@ -130,6 +147,7 @@ T-F07a, T-F08, T-F09a/b, T-F12, T-F13, T-F10a/b/c, T-F15, final T-F01b.
 - [open-question] Keep non-chat surface adapters disabled until their own deterministic tests and independent code/security reviews land.
 - [open-question] Retain distinct Evidence/Security reviewers, launcher/Approver, Judge, Red Team, replay, stress, reproduction, drill, publication, Railway/Clerk, and deployment authorities.
 - [open-question] True production isolation plus owner main merge/deploy and equal dual-remote green CI remain required.
+- [open-question] Exact T-F16h deployment grant accepted by T-F16g, trusted read-only observer/signing identity and maximum observation age, exact `python3` bootstrap provenance, plus deployed Runner fixture binding for the two approved Week 2 PDF references; the owner bundle may not be committed or assumed uploadable.
 
 [locked-decision] Fewer than three genuine independently reproduced findings leaves PRD-32 incomplete.
 

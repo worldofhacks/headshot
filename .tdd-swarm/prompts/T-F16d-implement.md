@@ -1,0 +1,4 @@
+# T-F16d Implement — Model: gpt-5.6-sol (capable)
+Worktree `<WORKTREE>`; branch `ticket/T-F16d-document-workflow`; baseline `1ac3ee0`. Inputs: ticket, frozen test, test-review report, `.tdd-swarm/LESSONS.md`, and landed T-F16a/b interfaces. Allowed writes only: `src/agentforge/target/private_fixtures.py`, `src/agentforge/target/document_workflow_adapter.py`, `.tdd-swarm/reports/T-F16d-implement.md`. Implement the exact private fixture resolver and bounded workflow; uploads are zero retry, lab reserves/accounts at most 67 physical operations for 34 logical operations, and intake is 2/2. Never edit tests or read owner fixtures.
+
+Run `.tdd-swarm/run-local-gates.sh tickets/T-F16d.md <DIFF_BASE>` each loop; maximum three GREEN attempts. No network, credentials, owner bundle/fixture read, screenshots, target calls, runtime-model change, main merge, or push. Return the four-status contract plus commits/gates.

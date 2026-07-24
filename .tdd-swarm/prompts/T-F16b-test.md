@@ -1,0 +1,4 @@
+# T-F16b Test — Model: gpt-5.6-sol (capable)
+Worktree `<WORKTREE>`; branch `ticket/T-F16b-physical-operation-gateway`; baseline `1ac3ee0`. Inputs: ticket, landed T-F16a, current Gateway/coordinator/work-unit code. Allowed writes only: `tests/test_surface_operation_gateway.py`, `.tdd-swarm/reports/T-F16b-test.md`. Own criterion-tagged RED for retry-inclusive reservation, fail-twice/succeed-third=3, 30-poll projections, capacity refusal before write, ambiguous zero-retry upload, every attempt charge/rate/trace, path/transition/abort, underdeclared flow, and chat/work-unit regression.
+
+Injected transports only. No sockets/network, credentials, owner files, source edit, main merge, or push. Maximum three test attempts. Gate `.tdd-swarm/run-local-gates.sh tickets/T-F16b.md <DIFF_BASE>`. Return the four-status contract plus RED map.

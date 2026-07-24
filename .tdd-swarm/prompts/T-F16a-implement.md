@@ -1,0 +1,4 @@
+# T-F16a Implement — Model: gpt-5.6-sol (capable)
+Worktree `<WORKTREE>`; branch `ticket/T-F16a-surface-policy`; baseline `1ac3ee0`. Inputs: ticket, all frozen T-F16a tests, test-review report, `.tdd-swarm/LESSONS.md`. Allowed writes only: `src/agentforge/target/spec.py`, `src/agentforge/target/catalog.py`, `src/agentforge/target/registry.py`, `src/agentforge/control_plane/serialization.py`, `docs/migrations/final-target-surface-policy-v2.md`, `.tdd-swarm/reports/T-F16a-implement.md`. Harden/replace partial profile-set behavior with canonical per-surface policy; never edit tests.
+
+Run `.tdd-swarm/run-local-gates.sh tickets/T-F16a.md <DIFF_BASE>` each loop; maximum three GREEN attempts. No network, credential/fixture read, target call, runtime-model change, main merge, or push. Return the four-status contract plus commits/gates.

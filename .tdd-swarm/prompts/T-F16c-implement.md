@@ -1,0 +1,4 @@
+# T-F16c Implement — Model: gpt-5.6-sol (capable)
+Worktree `<WORKTREE>`; branch `ticket/T-F16c-evidence-ui-adapters`; baseline `1ac3ee0`. Inputs: ticket, frozen tests, test-review report, `.tdd-swarm/LESSONS.md`, and landed T-F16a/b interfaces. Allowed writes only: `src/agentforge/target/openemr_adapter.py`, `src/agentforge/target/clinical_copilot_probe_adapters.py`, `.tdd-swarm/reports/T-F16c-implement.md`. Harden/extract the partial evidence/UI behavior, delete or make superseded path-derived public/document profiles unreachable, preserve reviewed chat transport, and use exact UI query key `sid`; never edit tests.
+
+Run `.tdd-swarm/run-local-gates.sh tickets/T-F16c.md <DIFF_BASE>` each loop; maximum three GREEN attempts. No network, credentials, owner bundle/fixture read, screenshots, target calls, runtime-model change, main merge, or push. Return the four-status contract plus commits/gates.
