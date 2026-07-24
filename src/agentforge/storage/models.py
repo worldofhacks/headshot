@@ -1314,6 +1314,74 @@ class CampaignAttemptRecord(Base):
     )
 
 
+class CampaignWorkUnitReservation(Base):
+    """One durable pre-send reservation and its one-way adapter observation marker."""
+
+    __tablename__ = "campaign_work_unit_reservations"
+
+    organization_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    run_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    attempt_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    turn_index: Mapped[int] = mapped_column(Integer, primary_key=True)
+    retry_index: Mapped[int] = mapped_column(Integer, primary_key=True)
+    job_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    job_attempt: Mapped[int] = mapped_column(Integer, nullable=False)
+    worker_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    lease_token_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    reserved_at: Mapped[datetime.datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=text("clock_timestamp()")
+    )
+    observed_at: Mapped[datetime.datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    observation_outcome: Mapped[str | None] = mapped_column(String(16), nullable=True)
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["organization_id", "run_id", "attempt_id"],
+            [
+                "campaign_attempts.organization_id",
+                "campaign_attempts.run_id",
+                "campaign_attempts.attempt_id",
+            ],
+            name="fk_campaign_work_unit_reservation_attempt",
+        ),
+        ForeignKeyConstraint(
+            ["job_id"],
+            ["jobs.job_id"],
+            name="fk_campaign_work_unit_reservation_job",
+        ),
+        CheckConstraint(
+            "turn_index >= 0 AND retry_index >= 0",
+            name="campaign_work_unit_coordinate_nonnegative",
+        ),
+        CheckConstraint(
+            "job_attempt > 0",
+            name="campaign_work_unit_job_attempt_positive",
+        ),
+        CheckConstraint(
+            "lease_token_sha256 ~ '^[0-9a-f]{64}$'",
+            name="campaign_work_unit_lease_hash",
+        ),
+        CheckConstraint(
+            "(observed_at IS NULL AND observation_outcome IS NULL) OR "
+            "(observed_at IS NOT NULL AND observation_outcome IN ('returned','raised'))",
+            name="campaign_work_unit_observation_shape",
+        ),
+        Index(
+            "ix_campaign_work_unit_reservations_org_run",
+            "organization_id",
+            "run_id",
+        ),
+        Index(
+            "ix_campaign_work_unit_reservations_unobserved",
+            "run_id",
+            "reserved_at",
+            postgresql_where=text("observed_at IS NULL"),
+        ),
+    )
+
+
 class AgentConfigurationVersion(Base):
     """Append-only operator configuration for one role's actual or staged engine."""
 
@@ -1357,6 +1425,49 @@ class AgentConfigurationVersion(Base):
             "organization_id",
             "agent_role",
             "version",
+        ),
+    )
+
+
+class HostedConfigurationSetRecord(Base):
+    """One atomic append-only four-role hosted configuration authority."""
+
+    __tablename__ = "hosted_configuration_sets"
+
+    organization_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    configuration_sha256: Mapped[str] = mapped_column(String(64), primary_key=True)
+    schema_version: Mapped[str] = mapped_column(String(16), nullable=False)
+    release_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    payload: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    rationale: Mapped[str] = mapped_column(Text, nullable=False)
+    actor_user_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    actor_session_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "organization_id",
+            "release_sha256",
+            name="uq_hosted_configuration_release",
+        ),
+        CheckConstraint(
+            "configuration_sha256 ~ '^[0-9a-f]{64}$'",
+            name="hosted_configuration_set_hash",
+        ),
+        CheckConstraint(
+            "release_sha256 ~ '^[0-9a-f]{64}$'",
+            name="hosted_configuration_release_hash",
+        ),
+        CheckConstraint(
+            "jsonb_typeof(payload) = 'object'",
+            name="hosted_configuration_payload_object",
+        ),
+        Index(
+            "ix_hosted_configuration_sets_created",
+            "organization_id",
+            "created_at",
         ),
     )
 

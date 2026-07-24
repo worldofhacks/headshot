@@ -109,6 +109,28 @@ const timelineTone = (value: string): "success" | "queued" | "failure" | undefin
   return tone === "brand" ? undefined : tone;
 };
 
+const resilienceTone = (value: string): "success" | "queued" | "failure" => {
+  const normalized = value.toUpperCase();
+  if (normalized === "NO_EXPLOIT_OBSERVED" || normalized === "PASS" || normalized === "PASSED") {
+    return "success";
+  }
+  if (
+    normalized === "EXPLOIT_CONFIRMED"
+    || normalized === "EXPLOIT_LIKELY"
+    || normalized === "FAIL"
+    || normalized === "FAILED"
+    || normalized === "REGRESSED"
+  ) {
+    return "failure";
+  }
+  return "queued";
+};
+
+const isPublished = (value: string) => {
+  const normalized = value.toLowerCase();
+  return normalized === "published" || normalized === "published_after_human_approval";
+};
+
 const unique = (values: string[]) => [...new Set(values)].sort();
 
 function MissingCommand({ label, dependency }: { label: string; dependency: string }) {
@@ -315,6 +337,9 @@ export function LiveScreen({ client, principal, entityId, getToken }: ScreenProp
   );
   const completedCampaigns = campaignRecords.filter((campaign) => campaign.state === "complete").length;
   const activeCampaigns = campaignRecords.filter((campaign) => ["queued", "running"].includes(campaign.state)).length;
+  const campaignAbortable = Boolean(
+    effectiveCampaign && ["queued", "running"].includes(effectiveCampaign.state),
+  );
 
   return (
     <div className="screen-stack">
@@ -428,8 +453,10 @@ export function LiveScreen({ client, principal, entityId, getToken }: ScreenProp
               path={COMMAND_PATHS.abortCampaign(selectedCampaignId)}
               payload={{ reason: "operator_abort" }}
               label="Abort selected campaign"
-              allowed={hasPermission(principal, PERMISSIONS.campaignAbort)}
-              unavailableReason={PERMISSIONS.campaignAbort}
+              allowed={campaignAbortable && hasPermission(principal, PERMISSIONS.campaignAbort)}
+              unavailableReason={campaignAbortable
+                ? PERMISSIONS.campaignAbort
+                : "a queued or running campaign"}
               destructive
               onAcknowledged={campaigns.refresh}
             />
@@ -617,14 +644,14 @@ export function FindingsScreen({ client, principal, entityId }: ScreenProps) {
       <ResourceView result={findings.result} emptyLabel="No findings have been persisted.">
         {(data) => {
           const elevated = data.filter((finding) => ["critical", "high"].includes(finding.severity.toLowerCase())).length;
-          const published = data.filter((finding) => finding.publication_status.toLowerCase().includes("publish")).length;
+          const published = data.filter((finding) => isPublished(finding.publication_status)).length;
           const integrityVerified = data.filter((finding) => ["verified", "valid", "bound"].some((value) => finding.evidence_integrity.toLowerCase().includes(value))).length;
           return (
             <>
               <MetricStrip label="Finding summary" values={[
                 { label: "Persisted findings", value: count(data.length), note: `${unique(data.map((finding) => finding.category)).length} categories` },
                 { label: "Critical / high", value: count(elevated), note: `${percent(data.length ? elevated / data.length : 0)} of register` },
-                { label: "Published", value: count(published), note: `${data.length - published} gated or withheld` },
+                { label: "Published after approval", value: count(published), note: `${data.length - published} draft, gated, or withheld` },
                 { label: "Evidence verified", value: `${integrityVerified}/${data.length}`, note: "server integrity state" },
               ]} />
               <div className="panel-grid analytical-grid">
@@ -697,8 +724,9 @@ export function ApprovalsScreen({ client, principal, entityId }: ScreenProps) {
   const distinctHuman = launcher === null || launcher !== principal.user_id;
   const canApproveIdentity = distinctHuman;
   const isLauncher = launcher !== null && launcher === principal.user_id;
-  const pending = selected?.status === "pending";
-  const approved = selected?.status === "approved";
+  const actionable = Boolean(selected && !selected.expired && !selected.consumed);
+  const pending = selected?.status === "pending" && actionable;
+  const approved = selected?.status === "approved" && actionable;
   const canAuthorize =
     hasPermission(principal, PERMISSIONS.campaignAuthorize) && canApproveIdentity && pending;
 
@@ -788,8 +816,24 @@ export function ApprovalsScreen({ client, principal, entityId }: ScreenProps) {
               "approver_user_id",
               "self_approval_override",
               "expires_at",
+              "expired",
+              "consumed",
             ]}
           />
+          {selected.expired && (
+            <StateNotice
+              state="unavailable"
+              reason="authorization_expired"
+              detail="This authorization window has expired and cannot be decided or launched."
+            />
+          )}
+          {selected.consumed && (
+            <StateNotice
+              state="unavailable"
+              reason="authorization_consumed"
+              detail="This authorization has already been consumed by a campaign."
+            />
+          )}
           {!distinctHuman && (
             <StateNotice
               state="unavailable"
@@ -856,7 +900,11 @@ function CoverageScreen({ client }: { client: ApiClient }) {
       <ScreenHeading title="Coverage" detail="Only server-derived, hash-verified and nonce-deduplicated coverage is shown." />
       <ResourceView result={controller.result} emptyLabel="No verified coverage records are available.">
         {(data) => {
-          const verified = data.reduce((total, record) => total + record.verified_attempt_count, 0);
+          const verifiedAttempts = data.reduce((total, record) => total + record.verified_attempt_count, 0);
+          const verifiedCases = data.reduce(
+            (total, record) => total + Math.min(record.verified_attempt_count, record.total_case_count),
+            0,
+          );
           const cases = data.reduce((total, record) => total + record.total_case_count, 0);
           const covered = data.filter((record) => record.covered).length;
           const verdicts = new Map<string, number>();
@@ -868,8 +916,8 @@ function CoverageScreen({ client }: { client: ApiClient }) {
           return (
             <>
               <MetricStrip label="Coverage summary" values={[
-                { label: "Verified attempts", value: count(verified), note: `${count(cases)} total cases` },
-                { label: "Case execution", value: cases ? percent(verified / cases) : "—", note: "verified / total" },
+                { label: "Verified attempts", value: count(verifiedAttempts), note: `${count(cases)} authorized cases` },
+                { label: "Case execution ceiling", value: cases ? percent(verifiedCases / cases) : "—", note: "deduplicated case count cannot exceed denominator" },
                 { label: "Covered versions", value: `${covered}/${data.length}`, note: "server coverage decision" },
                 { label: "Mapped controls", value: count(unique(data.flatMap((record) => [...record.owasp_web, ...record.owasp_llm])).length), note: "OWASP Web + LLM" },
               ]} />
@@ -926,8 +974,8 @@ function ResilienceScreen({ client }: { client: ApiClient }) {
       <ScreenHeading title="Resilience" detail="Version and regression history is read from the authoritative projection." />
       <ResourceView result={controller.result} emptyLabel="No resilience or regression history is recorded.">
         {(data) => {
-          const passing = data.filter((record) => timelineTone(record.status) === "success").length;
-          const failing = data.filter((record) => timelineTone(record.status) === "failure").length;
+          const passing = data.filter((record) => resilienceTone(record.status) === "success").length;
+          const failing = data.filter((record) => resilienceTone(record.status) === "failure").length;
           const latest = [...data].sort((left, right) => Date.parse(right.recorded_at) - Date.parse(left.recorded_at))[0];
           return (
             <>
@@ -953,7 +1001,7 @@ function ResilienceScreen({ client }: { client: ApiClient }) {
                     title: `${record.version} · ${record.status}`,
                     detail: record.regression_id,
                     at: record.recorded_at,
-                    tone: timelineTone(record.status),
+                    tone: resilienceTone(record.status),
                   }))} />
               </Panel>
               <Panel title="Resilience ledger" meta="authoritative history">
@@ -1001,16 +1049,7 @@ function TargetManagement({
   refresh: () => void;
 }) {
   const targetId = identity(selected, ["target_id"]);
-  const version = typeof selected.version === "string" ? selected.version : null;
-  const transitions = Array.isArray(selected.allowed_lifecycle_transitions)
-    ? selected.allowed_lifecycle_transitions.filter((value): value is string => typeof value === "string")
-    : [];
-  const probePayload = isJsonRecord(selected.probe_authorization_payload)
-    ? selected.probe_authorization_payload
-    : null;
   const surfaces = selected.surfaces;
-  const allowed = hasPermission(principal, PERMISSIONS.targetsManage);
-  const canAuthorizeProbe = hasPermission(principal, PERMISSIONS.campaignAuthorize);
   const template = selected.campaign_template;
   // Pre-filled bounded defaults so an Operator can request a campaign without hand-entering
   // caps or a nonce. The nonce is freshly generated per mount (unused → replay-safe); every
@@ -1054,7 +1093,7 @@ function TargetManagement({
       }
     : null;
   return (
-    <Panel title="Target administration" meta={targetId ?? undefined}>
+    <Panel title="Registered target" meta={targetId ?? undefined}>
       <RecordDetails
         data={selected}
         preferredKeys={[
@@ -1085,37 +1124,11 @@ function TargetManagement({
             : <StateNotice state="empty" detail="No versioned surfaces are attached." />}
         </div>
       </div>
-      <div className="command-row">
-        {targetId && version && transitions[0] ? (
-          <CommandButton
-            client={client}
-            path={COMMAND_PATHS.changeTargetLifecycle(targetId)}
-            payload={{ version, lifecycle: transitions[0] }}
-            label={`Move to ${transitions[0]}`}
-            allowed={allowed}
-            unavailableReason={PERMISSIONS.targetsManage}
-            onAcknowledged={refresh}
-          />
-        ) : (
-          <MissingCommand label="Change lifecycle" dependency="a server-returned allowed transition" />
-        )}
-        {probePayload ? (
-          <CommandButton
-            client={client}
-            path={COMMAND_PATHS.createProbeAuthorizationRequest}
-            payload={probePayload}
-            label="Request live probe authorization"
-            allowed={canAuthorizeProbe}
-            unavailableReason={PERMISSIONS.campaignAuthorize}
-            onAcknowledged={refresh}
-          />
-        ) : (
-          <MissingCommand label="Request live probe authorization" dependency="a server-prepared probe scope" />
-        )}
-        <MissingCommand label="Revise target" dependency="a trusted target authoring catalog" />
-        <MissingCommand label="Create attack surface" dependency="a trusted surface authoring catalog" />
-        <MissingCommand label="Revise attack surface" dependency="a trusted surface revision contract" />
-      </div>
+      <StateNotice
+        state="unavailable"
+        reason="frozen_target_catalog"
+        detail="Target authoring, lifecycle changes, surface changes, and standalone probes are unavailable in this recovery. Campaign requests use only the registered immutable target and surface below."
+      />
       {template && (
         <div className="evidence-stack">
           <p className="field-label">Exact campaign authorization request</p>
@@ -1178,35 +1191,6 @@ function TargetManagement({
               refresh();
             }}
           />
-        </div>
-      )}
-      {surfaces.length > 0 ? (
-        <div className="surface-stack">
-          {surfaces.map((surface, index) => {
-            const surfaceId = identity(surface, ["surface_id"]);
-            const surfaceVersion = typeof surface.version === "string" ? surface.version : null;
-            const enabled = typeof surface.enabled === "boolean" ? surface.enabled : null;
-            if (!targetId || !surfaceId || !surfaceVersion || enabled === null) return null;
-            return (
-              <div className="surface-row" key={`${surfaceId}:${surfaceVersion}:${index}`}>
-                <span className="mono">{surfaceId} · {surfaceVersion}</span>
-                <CommandButton
-                  client={client}
-                  path={COMMAND_PATHS.changeSurfaceState(targetId, surfaceId)}
-                  payload={{ version: surfaceVersion, enabled: !enabled }}
-                  label={enabled ? "Disable surface" : "Enable surface"}
-                  allowed={allowed}
-                  unavailableReason={PERMISSIONS.targetsManage}
-                  destructive={enabled}
-                  onAcknowledged={refresh}
-                />
-              </div>
-            );
-          })}
-        </div>
-      ) : (
-        <div className="command-row">
-          <MissingCommand label="Enable or disable surface" dependency="a selected versioned surface record" />
         </div>
       )}
     </Panel>
@@ -1350,26 +1334,6 @@ export function ConfigurationScreen({ client, principal }: ScreenProps) {
     decodeComponents,
   );
   const configRecord = configuration.result.data;
-  const candidate = configRecord && isJsonRecord(configRecord.candidate_configuration)
-    ? configRecord.candidate_configuration
-    : null;
-  const snapshotId = configRecord && typeof configRecord.validated_snapshot_id === "string"
-    ? configRecord.validated_snapshot_id
-    : null;
-  const validationId = configRecord && typeof configRecord.validation_id === "string"
-    ? configRecord.validation_id
-    : snapshotId;
-  const agentName = configRecord && typeof configRecord.agent_name === "string"
-    ? configRecord.agent_name
-    : null;
-  const baseVersion = configRecord && typeof configRecord.base_version === "number"
-    ? configRecord.base_version
-    : null;
-  const configurationPayload = candidate && agentName && baseVersion !== null
-    ? { agent_name: agentName, base_version: baseVersion, configuration: candidate }
-    : null;
-  const [rationale, setRationale] = useState("");
-  const allowed = hasPermission(principal, PERMISSIONS.configManage);
   const componentRecords = components.result.data ?? [];
   const operationalComponents = componentRecords.filter((component) => component.availability === "operational and evidenced").length;
   const configurationKeys = configRecord ? Object.keys(configRecord.configuration) : [];
@@ -1383,12 +1347,12 @@ export function ConfigurationScreen({ client, principal }: ScreenProps) {
     <div className="screen-stack">
       <ScreenHeading
         title="Configuration"
-        detail="Immutable effective configuration, validation and publication acknowledgements remain server-owned."
+        detail="Read-only effective application state from the existing deployment. Runtime topology, secrets, targets, and activation are frozen in this recovery."
       />
       {configRecord && (
         <MetricStrip label="Configuration summary" values={[
           { label: "Snapshot", value: shortId(configRecord.snapshot_id), note: `version ${configRecord.version}` },
-          { label: "Publication state", value: configRecord.status, note: configRecord.published_at },
+          { label: "Runtime snapshot state", value: configRecord.status, note: `Observed ${configRecord.published_at}` },
           { label: "Configuration areas", value: count(configurationKeys.length), note: configurationKeys.slice(0, 3).join(" · ") || "No top-level keys" },
           { label: "Components/tools evidenced", value: `${operationalComponents}/${componentRecords.length}`, note: components.result.state },
         ]} />
@@ -1398,12 +1362,12 @@ export function ConfigurationScreen({ client, principal }: ScreenProps) {
           {configRecord ? (
             <TagMatrix groups={[
               { label: "Effective areas", values: configurationKeys },
-              { label: "Publication status", values: [configRecord.status] },
-              { label: "Publisher", values: [shortId(configRecord.published_by)] },
+              { label: "Runtime status", values: [configRecord.status] },
+              { label: "Snapshot source", values: [shortId(configRecord.published_by)] },
               { label: "Snapshot", values: [shortId(configRecord.snapshot_id)] },
             ]} />
           ) : (
-            <ResourceView result={configuration.result} emptyLabel="No configuration snapshot is published.">{() => null}</ResourceView>
+            <ResourceView result={configuration.result} emptyLabel="No effective runtime snapshot is available.">{() => null}</ResourceView>
           )}
         </Panel>
         <Panel title="Component and tool status" meta="heartbeat + catalog verification" eyebrow="RUNTIME POSTURE">
@@ -1451,8 +1415,8 @@ export function ConfigurationScreen({ client, principal }: ScreenProps) {
           <ResourceView result={components.result} emptyLabel="No security-tool records are available.">{() => null}</ResourceView>
         )}
       </Panel>
-      <Panel title="Effective configuration">
-        <ResourceView result={configuration.result} emptyLabel="No configuration snapshot is published.">
+      <Panel title="Effective runtime snapshot">
+        <ResourceView result={configuration.result} emptyLabel="No effective runtime snapshot is available.">
           {(data) => (
             <div className="evidence-stack">
               <RecordDetails
@@ -1466,53 +1430,17 @@ export function ConfigurationScreen({ client, principal }: ScreenProps) {
                 ]}
               />
               <div>
-                <p className="field-label">Effective server configuration</p>
+                <p className="field-label">Effective server state</p>
                 <AdversarialText>{JSON.stringify(data.configuration, null, 2)}</AdversarialText>
               </div>
             </div>
           )}
         </ResourceView>
-        <div className="command-row">
-          {configurationPayload ? (
-            <CommandButton
-              client={client}
-              path={COMMAND_PATHS.validateConfiguration}
-              payload={configurationPayload}
-              label="Validate candidate configuration"
-              allowed={allowed}
-              unavailableReason={PERMISSIONS.configManage}
-              onAcknowledged={configuration.refresh}
-            />
-          ) : (
-            <MissingCommand label="Validate candidate configuration" dependency="a server-returned candidate" />
-          )}
-          {configurationPayload && validationId ? (
-            <CommandButton
-              client={client}
-              path={COMMAND_PATHS.publishConfiguration}
-              payload={{
-                ...configurationPayload,
-                validation_id: validationId,
-                rationale: rationale.trim(),
-              }}
-              label="Publish validated snapshot"
-              allowed={allowed && rationale.trim().length > 0}
-              unavailableReason={rationale.trim() ? PERMISSIONS.configManage : "a publication rationale"}
-              onAcknowledged={configuration.refresh}
-            />
-          ) : (
-            <MissingCommand label="Publish validated snapshot" dependency="a server-validated snapshot" />
-          )}
-        </div>
-        <label className="form-field">
-          <span>Publication rationale</span>
-          <textarea
-            value={rationale}
-            maxLength={2000}
-            onChange={(event) => setRationale(event.currentTarget.value)}
-            placeholder="Required for configuration publication"
-          />
-        </label>
+        <StateNotice
+          state="unavailable"
+          reason="frozen_application_configuration"
+          detail="Candidate validation, snapshot publication, and runtime activation are unavailable here. Four-role hosted sets may only be staged atomically through the protected API v1 resource."
+        />
       </Panel>
       <Panel title="Append-only audit history">
         {hasPermission(principal, PERMISSIONS.auditRead) ? (

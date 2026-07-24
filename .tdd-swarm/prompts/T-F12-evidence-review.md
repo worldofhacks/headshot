@@ -1,5 +1,5 @@
 # T-F12 Evidence Review — Model: capable
-Worktree `<WORKTREE>`; branch `ticket/T-F12-architecture-reconciliation`. Inputs ticket/docs/dependency reports/execute report. Allowed write `.tdd-swarm/reports/T-F12-evidence-review.md`. No test path; verify all AI roles, rate/auth/pagination, ADR rows, no undeclared drift.
+Worktree `<WORKTREE>`; branch `ticket/T-F12-architecture-reconciliation`. Inputs ticket/docs/reports/execute report, including T-F05d through T-F05p reviews. Allowed write `.tdd-swarm/reports/T-F12-evidence-review.md`. No test path; verify catalog parity/target-chat-session-patient pin, source authentication, bounded split delivery, fixed L/M refresh, O/N history, F sanitation, and complete rotation ADR rows with disabled surfaces still off and no credential/session/local-artifact content, combined/final-only state, undeclared drift, or invented readiness.
 No network/spend/live traffic; no main merge/push; max 3. Return four-status contract + verdict.
 Strict local contract: exact ticket input `tickets/T-F12.md`; there is no test scope and no production-code permission; use only the named mechanical verifier above. Return exactly `DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED(reason)` plus one-line summary; full output stays in the declared report path.
 No main merge/push.

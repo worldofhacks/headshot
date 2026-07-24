@@ -1,0 +1,4 @@
+# T-F05f Implement — Model: capable
+Worktree `<WORKTREE>`; branch `ticket/T-F05f-smart-session-runner`. Inputs: ticket, frozen tests/review, lessons, landed T-F05a/d/e/h/i/j/k/l/m/p. Write only `src/agentforge/policy/scoped_credentials.py`, `src/agentforge/runner.py`, and `.tdd-swarm/reports/T-F05f-implement.md`; never edit upstream/tests. Integrate exact P target/chat/session/patient pin and Runner-only resolver, claim → J/K → M, one resolution, per-attempt refresh, cleanup, and nonretryable sanitized queue fail with separate code/status. Return no free-form detail.
+
+Run local gates every GREEN loop; maximum three attempts. No network/live DB/controller/Railway/deployment/provider/target, real secrets/PHI, spend, main merge, or push. Return exactly `DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED(reason)` plus commit/gate summary; full output stays in the report.

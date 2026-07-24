@@ -1,0 +1,11 @@
+{
+  "attempt_id": null,
+  "content_hash": "70af20aace7d8adf8f7498a16fe9335facac0e42a17ba3ee064ecc63c20de4b7",
+  "kind": "abort",
+  "payload": {
+    "code": "abort",
+    "reason": "gateway refused dispatch: AbortError: rate cap: 0.036s since last dispatch is under the 2.000s min interval — HARD ABORT before dispatch",
+    "run_id": "platform-live-20260724-week1"
+  },
+  "run_id": "platform-live-20260724-week1"
+}

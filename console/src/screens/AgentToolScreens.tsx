@@ -88,7 +88,6 @@ export function AgentsScreen({
   const selectedActivity = activities.filter((row) => row.agent_role === selectedRole);
   const hostedEligible = selectedRole === "red_team" || selectedRole === "documentation";
   const canConfigure = principal.organization_permissions.includes(PERMISSIONS.configManage);
-  const configurationReady = model.trim().length > 0 && rationale.trim().length > 0;
 
   const changeMode = (value: "deterministic" | "hosted_advisory") => {
     setExecutionMode(value);
@@ -202,6 +201,7 @@ export function AgentsScreen({
             Execution mode
             <select
               value={executionMode}
+              disabled
               onChange={(event) => changeMode(event.target.value as "deterministic" | "hosted_advisory")}
             >
               <option value="deterministic">Deterministic production engine</option>
@@ -212,7 +212,7 @@ export function AgentsScreen({
             Provider
             <select
               value={provider}
-              disabled={executionMode === "deterministic"}
+              disabled
               onChange={(event) => setProvider(event.target.value)}
             >
               {executionMode === "deterministic"
@@ -227,12 +227,13 @@ export function AgentsScreen({
           <label className="form-field">
             Model / engine
             {executionMode === "deterministic" ? (
-              <select value={model} onChange={(event) => setModel(event.target.value)}>
+              <select disabled value={model} onChange={(event) => setModel(event.target.value)}>
                 {deterministicModels[selectedRole].map((item) => <option key={item}>{item}</option>)}
               </select>
             ) : (
               <input
                 value={model}
+                disabled
                 onChange={(event) => setModel(event.target.value)}
                 placeholder="Provider model identifier"
                 autoComplete="off"
@@ -243,6 +244,7 @@ export function AgentsScreen({
             Rationale
             <textarea
               value={rationale}
+              disabled
               onChange={(event) => setRationale(event.target.value)}
               placeholder="Why this engine is appropriate for this role"
             />
@@ -257,15 +259,18 @@ export function AgentsScreen({
                 execution_mode: executionMode,
                 rationale: rationale.trim(),
               }}
-              label={executionMode === "deterministic" ? "Activate engine" : "Stage advisory model"}
-              allowed={canConfigure && configurationReady}
-              unavailableReason={!canConfigure ? PERMISSIONS.configManage : "model and rationale"}
+              label="Per-role activation unavailable"
+              allowed={false}
+              unavailableReason={canConfigure
+                ? "atomic four-role configuration-set staging through API v1"
+                : PERMISSIONS.configManage}
               onAcknowledged={() => agents.refresh()}
             />
           </div>
           <p className="data-note">
-            Orchestrator and Judge are intentionally deterministic. Hosted Red Team or Documentation
-            choices are recorded as staged and cannot alter a previously approved campaign.
+            Recovery configuration is atomic across all four hosted roles. This read-only panel
+            cannot stage or activate one role independently, and staged sets cannot alter a
+            previously approved campaign.
           </p>
         </Panel>
       </div>

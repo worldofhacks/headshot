@@ -60,6 +60,20 @@ class CapsInput(_StrictModel):
     max_attempts_per_run: int = Field(gt=0)
     target_requests_per_second: float = Field(gt=0)
     run_timeout_seconds: float = Field(gt=0)
+    logical_case_limit: int | None = Field(default=None, gt=0)
+    physical_request_limit: int | None = Field(default=None, gt=0)
+    target_retries_per_turn: int | None = Field(default=None, ge=0)
+
+
+class HostedRunBindingInput(_StrictModel):
+    configuration_set_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    generation_policy_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    session_generation: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+    provider_model_call_limit: int = Field(gt=0, le=56)
+    provider_model_spend_limit_usd: str = Field(min_length=1, max_length=32)
+    provider_max_retries: int = Field(ge=0, le=1)
+    provider_max_concurrency: Literal[1]
+    provider_timeout_seconds: float = Field(gt=0, le=300)
 
 
 class AuthorizationRequestInput(_StrictModel):
@@ -72,6 +86,7 @@ class AuthorizationRequestInput(_StrictModel):
     execution_profile: Literal["synthetic", "live"] = "live"
     run_nonce: str = Field(min_length=16, max_length=128)
     caps: CapsInput
+    hosted_run: HostedRunBindingInput | None = None
     expires_in_seconds: int = Field(default=900, ge=60, le=3600)
 
 
@@ -172,6 +187,47 @@ class AgentConfigurationInput(_StrictModel):
     provider: Literal["headshot", "openrouter", "together", "anthropic"]
     model: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,159}$")
     execution_mode: Literal["deterministic", "hosted_advisory"]
+    rationale: str = Field(min_length=1, max_length=2000)
+
+
+class HostedTokenPricesInput(_StrictModel):
+    input_usd_per_million_tokens: str = Field(min_length=1, max_length=32)
+    output_usd_per_million_tokens: str = Field(min_length=1, max_length=32)
+    reasoning_usd_per_million_tokens: str = Field(min_length=1, max_length=32)
+
+
+class HostedLimitsInput(_StrictModel):
+    max_calls: int = Field(gt=0, le=56)
+    max_input_tokens: int = Field(gt=0)
+    max_output_tokens: int = Field(gt=0)
+    max_reasoning_tokens: int = Field(gt=0)
+    max_usd: str = Field(min_length=1, max_length=32)
+    max_retries: int = Field(ge=0, le=1)
+    max_requests_per_second: str = Field(min_length=1, max_length=32)
+    max_concurrency: Literal[1]
+
+
+class HostedRoleInput(_StrictModel):
+    role: Literal["orchestrator", "red_team", "judge", "documentation"]
+    provider: Literal["openrouter"]
+    model_id: str = Field(min_length=3, max_length=192)
+    upstream_provider: str = Field(min_length=1, max_length=64)
+    credential_reference: str = Field(min_length=1, max_length=512)
+    prompt_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    policy_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    prices: HostedTokenPricesInput
+    limits: HostedLimitsInput
+
+
+class HostedConfigurationInput(_StrictModel):
+    schema_version: Literal["1"]
+    roles: tuple[HostedRoleInput, ...] = Field(min_length=4, max_length=4)
+    global_limits: HostedLimitsInput
+
+
+class HostedConfigurationStageInput(_StrictModel):
+    configuration: HostedConfigurationInput
+    release_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
     rationale: str = Field(min_length=1, max_length=2000)
 
 
@@ -289,6 +345,20 @@ def approvals(request: Request, principal: ConsolePrincipal) -> JSONResponse:
     return _read(request, "approvals", principal)
 
 
+@router.get("/campaign-authorization-requests/{request_id}/preflight")
+def campaign_authorization_preflight(
+    request: Request,
+    request_id: str,
+    principal: ConsolePrincipal,
+) -> JSONResponse:
+    return _read(
+        request,
+        "campaign_authorization_preflight",
+        principal,
+        {"request_id": request_id},
+    )
+
+
 @router.get("/coverage")
 def coverage(request: Request, principal: FindingPrincipal) -> JSONResponse:
     return _read(request, "coverage", principal)
@@ -322,6 +392,34 @@ def target(request: Request, target_id: str, principal: ConsolePrincipal) -> JSO
 @router.get("/configuration")
 def configuration(request: Request, principal: ConsolePrincipal) -> JSONResponse:
     return _read(request, "configuration", principal)
+
+
+@router.get("/hosted-configuration-sets/{configuration_sha256}")
+def hosted_configuration_set(
+    request: Request,
+    configuration_sha256: str,
+    principal: ConsolePrincipal,
+) -> JSONResponse:
+    return _read(
+        request,
+        "hosted_configuration_set",
+        principal,
+        {"configuration_sha256": configuration_sha256},
+    )
+
+
+@router.get("/hosted-configuration-sets/{configuration_sha256}/preflight")
+def hosted_configuration_preflight(
+    request: Request,
+    configuration_sha256: str,
+    principal: ConsolePrincipal,
+) -> JSONResponse:
+    return _read(
+        request,
+        "hosted_configuration_preflight",
+        principal,
+        {"configuration_sha256": configuration_sha256},
+    )
 
 
 @router.get("/components")
@@ -566,6 +664,22 @@ def publish_configuration(
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
 ) -> JSONResponse:
     return _command(request, "publish_configuration", principal, body, idempotency_key)
+
+
+@router.post("/hosted-configuration-sets")
+def stage_hosted_configuration_set(
+    request: Request,
+    body: HostedConfigurationStageInput,
+    principal: ConfigPrincipal,
+    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
+) -> JSONResponse:
+    return _command(
+        request,
+        "stage_hosted_configuration_set",
+        principal,
+        body,
+        idempotency_key,
+    )
 
 
 @router.post("/agents/{agent_role}/configuration")

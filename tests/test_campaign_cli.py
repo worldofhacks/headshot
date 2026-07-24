@@ -140,6 +140,9 @@ def _write_caps(dir_path: Path) -> Path:
                 "max_attempts_per_run": 1000,
                 "target_requests_per_second": 1000.0,
                 "run_timeout_seconds": 3600.0,
+                "logical_case_limit": 1000,
+                "physical_request_limit": 3000,
+                "target_retries_per_turn": 2,
             }
         ),
         encoding="utf-8",
@@ -174,6 +177,9 @@ def _bound_operation_hash(
             "max_attempts_per_run": 1000,
             "target_requests_per_second": 1000.0,
             "run_timeout_seconds": 3600.0,
+            "logical_case_limit": 1000,
+            "physical_request_limit": 3000,
+            "target_retries_per_turn": 2,
         }
     )
     binding = TargetBinding(

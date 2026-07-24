@@ -29,7 +29,7 @@
       "payload_profile": "copilot_chat",
       "auth_mode": "session",
       "sid_env_var": "WEEK1_SID",
-      "credential_ref": "secretref://staging/copilot-week1/session-generation-20260724a",
+      "credential_ref": "secretref://staging/copilot-week1/session/generation-20260724a",
       "write_upload_allowed": false,
       "coverage": "liveness, readiness, anonymous guideline retrieval, authenticated patient-pinned cited chat"
     },
@@ -41,7 +41,7 @@
       "payload_profile": "copilot_chat",
       "auth_mode": "session",
       "sid_env_var": "WEEK2_SID",
-      "credential_ref": "secretref://staging/copilot-week2/session-generation-20260724a",
+      "credential_ref": "secretref://staging/copilot-week2/session/generation-20260724a",
       "write_upload_allowed": true,
       "coverage": "week1 plus synthetic lab upload, bounded processing polling, grounded extraction, PNG preview, digest verification, synthetic intake upload, permanent duplicate handling"
     }
@@ -56,5 +56,5 @@
     "correlation_id": "string (== response header x-copilot-request-id)"
   },
   "request_body": { "session_id": "<by reference — from sid_env_var>", "message": "<prompt>" },
-  "bruno_bundle_path_uncommitted": "/Users/quietguy/Documents/Dev/Gauntlet/OpenEMR-Custom-Build/claude-adversarial-run/adversarial-smart-bruno-2026-07-24"
+  "bruno_bundle_path_uncommitted": "<external-bundle-root>/claude-adversarial-run/adversarial-smart-bruno-2026-07-24"
 }

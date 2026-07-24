@@ -1,0 +1,4 @@
+# T-F05j Test Review — Model: capable
+Worktree `<WORKTREE>`; branch `ticket/T-F05j-smart-session-reference`. Inputs: ticket, focused test/report, dependencies, existing queue tests. Write only `.tdd-swarm/reports/T-F05j-test-review.md`; tests/source are read-only. Attack settings/ref newline and URI variants, payload/job substitution, update/retry/idempotency, migration, non-session behavior, retryable or wrong machine state, arbitrary-detail persistence, and any assertion requiring worker-supplied internal detail.
+
+Freeze only criterion-complete clean RED. No network/database server/controller/Railway/provider/target, secrets/PHI, spend, main merge, or push. Maximum three reviews. Return exactly `DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED(reason)` plus freeze verdict; full output stays in the report.

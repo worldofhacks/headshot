@@ -29,7 +29,12 @@ traces_to:
 ---
 
 ## Context
-[locked-decision] Wave 5 owns only smoke schemas, root/package parity, content-addressed synthetic fixture, registry classification, generic conformance, and offline manifest/review verification. These four schemas are repository **operational contracts**, explicitly enumerated in a new `OPERATIONAL_SCHEMAS` registry group and excluded from `SUCCESS_SCHEMAS`; generic registry/wheel conformance covers both groups.
+[locked-decision] Wave 5 owns only target-free OpenRouter smoke schemas, root/package parity,
+content-addressed smoke fixture, registry classification, generic conformance, and offline
+manifest/review verification. This fixture has `target_scope:none`; it is never a SMART
+target-session patient fixture and no lease/campaign/replay/stress consumer may use its identity.
+T-F05d later owns that distinct authority. These schemas are repository **operational contracts**,
+explicitly in `OPERATIONAL_SCHEMAS` and excluded from `SUCCESS_SCHEMAS`.
 
 ## Acceptance Criteria
 - **AC-1**: Given package/root registries, when enumerated, then all four smoke schemas appear exactly once in `OPERATIONAL_SCHEMAS`, never `SUCCESS_SCHEMAS`, have byte-identical root publications, validate installed-wheel lookup, and pass generic conformance/compatibility rules.
@@ -51,4 +56,4 @@ traces_to:
 - [ ] Independent Code and Security reviewers have no Critical/Important findings.
 
 ## Out of Scope
-No hosted role adapters/composition/dispatch, configuration staging/preflight, provider transport/spend, target traffic, or review execution.
+No hosted role adapters/composition/dispatch, configuration staging/preflight, provider transport/spend, target traffic, target-session patient fixture/lease binding, or review execution.

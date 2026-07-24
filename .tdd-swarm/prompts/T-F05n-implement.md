@@ -1,0 +1,4 @@
+# T-F05n Implement — Model: capable
+Worktree `<WORKTREE>`; branch `ticket/T-F05n-runner-rotation-evidence`. Inputs: ticket, frozen tests/review, lessons, landed E/F/H/I/J/O. Write only the seven ticket `file_scopes` and `.tdd-swarm/reports/T-F05n-implement.md`; never edit tests/source producers/config. Implement signed activation-receipt verification, canonical activation event, complete five-stage rotation evidence/hash/order verifier, exact create-only CLI paired outputs, stable redacted failures, and no activation action.
+
+Run local gates every GREEN loop; maximum three attempts. Synthetic artifacts only; no network/controller/database/Railway/deployment/provider/target, secrets/PHI, spend, main merge, or push. Return exactly `DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED(reason)` plus commit/gate summary; full output stays in the report.

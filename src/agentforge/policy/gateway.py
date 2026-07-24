@@ -91,6 +91,9 @@ class RunPolicy:
     max_attempts_per_run: int
     target_requests_per_second: float
     run_timeout_seconds: float
+    logical_case_limit: int | None = None
+    physical_request_limit: int | None = None
+    target_retries_per_turn: int | None = None
 
 
 @dataclass(frozen=True)
@@ -111,6 +114,15 @@ class AttemptResult:
     credential: Secret | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class WorkUnitCoordinates:
+    """Stable identity for one physical send within a logical campaign attempt."""
+
+    attempt_id: str
+    turn_index: int
+    retry_index: int
+
+
 @dataclass
 class PolicyGateway:
     """The trusted enforcement boundary; the SOLE holder of the target adapter.
@@ -128,11 +140,18 @@ class PolicyGateway:
     recorder: ExecutionRecorder = field(default_factory=ExecutionRecorder)
     credentials: dict[str, Any] = field(default_factory=dict)
     sleeper: Callable[[float], None] = field(default=time.sleep, repr=False)
+    pre_physical_send_gate: Callable[[WorkUnitCoordinates], None] | None = field(
+        default=None, repr=False
+    )
+    post_physical_send_observer: Callable[[WorkUnitCoordinates, str], None] | None = field(
+        default=None, repr=False
+    )
 
     # Per-gateway run accounting (deterministic, clock/accounting-driven).
     audit_log: list[dict] = field(default_factory=list)
     queued_attempts: list[dict] = field(default_factory=list)
     _attempts_used: int = field(default=0, init=False)
+    _physical_sends_used: int = field(default=0, init=False)
     _last_dispatch_at: float | None = field(default=None, init=False)
     _run_started_at: float | None = field(default=None, init=False)
 
@@ -198,7 +217,12 @@ class PolicyGateway:
             metadata=request_metadata,
         )
         self._enforce_sequence_capacity(request, policy)
-        response = self._dispatch_with_backoff(request, attack_attempt, policy)
+        response = self._dispatch_with_backoff(
+            request,
+            attack_attempt,
+            policy,
+            attempt_id=attempt_id or "",
+        )
 
         # (6) Count the logical attempt after a real dispatch, then build hashed evidence.
         # (charge + _last_dispatch_at are committed per physical send in _dispatch_with_backoff.)
@@ -212,6 +236,14 @@ class PolicyGateway:
             campaign_run_id=campaign_run_id,
             attempt_id=attempt_id,
         )
+
+    @property
+    def completed_logical_cases(self) -> int:
+        return self._attempts_used
+
+    @property
+    def physical_send_count(self) -> int:
+        return self._physical_sends_used
 
     # ------------------------------------------------------------------ gate steps
 
@@ -244,11 +276,24 @@ class PolicyGateway:
             )
 
         # ATTEMPT — the per-run attempt ceiling is reached; a further call is refused.
-        if self._attempts_used >= policy.max_attempts_per_run:
+        logical_limit = policy.max_attempts_per_run
+        if policy.logical_case_limit is not None:
+            logical_limit = min(logical_limit, policy.logical_case_limit)
+        if self._attempts_used >= logical_limit:
             raise AbortError(
                 f"attempt cap: {self._attempts_used} attempt(s) used reaches the limit of "
-                f"{policy.max_attempts_per_run} — HARD ABORT before dispatch",
+                f"{logical_limit} — HARD ABORT before dispatch",
                 code="abort",
+            )
+
+        if (
+            policy.physical_request_limit is not None
+            and self._physical_sends_used >= policy.physical_request_limit
+        ):
+            raise AbortError(
+                f"physical request cap: {self._physical_sends_used} send(s) reaches the limit of "
+                f"{policy.physical_request_limit} — HARD ABORT before dispatch",
+                code="physical-request-cap-exceeded",
             )
 
         # BUDGET — the projected spend (current + the next call's cost) would breach the
@@ -310,6 +355,15 @@ class PolicyGateway:
                 "multi-turn sequence contains no request turns — HARD ABORT before dispatch",
                 code="abort",
             )
+        if (
+            policy.physical_request_limit is not None
+            and self._physical_sends_used + turn_count > policy.physical_request_limit
+        ):
+            raise AbortError(
+                "physical request cap: the complete turn sequence cannot fit inside the "
+                "remaining authorized sends — HARD ABORT before dispatch",
+                code="physical-request-cap-exceeded",
+            )
         try:
             per_call = float(self.accounting.per_call_usd)
         except AttributeError as exc:
@@ -336,7 +390,12 @@ class PolicyGateway:
                 )
 
     def _dispatch_with_backoff(
-        self, request: TargetRequest, attack_attempt: dict, policy: RunPolicy
+        self,
+        request: TargetRequest,
+        attack_attempt: dict,
+        policy: RunPolicy,
+        *,
+        attempt_id: str,
     ) -> TargetResponse:
         """Dispatch one logical attempt as one atomic request or a paced turn sequence.
 
@@ -347,7 +406,13 @@ class PolicyGateway:
         """
 
         if getattr(self.adapter, "turn_delivery", "atomic") != "sequential":
-            return self._dispatch_one_with_backoff(request, attack_attempt, policy)
+            return self._dispatch_one_with_backoff(
+                request,
+                attack_attempt,
+                policy,
+                attempt_id=attempt_id,
+                turn_index=0,
+            )
 
         responses: list[TargetResponse] = []
         total = len(request.turns)
@@ -366,11 +431,19 @@ class PolicyGateway:
                 turn_request,
                 attack_attempt,
                 policy,
+                attempt_id=attempt_id,
+                turn_index=index,
             )
             responses.append(response)
             if not 200 <= response.status < 300:
                 break
 
+        if len(responses) != total:
+            raise AbortError(
+                "multi-turn sequence ended before every authorized turn was sent — "
+                "HARD ABORT without logical completion",
+                code="incomplete-multi-turn-attempt",
+            )
         final = responses[-1]
         transcript = {
             "delivery": "sequential",
@@ -423,6 +496,9 @@ class PolicyGateway:
         request: TargetRequest,
         attack_attempt: dict,
         policy: RunPolicy,
+        *,
+        attempt_id: str,
+        turn_index: int,
     ) -> TargetResponse:
         """Dispatch one physical request, retrying typed AdapterError with backoff.
 
@@ -436,13 +512,31 @@ class PolicyGateway:
         synthetic 200.
         """
         last_error: AdapterError | None = None
-        for dispatch_no in range(1, _MAX_DISPATCH_ATTEMPTS + 1):
-            # Re-enforce EVERY cap before THIS physical dispatch — the accumulated retries
-            # (spend charged, clock advanced) can themselves breach budget/rate/timeout.
+        retry_limit = (
+            _MAX_DISPATCH_ATTEMPTS - 1
+            if policy.target_retries_per_turn is None
+            else policy.target_retries_per_turn
+        )
+        for dispatch_no in range(1, retry_limit + 2):
+            coordinates = WorkUnitCoordinates(
+                attempt_id=attempt_id,
+                turn_index=turn_index,
+                retry_index=dispatch_no - 1,
+            )
+            # Re-check local caps immediately before durable reservation.  Reservation is the last
+            # admission action: once it commits, no later local check may strand an unobserved row
+            # without an adapter invocation.
             self._enforce_caps(policy, self.clock.now())
+            if self.pre_physical_send_gate is not None:
+                self.pre_physical_send_gate(coordinates)
+            # Reserve the physical-send slot before handing control to the adapter.  The counter
+            # therefore includes failed sends and makes the first over-limit call unreachable.
+            self._physical_sends_used += 1
             try:
                 response = self.adapter.send(request)
             except AdapterError as exc:
+                if self.post_physical_send_observer is not None:
+                    self.post_physical_send_observer(coordinates, "raised")
                 # A failed physical dispatch still consumes budget and advances the rate window.
                 self.accounting.charge()
                 self._last_dispatch_at = self.clock.now()
@@ -466,7 +560,13 @@ class PolicyGateway:
                 backoff = float(retry_after) if retry_after else float(2**dispatch_no)
                 self._wait(backoff)
                 continue
+            except BaseException:
+                if self.post_physical_send_observer is not None:
+                    self.post_physical_send_observer(coordinates, "raised")
+                raise
             # Success: charge this physical dispatch and advance the rate window, then return.
+            if self.post_physical_send_observer is not None:
+                self.post_physical_send_observer(coordinates, "returned")
             self.accounting.charge()
             self._last_dispatch_at = self.clock.now()
             return response
@@ -480,12 +580,12 @@ class PolicyGateway:
         )
         if isinstance(last_error, RateLimitedError):
             raise AbortError(
-                f"adapter rate-limited after {_MAX_DISPATCH_ATTEMPTS} backoff attempts; "
+                f"adapter rate-limited after {retry_limit + 1} dispatch attempt(s); "
                 "attempt queued — HARD ABORT (never a synthetic 200)",
                 code="abort",
             ) from last_error
         raise AbortError(
-            f"target unreachable after {_MAX_DISPATCH_ATTEMPTS} backoff attempts; attempt "
+            f"target unreachable after {retry_limit + 1} dispatch attempt(s); attempt "
             "queued — HARD ABORT (never a synthetic 200)",
             code="abort",
         ) from last_error

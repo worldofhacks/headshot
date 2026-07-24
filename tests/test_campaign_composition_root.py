@@ -58,6 +58,9 @@ def _write_run_inputs(tmp_path: Path) -> tuple[Path, Path]:
                 "max_attempts_per_run": 9,
                 "target_requests_per_second": 1.0,
                 "run_timeout_seconds": 60.0,
+                "logical_case_limit": 9,
+                "physical_request_limit": 9,
+                "target_retries_per_turn": 0,
             }
         ),
         encoding="utf-8",

@@ -1,0 +1,4 @@
+# T-F05l Implement — Model: capable
+Worktree `<WORKTREE>`; branch `ticket/T-F05l-controller-observation-source`. Inputs: ticket, frozen tests/review, lessons, landed H/J. Write only `src/agentforge/deployment/controller_observation_source.py` and `.tdd-swarm/reports/T-F05l-implement.md`; never edit H/config/provider/tests. Implement the fixed authenticated Unix seqpacket acquisition channel, canonical challenge/response, peer/trust/freshness/replay/sequence checks, single-use receipt, no success cache/retry/fallback, and stable redacted failures.
+
+Run local gates every GREEN loop; maximum three attempts. Fake transport tests only; no production socket/network/controller/Railway/database/provider/target, secrets/PHI, spend, main merge, or push. Return exactly `DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED(reason)` plus commit/gate summary; full output stays in the report.

@@ -1,0 +1,4 @@
+# T-F05n Test — Model: capable
+Worktree `<WORKTREE>`; branch `ticket/T-F05n-runner-rotation-evidence`. Inputs: ticket, landed E/F/H/I/J/O, contract conventions, frozen review. Write only `tests/test_runner_rotation_evidence.py` and `.tdd-swarm/reports/T-F05n-test.md`. Own RED for strict activation-event/evidence schemas; signed controller activation receipt; start/terminal/zero/event/final hash chain; exact set/rotation/release/context/fixture identity; draining<zero<activation<final sequence, distinct nonce/time order; no opaque activation hash/final-only proof; exact CLI create-only paired output and stable failures.
+
+Use synthetic signatures/attestations/clocks only; patch controller/database/Railway/provider/target/network/spend hooks to fail. No secrets/PHI, main merge, or push. Maximum three attempts. Return exactly `DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED(reason)` plus RED mapping; full output stays in the report.

@@ -28,15 +28,18 @@ from agentforge.campaign.authorization import RunAuthorization
 from agentforge.campaign.binding import TargetBinding
 from agentforge.campaign.coordinator import CampaignAbort, RunConfig, SecureCampaignCoordinator
 from agentforge.campaign.corpus import (
+    LIVE_100_CORPUS_ID,
     MVP_CASE_COUNT,
     MVP_CATEGORIES,
+    AuthoredCase,
     AuthoredCorpus,
-    load_full_scan_corpus,
+    resolve_workload,
+    verified_case_payload,
 )
 from agentforge.campaign.manifest import ManifestStore
 from agentforge.campaign.runtime import SystemClock, accounting_from_environment, production_engine
 from agentforge.control_plane.store import ControlPlaneStore
-from agentforge.policy.gateway import RunPolicy
+from agentforge.policy.gateway import RunPolicy, WorkUnitCoordinates
 from agentforge.policy.scoped_credentials import (
     CampaignCredentialLease,
     CredentialLeaseExpiredError,
@@ -207,22 +210,86 @@ def _exact_job_payload(job: JobRecord, authorized: Any) -> bool:
     )
 
 
-def _scope_payload_profile(*, relative_path: str, method: str, auth_mode: AuthMode) -> str:
-    """Derive request shape only from fields included in the authorization scope hash."""
+def _select_authorized_proposal(
+    remaining: list[AuthoredCase],
+    proposals: list[dict[str, Any]],
+    *,
+    corpus_id: str,
+) -> tuple[AuthoredCase, dict[str, Any]]:
+    """Select one proposal without allowing live-100 manifest-order drift."""
 
-    if relative_path != "chat":
-        return "openemr_turns"
-    if method != "POST" or auth_mode is not AuthMode.SESSION:
-        raise DispatchUnavailable("copilot_chat_scope_invalid")
-    return "copilot_chat"
+    if not remaining or not proposals:
+        raise DispatchUnavailable("authorized case proposal is unavailable")
+    proposal = proposals[0]
+    if corpus_id == LIVE_100_CORPUS_ID:
+        expected_case_id = remaining[0].payload.get("case_id")
+        ordered_matches = [
+            candidate for candidate in proposals if candidate.get("case_ref") == expected_case_id
+        ]
+        if len(ordered_matches) != 1:
+            raise DispatchUnavailable("next manifest-ordered case was not proposed exactly once")
+        proposal = ordered_matches[0]
+    case_matches = [
+        candidate
+        for candidate in remaining
+        if candidate.payload.get("case_id") == proposal.get("case_ref")
+    ]
+    if len(case_matches) != 1:
+        raise DispatchUnavailable("proposed case is not an exact unique authorized case")
+    return case_matches[0], proposal
+
+
+# The exact document sub-resource read templates the Co-Pilot exposes (document_id / page are
+# substituted at the dispatch boundary). Kept as a closed set so a scope can never derive a
+# document-read profile for an unlisted path.
+_DOCUMENT_READ_PATHS = frozenset(
+    {
+        "documents/{document_id}/status",
+        "documents/{document_id}/extraction-report",
+        "documents/{document_id}/readback-verification",
+        "documents/{document_id}/pages/{page}",
+    }
+)
+
+
+def _scope_payload_profile(*, relative_path: str, method: str, auth_mode: AuthMode) -> str:
+    """Derive request shape only from fields included in the authorization scope hash.
+
+    Every profile is a pure function of the surface's ``(relative_path, method, auth_mode)`` — all
+    three are bound in the persisted operation hash, so an environment change can never alter the
+    request shape after approval. An unrecognized combination fails closed (``DispatchUnavailable``)
+    rather than silently falling through to the bearer profile against the Co-Pilot's session API.
+    """
+
+    if relative_path in ("health", "ready"):
+        if method != "GET":
+            raise DispatchUnavailable("public_get_scope_invalid")
+        return "copilot_public_get"
+    if relative_path == "evidence/search":
+        if method != "POST":
+            raise DispatchUnavailable("evidence_search_scope_invalid")
+        return "copilot_evidence_search"
+    if relative_path == "chat":
+        if method != "POST" or auth_mode is not AuthMode.SESSION:
+            raise DispatchUnavailable("copilot_chat_scope_invalid")
+        return "copilot_chat"
+    if relative_path == "documents":
+        if method != "POST" or auth_mode is not AuthMode.SESSION:
+            raise DispatchUnavailable("document_upload_scope_invalid")
+        return "copilot_document_upload"
+    if relative_path in _DOCUMENT_READ_PATHS:
+        if method != "GET" or auth_mode is not AuthMode.SESSION:
+            raise DispatchUnavailable("document_read_scope_invalid")
+        return "copilot_document_read"
+    return "openemr_turns"
 
 
 def _campaign_session_required_until(authorized: Any, *, now: float) -> datetime.datetime:
     """Return the bounded window a delegated session must cover for this campaign.
 
-    The usable window ends at the earlier of the human authorization deadline and the
-    authorization-bound run timeout.  Session metadata must extend *past* this instant so the
-    Runner never starts a campaign it already knows may require an in-place identity rotation.
+    Both the human authorization and delegated session must extend *past* the complete
+    authorization-bound run timeout. The Runner never starts a campaign whose approval can expire
+    while the campaign is still permitted to run.
     """
 
     expires_at = getattr(authorized, "expires_at", None)
@@ -243,9 +310,9 @@ def _campaign_session_required_until(authorized: Any, *, now: float) -> datetime
     except (OverflowError, TypeError, ValueError) as exc:
         raise DispatchUnavailable("campaign_session_window_invalid") from exc
     authorization_expires_at = expires_at.astimezone(datetime.UTC)
-    if authorization_expires_at <= started_at:
+    if authorization_expires_at <= timeout_at:
         raise DispatchUnavailable("campaign_session_window_invalid")
-    return min(authorization_expires_at, timeout_at)
+    return timeout_at
 
 
 class DurableCampaignRunner:
@@ -266,7 +333,7 @@ class DurableCampaignRunner:
     ) -> None:
         self.engine = engine
         self.environment = environment
-        self.corpus = corpus or load_full_scan_corpus()
+        self.corpus = corpus or resolve_workload()
         self.catalog = catalog or TrustedTargetCatalog.from_environment(environment)
         self.credentials = credentials or SealedEnvironmentCredentialResolver.from_environment()
         self.clock = clock or SystemClock()
@@ -326,6 +393,11 @@ class DurableCampaignRunner:
             or scope.corpus_hash != self.corpus.content_hash
         ):
             blockers.append("corpus_hash_mismatch")
+        verified_payloads: tuple[dict[str, Any], ...] = ()
+        try:
+            verified_payloads = tuple(verified_case_payload(case) for case in self.corpus.cases)
+        except Exception:
+            blockers.append("corpus_content_mismatch")
         if len(self.corpus.cases) < MVP_CASE_COUNT or not MVP_CATEGORIES.issubset(
             self.corpus.categories
         ):
@@ -374,10 +446,15 @@ class DurableCampaignRunner:
             except DispatchUnavailable:
                 blockers.append("payload_profile_scope_invalid")
             else:
-                if entry.transport_policy.payload_profile != scope_profile:
+                if scope_profile not in entry.transport_policy.payload_profiles:
                     blockers.append("payload_profile_scope_mismatch")
-            if entry.transport_policy.write_upload_allowed:
-                blockers.append("write_upload_policy_not_mvp_safe")
+                if scope_profile == "copilot_document_upload" and (
+                    not entry.transport_policy.write_upload_allowed
+                    or not entry.transport_policy.allowed_write_resource_refs
+                ):
+                    # A write/upload surface may dispatch only under an explicit write policy with a
+                    # closed set of synthetic write-resource references; otherwise fail closed.
+                    blockers.append("write_upload_policy_missing")
             if scope.execution_profile is ExecutionProfile.SYNTHETIC:
                 if self.environment == "production" or scope.target_id != SYNTHETIC_TARGET_ID:
                     blockers.append("synthetic_profile_refused")
@@ -389,6 +466,18 @@ class DurableCampaignRunner:
             entry.target.safety_caps if entry is not None else caps
         ):
             blockers.append("campaign_caps_incompatible")
+        if self.corpus.corpus_id == LIVE_100_CORPUS_ID:
+            expected_physical = (
+                sum(len(payload["input_sequence"]) for payload in verified_payloads)
+                if verified_payloads
+                else -1
+            )
+            if (
+                caps.logical_case_limit != len(self.corpus.cases)
+                or caps.physical_request_limit != expected_physical
+                or caps.target_retries_per_turn != 0
+            ):
+                blockers.append("exact_request_caps_mismatch")
         if not self.credentials.has(scope.credential_ref):
             blockers.append("credential_reference_unavailable")
         if scope.execution_profile is ExecutionProfile.LIVE and scope.auth_mode is AuthMode.SESSION:
@@ -424,7 +513,7 @@ class DurableCampaignRunner:
         target = prepared.entry.target
         if scope.execution_profile is ExecutionProfile.SYNTHETIC:
             return SyntheticCassetteAdapter.for_cases(
-                tuple(case.payload for case in prepared.corpus.cases),
+                tuple(verified_case_payload(case) for case in prepared.corpus.cases),
                 base_url=target.base_url,
             )
         policy = prepared.entry.transport_policy
@@ -437,7 +526,8 @@ class DurableCampaignRunner:
             method=prepared.surface.method,
             auth_mode=scope.auth_mode,
         )
-        if policy.payload_profile != payload_profile:
+        allowed_profiles = getattr(policy, "payload_profiles", None) or (policy.payload_profile,)
+        if payload_profile not in allowed_profiles:
             raise DispatchUnavailable("payload_profile_scope_mismatch")
         return OpenEmrAdapter(
             base_url=target.base_url,
@@ -453,6 +543,9 @@ class DurableCampaignRunner:
                 allow_private=policy.allow_private_destination,
             ),
             telemetry=getattr(self, "telemetry", None),
+            # A synthetic-only fixture resolver is required for the copilot_document_upload surface;
+            # injected by the composition root and absent (fail-closed) for read-only surfaces.
+            fixture_resolver=getattr(self, "fixture_resolver", None),
         )
 
     def execute_claimed(self, job: JobRecord) -> None:
@@ -521,7 +614,9 @@ class DurableCampaignRunner:
         scope = authorized.scope
         self.store.append_campaign_state(run_id=job.campaign_run_id, state="running")
 
-        case_counts = Counter(case.payload["category"] for case in prepared.corpus.cases)
+        case_counts = Counter(
+            verified_case_payload(case)["category"] for case in prepared.corpus.cases
+        )
         remaining = list(prepared.corpus.cases)
         low_signal_streak = 0
         previous_category: str | None = None
@@ -581,7 +676,7 @@ class DurableCampaignRunner:
 
             directive = dict(decision.directive)
             priority_reason = decision.priority_reason
-            remaining_categories = {case.payload["category"] for case in remaining}
+            remaining_categories = {verified_case_payload(case)["category"] for case in remaining}
             if directive["category"] not in remaining_categories:
                 coverage = {row["category"]: row for row in snapshot["coverage"]}
                 selected_category = min(
@@ -600,6 +695,15 @@ class DurableCampaignRunner:
                 )
                 directive["mutation_policy"] = "redirect_to_remaining_authorized_case"
                 priority_reason = f"{priority_reason}_exhausted_redirect"
+            if prepared.corpus.corpus_id == LIVE_100_CORPUS_ID:
+                next_category = verified_case_payload(remaining[0])["category"]
+                if directive["category"] != next_category:
+                    directive["category"] = next_category
+                    directive["coverage_goal"] = (
+                        "execute the next instance in the exact authorized manifest order"
+                    )
+                    directive["mutation_policy"] = "preserve_authorized_manifest_order"
+                    priority_reason = f"{priority_reason}_manifest_order"
 
             self.store.finish_agent_execution(
                 execution_id=orchestrator_execution,
@@ -640,14 +744,13 @@ class DurableCampaignRunner:
             )
             try:
                 proposals = self.red_team.propose(
-                    cases=[case.payload for case in remaining],
+                    cases=[verified_case_payload(case) for case in remaining],
                     directive=directive,
                 )
-                proposal = proposals[0]
-                case = next(
-                    candidate
-                    for candidate in remaining
-                    if candidate.payload["case_id"] == proposal["case_ref"]
+                case, proposal = _select_authorized_proposal(
+                    remaining,
+                    proposals,
+                    corpus_id=prepared.corpus.corpus_id,
                 )
             except Exception as exc:
                 self.store.finish_agent_execution(
@@ -662,7 +765,7 @@ class DurableCampaignRunner:
                     code="red_team_proposal_failed",
                 ) from exc
 
-            payload = case.payload
+            payload = verified_case_payload(case)
             attempt = self.store.ensure_campaign_attempt(
                 run_id=job.campaign_run_id,
                 ordinal=next_ordinal,
@@ -713,7 +816,7 @@ class DurableCampaignRunner:
         )
         last_dispatch_at: float | None = None
 
-        def revalidate(attempt_id: str) -> None:
+        def revalidate(coordinates: str | WorkUnitCoordinates) -> None:
             nonlocal last_dispatch_at
             if last_dispatch_at is not None:
                 wait = (1.0 / policy.target_requests_per_second) - (
@@ -727,6 +830,11 @@ class DurableCampaignRunner:
                     self.sleeper(wait + 0.000001)
             self.queue.heartbeat(job, extension=_DEFAULT_LEASE)
             self.store.assert_job_lease(job)
+            attempt_id = (
+                coordinates.attempt_id
+                if isinstance(coordinates, WorkUnitCoordinates)
+                else coordinates
+            )
             current = self.store.resolve_dispatch(job.campaign_run_id, attempt_id)
             if (
                 current.run.scope_hash != authorized.run.scope_hash
@@ -734,6 +842,27 @@ class DurableCampaignRunner:
                 or current.approval.decision_id != authorized.approval.decision_id
             ):
                 raise CampaignAbort("persisted authorization changed", code="authorization_changed")
+            # Re-check the pinned session deadline before every physical turn/retry.  Once resolved,
+            # this returns the same in-memory Secret and cannot rotate identity mid-campaign.
+            credential_lease.resolve(scope.credential_ref)
+
+        def reserve_work_unit(coordinates: WorkUnitCoordinates) -> None:
+            revalidate(coordinates.attempt_id)
+            self.store.reserve_campaign_work_unit(
+                job=job,
+                attempt_id=coordinates.attempt_id,
+                turn_index=coordinates.turn_index,
+                retry_index=coordinates.retry_index,
+            )
+
+        def observe_work_unit(coordinates: WorkUnitCoordinates, outcome: str) -> None:
+            self.store.observe_campaign_work_unit(
+                job=job,
+                attempt_id=coordinates.attempt_id,
+                turn_index=coordinates.turn_index,
+                retry_index=coordinates.retry_index,
+                outcome=outcome,
+            )
 
         provenance = (
             "synthetic_offline"
@@ -769,6 +898,8 @@ class DurableCampaignRunner:
                 authorization_operation_hash=authorized.run.scope_hash,
                 campaign_run_id=authorized.run.run_id,
                 pre_dispatch_gate=revalidate,
+                work_unit_reserver=reserve_work_unit,
+                work_unit_observer=observe_work_unit,
                 credential_resolver=credential_lease.resolve,
                 result_context={
                     "organization_id": authorized.run.organization_id,
@@ -793,8 +924,9 @@ class DurableCampaignRunner:
         )
         while True:
             case, proposal, attempt, current_red_team_execution = work
+            dispatch_payload = verified_case_payload(case)
             outcome = coordinator.run_case(
-                case.payload,
+                dispatch_payload,
                 attack_attempt=proposal,
                 attempt_id=attempt.attempt_id,
             )
@@ -824,7 +956,7 @@ class DurableCampaignRunner:
                     report = self.documentation.draft(
                         verdict=outcome.verdict,
                         report_input=self._documentation_input(
-                            payload=case.payload,
+                            payload=dispatch_payload,
                             organization_id=authorized.run.organization_id,
                             finding_id=finding_id,
                             campaign_run_id=authorized.run.run_id,
@@ -883,7 +1015,7 @@ class DurableCampaignRunner:
             # response and is correctly (but unexpectedly) hard-aborted by its completion-based
             # rate check.
             last_dispatch_at = self.clock.now()
-            previous_category = case.payload["category"]
+            previous_category = dispatch_payload["category"]
             if outcome.verdict.get("state") in {"INDETERMINATE", "ERROR"}:
                 low_signal_streak += 1
             else:
@@ -895,7 +1027,6 @@ class DurableCampaignRunner:
 
         self.store.complete_campaign_job(
             job=job,
-            request_count=accounting.request_count,
             measured_cost=accounting.spent_usd,
         )
 
@@ -1000,7 +1131,7 @@ def check_runtime(database_url: str | None = None) -> bool:
         return False
     try:
         engine = _engine(url)
-        return _schema_is_current(engine) and len(load_full_scan_corpus().cases) >= MVP_CASE_COUNT
+        return _schema_is_current(engine) and len(resolve_workload().cases) >= MVP_CASE_COUNT
     except Exception:
         return False
 

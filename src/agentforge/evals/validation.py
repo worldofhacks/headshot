@@ -16,7 +16,9 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
 import re
+import stat
 import unicodedata
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
@@ -409,17 +411,20 @@ def _check_structure_bounds(value: Any, *, source: str | Path) -> None:
             )
 
 
-def load_json_file(path: Path) -> Any:
-    """Load bounded strict JSON, rejecting duplicates/non-finite values without echoing content."""
+def load_json_file_bytes(path: Path) -> tuple[Any, bytes]:
+    """Load strict JSON and return the exact bounded regular-file bytes that were parsed."""
 
     source = _safe_source(path)
+    descriptor: int | None = None
     try:
-        if path.is_symlink() or not path.is_file():
+        flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(path, flags)
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode):
             raise EvalValidationError(
                 [_issue(EvalValidationCode.IO_ERROR, source, "", "input must be a regular file")]
             )
-        size = path.stat().st_size
-        if size > MAX_FILE_BYTES:
+        if metadata.st_size > MAX_FILE_BYTES:
             raise EvalValidationError(
                 [
                     _issue(
@@ -430,7 +435,9 @@ def load_json_file(path: Path) -> Any:
                     )
                 ]
             )
-        raw = path.read_bytes()
+        with os.fdopen(descriptor, "rb", closefd=True) as stream:
+            descriptor = None
+            raw = stream.read(MAX_FILE_BYTES + 1)
         if len(raw) > MAX_FILE_BYTES:
             raise EvalValidationError(
                 [
@@ -448,6 +455,9 @@ def load_json_file(path: Path) -> Any:
         raise EvalValidationError(
             [_issue(EvalValidationCode.IO_ERROR, source, "", "input file could not be read")]
         ) from exc
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
 
     try:
         text = raw.decode("utf-8", errors="strict")
@@ -505,6 +515,13 @@ def load_json_file(path: Path) -> Any:
         ) from exc
 
     _preflight_json_value(value, source=source)
+    return value, raw
+
+
+def load_json_file(path: Path) -> Any:
+    """Load bounded strict JSON, rejecting duplicates/non-finite values without echoing content."""
+
+    value, _raw = load_json_file_bytes(path)
     return value
 
 

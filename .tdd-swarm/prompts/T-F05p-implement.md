@@ -1,0 +1,4 @@
+# T-F05p Implement — Model: capable
+Worktree `<WORKTREE>`; branch `ticket/T-F05p-clinical-copilot-target-catalog`. Inputs: ticket, frozen tests/review, lessons, current non-secret catalog. Write only the five ticket `file_scopes` and `.tdd-swarm/reports/T-F05p-implement.md`; never edit tests or add adapters. Freeze strict tracked catalog loading/hash parity, exactly two targets, chat-only enablement, Runner-only opaque credential mapping, and one-target/session/patient binding. Do not add or copy any credential/session or locally extracted artifact.
+
+Run local gates every GREEN loop; maximum three attempts. No network/Railway action/provider/target, credential/session values, PHI, spend, main merge, or push. Return exactly `DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED(reason)` plus commit/gate summary; full output stays in the report.

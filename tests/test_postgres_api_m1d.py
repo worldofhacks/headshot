@@ -65,10 +65,12 @@ def _clean(engine: Engine) -> None:
         connection.execute(
             text(
                 "TRUNCATE TABLE agent_executions, agent_configuration_versions, "
+                "hosted_configuration_sets, "
                 "tool_execution_errors, security_tool_findings, scan_artifacts, "
                 "security_tool_runs, finding_decision_events, audit_events, command_idempotency, "
                 "campaign_attempts, campaign_run_events, campaign_runs, "
                 "campaign_authorization_decisions, campaign_authorization_requests, "
+                "runtime_component_status, "
                 "surface_state_events, attack_surface_definitions, surface_identities, "
                 "target_lifecycle_events, target_definitions, target_identities, jobs "
                 "RESTART IDENTITY CASCADE"
@@ -122,6 +124,59 @@ def _surface_payload() -> dict[str, Any]:
         ],
         "oracle_refs": ["oracle://canary/api-fixture"],
         "enabled": True,
+    }
+
+
+def _hosted_configuration_payload() -> dict[str, Any]:
+    identities = {
+        "orchestrator": ("anthropic/claude-opus-4.8", "Anthropic", 8, "0.75"),
+        "red_team": ("qwen/qwen3.5-397b-a17b", "Together", 21, "1.25"),
+        "judge": ("google/gemini-2.5-pro", "Google", 21, "2.5"),
+        "documentation": ("openai/gpt-5.4", "OpenAI", 6, "0.5"),
+    }
+    roles = []
+    for role, (model, upstream, calls, usd) in identities.items():
+        roles.append(
+            {
+                "role": role,
+                "provider": "openrouter",
+                "model_id": model,
+                "upstream_provider": upstream,
+                "credential_reference": (
+                    f"secretref://staging/openrouter/{role}/generation-20260724"
+                ),
+                "prompt_sha256": hashlib.sha256(f"{role}:prompt".encode()).hexdigest(),
+                "policy_sha256": hashlib.sha256(f"{role}:policy".encode()).hexdigest(),
+                "prices": {
+                    "input_usd_per_million_tokens": "1",
+                    "output_usd_per_million_tokens": "2",
+                    "reasoning_usd_per_million_tokens": "3",
+                },
+                "limits": {
+                    "max_calls": calls,
+                    "max_input_tokens": 100000,
+                    "max_output_tokens": 20000,
+                    "max_reasoning_tokens": 10000,
+                    "max_usd": usd,
+                    "max_retries": 1,
+                    "max_requests_per_second": "0.5",
+                    "max_concurrency": 1,
+                },
+            }
+        )
+    return {
+        "schema_version": "1",
+        "roles": roles,
+        "global_limits": {
+            "max_calls": 56,
+            "max_input_tokens": 400000,
+            "max_output_tokens": 80000,
+            "max_reasoning_tokens": 40000,
+            "max_usd": "5",
+            "max_retries": 1,
+            "max_requests_per_second": "0.5",
+            "max_concurrency": 1,
+        },
     }
 
 
@@ -221,7 +276,7 @@ def test_agent_models_and_tool_scope_are_real_configurable_projections(
     assert tool_rows["zap"]["applicability"] == "companion_scan"
     assert tool_rows["semgrep"]["applicability"] == "platform_assurance"
 
-    staged = client.post(
+    per_role = client.post(
         "/api/v1/agents/red_team/configuration",
         json={
             "provider": "openrouter",
@@ -231,13 +286,41 @@ def test_agent_models_and_tool_scope_are_real_configurable_projections(
         },
         headers=_headers("agent-config-stage-0001"),
     )
-    assert staged.status_code == 200, staged.text
-    red_team = next(
-        row for row in client.get("/api/v1/agents").json()["data"] if row["role"] == "red_team"
+    assert per_role.status_code == 503
+    assert per_role.json()["reason_code"] == "atomic_hosted_configuration_set_required"
+
+    staged = client.post(
+        "/api/v1/hosted-configuration-sets",
+        json={
+            "configuration": _hosted_configuration_payload(),
+            "release_sha256": "f" * 64,
+            "rationale": "Stage all four reviewed hosted identities atomically.",
+        },
+        headers=_headers("hosted-config-set-stage-0001"),
     )
-    assert red_team["active_assignment"]["model"] == "full-scan-corpus-v1"
-    assert red_team["staged_assignment"]["model"] == "provider/model-v1"
-    assert red_team["staged_assignment"]["activation_state"] == "staged_pending_authorization"
+    assert staged.status_code == 200, staged.text
+    configuration_sha256 = staged.json()["resource_id"]
+    projection = client.get(
+        f"/api/v1/hosted-configuration-sets/{configuration_sha256}"
+    )
+    assert projection.status_code == 200
+    assert projection.json()["state"] == "ready"
+    assert projection.json()["data"]["activation_state"] == "staged_pending_authorization"
+    assert projection.json()["data"]["runtime_reason"] == "hosted_runtime_not_composed"
+    assert len(projection.json()["data"]["roles"]) == 4
+    assert "secretref://" not in projection.text
+    assert all(
+        role["provider_reference_bound"] is True
+        for role in projection.json()["data"]["roles"]
+    )
+    preflight = client.get(
+        f"/api/v1/hosted-configuration-sets/{configuration_sha256}/preflight"
+    )
+    assert preflight.status_code == 200
+    assert preflight.json()["state"] == "degraded"
+    assert preflight.json()["reason_code"] == "hosted_runtime_not_composed"
+    assert preflight.json()["data"]["preflight"]["provider_calls_performed"] == 0
+    assert preflight.json()["data"]["preflight"]["target_calls_performed"] == 0
 
     rejected = client.post(
         "/api/v1/agents/judge/configuration",
@@ -249,7 +332,8 @@ def test_agent_models_and_tool_scope_are_real_configurable_projections(
         },
         headers=_headers("agent-config-reject-0001"),
     )
-    assert rejected.status_code == 409
+    assert rejected.status_code == 503
+    assert rejected.json()["reason_code"] == "atomic_hosted_configuration_set_required"
 
 
 def test_live_security_tool_findings_are_projected_into_the_console_register(
@@ -423,6 +507,186 @@ def test_exact_scope_two_person_flow_reaches_persistence_but_not_unwired_runner(
     )
     assert launch.status_code == 503
     assert launch.json()["reason_code"] == "runner_execution_composition_missing"
+    with migrated_db.connect() as connection:
+        assert connection.execute(text("SELECT count(*) FROM campaign_runs")).scalar_one() == 0
+        assert connection.execute(text("SELECT count(*) FROM jobs")).scalar_one() == 0
+
+    client.app.state.api_backend = PostgresApiBackend(
+        migrated_db,
+        environment="staging",
+        runner_available=True,
+    )
+    stale = client.post(
+        "/api/v1/campaigns",
+        json={"authorization_request_id": request_id},
+        headers=_headers("api-launch-stale-runner-0001"),
+    )
+    assert stale.status_code == 503
+    assert stale.json()["reason_code"] == "runner_heartbeat_stale"
+    with migrated_db.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO runtime_component_status "
+                "(environment, component_id, name, kind, availability, detail) VALUES "
+                "('staging', 'runner', 'Private Runner', 'worker', "
+                "'operational and evidenced', 'fresh test heartbeat') "
+                "ON CONFLICT (environment, component_id) DO UPDATE SET "
+                "availability = EXCLUDED.availability, heartbeat_at = clock_timestamp()"
+            )
+        )
+    launched = client.post(
+        "/api/v1/campaigns",
+        json={"authorization_request_id": request_id},
+        headers=_headers("api-launch-fresh-runner-0001"),
+    )
+    assert launched.status_code == 202, launched.text
+    approvals = client.get("/api/v1/approvals").json()["data"]
+    consumed = next(item for item in approvals if item["request_id"] == request_id)
+    assert consumed["consumed"] is True
+    assert consumed["expired"] is False
+    with migrated_db.connect() as connection:
+        assert connection.execute(text("SELECT count(*) FROM campaign_runs")).scalar_one() == 1
+        assert connection.execute(text("SELECT count(*) FROM jobs")).scalar_one() == 1
+
+
+def test_hosted_authorization_is_bound_but_launch_stays_unavailable_until_composed(
+    migrated_db: Engine,
+) -> None:
+    _clean(migrated_db)
+    launcher = _principal(
+        LAUNCHER_ID,
+        "org:console:read",
+        "org:campaign:launch",
+        "org:targets:manage",
+        "org:config:manage",
+    )
+    client = TestClient(_app(migrated_db, launcher))
+    _seed_ready_target(migrated_db, launcher)
+
+    staged = client.post(
+        "/api/v1/hosted-configuration-sets",
+        json={
+            "configuration": _hosted_configuration_payload(),
+            "release_sha256": "e" * 64,
+            "rationale": "Bind the reviewed four-model set to one authorization.",
+        },
+        headers=_headers("hosted-config-set-stage-launch-0001"),
+    )
+    assert staged.status_code == 200, staged.text
+    configuration_sha256 = staged.json()["resource_id"]
+
+    requested = client.post(
+        "/api/v1/campaign-authorization-requests",
+        json={
+            "target_id": "copilot-api",
+            "target_version": "1.0.0",
+            "surface_id": "chat-api",
+            "surface_version": "1.0.0",
+            "corpus_hash": "a" * 64,
+            "run_nonce": "nonce-hosted-fixture-0001",
+            "caps": {
+                "budget_usd": 2.0,
+                "max_attempts_per_run": 3,
+                "target_requests_per_second": 0.5,
+                "run_timeout_seconds": 60.0,
+            },
+            "hosted_run": {
+                "configuration_set_sha256": configuration_sha256,
+                "generation_policy_sha256": "d" * 64,
+                "session_generation": "generation-20260724",
+                "provider_model_call_limit": 56,
+                "provider_model_spend_limit_usd": "5",
+                "provider_max_retries": 1,
+                "provider_max_concurrency": 1,
+                "provider_timeout_seconds": 30.0,
+            },
+            "expires_in_seconds": 600,
+        },
+        headers=_headers("hosted-auth-request-0001"),
+    )
+    assert requested.status_code == 200, requested.text
+    request_id = requested.json()["resource_id"]
+    approval_scope = next(
+        item
+        for item in client.get("/api/v1/approvals").json()["data"]
+        if item["request_id"] == request_id
+    )
+    assert approval_scope["hosted_run"] == {
+        "configuration_set_sha256": configuration_sha256,
+        "generation_policy_sha256": "d" * 64,
+        "session_generation": "generation-20260724",
+        "provider_model_call_limit": 56,
+        "provider_model_spend_limit_usd": "5",
+        "provider_max_retries": 1,
+        "provider_max_concurrency": 1,
+        "provider_timeout_seconds": 30.0,
+    }
+    assert "credential_ref" not in json.dumps(approval_scope)
+    preflight = client.get(
+        f"/api/v1/campaign-authorization-requests/{request_id}/preflight"
+    )
+    assert preflight.status_code == 200
+    assert preflight.json()["state"] == "degraded"
+    assert preflight.json()["reason_code"] == "hosted_runtime_not_composed"
+    assert preflight.json()["data"]["provider_calls_performed"] == 0
+    assert preflight.json()["data"]["target_calls_performed"] == 0
+    assert "credential_ref" not in preflight.text
+
+    distinct_client = TestClient(
+        _app(migrated_db, _principal(APPROVER_ID, "org:campaign:authorize"))
+    )
+    approved = distinct_client.post(
+        f"/api/v1/campaign-authorization-requests/{request_id}/decisions",
+        json={"decision": "approved"},
+        headers=_headers("hosted-auth-decision-0001"),
+    )
+    assert approved.status_code == 200, approved.text
+
+    client.app.state.api_backend = PostgresApiBackend(
+        migrated_db,
+        environment="staging",
+        runner_available=True,
+        hosted_runtime_available=False,
+    )
+    launch = client.post(
+        "/api/v1/campaigns",
+        json={"authorization_request_id": request_id},
+        headers=_headers("hosted-launch-unavailable-0001"),
+    )
+    assert launch.status_code == 503
+    assert launch.json()["reason_code"] == "hosted_runtime_not_composed"
+    with migrated_db.connect() as connection:
+        assert connection.execute(text("SELECT count(*) FROM campaign_runs")).scalar_one() == 0
+        assert connection.execute(text("SELECT count(*) FROM jobs")).scalar_one() == 0
+
+    with migrated_db.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO runtime_component_status "
+                "(environment, component_id, name, kind, availability, detail) VALUES "
+                "('staging', 'runner', 'Private Runner', 'worker', "
+                "'operational and evidenced', 'fresh test heartbeat') "
+                "ON CONFLICT (environment, component_id) DO UPDATE SET "
+                "availability = EXCLUDED.availability, heartbeat_at = clock_timestamp()"
+            )
+        )
+    client.app.state.api_backend = PostgresApiBackend(
+        migrated_db,
+        environment="staging",
+        runner_available=True,
+        hosted_runtime_available=True,
+        hosted_provider_bindings_verified=False,
+    )
+    unverified = client.post(
+        "/api/v1/campaigns",
+        json={"authorization_request_id": request_id},
+        headers=_headers("hosted-launch-unverified-bindings-0001"),
+    )
+    assert unverified.status_code == 503
+    assert (
+        unverified.json()["reason_code"]
+        == "provider_credentials_runner_unverified"
+    )
     with migrated_db.connect() as connection:
         assert connection.execute(text("SELECT count(*) FROM campaign_runs")).scalar_one() == 0
         assert connection.execute(text("SELECT count(*) FROM jobs")).scalar_one() == 0

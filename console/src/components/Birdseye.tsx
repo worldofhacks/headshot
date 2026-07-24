@@ -131,7 +131,7 @@ function SecurityPosture({ snapshot }: { snapshot: BirdseyeSnapshotReadModel }) 
               : `${money(posture.cost_velocity_usd_per_minute)} / min`}
             {posture.projected_cost_at_attempt_cap_usd === null
               ? ""
-              : ` · ${money(posture.projected_cost_at_attempt_cap_usd)} projected`}
+              : ` · ${money(posture.projected_cost_at_attempt_cap_usd)} budget-bounded projection`}
           </small>
         </article>
       </div>

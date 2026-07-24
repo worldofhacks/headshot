@@ -67,7 +67,7 @@
         "shouldStopRunnerExecution": false,
         "runDuration": 0.335731917,
         "name": "Health",
-        "suitename": "/Users/quietguy/Documents/Dev/Gauntlet/OpenEMR-Custom-Build/claude-adversarial-run/adversarial-smart-bruno-2026-07-24/week1/bruno/health",
+        "suitename": "<external-bundle-root>/claude-adversarial-run/adversarial-smart-bruno-2026-07-24/week1/bruno/health",
         "path": "health",
         "iterationIndex": 0
       },
@@ -192,7 +192,7 @@
         "shouldStopRunnerExecution": false,
         "runDuration": 9.704131457999999,
         "name": "Readiness",
-        "suitename": "/Users/quietguy/Documents/Dev/Gauntlet/OpenEMR-Custom-Build/claude-adversarial-run/adversarial-smart-bruno-2026-07-24/week1/bruno/ready",
+        "suitename": "<external-bundle-root>/claude-adversarial-run/adversarial-smart-bruno-2026-07-24/week1/bruno/ready",
         "path": "ready",
         "iterationIndex": 0
       },
@@ -301,7 +301,7 @@
         "shouldStopRunnerExecution": false,
         "runDuration": 4.217466125,
         "name": "VA/DoD guideline evidence search",
-        "suitename": "/Users/quietguy/Documents/Dev/Gauntlet/OpenEMR-Custom-Build/claude-adversarial-run/adversarial-smart-bruno-2026-07-24/week1/bruno/evidence-search",
+        "suitename": "<external-bundle-root>/claude-adversarial-run/adversarial-smart-bruno-2026-07-24/week1/bruno/evidence-search",
         "path": "evidence-search",
         "iterationIndex": 0
       },
@@ -630,7 +630,7 @@
         "shouldStopRunnerExecution": false,
         "runDuration": 72.269359625,
         "name": "Cited patient-pinned chat",
-        "suitename": "/Users/quietguy/Documents/Dev/Gauntlet/OpenEMR-Custom-Build/claude-adversarial-run/adversarial-smart-bruno-2026-07-24/week1/bruno/chat",
+        "suitename": "<external-bundle-root>/claude-adversarial-run/adversarial-smart-bruno-2026-07-24/week1/bruno/chat",
         "path": "chat",
         "iterationIndex": 0
       }

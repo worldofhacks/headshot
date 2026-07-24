@@ -64,7 +64,7 @@ from agentforge.campaign.manifest import ManifestStore
 from agentforge.config import Settings
 from agentforge.contracts import validate as validate_contract
 from agentforge.policy.allowlist import Allowlist, AllowlistEntry
-from agentforge.policy.gateway import AttemptResult, PolicyGateway, RunPolicy
+from agentforge.policy.gateway import AttemptResult, PolicyGateway, RunPolicy, WorkUnitCoordinates
 from agentforge.policy.recorder import (
     PERSISTED_EVIDENCE_COLUMNS,
     EvidenceIntegrityError,
@@ -182,6 +182,12 @@ class RunConfig:
     authorization_operation_hash: str | None = None
     campaign_run_id: str | None = None
     pre_dispatch_gate: Callable[[str], None] | None = field(default=None, repr=False)
+    work_unit_reserver: Callable[[WorkUnitCoordinates], None] | None = field(
+        default=None, repr=False
+    )
+    work_unit_observer: Callable[[WorkUnitCoordinates, str], None] | None = field(
+        default=None, repr=False
+    )
     credential_resolver: Callable[[str | None], Any] | None = field(default=None, repr=False)
     result_context: Mapping[str, Any] = field(default_factory=dict, repr=False)
     agent_execution_start: Callable[..., str] | None = field(default=None, repr=False)
@@ -570,6 +576,13 @@ class SecureCampaignCoordinator:
         + caps — so no live enforcement object is built for a run that never clears the gates.
         """
         if self._gateway is None:
+            physical_gate = self.config.work_unit_reserver
+            if physical_gate is None and self.config.pre_dispatch_gate is not None:
+                logical_gate = self.config.pre_dispatch_gate
+
+                def physical_gate(coordinates: WorkUnitCoordinates) -> None:
+                    logical_gate(coordinates.attempt_id)
+
             allowlist = Allowlist(
                 entries=[
                     AllowlistEntry(target_id=binding.target_id, adapter_name=binding.adapter_kind)
@@ -583,6 +596,8 @@ class SecureCampaignCoordinator:
                 accounting=self.accounting,
                 recorder=self.recorder,
                 sleeper=self.config.dispatch_sleeper,
+                pre_physical_send_gate=physical_gate,
+                post_physical_send_observer=self.config.work_unit_observer,
             )
         return self._gateway
 

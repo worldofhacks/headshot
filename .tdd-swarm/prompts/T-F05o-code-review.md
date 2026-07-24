@@ -1,0 +1,4 @@
+# T-F05o Code Review — Model: capable
+Worktree `<WORKTREE>`; branch `ticket/T-F05o-runner-rotation-control-history`. Inputs: ticket, diff, implementation/gate reports, frozen tests, H/I/J reviews. Write only `.tdd-swarm/reports/T-F05o-code-review.md`; source/tests are read-only. Re-run gates for canonical schema/attestation, draining input, fixed exact-set queries/high-watermarks, start→terminal hash/membership, no post-cutoff predecessor work, terminal campaign/job semantics, zero live leases, redaction, forbidden caller inputs, and create-only outputs.
+
+No network/live DB/controller/Railway/provider/target, secrets/PHI, spend, main merge, or push. Maximum three reviews. Return exactly `DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED(reason)` plus verdict; full output stays in the report.

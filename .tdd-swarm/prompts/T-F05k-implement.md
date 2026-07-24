@@ -1,0 +1,4 @@
+# T-F05k Implement — Model: capable
+Worktree `<WORKTREE>`; branch `ticket/T-F05k-smart-session-context-loader`. Inputs: ticket, frozen tests/review, lessons, landed E/J. Write only the two ticket `file_scopes` and `.tdd-swarm/reports/T-F05k-implement.md`; never edit tests/config/storage/provider/Runner. Implement fixed-path no-follow create-only install, startup/post-claim reopen validation, non-serializable pin, exact cleanup, stable redacted errors, and non-session bypass.
+
+Run local gates every GREEN loop; maximum three attempts. Temporary deterministic filesystem only; no live `/run`, network/Railway/controller/database/provider/target, secrets/PHI, spend, main merge, or push. Return exactly `DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED(reason)` plus commit/gate summary; full output stays in the report.

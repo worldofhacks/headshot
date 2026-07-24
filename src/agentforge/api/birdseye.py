@@ -194,11 +194,23 @@ def build_birdseye_snapshot(
         if run_id
         else None
     )
-    measured_cost = float(
+    target_measured_cost = float(
         summary["measured_cost"]
         if summary is not None
         else request_metrics.get("measured_cost") or 0
     )
+    agent_measured_cost = float(
+        connection.execute(
+            text(
+                "SELECT coalesce(sum(measured_cost), 0) FROM agent_executions "
+                "WHERE organization_id = :org "
+                "AND (CAST(:run_id AS varchar) IS NULL OR campaign_run_id = :run_id)"
+            ),
+            run_parameters,
+        ).scalar_one()
+        or 0
+    )
+    measured_cost = target_measured_cost + agent_measured_cost
     budget = max(0.0, float(caps.get("budget_usd") or 0))
     budget_utilization = measured_cost / budget if budget > 0 else 0.0
     scope_target_id = scope.get("target_id")
@@ -467,8 +479,13 @@ def build_birdseye_snapshot(
         elapsed_seconds = 0.0
     cost_velocity = measured_cost / (elapsed_seconds / 60) if elapsed_seconds > 0 else None
     attempt_cap = int(caps.get("max_attempts_per_run") or 0)
-    projected_cost_at_attempt_cap = (
+    unbounded_projected_cost = (
         cost_per_attempt * attempt_cap if cost_per_attempt is not None and attempt_cap > 0 else None
+    )
+    projected_cost_at_attempt_cap = (
+        min(unbounded_projected_cost, budget)
+        if unbounded_projected_cost is not None and budget > 0
+        else unbounded_projected_cost
     )
 
     orchestration_priority = (

@@ -19,7 +19,7 @@ traces_to:
 ---
 
 ## Context
-Wave 7 deterministic code consumes T-F04c's immutable configuration-set/execution references, T-F03a's Judge result, T-F04a's Red Team lineage, T-F04h's typed manifest contract, and T-F04d's composed execution metadata, then exposes durable lineage through runner/store/Birdseye. It must consume the persisted `HostedRoleConfiguration`; independent environment/artifact reparsing is forbidden.
+Wave 7 deterministic code consumes T-F04c's immutable configuration-set/execution references, T-F03a's Judge result, T-F04a's Red Team lineage, T-F04h's typed manifest contract, and T-F04d's composed execution metadata, then exposes durable lineage through runner/store/Birdseye. It must consume the persisted `HostedRoleConfiguration`; independent environment/artifact reparsing is forbidden. T-F05d publishes the target-session fixture; T-F05h/T-F05i own authenticated state; T-F05e owns context/fresh validation; T-F05j owns delivery; T-F05f owns Runner enforcement; and T-F05g owns rotation. This ticket must not claim those concerns or add an alternate source/context/session parser.
 
 ## Acceptance Criteria
 - **AC-1**: Given an offline or injected-transport four-role run, each started execution references the immutable T-F04c role-version/configuration-set hash and persists role/parent/phase/times/status/correlation/release SHA/target, requested and exact returned model/provider/endpoint identity, prompt/rubric/criteria/policy/catalog/data-policy/fixture hashes, input-output hashes, tokens, measured cost, trace ID, and cost provenance.
@@ -33,4 +33,6 @@ Wave 7 deterministic code consumes T-F04c's immutable configuration-set/executio
 - [ ] Independent Code and Security reviewers have no Critical/Important findings.
 
 ## Out of Scope
-No live campaign, evidence docs, or provider/target request.
+No target-session fixture, source projection, SMART lease/context delivery/Runner/rotation change
+(owned by T-F05d/T-F05h/T-F05i/T-F05e/T-F05j/T-F05f/T-F05g), live campaign, evidence docs, or
+provider/target request.

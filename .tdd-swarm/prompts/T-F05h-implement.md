@@ -1,0 +1,4 @@
+# T-F05h Implement — Model: capable
+Worktree `<WORKTREE>`; branch `ticket/T-F05h-runner-deployment-state`. Inputs: ticket, frozen test/review, lessons, landed T-F05a/T-F05d. Write only the seven ticket `file_scopes` and `.tdd-swarm/reports/T-F05h-implement.md`; never edit tests. Implement strict signed projection/validator, runtime-only non-serializable receipt/request-nonce boundary, separate evidence-only CLI entry point, rotation phase/hash invariants, direct crypto dependency, truthful unsafe states, stable redacted failures, and create-only output. Do not implement acquisition; T-F05l owns it.
+
+Run local gates every GREEN loop; maximum three attempts. Deterministic fixtures only; no network/live controller/Railway/database/provider/target, raw secrets/PHI, spend, main merge, or push. Return exactly `DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED(reason)` plus commit/gate summary; full output stays in the report.

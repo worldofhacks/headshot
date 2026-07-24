@@ -16,13 +16,17 @@ from urllib.parse import urlsplit
 
 from sqlalchemy import Engine, create_engine, text
 
+from agentforge.agents.hosted import (
+    HostedConfigurationSet,
+    preflight_hosted_configuration_set,
+)
 from agentforge.agents.runtime import AGENT_DEFINITIONS, default_assignment
 from agentforge.api.backend import ApiBackend, ApiBackendUnavailable, ApiConflict
 from agentforge.api.birdseye import build_birdseye_snapshot
 from agentforge.api.read_models import validate_ready_data
 from agentforge.api.schemas import CommandResult, EventBatch, ResourceResult
 from agentforge.auth.errors import AuthorizationError
-from agentforge.campaign.corpus import AuthoredCorpus, load_full_scan_corpus
+from agentforge.campaign.corpus import AuthoredCorpus, resolve_workload
 from agentforge.control_plane import ControlPlaneStore
 from agentforge.control_plane.errors import (
     AuthorizationDeniedError,
@@ -48,6 +52,7 @@ from agentforge.security_tools.workbench import (
 from agentforge.target.catalog import SYNTHETIC_TARGET_ID, TrustedTargetCatalog
 from agentforge.target.spec import (
     AttackSurfaceDefinition,
+    HostedRunBinding,
     OwaspMapping,
     SafetyCaps,
     TargetDefinition,
@@ -77,6 +82,7 @@ _ALLOWED_LIFECYCLE_TRANSITIONS = {
 _REQUIRED_WEB = frozenset({"A01", "A03", "A04", "A06", "A07", "A09", "A10"})
 _REQUIRED_LLM = frozenset({"LLM01", "LLM02", "LLM03", "LLM05", "LLM06"})
 _REQUIRED_CATEGORIES = frozenset({"prompt_injection", "data_exfiltration", "tool_misuse"})
+_RUNNER_HEARTBEAT_FRESHNESS_SECONDS = 30
 
 
 def _safe(value: Any) -> Any:
@@ -187,6 +193,23 @@ def _scope_projection(value: Any, *, target_base_url: Any = None) -> dict[str, A
         if projected.get("explicit_no_auth") is True
         else projected.get("auth_mode")
     )
+    hosted_run = value.get("hosted_run")
+    if isinstance(hosted_run, Mapping):
+        projected["hosted_run"] = {
+            key: hosted_run.get(key)
+            for key in (
+                "configuration_set_sha256",
+                "generation_policy_sha256",
+                "session_generation",
+                "provider_model_call_limit",
+                "provider_model_spend_limit_usd",
+                "provider_max_retries",
+                "provider_max_concurrency",
+                "provider_timeout_seconds",
+            )
+        }
+    else:
+        projected["hosted_run"] = None
     return projected
 
 
@@ -199,12 +222,16 @@ class PostgresApiBackend(ApiBackend):
         *,
         environment: str,
         runner_available: bool = False,
+        hosted_runtime_available: bool = False,
+        hosted_provider_bindings_verified: bool = False,
         corpus: AuthoredCorpus | None = None,
     ) -> None:
         self._engine = engine
         self._store = ControlPlaneStore(engine, environment=environment)
         self._environment = environment
         self._runner_available = runner_available
+        self._hosted_runtime_available = hosted_runtime_available
+        self._hosted_provider_bindings_verified = hosted_provider_bindings_verified
         self._corpus = corpus
 
     def read(self, resource, principal, *, identifiers=None):
@@ -222,6 +249,14 @@ class PostgresApiBackend(ApiBackend):
                     },
                 )
             )
+        if resource == "campaign_authorization_preflight":
+            try:
+                return self._campaign_authorization_preflight(
+                    organization_id=principal.organization_id,
+                    request_id=identifiers.get("request_id", ""),
+                )
+            except Exception:
+                return ResourceResult.unavailable("campaign_preflight_unavailable")
         try:
             with self._engine.connect() as connection:
                 if resource == "agents":
@@ -332,6 +367,78 @@ class PostgresApiBackend(ApiBackend):
                                 "last_attempt_id": stats.get("last_attempt_id"),
                             }
                         )
+                elif resource in {
+                    "hosted_configuration_set",
+                    "hosted_configuration_preflight",
+                }:
+                    row = connection.execute(
+                        text(
+                            "SELECT configuration_sha256, schema_version, release_sha256, "
+                            "payload, actor_user_id, created_at FROM hosted_configuration_sets "
+                            "WHERE organization_id = :org "
+                            "AND configuration_sha256 = :configuration"
+                        ),
+                        {
+                            "org": principal.organization_id,
+                            "configuration": identifiers.get("configuration_sha256", ""),
+                        },
+                    ).mappings().one_or_none()
+                    if row is None:
+                        rows = []
+                    else:
+                        configuration = HostedConfigurationSet.from_payload(dict(row["payload"]))
+                        if configuration.configuration_sha256 != row["configuration_sha256"]:
+                            return ResourceResult.unavailable(
+                                "hosted_configuration_integrity_failed"
+                            )
+                        preflight = preflight_hosted_configuration_set(configuration)
+                        public_roles = [
+                            {
+                                "role": role.role,
+                                "provider": role.provider,
+                                "model_id": role.model_id,
+                                "upstream_provider": role.upstream_provider,
+                                "prompt_sha256": role.prompt_sha256,
+                                "policy_sha256": role.policy_sha256,
+                                "prices": role.prices.canonical_payload(),
+                                "limits": role.limits.canonical_payload(),
+                                "provider_reference_bound": True,
+                                "role_configuration_sha256": role.configuration_sha256,
+                            }
+                            for role in configuration.roles
+                        ]
+                        projection = {
+                            "configuration_sha256": configuration.configuration_sha256,
+                            "schema_version": configuration.schema_version,
+                            "release_sha256": row["release_sha256"],
+                            "activation_state": "staged_pending_authorization",
+                            "runtime_available": self._hosted_runtime_available,
+                            "runtime_reason": (
+                                None
+                                if self._hosted_runtime_available
+                                else "hosted_runtime_not_composed"
+                            ),
+                            "global_limits": configuration.global_limits.canonical_payload(),
+                            "roles": public_roles,
+                            "configured_by": row["actor_user_id"],
+                            "created_at": row["created_at"],
+                        }
+                        if resource == "hosted_configuration_preflight":
+                            projection["preflight"] = {
+                                "configuration_integrity": preflight.ok,
+                                "role_count": len(preflight.roles),
+                                "provider_bindings_distinct": True,
+                                "provider_binding_readiness": (
+                                    "runner_verified"
+                                    if self._hosted_provider_bindings_verified
+                                    else "runner_only_unverified"
+                                ),
+                                "authorization_required": preflight.authorization_required,
+                                "runner_heartbeat_fresh": self._runner_heartbeat_is_fresh(),
+                                "provider_calls_performed": 0,
+                                "target_calls_performed": 0,
+                            }
+                        rows = [projection]
                 elif resource == "agent_activity":
                     rows = _rows(
                         connection,
@@ -474,6 +581,10 @@ class PostgresApiBackend(ApiBackend):
                     configuration = {
                         "environment": self._environment,
                         "runner_composed": self._runner_available,
+                        "hosted_runtime_composed": self._hosted_runtime_available,
+                        "provider_bindings_runner_verified": (
+                            self._hosted_provider_bindings_verified
+                        ),
                         "corpus": {
                             "id": self._corpus.corpus_id if self._corpus else None,
                             "content_hash": self._corpus.content_hash if self._corpus else None,
@@ -768,7 +879,13 @@ class PostgresApiBackend(ApiBackend):
                         connection,
                         "SELECT ar.*, a.case_id, a.category, a.attack_class, a.owasp_mappings, "
                         "a.fixture_provenance, v.state AS verdict_state, "
-                        "v.created_at AS verdict_created_at FROM campaign_attempts a "
+                        "v.created_at AS verdict_created_at, "
+                        "q.scope_payload->>'corpus_hash' AS authorized_corpus_hash "
+                        "FROM campaign_attempts a JOIN campaign_runs r "
+                        "ON r.organization_id = a.organization_id AND r.run_id = a.run_id "
+                        "JOIN campaign_authorization_requests q "
+                        "ON q.organization_id = r.organization_id "
+                        "AND q.request_id = r.authorization_request_id "
                         "JOIN attempt_result ar ON ar.organization_id = a.organization_id "
                         "AND ar.campaign_run_id = a.run_id AND ar.attempt_id = a.attempt_id "
                         "JOIN verdict v ON v.organization_id = ar.organization_id "
@@ -812,6 +929,7 @@ class PostgresApiBackend(ApiBackend):
                                 "web": set(),
                                 "llm": set(),
                                 "verdicts": {},
+                                "authorized_case_counts": set(),
                                 "as_of": source["verdict_created_at"],
                             },
                         )
@@ -819,6 +937,11 @@ class PostgresApiBackend(ApiBackend):
                         group["cases"].add(source["case_id"])
                         group["categories"].add(source["category"])
                         group["classifications"].add(source["attack_class"])
+                        if (
+                            self._corpus is not None
+                            and source.get("authorized_corpus_hash") == self._corpus.content_hash
+                        ):
+                            group["authorized_case_counts"].add(len(self._corpus.cases))
                         for mapping in mappings:
                             if not isinstance(mapping, dict):
                                 continue
@@ -840,11 +963,14 @@ class PostgresApiBackend(ApiBackend):
                     for (target_id, target_version, profile, provenance), group in sorted(
                         groups.items()
                     ):
+                        total_case_count = max(
+                            group["authorized_case_counts"] or {len(group["cases"])}
+                        )
                         rows.append(
                             {
                                 "target_version": f"{target_id}@{target_version}",
                                 "verified_attempt_count": len(group["attempts"]),
-                                "total_case_count": len(group["cases"]),
+                                "total_case_count": total_case_count,
                                 "category_count": len(group["categories"]),
                                 "execution_profile": profile,
                                 "evidence_provenance": provenance,
@@ -853,7 +979,8 @@ class PostgresApiBackend(ApiBackend):
                                 "owasp_llm": sorted(group["llm"]),
                                 "verdict_counts": group["verdicts"],
                                 "covered": (
-                                    len(group["cases"]) >= 9
+                                    len(group["cases"]) >= total_case_count
+                                    and total_case_count >= 9
                                     and group["categories"] == _REQUIRED_CATEGORIES
                                     and _REQUIRED_WEB.issubset(group["web"])
                                     and _REQUIRED_LLM.issubset(group["llm"])
@@ -918,6 +1045,7 @@ class PostgresApiBackend(ApiBackend):
                     agent_cost_rows = _rows(
                         connection,
                         "SELECT e.campaign_run_id, e.agent_role, e.provider, e.model, "
+                        "e.execution_mode, "
                         "sum(e.measured_cost) AS measured_cost, e.currency, "
                         "count(*) AS executions, "
                         "min(e.started_at) AS started_at, max(e.finished_at) AS ended_at, "
@@ -935,7 +1063,8 @@ class PostgresApiBackend(ApiBackend):
                         "AND q.request_id = r.authorization_request_id "
                         "WHERE e.organization_id = :org AND e.status <> 'running' "
                         "GROUP BY e.campaign_run_id, e.agent_role, e.provider, e.model, "
-                        "e.currency, q.scope_payload ORDER BY max(e.finished_at) DESC LIMIT 400",
+                        "e.currency, e.execution_mode, q.scope_payload "
+                        "ORDER BY max(e.finished_at) DESC LIMIT 400",
                         {"org": principal.organization_id},
                     )
                     for source in agent_cost_rows:
@@ -956,14 +1085,15 @@ class PostgresApiBackend(ApiBackend):
                                 ),
                                 "measured_cost": cost,
                                 "currency": source["currency"],
+                                # Agent executions are logical spans, not physical provider
+                                # requests. Until provider request IDs are durably correlated,
+                                # never infer a request count from execution count.
                                 "request_count": 0,
                                 "attempt_count": int(source["executions"]),
                                 "confirmed_finding_count": 0,
                                 "average_cost_per_request": 0.0,
-                                "budget_usd": source["budget_usd"],
-                                "budget_utilization": (
-                                    cost / source["budget_usd"] if source["budget_usd"] else None
-                                ),
+                                "budget_usd": None,
+                                "budget_utilization": None,
                                 "duration_ms": float(source["duration_ms"] or 0.0),
                                 "execution_profile": source["execution_profile"],
                                 "started_at": source["started_at"],
@@ -1160,7 +1290,12 @@ class PostgresApiBackend(ApiBackend):
                         " AND t.version = q.scope_payload->>'target_version' LIMIT 1) "
                         "AS target_base_url, d.decision, d.approver_user_id, "
                         "coalesce(d.self_approval_override, false) AS self_approval_override, "
-                        "d.created_at AS decided_at FROM campaign_authorization_requests q "
+                        "d.created_at AS decided_at, "
+                        "(q.expires_at <= clock_timestamp()) AS expired, "
+                        "EXISTS (SELECT 1 FROM campaign_runs r "
+                        "WHERE r.organization_id = q.organization_id "
+                        "AND r.authorization_request_id = q.request_id) AS consumed "
+                        "FROM campaign_authorization_requests q "
                         "LEFT JOIN campaign_authorization_decisions d "
                         "ON d.organization_id = q.organization_id AND d.request_id = q.request_id "
                         "WHERE q.organization_id = :org ORDER BY q.created_at DESC LIMIT 200",
@@ -1274,11 +1409,25 @@ class PostgresApiBackend(ApiBackend):
             "finding",
             "configuration",
             "birdseye",
+            "hosted_configuration_set",
+            "hosted_configuration_preflight",
         }:
             if not sanitized:
                 return ResourceResult.empty()
             try:
-                return ResourceResult.ready(validate_ready_data(resource, sanitized[0]))
+                data = validate_ready_data(resource, sanitized[0])
+                if resource == "hosted_configuration_preflight":
+                    if not self._hosted_runtime_available:
+                        return ResourceResult.degraded(
+                            data,
+                            "hosted_runtime_not_composed",
+                        )
+                    if not self._hosted_provider_bindings_verified:
+                        return ResourceResult.degraded(
+                            data,
+                            "provider_credentials_runner_unverified",
+                        )
+                return ResourceResult.ready(data)
             except Exception:
                 return ResourceResult.unavailable("projection_schema_invalid")
         if not sanitized:
@@ -1342,8 +1491,17 @@ class PostgresApiBackend(ApiBackend):
                     run_nonce=str(payload["run_nonce"]),
                     corpus_id=str(payload["corpus_id"]),
                     execution_profile=str(payload["execution_profile"]),
+                    hosted_run=(
+                        HostedRunBinding(**dict(payload["hosted_run"]))
+                        if payload.get("hosted_run") is not None
+                        else None
+                    ),
                 )
-                expiry = datetime.datetime.now(datetime.UTC) + datetime.timedelta(
+                with self._engine.connect() as connection:
+                    database_now = connection.execute(
+                        text("SELECT clock_timestamp()")
+                    ).scalar_one()
+                expiry = database_now + datetime.timedelta(
                     seconds=int(payload["expires_in_seconds"])
                 )
                 record = self._store.request_campaign_authorization(
@@ -1364,6 +1522,21 @@ class PostgresApiBackend(ApiBackend):
             if command == "launch_campaign":
                 if not self._runner_available:
                     return CommandResult.unavailable("runner_execution_composition_missing")
+                requires_hosted_runtime = self._authorization_requires_hosted_runtime(
+                    principal.organization_id,
+                    str(payload["authorization_request_id"]),
+                )
+                if not self._hosted_runtime_available and requires_hosted_runtime:
+                    return CommandResult.unavailable("hosted_runtime_not_composed")
+                if (
+                    not self._hosted_provider_bindings_verified
+                    and requires_hosted_runtime
+                ):
+                    return CommandResult.unavailable(
+                        "provider_credentials_runner_unverified"
+                    )
+                if not self._runner_heartbeat_is_fresh():
+                    return CommandResult.unavailable("runner_heartbeat_stale")
                 record = self._store.launch_campaign(
                     principal=principal,
                     request_id=str(payload["authorization_request_id"]),
@@ -1392,18 +1565,23 @@ class PostgresApiBackend(ApiBackend):
             if command == "request_live_probe_authorization":
                 return CommandResult.unavailable("distinct_live_probe_workflow_missing")
             if command == "configure_agent":
-                assignment = self._store.configure_agent(
+                return CommandResult.unavailable(
+                    "atomic_hosted_configuration_set_required"
+                )
+            if command == "stage_hosted_configuration_set":
+                configuration = HostedConfigurationSet.from_payload(
+                    dict(payload["configuration"])
+                )
+                configuration_sha256 = self._store.stage_hosted_configuration_set(
                     principal=principal,
-                    agent_role=identifiers.get("agent_role", ""),
-                    provider=str(payload["provider"]),
-                    model=str(payload["model"]),
-                    execution_mode=str(payload["execution_mode"]),
+                    configuration=configuration,
+                    release_sha256=str(payload["release_sha256"]),
                     rationale=str(payload["rationale"]),
                     idempotency_key=idempotency_key,
                 )
                 return CommandResult.completed(
-                    assignment.configuration_sha256,
-                    resource_id=assignment.role,
+                    configuration_sha256,
+                    resource_id=configuration_sha256,
                 )
             if command in {"validate_configuration", "publish_configuration"}:
                 return CommandResult.unavailable("configuration_snapshot_repository_missing")
@@ -1416,6 +1594,235 @@ class PostgresApiBackend(ApiBackend):
             raise ApiConflict("invalid control-plane command") from exc
         except ControlPlaneError as exc:
             raise ApiBackendUnavailable("control-plane command unavailable") from exc
+
+    def _runner_heartbeat_is_fresh(self) -> bool:
+        """Use database time so Web/Runner host clock skew cannot widen launch authority."""
+
+        with self._engine.connect() as connection:
+            return bool(
+                connection.execute(
+                    text(
+                        "SELECT EXISTS (SELECT 1 FROM runtime_component_status "
+                        "WHERE environment = :environment AND component_id = 'runner' "
+                        "AND availability = 'operational and evidenced' "
+                        "AND heartbeat_at > clock_timestamp() "
+                        "- make_interval(secs => :freshness_seconds))"
+                    ),
+                    {
+                        "environment": self._environment,
+                        "freshness_seconds": _RUNNER_HEARTBEAT_FRESHNESS_SECONDS,
+                    },
+                ).scalar_one()
+            )
+
+    def _campaign_authorization_preflight(
+        self,
+        *,
+        organization_id: str,
+        request_id: str,
+    ) -> ResourceResult:
+        """Project every launch gate without resolving a secret or making an external call."""
+
+        with self._engine.connect() as connection:
+            row = connection.execute(
+                text(
+                    "SELECT q.scope_hash, q.scope_payload, q.launcher_user_id, q.expires_at, "
+                    "d.decision, d.approver_user_id, clock_timestamp() AS database_now, "
+                    "EXISTS (SELECT 1 FROM campaign_runs r "
+                    "WHERE r.organization_id = q.organization_id "
+                    "AND r.authorization_request_id = q.request_id) AS consumed "
+                    "FROM campaign_authorization_requests q "
+                    "LEFT JOIN campaign_authorization_decisions d "
+                    "ON d.organization_id = q.organization_id AND d.request_id = q.request_id "
+                    "WHERE q.organization_id = :org AND q.request_id = :request_id"
+                ),
+                {"org": organization_id, "request_id": request_id},
+            ).mappings().one_or_none()
+            if row is None:
+                return ResourceResult.empty()
+            scope = dict(row["scope_payload"])
+            hosted = scope.get("hosted_run")
+            hosted = dict(hosted) if isinstance(hosted, Mapping) else None
+            target_state = connection.execute(
+                text(
+                    "SELECT "
+                    "(SELECT e.to_lifecycle FROM target_lifecycle_events e "
+                    "WHERE e.organization_id = t.organization_id "
+                    "AND e.target_id = t.target_id AND e.target_version = t.version "
+                    "ORDER BY e.id DESC LIMIT 1) AS lifecycle, "
+                    "(SELECT e.to_enabled FROM surface_state_events e "
+                    "WHERE e.organization_id = s.organization_id "
+                    "AND e.surface_id = s.surface_id AND e.surface_version = s.version "
+                    "ORDER BY e.id DESC LIMIT 1) AS surface_enabled, "
+                    "(t.payload->>'synthetic_data_only')::boolean AS synthetic_data_only "
+                    "FROM target_definitions t JOIN attack_surface_definitions s "
+                    "ON s.organization_id = t.organization_id "
+                    "AND s.target_id = t.target_id AND s.target_version = t.version "
+                    "WHERE t.organization_id = :org AND t.target_id = :target "
+                    "AND t.version = :target_version AND s.surface_id = :surface "
+                    "AND s.version = :surface_version"
+                ),
+                {
+                    "org": organization_id,
+                    "target": scope.get("target_id", ""),
+                    "target_version": scope.get("target_version", ""),
+                    "surface": scope.get("surface_id", ""),
+                    "surface_version": scope.get("surface_version", ""),
+                },
+            ).mappings().one_or_none()
+            runner_heartbeat_fresh = bool(
+                connection.execute(
+                    text(
+                        "SELECT EXISTS (SELECT 1 FROM runtime_component_status "
+                        "WHERE environment = :environment AND component_id = 'runner' "
+                        "AND availability = 'operational and evidenced' "
+                        "AND heartbeat_at > clock_timestamp() "
+                        "- make_interval(secs => :freshness_seconds))"
+                    ),
+                    {
+                        "environment": self._environment,
+                        "freshness_seconds": _RUNNER_HEARTBEAT_FRESHNESS_SECONDS,
+                    },
+                ).scalar_one()
+            )
+
+            configuration_valid = False
+            distinct_references = False
+            caps_match = False
+            if hosted is not None:
+                payload = connection.execute(
+                    text(
+                        "SELECT payload FROM hosted_configuration_sets "
+                        "WHERE organization_id = :org "
+                        "AND configuration_sha256 = :configuration"
+                    ),
+                    {
+                        "org": organization_id,
+                        "configuration": hosted.get("configuration_set_sha256", ""),
+                    },
+                ).scalar_one_or_none()
+                if payload is not None:
+                    try:
+                        configuration = HostedConfigurationSet.from_payload(dict(payload))
+                        configuration_valid = (
+                            configuration.configuration_sha256
+                            == hosted.get("configuration_set_sha256")
+                        )
+                        distinct_references = len(
+                            {role.credential_reference for role in configuration.roles}
+                        ) == len(configuration.roles)
+                        caps_match = (
+                            configuration.global_limits.max_calls
+                            == hosted.get("provider_model_call_limit")
+                            and format(configuration.global_limits.max_usd, "f")
+                            == hosted.get("provider_model_spend_limit_usd")
+                            and configuration.global_limits.max_retries
+                            == hosted.get("provider_max_retries")
+                            and configuration.global_limits.max_concurrency
+                            == hosted.get("provider_max_concurrency")
+                        )
+                    except (TypeError, ValueError):
+                        pass
+
+        database_now = row["database_now"]
+        timeout_seconds = float(dict(scope.get("caps") or {}).get("run_timeout_seconds", 0))
+        authorization_window_covers_run = (
+            row["expires_at"]
+            > database_now + datetime.timedelta(seconds=timeout_seconds)
+        )
+        two_person_approval = (
+            row["decision"] == "approved"
+            and isinstance(row["approver_user_id"], str)
+            and row["approver_user_id"] != row["launcher_user_id"]
+        )
+        target_ready = bool(
+            target_state is not None
+            and target_state["lifecycle"] == "ready"
+            and target_state["surface_enabled"] is True
+            and target_state["synthetic_data_only"] is True
+        )
+        session_generation_bound = bool(
+            hosted is not None
+            and (
+                scope.get("auth_mode") != "session"
+                or (
+                    isinstance(scope.get("credential_ref"), str)
+                    and scope["credential_ref"].endswith(
+                        f"/{hosted.get('session_generation', '')}"
+                    )
+                )
+            )
+        )
+        gates = {
+            "target_ready": target_ready,
+            "runner_heartbeat_fresh": runner_heartbeat_fresh,
+            "two_person_approval": two_person_approval,
+            "authorization_window_covers_run": authorization_window_covers_run,
+            "approval_unconsumed": not bool(row["consumed"]),
+            "hosted_runtime_composed": self._hosted_runtime_available,
+            "configuration_integrity": configuration_valid,
+            "configuration_caps_match": caps_match,
+            "provider_bindings_distinct": distinct_references,
+            "provider_bindings_runner_verified": self._hosted_provider_bindings_verified,
+            "session_generation_bound": session_generation_bound,
+            "synthetic_data_only": bool(
+                target_state is not None and target_state["synthetic_data_only"] is True
+            ),
+        }
+        reason_checks = (
+            ("hosted_binding_missing", hosted is not None),
+            ("hosted_runtime_not_composed", self._hosted_runtime_available),
+            ("target_not_ready", target_ready),
+            ("runner_heartbeat_stale", runner_heartbeat_fresh),
+            ("two_person_approval_missing", two_person_approval),
+            ("authorization_window_too_short", authorization_window_covers_run),
+            ("approval_consumed", not bool(row["consumed"])),
+            ("hosted_configuration_invalid", configuration_valid),
+            ("hosted_configuration_caps_mismatch", caps_match),
+            ("provider_credential_references_invalid", distinct_references),
+            (
+                "provider_credentials_runner_unverified",
+                self._hosted_provider_bindings_verified,
+            ),
+            ("session_generation_mismatch", session_generation_bound),
+        )
+        reason = next(
+            (code for code, passed in reason_checks if not passed),
+            None,
+        )
+        projection = {
+            "request_id": request_id,
+            "scope_hash": row["scope_hash"],
+            "configuration_set_sha256": (
+                hosted.get("configuration_set_sha256") if hosted is not None else None
+            ),
+            "session_generation": (
+                hosted.get("session_generation") if hosted is not None else None
+            ),
+            "gates": gates,
+            "provider_calls_performed": 0,
+            "target_calls_performed": 0,
+            "checked_at": database_now.isoformat(),
+        }
+        if reason is None:
+            return ResourceResult.ready(_safe(projection))
+        return ResourceResult.degraded(_safe(projection), reason)
+
+    def _authorization_requires_hosted_runtime(
+        self,
+        organization_id: str,
+        request_id: str,
+    ) -> bool:
+        with self._engine.connect() as connection:
+            value = connection.execute(
+                text(
+                    "SELECT scope_payload ? 'hosted_run' "
+                    "FROM campaign_authorization_requests "
+                    "WHERE organization_id = :org AND request_id = :request_id"
+                ),
+                {"org": organization_id, "request_id": request_id},
+            ).scalar_one_or_none()
+        return bool(value)
 
     def events(self, principal, *, after_cursor, limit):
         try:
@@ -1495,13 +1902,15 @@ def build_postgres_backend(
     *,
     environment: str,
     runner_available: bool = False,
+    hosted_runtime_available: bool = False,
+    hosted_provider_bindings_verified: bool = False,
 ) -> ApiBackend:
     if not database_url:
         from agentforge.api.backend import UnavailableApiBackend
 
         return UnavailableApiBackend()
     engine = create_engine(normalize_psycopg_url(database_url), pool_pre_ping=True, future=True)
-    corpus = load_full_scan_corpus()
+    corpus = resolve_workload()
     required_org = os.environ.get("CLERK_REQUIRED_ORG_ID")
     if required_org:
         catalog = TrustedTargetCatalog.from_environment(environment)
@@ -1513,6 +1922,8 @@ def build_postgres_backend(
         engine,
         environment=environment,
         runner_available=runner_available,
+        hosted_runtime_available=hosted_runtime_available,
+        hosted_provider_bindings_verified=hosted_provider_bindings_verified,
         corpus=corpus,
     )
 

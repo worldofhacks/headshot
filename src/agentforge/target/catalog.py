@@ -26,6 +26,19 @@ from agentforge.target.spec import (
 SYNTHETIC_TARGET_ID = "synthetic-copilot"
 SYNTHETIC_SURFACE_ID = "synthetic-chat"
 
+# The closed set of request-shaping profiles the bound OpenEmrAdapter understands. A catalog entry
+# may declare more than one (its surfaces have different shapes), but never an unknown profile.
+_KNOWN_PAYLOAD_PROFILES = frozenset(
+    {
+        "openemr_turns",
+        "copilot_chat",
+        "copilot_public_get",
+        "copilot_evidence_search",
+        "copilot_document_upload",
+        "copilot_document_read",
+    }
+)
+
 
 class TargetCatalogError(RuntimeError):
     """Trusted catalog configuration is absent or invalid."""
@@ -50,6 +63,11 @@ class TransportPolicy:
     # transport), for a Clinical Co-Pilot /chat surface. A closed set — an unknown profile is a
     # fail-closed catalog error.
     payload_profile: str = "openemr_turns"
+    # The full set of request-shaping profiles this entry's surfaces use (a target may expose chat,
+    # evidence-search, public liveness, document upload, and document-read surfaces at once). When
+    # omitted it defaults to the single ``payload_profile`` — so a single-surface catalog entry is
+    # unchanged. The runner requires each surface's scope-derived profile to be a member of this set.
+    payload_profiles: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not self.allowed_methods or any(
@@ -88,8 +106,14 @@ class TransportPolicy:
             raise TargetCatalogError("TLS verification must be required")
         if not isinstance(self.allow_private_destination, bool):
             raise TargetCatalogError("private-destination policy is invalid")
-        if self.payload_profile not in {"openemr_turns", "copilot_chat"}:
+        if self.payload_profile not in _KNOWN_PAYLOAD_PROFILES:
             raise TargetCatalogError("transport payload profile is invalid")
+        profiles = tuple(self.payload_profiles) if self.payload_profiles else (self.payload_profile,)
+        if any(profile not in _KNOWN_PAYLOAD_PROFILES for profile in profiles):
+            raise TargetCatalogError("transport payload profile set is invalid")
+        if len(set(profiles)) != len(profiles):
+            raise TargetCatalogError("transport payload profile set has duplicates")
+        object.__setattr__(self, "payload_profiles", profiles)
 
 
 @dataclass(frozen=True, slots=True)
@@ -158,6 +182,8 @@ class TrustedTargetCatalog:
                 policy_values["allowed_content_types"] = tuple(
                     policy_values["allowed_content_types"]
                 )
+                if "payload_profiles" in policy_values:
+                    policy_values["payload_profiles"] = tuple(policy_values["payload_profiles"])
                 entries.append(
                     CatalogEntry(
                         target=target,
@@ -238,6 +264,10 @@ def _synthetic_entry(environment: TargetEnvironment) -> CatalogEntry:
             max_attempts_per_run=14,
             target_requests_per_second=100.0,
             run_timeout_seconds=300.0,
+            logical_case_limit=14,
+            # Eleven single-turn + three two-turn cases, with two retries permitted per turn.
+            physical_request_limit=51,
+            target_retries_per_turn=2,
         ),
     )
     surface = AttackSurfaceDefinition(

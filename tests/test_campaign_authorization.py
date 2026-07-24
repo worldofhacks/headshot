@@ -42,6 +42,7 @@ from agentforge.campaign.caps import CapError, RunCaps
 from agentforge.config import Settings
 from agentforge.policy.gateway import RunPolicy
 from agentforge.secrets import Secret
+from agentforge.target.spec import SafetyCaps
 
 # --------------------------------------------------------------------------------------------
 # The bound run config — an OpenEMR live target reached over its EXACT https host. No live call
@@ -192,6 +193,42 @@ def test_operation_hash_binds_corpus_content_not_just_id() -> None:
     same_id_edited = operation_hash(**_op_hash_kwargs(corpus_sha="c" * 64))  # type: ignore[arg-type]
     original = operation_hash(**_op_hash_kwargs())  # type: ignore[arg-type]
     assert same_id_edited != original
+
+
+def test_operation_hash_binds_complete_hosted_authority_or_rejects_partial_binding() -> None:
+    hosted = {
+        "configuration_set_sha256": "d" * 64,
+        "generation_policy_sha256": "e" * 64,
+        "session_generation": "generation-20260724",
+        "provider_model_call_limit": 56,
+        "provider_model_spend_limit_usd": "5",
+        "provider_max_retries": 1,
+        "provider_max_concurrency": 1,
+        "provider_timeout_seconds": 30.0,
+    }
+    baseline = operation_hash(**_op_hash_kwargs(), **hosted)  # type: ignore[arg-type]
+
+    for field, changed in (
+        ("configuration_set_sha256", "f" * 64),
+        ("generation_policy_sha256", "f" * 64),
+        ("session_generation", "generation-next"),
+        ("provider_model_call_limit", 55),
+        ("provider_model_spend_limit_usd", "4.99"),
+        ("provider_max_retries", 0),
+        ("provider_max_concurrency", 2),
+        ("provider_timeout_seconds", 29.0),
+    ):
+        variant = {**hosted, field: changed}
+        assert baseline != operation_hash(  # type: ignore[arg-type]
+            **_op_hash_kwargs(),
+            **variant,
+        )
+
+    with pytest.raises(ValueError, match="complete"):
+        operation_hash(  # type: ignore[arg-type]
+            **_op_hash_kwargs(),
+            configuration_set_sha256="d" * 64,
+        )
 
 
 # ============================================================================================
@@ -413,35 +450,110 @@ def test_binding_without_credential_supports_auth_mode_none() -> None:
 # ============================================================================================
 # RunCaps — FAIL-CLOSED parsing into a RunPolicy; every cap finite/positive/<= a hard max.
 # ============================================================================================
-def test_valid_caps_parse_into_a_run_policy() -> None:
-    """A fully-valid caps config parses into an immutable RunPolicy carrying every ceiling —
-    this is the one non-refusing path (each invalid variant below is a typed CapError)."""
-    policy = RunCaps.parse(
-        {
-            "budget_usd": 10.0,
-            "max_attempts_per_run": 9,
-            "target_requests_per_second": 1.0,
-            "run_timeout_seconds": 60.0,
-        }
-    )
-    assert isinstance(policy, RunPolicy)
-    assert policy.budget_usd == 10.0
-    assert policy.max_attempts_per_run == 9
+def _complete_caps_config() -> dict[str, object]:
+    return {
+        "budget_usd": 10.0,
+        "max_attempts_per_run": 100,
+        "target_requests_per_second": 1.0,
+        "run_timeout_seconds": 60.0,
+        "logical_case_limit": 100,
+        "physical_request_limit": 121,
+        "target_retries_per_turn": 0,
+    }
 
 
 @pytest.mark.parametrize(
     "field",
-    ["budget_usd", "max_attempts_per_run", "target_requests_per_second", "run_timeout_seconds"],
+    ("logical_case_limit", "physical_request_limit", "target_retries_per_turn"),
+)
+def test_physical_execution_cap_omission_fails_closed_without_a_trusted_legacy_maximum(
+    field: str,
+) -> None:
+    config = _complete_caps_config()
+    del config[field]
+
+    with pytest.raises(CapError, match=field):
+        RunCaps.parse(config)
+
+
+def test_parse_requires_optional_caps_declared_by_trusted_target_maximum() -> None:
+    maximum = SafetyCaps(
+        budget_usd=10.0,
+        max_attempts_per_run=100,
+        target_requests_per_second=1.0,
+        run_timeout_seconds=60.0,
+        logical_case_limit=100,
+        physical_request_limit=121,
+        target_retries_per_turn=0,
+    )
+    missing_retry = _complete_caps_config()
+    del missing_retry["target_retries_per_turn"]
+
+    with pytest.raises(CapError, match="target_retries_per_turn"):
+        RunCaps.parse(missing_retry, trusted_maximum=maximum)
+
+    policy = RunCaps.parse(_complete_caps_config(), trusted_maximum=maximum)
+    assert policy.logical_case_limit == 100
+    assert policy.physical_request_limit == 121
+    assert policy.target_retries_per_turn == 0
+
+    too_many_requests = _complete_caps_config()
+    too_many_requests["physical_request_limit"] = 122
+    with pytest.raises(CapError, match="trusted target maximum"):
+        RunCaps.parse(too_many_requests, trusted_maximum=maximum)
+
+
+def test_trusted_legacy_maximum_is_the_only_explicit_optional_cap_compatibility_path() -> None:
+    legacy_maximum = SafetyCaps(
+        budget_usd=10.0,
+        max_attempts_per_run=100,
+        target_requests_per_second=1.0,
+        run_timeout_seconds=60.0,
+    )
+    config = _complete_caps_config()
+    for field in (
+        "logical_case_limit",
+        "physical_request_limit",
+        "target_retries_per_turn",
+    ):
+        del config[field]
+
+    policy = RunCaps.parse(config, trusted_maximum=legacy_maximum)
+    assert policy.logical_case_limit is None
+    assert policy.physical_request_limit is None
+    assert policy.target_retries_per_turn is None
+
+
+def test_valid_caps_parse_into_a_run_policy() -> None:
+    """A fully-valid caps config parses into an immutable RunPolicy carrying every ceiling —
+    this is the one non-refusing path (each invalid variant below is a typed CapError)."""
+    config = _complete_caps_config()
+    config["max_attempts_per_run"] = 9
+    policy = RunCaps.parse(config)
+    assert isinstance(policy, RunPolicy)
+    assert policy.budget_usd == 10.0
+    assert policy.max_attempts_per_run == 9
+    assert policy.logical_case_limit == 100
+    assert policy.physical_request_limit == 121
+    assert policy.target_retries_per_turn == 0
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "budget_usd",
+        "max_attempts_per_run",
+        "target_requests_per_second",
+        "run_timeout_seconds",
+        "logical_case_limit",
+        "physical_request_limit",
+        "target_retries_per_turn",
+    ],
 )
 def test_missing_cap_fails_closed(field: str) -> None:
     """A MISSING cap is a typed CapError — never a silent default. An unbounded dimension can
     never slip through as 'unset', so no run can execute without every ceiling explicit."""
-    config = {
-        "budget_usd": 10.0,
-        "max_attempts_per_run": 9,
-        "target_requests_per_second": 1.0,
-        "run_timeout_seconds": 60.0,
-    }
+    config = _complete_caps_config()
     del config[field]
     with pytest.raises(CapError):
         RunCaps.parse(config)
@@ -455,12 +567,7 @@ def test_missing_cap_fails_closed(field: str) -> None:
 def test_zero_negative_nonnumeric_or_infinite_cap_fails_closed(field: str, bad: object) -> None:
     """A zero / negative / non-numeric / infinite / NaN cap is a typed CapError — every cap
     must be a FINITE POSITIVE number, so an unbounded or nonsensical ceiling never parses."""
-    config: dict[str, object] = {
-        "budget_usd": 10.0,
-        "max_attempts_per_run": 9,
-        "target_requests_per_second": 1.0,
-        "run_timeout_seconds": 60.0,
-    }
+    config = _complete_caps_config()
     config[field] = bad
     with pytest.raises(CapError):
         RunCaps.parse(config)
@@ -473,12 +580,7 @@ def test_zero_negative_nonnumeric_or_infinite_cap_fails_closed(field: str, bad: 
 def test_over_maximum_cap_fails_closed(field: str) -> None:
     """A cap ABOVE the hard platform maximum is a typed CapError — the platform maxima are a
     ceiling on the ceilings, so a run can never request an unbounded-in-practice budget/rate."""
-    config: dict[str, object] = {
-        "budget_usd": 10.0,
-        "max_attempts_per_run": 9,
-        "target_requests_per_second": 1.0,
-        "run_timeout_seconds": 60.0,
-    }
+    config = _complete_caps_config()
     config[field] = 10**12  # absurdly large — above any sane hard maximum
     with pytest.raises(CapError):
         RunCaps.parse(config)

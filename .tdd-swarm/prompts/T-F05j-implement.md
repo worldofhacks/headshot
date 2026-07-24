@@ -1,0 +1,4 @@
+# T-F05j Implement — Model: capable
+Worktree `<WORKTREE>`; branch `ticket/T-F05j-smart-session-reference`. Inputs: ticket, frozen tests/review, lessons, landed T-F05e/H/I. Write only the six ticket `file_scopes` and `.tdd-swarm/reports/T-F05j-implement.md`; never edit tests or add filesystem/provider/Runner logic. Implement settings/reference parser, migration/store/queue immutable job binding, and preserve the queue's sanitized failure message while persisting the stable SMART rejection code/dead-letter status.
+
+Run local gates every GREEN loop; maximum three attempts. Local deterministic tests only; no network/live DB/controller/Railway/provider/target, raw secrets/PHI, spend, main merge, or push. Return exactly `DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED(reason)` plus commit/gate summary; full output stays in the report.

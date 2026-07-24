@@ -85,6 +85,21 @@ class CampaignAttemptRecord:
 
 
 @dataclass(frozen=True, slots=True)
+class CampaignWorkUnitReservationRecord:
+    organization_id: str
+    run_id: str
+    attempt_id: str
+    turn_index: int
+    retry_index: int
+    job_id: str
+    job_attempt: int
+    worker_id: str
+    reserved_at: datetime.datetime
+    observed_at: datetime.datetime | None
+    observation_outcome: str | None
+
+
+@dataclass(frozen=True, slots=True)
 class FindingDecisionRecord:
     decision_id: str
     organization_id: str

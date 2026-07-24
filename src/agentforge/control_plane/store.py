@@ -13,6 +13,10 @@ from typing import Any
 
 from sqlalchemy import Connection, Engine, text
 
+from agentforge.agents.hosted import (
+    HostedConfigurationSet,
+    validate_hosted_configuration_set,
+)
 from agentforge.agents.runtime import (
     AgentAssignment,
     default_assignment,
@@ -44,6 +48,7 @@ from agentforge.control_plane.records import (
     AuthorizedRunRecord,
     CampaignAttemptRecord,
     CampaignRunRecord,
+    CampaignWorkUnitReservationRecord,
     FindingDecisionRecord,
     SurfaceSnapshotRecord,
     TargetSnapshotRecord,
@@ -67,6 +72,7 @@ from agentforge.target.spec import (
     AttackSurfaceDefinition,
     AuthorizationScope,
     ExecutionProfile,
+    HostedRunBinding,
     SafetyCaps,
     TargetDefinition,
     TargetEnvironment,
@@ -94,6 +100,7 @@ _SHA256 = re.compile(r"\A[a-f0-9]{64}\Z")
 _CASE_CATEGORIES = frozenset({"prompt_injection", "data_exfiltration", "tool_misuse"})
 _ATTACK_CLASSES = frozenset({"boundary", "invariant", "regression"})
 _SEVERITIES = frozenset({"low", "medium", "high", "critical"})
+_EXACT_COUNT_CORPUS_ID = "headshot-live-100-v1"
 
 
 class ControlPlaneStore:
@@ -559,6 +566,7 @@ class ControlPlaneStore:
         run_nonce: str,
         corpus_id: str = "m11-seed-corpus-v1",
         execution_profile: ExecutionProfile = ExecutionProfile.LIVE,
+        hosted_run: HostedRunBinding | None = None,
     ) -> AuthorizationScope:
         self._require_permission(principal, CAMPAIGN_LAUNCH)
         with self._engine.connect() as connection:
@@ -574,6 +582,7 @@ class ControlPlaneStore:
                 run_nonce,
                 corpus_id,
                 execution_profile,
+                hosted_run,
             )
 
     def request_campaign_authorization(
@@ -597,6 +606,14 @@ class ControlPlaneStore:
             if existing is not None:
                 return self._authorization_request(
                     connection, principal.organization_id, existing["request_id"]
+                )
+            database_now = connection.execute(text("SELECT clock_timestamp()")).scalar_one()
+            if (
+                expiry <= database_now
+                or expiry - database_now > _MAX_AUTHORIZATION_LIFETIME
+            ):
+                raise InvalidControlPlaneInput(
+                    "authorization expiry must be future and within 24 hours"
                 )
             self._validate_scope(connection, principal.organization_id, scope)
             request_id = uuid.uuid4().hex
@@ -688,7 +705,8 @@ class ControlPlaneStore:
             ).scalar_one_or_none()
             if prior is not None:
                 raise RecordConflictError("authorization request already has a terminal decision")
-            if request.expires_at <= datetime.datetime.now(datetime.UTC):
+            database_now = connection.execute(text("SELECT clock_timestamp()")).scalar_one()
+            if request.expires_at <= database_now:
                 raise AuthorizationDeniedError("authorization request is expired")
             # The legacy column remains in the expand-only schema for compatibility, but no
             # application role may set it. Two-person authorization is unconditional.
@@ -787,8 +805,15 @@ class ControlPlaneStore:
                 raise AuthorizationDeniedError(
                     "only the persisted launcher may launch this request"
                 )
-            if request.expires_at <= datetime.datetime.now(datetime.UTC):
-                raise AuthorizationDeniedError("approved authorization is expired")
+            database_now = connection.execute(text("SELECT clock_timestamp()")).scalar_one()
+            scope = scope_from_payload(request.scope_payload)
+            required_until = database_now + datetime.timedelta(
+                seconds=scope.caps.run_timeout_seconds
+            )
+            if request.expires_at <= required_until:
+                raise AuthorizationDeniedError(
+                    "approved authorization cannot cover the full campaign timeout"
+                )
             decision_row = (
                 connection.execute(
                     text(
@@ -802,7 +827,6 @@ class ControlPlaneStore:
             )
             if decision_row is None or decision_row["decision"] != "approved":
                 raise AuthorizationDeniedError("campaign launch requires an approved request")
-            scope = scope_from_payload(request.scope_payload)
             self._validate_scope(connection, principal.organization_id, scope)
             prior_run = connection.execute(
                 text(
@@ -976,6 +1000,7 @@ class ControlPlaneStore:
                         "d.decision_id, d.decision, d.approver_user_id, d.approver_session_id, "
                         "d.self_approval_override, "
                         "d.created_at AS decision_created_at, "
+                        "(q.expires_at > clock_timestamp()) AS authorization_live, "
                         "(SELECT state FROM campaign_run_events e "
                         "WHERE e.organization_id = r.organization_id "
                         "AND e.run_id = r.run_id ORDER BY e.id DESC LIMIT 1) AS state "
@@ -996,9 +1021,7 @@ class ControlPlaneStore:
             )
             if row is None:
                 raise RecordNotFoundError("campaign run does not exist")
-            if row["decision"] != "approved" or row["expires_at"] <= datetime.datetime.now(
-                datetime.UTC
-            ):
+            if row["decision"] != "approved" or not row["authorization_live"]:
                 raise AuthorizationDeniedError("campaign run authorization is not live")
             same_person = row["approver_user_id"] == row["launcher_user_id"]
             if same_person:
@@ -1302,6 +1325,201 @@ class ControlPlaneStore:
         if owned is None:
             raise AuthorizationDeniedError("runner lease ownership is stale")
 
+    def reserve_campaign_work_unit(
+        self,
+        *,
+        job: Any,
+        attempt_id: str,
+        turn_index: int,
+        retry_index: int,
+    ) -> CampaignWorkUnitReservationRecord:
+        """Reserve one physical target send under the caller's live queue lease.
+
+        The job row is locked while duplicate and run-wide limit checks execute, making admission
+        and insertion one transaction.  Reservations survive worker restart and lease reclaim;
+        the same coordinate is therefore never silently replayed.
+        """
+
+        self._validate_work_unit_coordinate(attempt_id, turn_index, retry_index)
+        run_id = str(getattr(job, "campaign_run_id", ""))
+        with self._engine.begin() as connection:
+            self._aggregate_lock(connection, f"campaign-work-units:{run_id}")
+            context = self._locked_work_unit_context(connection, job)
+            if context["campaign_run_id"] != run_id:
+                raise AuthorizationDeniedError("campaign queue job does not own this run")
+            if context["run_state"] != "running":
+                raise AuthorizationDeniedError("campaign run is not accepting physical work")
+
+            scope = scope_from_payload(dict(context["scope_payload"]))
+            if scope.scope_hash() != context["scope_hash"]:
+                raise AuthorizationDeniedError("campaign work-unit scope integrity failed")
+            self._validate_scope(connection, context["organization_id"], scope)
+            physical_limit = scope.caps.physical_request_limit
+            if physical_limit is None:
+                raise AuthorizationDeniedError(
+                    "campaign scope has no durable physical work-unit limit"
+                )
+            retry_limit = scope.caps.target_retries_per_turn
+            if retry_limit is None:
+                raise AuthorizationDeniedError("campaign scope has no durable per-turn retry limit")
+            if retry_index > retry_limit:
+                raise AuthorizationDeniedError(
+                    "campaign physical work-unit exceeds its per-turn retry limit"
+                )
+
+            attempt_exists = connection.execute(
+                text(
+                    "SELECT 1 FROM campaign_attempts WHERE organization_id = :org "
+                    "AND run_id = :run_id AND attempt_id = :attempt_id"
+                ),
+                {
+                    "org": context["organization_id"],
+                    "run_id": run_id,
+                    "attempt_id": attempt_id,
+                },
+            ).scalar_one_or_none()
+            if attempt_exists is None:
+                raise AuthorizationDeniedError("campaign work-unit attempt is unavailable")
+
+            duplicate = connection.execute(
+                text(
+                    "SELECT 1 FROM campaign_work_unit_reservations "
+                    "WHERE run_id = :run_id AND attempt_id = :attempt_id "
+                    "AND turn_index = :turn_index AND retry_index = :retry_index"
+                ),
+                {
+                    "run_id": run_id,
+                    "attempt_id": attempt_id,
+                    "turn_index": turn_index,
+                    "retry_index": retry_index,
+                },
+            ).scalar_one_or_none()
+            if duplicate is not None:
+                raise RecordConflictError("campaign physical work-unit is already reserved")
+
+            reserved_count = int(
+                connection.execute(
+                    text(
+                        "SELECT count(*) FROM campaign_work_unit_reservations "
+                        "WHERE run_id = :run_id"
+                    ),
+                    {"run_id": run_id},
+                ).scalar_one()
+            )
+            if reserved_count >= physical_limit:
+                raise AuthorizationDeniedError(
+                    "campaign physical work-unit limit is already exhausted"
+                )
+
+            lease_hash = self._work_unit_lease_hash(context["lease_token"])
+            row = (
+                connection.execute(
+                    text(
+                        "INSERT INTO campaign_work_unit_reservations "
+                        "(organization_id, run_id, attempt_id, turn_index, retry_index, job_id, "
+                        "job_attempt, worker_id, lease_token_sha256) VALUES "
+                        "(:org, :run_id, :attempt_id, :turn_index, :retry_index, :job_id, "
+                        ":job_attempt, :worker_id, :lease_hash) RETURNING *"
+                    ),
+                    {
+                        "org": context["organization_id"],
+                        "run_id": run_id,
+                        "attempt_id": attempt_id,
+                        "turn_index": turn_index,
+                        "retry_index": retry_index,
+                        "job_id": context["job_id"],
+                        "job_attempt": context["attempts"],
+                        "worker_id": context["worker_id"],
+                        "lease_hash": lease_hash,
+                    },
+                )
+                .mappings()
+                .one()
+            )
+            return self._work_unit_reservation_from_row(row)
+
+    def observe_campaign_work_unit(
+        self,
+        *,
+        job: Any,
+        attempt_id: str,
+        turn_index: int,
+        retry_index: int,
+        outcome: str,
+    ) -> CampaignWorkUnitReservationRecord:
+        """Mark a reserved send observed once adapter control returns or raises.
+
+        Only the exact queue claim that created the reservation may mark it.  If the lease is lost
+        before this transaction, the reservation stays ambiguous and completion fails closed.
+        """
+
+        self._validate_work_unit_coordinate(attempt_id, turn_index, retry_index)
+        if outcome not in {"returned", "raised"}:
+            raise InvalidControlPlaneInput("campaign work-unit outcome is invalid")
+        run_id = str(getattr(job, "campaign_run_id", ""))
+        with self._engine.begin() as connection:
+            self._aggregate_lock(connection, f"campaign-work-units:{run_id}")
+            context = self._locked_work_unit_context(connection, job)
+            if context["campaign_run_id"] != run_id:
+                raise AuthorizationDeniedError("campaign queue job does not own this run")
+            row = (
+                connection.execute(
+                    text(
+                        "SELECT * FROM campaign_work_unit_reservations "
+                        "WHERE run_id = :run_id AND attempt_id = :attempt_id "
+                        "AND turn_index = :turn_index AND retry_index = :retry_index FOR UPDATE"
+                    ),
+                    {
+                        "run_id": run_id,
+                        "attempt_id": attempt_id,
+                        "turn_index": turn_index,
+                        "retry_index": retry_index,
+                    },
+                )
+                .mappings()
+                .one_or_none()
+            )
+            if row is None:
+                raise RecordNotFoundError("campaign physical work-unit reservation does not exist")
+            if (
+                row["job_id"] != context["job_id"]
+                or row["job_attempt"] != context["attempts"]
+                or row["worker_id"] != context["worker_id"]
+                or row["lease_token_sha256"] != self._work_unit_lease_hash(context["lease_token"])
+            ):
+                raise AuthorizationDeniedError(
+                    "campaign physical work-unit belongs to a different queue claim"
+                )
+            if row["observed_at"] is not None:
+                if row["observation_outcome"] != outcome:
+                    raise RecordConflictError(
+                        "campaign physical work-unit observation is immutable"
+                    )
+                return self._work_unit_reservation_from_row(row)
+            observed = (
+                connection.execute(
+                    text(
+                        "UPDATE campaign_work_unit_reservations "
+                        "SET observed_at = clock_timestamp(), observation_outcome = :outcome "
+                        "WHERE run_id = :run_id AND attempt_id = :attempt_id "
+                        "AND turn_index = :turn_index AND retry_index = :retry_index "
+                        "AND observed_at IS NULL RETURNING *"
+                    ),
+                    {
+                        "outcome": outcome,
+                        "run_id": run_id,
+                        "attempt_id": attempt_id,
+                        "turn_index": turn_index,
+                        "retry_index": retry_index,
+                    },
+                )
+                .mappings()
+                .one_or_none()
+            )
+            if observed is None:
+                raise RecordConflictError("campaign physical work-unit observation was lost")
+            return self._work_unit_reservation_from_row(observed)
+
     def configure_agent(
         self,
         *,
@@ -1430,6 +1648,102 @@ class ControlPlaneStore:
                 role,
                 version=version,
             )
+
+    def stage_hosted_configuration_set(
+        self,
+        *,
+        principal: Principal,
+        configuration: HostedConfigurationSet,
+        release_sha256: str,
+        rationale: str,
+        idempotency_key: str,
+    ) -> str:
+        """Atomically append all four hosted role authorities as one content-addressed row."""
+
+        self._require_permission(principal, CONFIG_MANAGE)
+        validate_hosted_configuration_set(configuration)
+        if not isinstance(release_sha256, str) or _SHA256.fullmatch(release_sha256) is None:
+            raise InvalidControlPlaneInput("hosted configuration release hash is invalid")
+        safe_rationale = self._sanitize_plaintext_rationale(rationale)
+        document = {
+            "configuration": configuration.canonical_payload(),
+            "configuration_sha256": configuration.configuration_sha256,
+            "release_sha256": release_sha256,
+            "rationale": safe_rationale,
+        }
+        with self._engine.begin() as connection:
+            existing, request_hash = self._begin_command(
+                connection,
+                principal,
+                "hosted-configuration-set.stage",
+                idempotency_key,
+                document,
+            )
+            if existing is not None:
+                return str(existing["configuration_sha256"])
+            self._aggregate_lock(
+                connection,
+                f"hosted-configuration-set:{principal.organization_id}",
+            )
+            prior = connection.execute(
+                text(
+                    "SELECT configuration_sha256 FROM hosted_configuration_sets "
+                    "WHERE organization_id = :org "
+                    "AND (configuration_sha256 = :configuration OR release_sha256 = :release)"
+                ),
+                {
+                    "org": principal.organization_id,
+                    "configuration": configuration.configuration_sha256,
+                    "release": release_sha256,
+                },
+            ).scalar_one_or_none()
+            if prior is not None:
+                raise RecordConflictError(
+                    "hosted configuration or application release is already staged"
+                )
+            connection.execute(
+                text(
+                    "INSERT INTO hosted_configuration_sets "
+                    "(organization_id, configuration_sha256, schema_version, release_sha256, "
+                    "payload, rationale, actor_user_id, actor_session_id) VALUES "
+                    "(:org, :configuration, :schema, :release, CAST(:payload AS jsonb), "
+                    ":rationale, :user, :session)"
+                ),
+                {
+                    "org": principal.organization_id,
+                    "configuration": configuration.configuration_sha256,
+                    "schema": configuration.schema_version,
+                    "release": release_sha256,
+                    "payload": configuration.canonical_bytes().decode("utf-8"),
+                    "rationale": safe_rationale,
+                    "user": principal.user_id,
+                    "session": principal.session_id,
+                },
+            )
+            self._audit(
+                connection,
+                principal.organization_id,
+                "hosted_configuration_set.staged",
+                "hosted_configuration_set",
+                configuration.configuration_sha256,
+                principal,
+                {
+                    "configuration_sha256": configuration.configuration_sha256,
+                    "release_sha256": release_sha256,
+                    "role_count": len(configuration.roles),
+                    "activation_state": "staged_pending_authorization",
+                },
+            )
+            response = {"configuration_sha256": configuration.configuration_sha256}
+            self._finish_command(
+                connection,
+                principal,
+                "hosted-configuration-set.stage",
+                idempotency_key,
+                request_hash,
+                response,
+            )
+            return configuration.configuration_sha256
 
     def active_agent_assignment(self, *, organization_id: str, agent_role: str) -> AgentAssignment:
         """Return the latest active assignment or the code-owned deterministic default."""
@@ -2298,15 +2612,24 @@ class ControlPlaneStore:
         self,
         *,
         job: Any,
-        request_count: int,
+        request_count: int | None = None,
         measured_cost: float,
     ) -> CampaignRunRecord:
-        """Atomically persist the run summary, terminal state, audit event, and queue completion."""
+        """Atomically reconcile durable work, persist the summary, and complete the queue job.
+
+        ``request_count`` remains a compatibility-only argument and is deliberately ignored.
+        Physical work is derived from observed durable reservations, never a process-local meter.
+        """
 
         if (
-            isinstance(request_count, bool)
-            or not isinstance(request_count, int)
-            or request_count < 0
+            (
+                request_count is not None
+                and (
+                    isinstance(request_count, bool)
+                    or not isinstance(request_count, int)
+                    or request_count < 0
+                )
+            )
             or not isinstance(measured_cost, (int, float))
             or measured_cost < 0
         ):
@@ -2317,8 +2640,8 @@ class ControlPlaneStore:
             owned = (
                 connection.execute(
                     text(
-                        "SELECT status, completion_worker_id, completion_lease_token FROM jobs "
-                        "WHERE job_id = :job_id FOR UPDATE"
+                        "SELECT status, campaign_run_id, completion_worker_id, "
+                        "completion_lease_token FROM jobs WHERE job_id = :job_id FOR UPDATE"
                     ),
                     {"job_id": getattr(job, "job_id", None)},
                 )
@@ -2329,6 +2652,8 @@ class ControlPlaneStore:
             token = getattr(job, "lease_token", None)
             if owned is None:
                 raise AuthorizationDeniedError("campaign queue job is unavailable")
+            if owned["campaign_run_id"] != run_id:
+                raise AuthorizationDeniedError("campaign queue job does not own this run")
             if owned["status"] == "completed":
                 if (
                     owned["completion_worker_id"] == worker
@@ -2376,13 +2701,55 @@ class ControlPlaneStore:
             self._validate_scope(connection, run_row["organization_id"], scope)
             current = self._campaign_run_from_row(run_row)
             org = current.organization_id
-            attempt_count = connection.execute(
-                text(
-                    "SELECT count(*) FROM verdict WHERE organization_id = :org "
-                    "AND campaign_run_id = :run_id"
-                ),
-                {"org": org, "run_id": run_id},
-            ).scalar_one()
+            attempt_count = int(
+                connection.execute(
+                    text(
+                        "SELECT count(DISTINCT a.attempt_id) FROM campaign_attempts a "
+                        "JOIN attempt_result ar ON ar.organization_id = a.organization_id "
+                        "AND ar.campaign_run_id = a.run_id AND ar.attempt_id = a.attempt_id "
+                        "JOIN verdict v ON v.organization_id = ar.organization_id "
+                        "AND v.campaign_run_id = ar.campaign_run_id "
+                        "AND v.attempt_id = ar.attempt_id "
+                        "WHERE a.organization_id = :org AND a.run_id = :run_id"
+                    ),
+                    {"org": org, "run_id": run_id},
+                ).scalar_one()
+            )
+            reservation_counts = (
+                connection.execute(
+                    text(
+                        "SELECT count(*) AS reserved_count, "
+                        "count(*) FILTER (WHERE observed_at IS NOT NULL) AS observed_count, "
+                        "count(*) FILTER (WHERE retry_index <> 0) AS retry_count "
+                        "FROM campaign_work_unit_reservations "
+                        "WHERE organization_id = :org AND run_id = :run_id"
+                    ),
+                    {"org": org, "run_id": run_id},
+                )
+                .mappings()
+                .one()
+            )
+            reserved_count = int(reservation_counts["reserved_count"])
+            observed_count = int(reservation_counts["observed_count"])
+            retry_count = int(reservation_counts["retry_count"])
+            if reserved_count != observed_count:
+                raise RecordConflictError(
+                    "campaign has an unobserved physical work-unit reservation"
+                )
+            exact_counts_declared = (
+                scope.corpus_id == _EXACT_COUNT_CORPUS_ID
+                and scope.caps.logical_case_limit is not None
+                and scope.caps.physical_request_limit is not None
+                and scope.caps.target_retries_per_turn == 0
+            )
+            if exact_counts_declared and (
+                attempt_count != scope.caps.logical_case_limit
+                or observed_count != scope.caps.physical_request_limit
+                or retry_count != 0
+            ):
+                raise RecordConflictError(
+                    "campaign durable work does not match its exact completion counts"
+                )
             confirmed_count = connection.execute(
                 text(
                     "SELECT count(*) FROM finding_evidence_links WHERE organization_id = :org "
@@ -2416,7 +2783,7 @@ class ControlPlaneStore:
                     "profile": scope.execution_profile.value,
                     "provenance": provenance,
                     "attempts": attempt_count,
-                    "requests": request_count,
+                    "requests": observed_count,
                     "findings": confirmed_count,
                     "cost": measured_cost,
                     "started": started_at,
@@ -2438,7 +2805,7 @@ class ControlPlaneStore:
                 None,
                 {
                     "attempt_count": attempt_count,
-                    "request_count": request_count,
+                    "request_count": observed_count,
                     "confirmed_finding_count": confirmed_count,
                     "execution_profile": scope.execution_profile.value,
                     "provenance": provenance,
@@ -2982,6 +3349,7 @@ class ControlPlaneStore:
         run_nonce: str,
         corpus_id: str = "m11-seed-corpus-v1",
         execution_profile: ExecutionProfile = ExecutionProfile.LIVE,
+        hosted_run: HostedRunBinding | None = None,
     ) -> AuthorizationScope:
         base, target, events = self._load_target(
             connection, organization_id, target_id, target_version
@@ -3007,6 +3375,7 @@ class ControlPlaneStore:
                 run_nonce=run_nonce,
                 corpus_id=corpus_id,
                 execution_profile=execution_profile,
+                hosted_run=hosted_run,
             )
             registry.resolve(scope)
             return scope
@@ -3028,9 +3397,116 @@ class ControlPlaneStore:
             scope.run_nonce,
             scope.corpus_id,
             scope.execution_profile,
+            scope.hosted_run,
         )
         if expected.canonical_bytes() != scope.canonical_bytes():
             raise AuthorizationDeniedError("authorization scope differs from registry state")
+        if scope.hosted_run is not None:
+            row = connection.execute(
+                text(
+                    "SELECT payload FROM hosted_configuration_sets "
+                    "WHERE organization_id = :org AND configuration_sha256 = :configuration"
+                ),
+                {
+                    "org": organization_id,
+                    "configuration": scope.hosted_run.configuration_set_sha256,
+                },
+            ).scalar_one_or_none()
+            if row is None:
+                raise AuthorizationDeniedError("hosted configuration set is not staged")
+            try:
+                configuration = HostedConfigurationSet.from_payload(dict(row))
+                validate_hosted_configuration_set(configuration)
+            except (TypeError, ValueError) as exc:
+                raise AuthorizationDeniedError(
+                    "hosted configuration-set integrity check failed"
+                ) from exc
+            binding = scope.hosted_run
+            if (
+                configuration.configuration_sha256 != binding.configuration_set_sha256
+                or configuration.global_limits.max_calls != binding.provider_model_call_limit
+                or format(configuration.global_limits.max_usd, "f")
+                != binding.provider_model_spend_limit_usd
+                or configuration.global_limits.max_retries != binding.provider_max_retries
+                or configuration.global_limits.max_concurrency != binding.provider_max_concurrency
+            ):
+                raise AuthorizationDeniedError(
+                    "hosted authorization caps differ from the immutable configuration set"
+                )
+            if scope.auth_mode.value == "session" and (
+                scope.credential_ref is None
+                or not scope.credential_ref.endswith(f"/{binding.session_generation}")
+            ):
+                raise AuthorizationDeniedError(
+                    "session generation differs from the target credential binding"
+                )
+
+    @staticmethod
+    def _validate_work_unit_coordinate(
+        attempt_id: str,
+        turn_index: int,
+        retry_index: int,
+    ) -> None:
+        if not isinstance(attempt_id, str) or not attempt_id or len(attempt_id) > 64:
+            raise InvalidControlPlaneInput("campaign work-unit attempt identity is invalid")
+        for field, value in (("turn index", turn_index), ("retry index", retry_index)):
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise InvalidControlPlaneInput(
+                    f"campaign work-unit {field} must be a non-negative integer"
+                )
+
+    @staticmethod
+    def _work_unit_lease_hash(lease_token: Any) -> str:
+        if not isinstance(lease_token, str) or not lease_token:
+            raise AuthorizationDeniedError("campaign queue lease token is unavailable")
+        return hashlib.sha256(lease_token.encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def _locked_work_unit_context(connection: Connection, job: Any) -> Any:
+        row = (
+            connection.execute(
+                text(
+                    "SELECT j.job_id, j.queue, j.status, j.campaign_run_id, j.attempts, "
+                    "j.worker_id, j.lease_token, "
+                    "(j.lease_expires_at > clock_timestamp()) AS lease_live, "
+                    "r.organization_id, r.scope_hash, r.launcher_user_id, q.scope_payload, "
+                    "(q.expires_at > clock_timestamp()) AS authorization_live, "
+                    "d.decision, d.approver_user_id, d.self_approval_override, "
+                    "(SELECT state FROM campaign_run_events e "
+                    "WHERE e.organization_id = r.organization_id AND e.run_id = r.run_id "
+                    "ORDER BY e.id DESC LIMIT 1) AS run_state "
+                    "FROM jobs j JOIN campaign_runs r ON r.run_id = j.campaign_run_id "
+                    "JOIN campaign_authorization_requests q "
+                    "ON q.organization_id = r.organization_id "
+                    "AND q.request_id = r.authorization_request_id "
+                    "AND q.scope_hash = r.scope_hash "
+                    "JOIN campaign_authorization_decisions d "
+                    "ON d.organization_id = q.organization_id "
+                    "AND d.request_id = q.request_id AND d.scope_hash = q.scope_hash "
+                    "WHERE j.job_id = :job_id FOR UPDATE OF j"
+                ),
+                {"job_id": getattr(job, "job_id", None)},
+            )
+            .mappings()
+            .one_or_none()
+        )
+        if row is None:
+            raise AuthorizationDeniedError("campaign queue job is unavailable")
+        if (
+            str(row["queue"]) != "agent_work"
+            or str(row["status"]) != "leased"
+            or row["lease_live"] is not True
+            or row["authorization_live"] is not True
+            or row["decision"] != "approved"
+            or bool(row["self_approval_override"])
+            or row["approver_user_id"] == row["launcher_user_id"]
+            or row["campaign_run_id"] != getattr(job, "campaign_run_id", None)
+            or row["worker_id"] != getattr(job, "worker_id", None)
+            or row["lease_token"] != getattr(job, "lease_token", None)
+            or row["attempts"] != getattr(job, "attempts", None)
+        ):
+            raise AuthorizationDeniedError("runner lease ownership is stale")
+        return row
 
     @staticmethod
     def _sanitize_plaintext_rationale(value: str) -> str:
@@ -3061,13 +3537,7 @@ class ControlPlaneStore:
     def _normalize_expiry(value: datetime.datetime) -> datetime.datetime:
         if not isinstance(value, datetime.datetime) or value.tzinfo is None:
             raise InvalidControlPlaneInput("authorization expiry must be timezone-aware")
-        expiry = value.astimezone(datetime.UTC)
-        now = datetime.datetime.now(datetime.UTC)
-        if expiry <= now or expiry - now > _MAX_AUTHORIZATION_LIFETIME:
-            raise InvalidControlPlaneInput(
-                "authorization expiry must be future and within 24 hours"
-            )
-        return expiry
+        return value.astimezone(datetime.UTC)
 
     def _authorization_request(
         self,
@@ -3176,6 +3646,22 @@ class ControlPlaneStore:
             ordinal=row["ordinal"],
             case_id=row["case_id"],
             created_at=row["created_at"],
+        )
+
+    @staticmethod
+    def _work_unit_reservation_from_row(row: Any) -> CampaignWorkUnitReservationRecord:
+        return CampaignWorkUnitReservationRecord(
+            organization_id=row["organization_id"],
+            run_id=row["run_id"],
+            attempt_id=row["attempt_id"],
+            turn_index=row["turn_index"],
+            retry_index=row["retry_index"],
+            job_id=row["job_id"],
+            job_attempt=row["job_attempt"],
+            worker_id=row["worker_id"],
+            reserved_at=row["reserved_at"],
+            observed_at=row["observed_at"],
+            observation_outcome=row["observation_outcome"],
         )
 
     @staticmethod

@@ -1,0 +1,4 @@
+# T-F05m Security Review — Model: capable
+Worktree `<WORKTREE>`; branch `ticket/T-F05m-authenticated-runner-state-provider`. Inputs: ticket, diff, implementation/gate reports, frozen tests/review. Write only `.tdd-swarm/reports/T-F05m-security.md`; all else is read-only. Re-run gates; inspect fake/serialized claim, source bypass, offline-path confused deputy, cached/replayed observation, partial pair reuse, TOCTOU between H/I, trust/release/generation drift, current abort/other claim, internal data leakage, fallback, and fail-open exceptions.
+
+No filesystem/network/live controller/database/Railway/provider/target, secrets/PHI, spend, main merge, or push. Maximum three reviews. Return exactly `DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED(reason)` plus highest severity; full output stays in the report.

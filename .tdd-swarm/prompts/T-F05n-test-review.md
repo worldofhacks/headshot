@@ -1,0 +1,4 @@
+# T-F05n Test Review — Model: capable
+Worktree `<WORKTREE>`; branch `ticket/T-F05n-runner-rotation-evidence`. Inputs: ticket, focused test/report, landed dependencies, frozen review. Write only `.tdd-swarm/reports/T-F05n-test-review.md`; tests/source are read-only. Attack unsigned/wrong-root receipt, activation failure, omitted/aliased/reordered stages, terminal/start set mismatch, zero hash missing terminal, event missing zero, final missing event, wrong generation/context, reused nonce, sequence/time rollback, opaque hash, single final snapshot, partial pair, overwrite, and leaks.
+
+Freeze only clean criterion-complete RED. Synthetic artifacts only; no network/controller/database/Railway/provider/target, secrets/PHI, spend, main merge, or push. Maximum three reviews. Return exactly `DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED(reason)` plus freeze verdict; full output stays in the report.

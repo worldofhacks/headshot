@@ -17,6 +17,7 @@ _REF_PREFIX = "secretref://"
 _GENERATION = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
 _SHA256 = re.compile(r"\A[0-9a-f]{64}\Z")
 _SESSION_LEASES_ENV = "AGENTFORGE_SESSION_LEASES_JSON"
+_EXPIRY_SOURCES = frozenset({"issuer_verified", "operator_conservative_lease"})
 
 
 class CredentialResolutionError(RuntimeError):
@@ -38,6 +39,7 @@ class SessionLeaseMetadata:
     generation: str
     expires_at: datetime
     value_sha256: str
+    expiry_source: str
 
     def __post_init__(self) -> None:
         if not isinstance(self.generation, str) or _GENERATION.fullmatch(self.generation) is None:
@@ -47,6 +49,8 @@ class SessionLeaseMetadata:
         object.__setattr__(self, "expires_at", self.expires_at.astimezone(UTC))
         if not isinstance(self.value_sha256, str) or _SHA256.fullmatch(self.value_sha256) is None:
             raise CredentialResolutionError("session generation metadata hash is invalid")
+        if self.expiry_source not in _EXPIRY_SOURCES:
+            raise CredentialResolutionError("session expiry source metadata is invalid")
 
 
 class CampaignCredentialLease:
@@ -194,7 +198,8 @@ class SealedEnvironmentCredentialResolver:
                 not isinstance(reference, str)
                 or not reference.startswith(_REF_PREFIX)
                 or not isinstance(value, dict)
-                or set(value) != {"generation", "expires_at", "value_sha256"}
+                or set(value)
+                != {"generation", "expires_at", "value_sha256", "expiry_source"}
             ):
                 raise CredentialResolutionError("session lease metadata configuration is invalid")
             try:
@@ -203,6 +208,7 @@ class SealedEnvironmentCredentialResolver:
                     generation=value["generation"],
                     expires_at=expires_at,
                     value_sha256=value["value_sha256"],
+                    expiry_source=value["expiry_source"],
                 )
             except (TypeError, ValueError) as exc:
                 raise CredentialResolutionError(
@@ -225,6 +231,16 @@ class SealedEnvironmentCredentialResolver:
         value = self._environment.get(variable)
         if not isinstance(value, str) or not value:
             raise CredentialResolutionError("credential reference is unavailable to this Runner")
+        if reference in self._session_metadata:
+            lowered = value.lower()
+            if (
+                value != value.strip()
+                or any(ord(character) < 32 or ord(character) == 127 for character in value)
+                or lowered.startswith(("sid=", "cookie:", "set-cookie:"))
+            ):
+                raise CredentialResolutionError(
+                    "delegated session must be provisioned as the raw identifier value"
+                )
         return Secret(value)
 
     def session_ready(self, reference: str | None, *, required_until: datetime) -> bool:

@@ -1,0 +1,4 @@
+# T-F05g Security Review — Model: capable
+Worktree `<WORKTREE>`; branch `ticket/T-F05g-smart-session-rotation`. Inputs: ticket, diff, implementation/gate reports, frozen tests/reviews, P catalog review. Write only `.tdd-swarm/reports/T-F05g-security.md`; all else is read-only. Re-run gates; inspect catalog/hash divergence, disabled-surface or target/session/patient drift, combined/single-snapshot spoofing, set omission, live lease/nonterminal job hidden by abort, zero/final substitution, unsigned/replayed activation, hash/nonce/sequence/time confusion, old-generation resurrection, context overwrite, self-approval, source bypass, secrets, and fail-open verification.
+
+No network/live DB/controller/Railway/deployment/provider/target, secrets/PHI, spend, main merge, or push. Maximum three reviews. Return exactly `DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED(reason)` plus highest severity; full output stays in the report.

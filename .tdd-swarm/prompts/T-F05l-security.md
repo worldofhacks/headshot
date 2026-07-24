@@ -1,0 +1,4 @@
+# T-F05l Security Review — Model: capable
+Worktree `<WORKTREE>`; branch `ticket/T-F05l-controller-observation-source`. Inputs: ticket, diff, implementation/gate reports, frozen tests/review. Write only `.tdd-swarm/reports/T-F05l-security.md`; all else is read-only. Re-run gates; inspect endpoint/ancestor symlink and inode swap, peer-credential confusion, trust-root substitution, challenge predictability, replay/sequence rollback, frame smuggling/truncation, timeout/retry, alternate source fallback, cached success, metadata/envelope disclosure, and fail-open absence.
+
+No production socket/network/controller/Railway/database/provider/target, secrets/PHI, spend, main merge, or push. Maximum three reviews. Return exactly `DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED(reason)` plus highest severity; full output stays in the report.

@@ -45,9 +45,11 @@ const bytes = (value: number) => {
 };
 
 const physicalRequests = (traces: TraceReadModel[]) => {
-  const durable = traces.filter((trace) => trace.request_id !== null);
-  if (durable.length > 0) return durable;
-  return traces.filter((trace) => trace.operation !== "campaign.run");
+  return traces.filter((trace) => (
+    trace.request_id !== null
+    && trace.method !== null
+    && trace.destination_host !== null
+  ));
 };
 
 export interface TraceSummary {
@@ -284,7 +286,16 @@ function traceData(result: ResourceResult<TraceReadModel[]>) {
 function CostDashboard({ costs, traces, traceState }: { costs: CostReadModel[]; traces: TraceReadModel[]; traceState: string }) {
   const totalCost = sum(costs.map((record) => record.measured_cost));
   const totalRequests = sum(costs.map((record) => record.request_count));
-  const totalBudget = sum(costs.flatMap((record) => record.budget_usd === null ? [] : [record.budget_usd]));
+  const campaignBudgets = new Map<string, number>();
+  for (const record of costs) {
+    if (record.budget_usd !== null) {
+      campaignBudgets.set(
+        record.campaign_id,
+        Math.max(campaignBudgets.get(record.campaign_id) ?? 0, record.budget_usd),
+      );
+    }
+  }
+  const totalBudget = sum([...campaignBudgets.values()]);
   const budgetedSpend = sum(costs.filter((record) => record.budget_usd !== null).map((record) => record.measured_cost));
   const requestLedger = physicalRequests(traces);
   const requestCost = sum(requestLedger.map((trace) => trace.measured_cost));

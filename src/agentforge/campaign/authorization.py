@@ -55,6 +55,14 @@ def operation_hash(
     corpus_sha: str,
     caps: RunPolicy,
     run_nonce: str,
+    configuration_set_sha256: str | None = None,
+    generation_policy_sha256: str | None = None,
+    session_generation: str | None = None,
+    provider_model_call_limit: int | None = None,
+    provider_model_spend_limit_usd: str | None = None,
+    provider_max_retries: int | None = None,
+    provider_max_concurrency: int | None = None,
+    provider_timeout_seconds: float | None = None,
 ) -> str:
     """Return the canonical 64-hex operation hash scoping the authorization to the WHOLE run.
 
@@ -77,6 +85,18 @@ def operation_hash(
     ANY bound field changes the hash (and thus refuses the grant). The full target/adapter/auth
     REGISTRY stays in the separate Codex lane; this binds the minimal per-run fields only.
     """
+    caps_payload: dict[str, float | int] = {
+        "budget_usd": caps.budget_usd,
+        "max_attempts_per_run": caps.max_attempts_per_run,
+        "target_requests_per_second": caps.target_requests_per_second,
+        "run_timeout_seconds": caps.run_timeout_seconds,
+    }
+    if caps.logical_case_limit is not None:
+        caps_payload["logical_case_limit"] = caps.logical_case_limit
+    if caps.physical_request_limit is not None:
+        caps_payload["physical_request_limit"] = caps.physical_request_limit
+    if caps.target_retries_per_turn is not None:
+        caps_payload["target_retries_per_turn"] = caps.target_retries_per_turn
     payload = {
         "target_id": target_id,
         "host": host,
@@ -85,14 +105,32 @@ def operation_hash(
         "credential_marker": credential_marker,
         "corpus_id": corpus_id,
         "corpus_sha": corpus_sha,
-        "caps": {
-            "budget_usd": caps.budget_usd,
-            "max_attempts_per_run": caps.max_attempts_per_run,
-            "target_requests_per_second": caps.target_requests_per_second,
-            "run_timeout_seconds": caps.run_timeout_seconds,
-        },
+        "caps": caps_payload,
         "run_nonce": run_nonce,
     }
+    hosted_values = (
+        configuration_set_sha256,
+        generation_policy_sha256,
+        session_generation,
+        provider_model_call_limit,
+        provider_model_spend_limit_usd,
+        provider_max_retries,
+        provider_max_concurrency,
+        provider_timeout_seconds,
+    )
+    if any(value is not None for value in hosted_values):
+        if any(value is None for value in hosted_values):
+            raise ValueError("hosted authorization binding must be complete")
+        payload["hosted_run"] = {
+            "configuration_set_sha256": configuration_set_sha256,
+            "generation_policy_sha256": generation_policy_sha256,
+            "session_generation": session_generation,
+            "provider_model_call_limit": provider_model_call_limit,
+            "provider_model_spend_limit_usd": provider_model_spend_limit_usd,
+            "provider_max_retries": provider_max_retries,
+            "provider_max_concurrency": provider_max_concurrency,
+            "provider_timeout_seconds": provider_timeout_seconds,
+        }
     canonical = json.dumps(
         payload, sort_keys=True, ensure_ascii=False, separators=(",", ":")
     ).encode("utf-8")

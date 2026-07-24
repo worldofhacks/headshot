@@ -1,0 +1,4 @@
+# T-F05m Implement — Model: capable
+Worktree `<WORKTREE>`; branch `ticket/T-F05m-authenticated-runner-state-provider`. Inputs: ticket, frozen tests/review, lessons, landed E/H/I/J/K/L. Write only `src/agentforge/policy/runner_state_provider.py` and `.tdd-swarm/reports/T-F05m-implement.md`; never edit dependencies/tests/Runner. Implement exact per-call L→H→I→E composition, trusted type boundaries, no cache/retry/fallback/partial reuse, self-only claim validation, and stable redacted failure mapping.
+
+Run local gates every GREEN loop; maximum three attempts. Fake-source tests only; no filesystem/network/live controller/database/Railway/provider/target, secrets/PHI, spend, main merge, or push. Return exactly `DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED(reason)` plus commit/gate summary; full output stays in the report.

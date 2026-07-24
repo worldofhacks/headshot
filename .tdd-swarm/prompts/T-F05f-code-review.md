@@ -1,0 +1,4 @@
+# T-F05f Code Review — Model: capable
+Worktree `<WORKTREE>`; branch `ticket/T-F05f-smart-session-runner`. Inputs: ticket, diff, implementation/gate reports, frozen tests, E/J/K/L/M/P reviews. Write only `.tdd-swarm/reports/T-F05f-code-review.md`; source/tests are read-only. Re-run gates for P catalog/hash parity, chat-only target/session/patient pin, Runner-only credential mapping, claim-only exemption, J/K/M ordering, source acquisition every call, self-only claim, sanitizer-owned public message plus code/status, no internal detail, one resolution/client, fresh per-attempt checks, cleanup/partial evidence, and non-session compatibility.
+
+No network/live DB/controller/Railway/provider/target, secrets/PHI, spend, main merge, or push. Maximum three reviews. Return exactly `DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED(reason)` plus verdict; full output stays in the report.

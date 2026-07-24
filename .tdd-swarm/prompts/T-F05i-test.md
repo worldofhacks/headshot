@@ -1,0 +1,4 @@
+# T-F05i Test — Model: capable
+Worktree `<WORKTREE>`; branch `ticket/T-F05i-runner-control-state`. Inputs: ticket, landed T-F05a/T-F05h, schemas, frozen review. Write only `tests/test_runner_control_state.py` and `.tdd-swarm/reports/T-F05i-test.md`. Own RED for strict current-state schema; one authenticated read-only repeatable-read transaction; valid empty set; per-campaign abort; exact secret-free live bindings; stable campaign/job IDs, generation lineage and sequence fields consumed by T-F05o; attestation; rollback/create-only; no DSN/state override.
+
+Use fake connection/attestor/clock and patch real engine/socket/controller/provider/target hooks to fail. No network/PostgreSQL, raw credential/session/PHI, Railway, spend, main merge, or push. Maximum three attempts. Return exactly `DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED(reason)` plus RED mapping; full output stays in the report.

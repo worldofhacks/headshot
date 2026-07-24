@@ -410,6 +410,8 @@ const decodeApproval = (value: unknown): ApprovalReadModel => {
     "approver_user_id",
     "self_approval_override",
     "decided_at",
+    "expired",
+    "consumed",
   ]);
   for (const key of ["request_id", "scope_hash", "launcher_user_id"]) string(result, key, name);
   timestamp(result, "expires_at", name);
@@ -418,6 +420,8 @@ const decodeApproval = (value: unknown): ApprovalReadModel => {
   nullableLiteral(result, "decision", ["approved", "rejected"], name);
   nullableString(result, "approver_user_id", name);
   boolean(result, "self_approval_override", name);
+  boolean(result, "expired", name);
+  boolean(result, "consumed", name);
   nullableTimestamp(result, "decided_at", name);
   return result as ApprovalReadModel;
 };

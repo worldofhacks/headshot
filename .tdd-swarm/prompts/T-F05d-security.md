@@ -1,0 +1,4 @@
+# T-F05d Security Review — Model: capable
+Worktree `<WORKTREE>`; branch `ticket/T-F05d-target-session-fixture`. Exact inputs: `tickets/T-F05d.md`, `.tdd-swarm/diffs/T-F05d.patch`, implementation/gate reports, frozen tests, and the session scope review. Allowed write only: `.tdd-swarm/reports/T-F05d-security.md`; all other files are read-only. Re-run the ticket gate; inspect canonicalization/hash confusion, duplicate-key overwrite, cross-patient/context/target/version/surface substitution or a shorter “complete” tuple, false synthetic attestation, smoke-fixture confusion, path/symlink or caller-expected-hash bypass, PHI/secret leakage, and fail-open verification.
+
+No network, raw credential/session/PHI, Railway action, provider/target call, spend, main merge, or push. Maximum three review attempts. Return exactly `DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED(reason)` plus highest severity; full output stays in the report.

@@ -67,7 +67,7 @@
         "shouldStopRunnerExecution": false,
         "runDuration": 0.4029815,
         "name": "Health",
-        "suitename": "/Users/quietguy/Documents/Dev/Gauntlet/OpenEMR-Custom-Build/claude-adversarial-run/adversarial-smart-bruno-2026-07-24/week2/bruno/health",
+        "suitename": "<external-bundle-root>/claude-adversarial-run/adversarial-smart-bruno-2026-07-24/week2/bruno/health",
         "path": "health",
         "iterationIndex": 0
       },
@@ -192,7 +192,7 @@
         "shouldStopRunnerExecution": false,
         "runDuration": 7.7605059579999995,
         "name": "Readiness",
-        "suitename": "/Users/quietguy/Documents/Dev/Gauntlet/OpenEMR-Custom-Build/claude-adversarial-run/adversarial-smart-bruno-2026-07-24/week2/bruno/ready",
+        "suitename": "<external-bundle-root>/claude-adversarial-run/adversarial-smart-bruno-2026-07-24/week2/bruno/ready",
         "path": "ready",
         "iterationIndex": 0
       },
@@ -212,7 +212,7 @@
             "_valuesToMeasure": [
               {
                 "fd": null,
-                "path": "/Users/quietguy/Documents/Dev/Gauntlet/OpenEMR-Custom-Build/claude-adversarial-run/adversarial-smart-bruno-2026-07-24/week2/evals/fixtures/documents/clean.pdf",
+                "path": "<external-bundle-root>/claude-adversarial-run/adversarial-smart-bruno-2026-07-24/week2/evals/fixtures/documents/clean.pdf",
                 "flags": "r",
                 "mode": 438,
                 "end": null,
@@ -286,7 +286,7 @@
         "shouldStopRunnerExecution": false,
         "runDuration": 0.823250666,
         "name": "Lab upload",
-        "suitename": "/Users/quietguy/Documents/Dev/Gauntlet/OpenEMR-Custom-Build/claude-adversarial-run/adversarial-smart-bruno-2026-07-24/week2/bruno/lab-upload",
+        "suitename": "<external-bundle-root>/claude-adversarial-run/adversarial-smart-bruno-2026-07-24/week2/bruno/lab-upload",
         "path": "lab-upload",
         "iterationIndex": 0
       },
@@ -353,7 +353,7 @@
         "shouldStopRunnerExecution": false,
         "runDuration": 0.381400333,
         "name": "Bounded lab status poll",
-        "suitename": "/Users/quietguy/Documents/Dev/Gauntlet/OpenEMR-Custom-Build/claude-adversarial-run/adversarial-smart-bruno-2026-07-24/week2/bruno/lab-status",
+        "suitename": "<external-bundle-root>/claude-adversarial-run/adversarial-smart-bruno-2026-07-24/week2/bruno/lab-status",
         "path": "lab-status",
         "iterationIndex": 0
       },
@@ -411,7 +411,7 @@
         "shouldStopRunnerExecution": false,
         "runDuration": 0.337615583,
         "name": "Lab extraction report",
-        "suitename": "/Users/quietguy/Documents/Dev/Gauntlet/OpenEMR-Custom-Build/claude-adversarial-run/adversarial-smart-bruno-2026-07-24/week2/bruno/lab-extraction-report",
+        "suitename": "<external-bundle-root>/claude-adversarial-run/adversarial-smart-bruno-2026-07-24/week2/bruno/lab-extraction-report",
         "path": "lab-extraction-report",
         "iterationIndex": 0
       },
@@ -462,7 +462,7 @@
         "shouldStopRunnerExecution": false,
         "runDuration": 1.875467375,
         "name": "Patient-pinned page preview",
-        "suitename": "/Users/quietguy/Documents/Dev/Gauntlet/OpenEMR-Custom-Build/claude-adversarial-run/adversarial-smart-bruno-2026-07-24/week2/bruno/lab-page-preview",
+        "suitename": "<external-bundle-root>/claude-adversarial-run/adversarial-smart-bruno-2026-07-24/week2/bruno/lab-page-preview",
         "path": "lab-page-preview",
         "iterationIndex": 0
       },
@@ -528,7 +528,7 @@
         "shouldStopRunnerExecution": false,
         "runDuration": 2.940258792,
         "name": "Source and artifact readback verification",
-        "suitename": "/Users/quietguy/Documents/Dev/Gauntlet/OpenEMR-Custom-Build/claude-adversarial-run/adversarial-smart-bruno-2026-07-24/week2/bruno/lab-readback",
+        "suitename": "<external-bundle-root>/claude-adversarial-run/adversarial-smart-bruno-2026-07-24/week2/bruno/lab-readback",
         "path": "lab-readback",
         "iterationIndex": 0
       },
@@ -637,7 +637,7 @@
         "shouldStopRunnerExecution": false,
         "runDuration": 5.724097208,
         "name": "VA/DoD guideline evidence search",
-        "suitename": "/Users/quietguy/Documents/Dev/Gauntlet/OpenEMR-Custom-Build/claude-adversarial-run/adversarial-smart-bruno-2026-07-24/week2/bruno/evidence-search",
+        "suitename": "<external-bundle-root>/claude-adversarial-run/adversarial-smart-bruno-2026-07-24/week2/bruno/evidence-search",
         "path": "evidence-search",
         "iterationIndex": 0
       },
@@ -1110,7 +1110,7 @@
         "shouldStopRunnerExecution": false,
         "runDuration": 75.952857584,
         "name": "Cited patient-pinned chat",
-        "suitename": "/Users/quietguy/Documents/Dev/Gauntlet/OpenEMR-Custom-Build/claude-adversarial-run/adversarial-smart-bruno-2026-07-24/week2/bruno/chat",
+        "suitename": "<external-bundle-root>/claude-adversarial-run/adversarial-smart-bruno-2026-07-24/week2/bruno/chat",
         "path": "chat",
         "iterationIndex": 0
       },
@@ -1130,7 +1130,7 @@
             "_valuesToMeasure": [
               {
                 "fd": null,
-                "path": "/Users/quietguy/Documents/Dev/Gauntlet/OpenEMR-Custom-Build/claude-adversarial-run/adversarial-smart-bruno-2026-07-24/week2/evals/fixtures/golden/intake-full-valid.pdf",
+                "path": "<external-bundle-root>/claude-adversarial-run/adversarial-smart-bruno-2026-07-24/week2/evals/fixtures/golden/intake-full-valid.pdf",
                 "flags": "r",
                 "mode": 438,
                 "end": null,
@@ -1204,7 +1204,7 @@
         "shouldStopRunnerExecution": false,
         "runDuration": 0.814438958,
         "name": "Intake upload",
-        "suitename": "/Users/quietguy/Documents/Dev/Gauntlet/OpenEMR-Custom-Build/claude-adversarial-run/adversarial-smart-bruno-2026-07-24/week2/bruno/intake-upload",
+        "suitename": "<external-bundle-root>/claude-adversarial-run/adversarial-smart-bruno-2026-07-24/week2/bruno/intake-upload",
         "path": "intake-upload",
         "iterationIndex": 0
       },
@@ -1224,7 +1224,7 @@
             "_valuesToMeasure": [
               {
                 "fd": null,
-                "path": "/Users/quietguy/Documents/Dev/Gauntlet/OpenEMR-Custom-Build/claude-adversarial-run/adversarial-smart-bruno-2026-07-24/week2/evals/fixtures/golden/intake-full-valid.pdf",
+                "path": "<external-bundle-root>/claude-adversarial-run/adversarial-smart-bruno-2026-07-24/week2/evals/fixtures/golden/intake-full-valid.pdf",
                 "flags": "r",
                 "mode": 438,
                 "end": null,
@@ -1298,7 +1298,7 @@
         "shouldStopRunnerExecution": false,
         "runDuration": 0.657776875,
         "name": "Intake duplicate idempotency check",
-        "suitename": "/Users/quietguy/Documents/Dev/Gauntlet/OpenEMR-Custom-Build/claude-adversarial-run/adversarial-smart-bruno-2026-07-24/week2/bruno/intake-duplicate",
+        "suitename": "<external-bundle-root>/claude-adversarial-run/adversarial-smart-bruno-2026-07-24/week2/bruno/intake-duplicate",
         "path": "intake-duplicate",
         "iterationIndex": 0
       }

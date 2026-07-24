@@ -13,6 +13,7 @@ import json
 import math
 import re
 from dataclasses import dataclass, replace
+from decimal import Decimal
 from enum import StrEnum
 from urllib.parse import urlsplit
 
@@ -23,7 +24,12 @@ _HOST_LABEL_RE = re.compile(r"\A[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\Z")
 _METHOD_RE = re.compile(r"\A[A-Z][A-Z0-9_-]{0,31}\Z")
 _CORPUS_HASH_RE = re.compile(r"\A[a-f0-9]{64}\Z")
 _RUN_NONCE_RE = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9._-]{15,127}\Z")
+_SESSION_GENERATION_RE = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
 _RELATIVE_SEGMENT_RE = re.compile(r"\A[A-Za-z0-9._~-]+\Z")
+# A single path-parameter placeholder segment, e.g. ``{document_id}``. The name grammar is the
+# strict lowercase identifier used elsewhere so a template can never smuggle traversal, a second
+# authority, or URL-override syntax through a parameter name.
+_PATH_PARAM_RE = re.compile(r"\A\{[a-z][a-z0-9_]*\}\Z")
 _FORWARD_TRANSITIONS: dict[TargetLifecycle, TargetLifecycle] = {}
 
 
@@ -235,12 +241,42 @@ def validate_relative_path(value: object) -> str:
     if parts.scheme or parts.netloc or parts.query or parts.fragment:
         raise DefinitionError("relative path must not contain a scheme, host, query, or fragment")
     segments = path.split("/")
-    if any(
-        not segment or segment in {".", ".."} or _RELATIVE_SEGMENT_RE.fullmatch(segment) is None
-        for segment in segments
-    ):
+    if any(not _relative_segment_is_valid(segment) for segment in segments):
         raise DefinitionError("relative path contains empty, traversal, or invalid segments")
+    parameters = [segment[1:-1] for segment in segments if _PATH_PARAM_RE.fullmatch(segment)]
+    if len(set(parameters)) != len(parameters):
+        raise DefinitionError("relative path must not repeat a parameter name")
     return path
+
+
+def _relative_segment_is_valid(segment: str) -> bool:
+    """A path segment is a literal token OR exactly one ``{name}`` parameter placeholder.
+
+    Traversal (``.`` / ``..``), empty, and mixed literal+parameter segments (``x{id}``) are all
+    refused, so a template never resolves to a second authority or a traversal after substitution.
+    """
+
+    if not segment or segment in {".", ".."}:
+        return False
+    return (
+        _RELATIVE_SEGMENT_RE.fullmatch(segment) is not None
+        or _PATH_PARAM_RE.fullmatch(segment) is not None
+    )
+
+
+def relative_path_parameters(value: str) -> tuple[str, ...]:
+    """Ordered names of the ``{param}`` placeholders in a validated relative path.
+
+    Returns ``()`` for a fully static path. The trusted dispatch boundary substitutes exactly
+    these names from the authorized attempt; an unfilled or unknown parameter is a fail-closed
+    dispatch error, never a partially-templated URL sent to the target.
+    """
+
+    return tuple(
+        segment[1:-1]
+        for segment in value.split("/")
+        if _PATH_PARAM_RE.fullmatch(segment) is not None
+    )
 
 
 def _finite_positive(value: object, field: str) -> float:
@@ -260,12 +296,28 @@ class SafetyCaps:
     max_attempts_per_run: int
     target_requests_per_second: float
     run_timeout_seconds: float
+    logical_case_limit: int | None = None
+    physical_request_limit: int | None = None
+    target_retries_per_turn: int | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "budget_usd", _finite_positive(self.budget_usd, "budget_usd"))
         attempts = self.max_attempts_per_run
         if isinstance(attempts, bool) or not isinstance(attempts, int) or attempts <= 0:
             raise DefinitionError("max_attempts_per_run must be a positive integer")
+        for field in ("logical_case_limit", "physical_request_limit"):
+            value = getattr(self, field)
+            if value is not None and (
+                isinstance(value, bool) or not isinstance(value, int) or value <= 0
+            ):
+                raise DefinitionError(f"{field} must be a positive integer when declared")
+        retries = self.target_retries_per_turn
+        if retries is not None and (
+            isinstance(retries, bool) or not isinstance(retries, int) or retries < 0
+        ):
+            raise DefinitionError(
+                "target_retries_per_turn must be a non-negative integer when declared"
+            )
         object.__setattr__(
             self,
             "target_requests_per_second",
@@ -278,20 +330,107 @@ class SafetyCaps:
         )
 
     def canonical_payload(self) -> dict[str, float | int]:
-        return {
+        payload: dict[str, float | int] = {
             "budget_usd": self.budget_usd,
             "max_attempts_per_run": self.max_attempts_per_run,
             "target_requests_per_second": self.target_requests_per_second,
             "run_timeout_seconds": self.run_timeout_seconds,
         }
+        if self.logical_case_limit is not None:
+            payload["logical_case_limit"] = self.logical_case_limit
+        if self.physical_request_limit is not None:
+            payload["physical_request_limit"] = self.physical_request_limit
+        if self.target_retries_per_turn is not None:
+            payload["target_retries_per_turn"] = self.target_retries_per_turn
+        return payload
 
     def is_within(self, maximum: SafetyCaps) -> bool:
-        return (
+        legacy_within = (
             self.budget_usd <= maximum.budget_usd
             and self.max_attempts_per_run <= maximum.max_attempts_per_run
             and self.target_requests_per_second <= maximum.target_requests_per_second
             and self.run_timeout_seconds <= maximum.run_timeout_seconds
         )
+        if not legacy_within:
+            return False
+        for field in (
+            "logical_case_limit",
+            "physical_request_limit",
+            "target_retries_per_turn",
+        ):
+            requested = getattr(self, field)
+            trusted_maximum = getattr(maximum, field)
+            if trusted_maximum is None:
+                if requested is not None:
+                    return False
+                continue
+            if requested is None or requested > trusted_maximum:
+                return False
+        return True
+
+
+@dataclass(frozen=True, slots=True)
+class HostedRunBinding:
+    """Non-secret four-model authority included in the campaign scope hash."""
+
+    configuration_set_sha256: str
+    generation_policy_sha256: str
+    session_generation: str
+    provider_model_call_limit: int
+    provider_model_spend_limit_usd: str
+    provider_max_retries: int
+    provider_max_concurrency: int
+    provider_timeout_seconds: float
+
+    def __post_init__(self) -> None:
+        for field, value in (
+            ("configuration_set_sha256", self.configuration_set_sha256),
+            ("generation_policy_sha256", self.generation_policy_sha256),
+        ):
+            if not isinstance(value, str) or _CORPUS_HASH_RE.fullmatch(value) is None:
+                raise DefinitionError(f"{field} must be a lowercase SHA-256 digest")
+        if (
+            not isinstance(self.session_generation, str)
+            or _SESSION_GENERATION_RE.fullmatch(self.session_generation) is None
+        ):
+            raise DefinitionError("session_generation must be a non-secret immutable generation")
+        if (
+            type(self.provider_model_call_limit) is not int
+            or not 1 <= self.provider_model_call_limit <= 56
+        ):
+            raise DefinitionError("provider_model_call_limit must be between 1 and 56")
+        try:
+            spend = Decimal(self.provider_model_spend_limit_usd)
+        except (ArithmeticError, TypeError, ValueError) as exc:
+            raise DefinitionError(
+                "provider_model_spend_limit_usd must be exact decimal text"
+            ) from exc
+        if (
+            not spend.is_finite()
+            or spend <= 0
+            or spend > Decimal("5")
+            or self.provider_model_spend_limit_usd != format(spend, "f")
+        ):
+            raise DefinitionError(
+                "provider_model_spend_limit_usd must be canonical decimal text at most 5"
+            )
+        if type(self.provider_max_retries) is not int or not 0 <= self.provider_max_retries <= 1:
+            raise DefinitionError("provider_max_retries must be zero or one")
+        if self.provider_max_concurrency != 1:
+            raise DefinitionError("provider_max_concurrency must be exactly one")
+        _finite_positive(self.provider_timeout_seconds, "provider_timeout_seconds")
+
+    def canonical_payload(self) -> dict[str, object]:
+        return {
+            "configuration_set_sha256": self.configuration_set_sha256,
+            "generation_policy_sha256": self.generation_policy_sha256,
+            "session_generation": self.session_generation,
+            "provider_model_call_limit": self.provider_model_call_limit,
+            "provider_model_spend_limit_usd": self.provider_model_spend_limit_usd,
+            "provider_max_retries": self.provider_max_retries,
+            "provider_max_concurrency": self.provider_max_concurrency,
+            "provider_timeout_seconds": self.provider_timeout_seconds,
+        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -497,6 +636,7 @@ class AuthorizationScope:
     run_nonce: str
     corpus_id: str = "m11-seed-corpus-v1"
     execution_profile: ExecutionProfile = ExecutionProfile.LIVE
+    hosted_run: HostedRunBinding | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "target_id", _require_identifier(self.target_id, "target_id"))
@@ -544,6 +684,8 @@ class AuthorizationScope:
             "execution_profile",
             _coerce_enum(self.execution_profile, ExecutionProfile, "execution_profile"),
         )
+        if self.hosted_run is not None and not isinstance(self.hosted_run, HostedRunBinding):
+            raise DefinitionError("hosted_run must be a validated HostedRunBinding")
 
     @classmethod
     def for_definitions(
@@ -556,6 +698,7 @@ class AuthorizationScope:
         run_nonce: str,
         corpus_id: str = "m11-seed-corpus-v1",
         execution_profile: ExecutionProfile = ExecutionProfile.LIVE,
+        hosted_run: HostedRunBinding | None = None,
     ) -> AuthorizationScope:
         if surface.target_id != target.target_id or surface.target_version != target.version:
             raise DefinitionError("surface reference does not match the target definition")
@@ -578,10 +721,11 @@ class AuthorizationScope:
             run_nonce=run_nonce,
             corpus_id=corpus_id,
             execution_profile=execution_profile,
+            hosted_run=hosted_run,
         )
 
     def canonical_payload(self) -> dict[str, object]:
-        return {
+        payload: dict[str, object] = {
             "target_id": self.target_id,
             "target_version": self.target_version,
             "surface_id": self.surface_id,
@@ -601,6 +745,9 @@ class AuthorizationScope:
             "run_nonce": self.run_nonce,
             "execution_profile": self.execution_profile.value,
         }
+        if self.hosted_run is not None:
+            payload["hosted_run"] = self.hosted_run.canonical_payload()
+        return payload
 
     def canonical_bytes(self) -> bytes:
         return json.dumps(
@@ -620,6 +767,7 @@ __all__ = [
     "AuthorizationScope",
     "DefinitionError",
     "ExecutionProfile",
+    "HostedRunBinding",
     "OwaspMapping",
     "RiskLevel",
     "SafetyCaps",
@@ -627,5 +775,6 @@ __all__ = [
     "TargetDefinition",
     "TargetEnvironment",
     "TargetLifecycle",
+    "relative_path_parameters",
     "validate_relative_path",
 ]

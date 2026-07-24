@@ -7,7 +7,7 @@ export const meta = {
   ],
 }
 
-const REPO = '/Users/quietguy/Documents/Dev/Gauntlet/Adversarial Machine'
+const REPO = '<repo>'
 
 const SPEC = `
 REPO (main repo): ${REPO}   BRANCH: ticket/m6a-observability (off swarm; has M2 + M4). venv at ${REPO}/.venv.

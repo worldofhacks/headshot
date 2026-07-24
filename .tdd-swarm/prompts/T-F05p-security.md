@@ -1,0 +1,4 @@
+# T-F05p Security Review — Model: capable
+Worktree `<WORKTREE>`; branch `ticket/T-F05p-clinical-copilot-target-catalog`. Inputs: ticket, diff, implementation/gate reports, frozen tests. Write only `.tdd-swarm/reports/T-F05p-security.md`; all else is read-only. Re-run gates; inspect catalog/path/hash substitution, Web secret access, inline environment injection, cross-target credential/session confusion, disabled-surface bypass, wildcard route, multi-target grant, patient/session swap, secret/canary/local-artifact leakage, and fail-open missing catalog.
+
+No network/Railway/provider/target, credential/session values, PHI, spend, main merge, or push. Maximum three reviews. Return exactly `DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED(reason)` plus highest severity; full output stays in the report.

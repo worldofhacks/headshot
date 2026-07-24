@@ -141,7 +141,7 @@ def test_synthetic_catalog_versions_the_fourteen_case_safety_contract() -> None:
     assert surface.target_version == entry.target.version
 
 
-def test_session_window_is_bounded_by_authorization_and_run_timeout() -> None:
+def test_authorization_and_session_must_cover_the_full_run_timeout() -> None:
     started = datetime.datetime(2026, 7, 22, 18, 0, tzinfo=datetime.UTC)
     scope = SimpleNamespace(caps=SimpleNamespace(run_timeout_seconds=300.0))
 
@@ -154,10 +154,11 @@ def test_session_window_is_bounded_by_authorization_and_run_timeout() -> None:
         expires_at=started + datetime.timedelta(seconds=900),
     )
 
-    assert _campaign_session_required_until(
-        authorization_first,
-        now=started.timestamp(),
-    ) == started + datetime.timedelta(seconds=120)
+    with pytest.raises(DispatchUnavailable, match="campaign_session_window_invalid"):
+        _campaign_session_required_until(
+            authorization_first,
+            now=started.timestamp(),
+        )
     assert _campaign_session_required_until(
         timeout_first,
         now=started.timestamp(),
@@ -182,6 +183,7 @@ def test_runner_pins_and_releases_session_resources_on_campaign_abort() -> None:
                 generation="generation-test",
                 expires_at=started + datetime.timedelta(minutes=10),
                 value_sha256=hashlib.sha256(session_value.encode()).hexdigest(),
+                expiry_source="operator_conservative_lease",
             )
         },
     )
@@ -279,6 +281,9 @@ def _authorize_synthetic_run(
             max_attempts_per_run=len(corpus.cases),
             target_requests_per_second=target_requests_per_second,
             run_timeout_seconds=300.0,
+            logical_case_limit=14,
+            physical_request_limit=51,
+            target_retries_per_turn=2,
         ),
         run_nonce="runner-negative-nonce-0001",
         execution_profile=ExecutionProfile.SYNTHETIC,
@@ -459,6 +464,9 @@ def test_two_person_control_violation_is_not_dispatchable(
             max_attempts_per_run=9,
             target_requests_per_second=100.0,
             run_timeout_seconds=300.0,
+            logical_case_limit=14,
+            physical_request_limit=51,
+            target_retries_per_turn=2,
         ),
         run_nonce="runner-selfapprove-nonce-0001",
         execution_profile=ExecutionProfile.SYNTHETIC,
@@ -510,6 +518,9 @@ def test_synthetic_campaign_executes_all_nine_cases_and_completes_atomically(
             max_attempts_per_run=9,
             target_requests_per_second=100.0,
             run_timeout_seconds=300.0,
+            logical_case_limit=14,
+            physical_request_limit=51,
+            target_retries_per_turn=2,
         ),
         run_nonce="runner-synthetic-nonce-0001",
         execution_profile=ExecutionProfile.SYNTHETIC,
@@ -606,6 +617,18 @@ def test_synthetic_campaign_executes_all_nine_cases_and_completes_atomically(
             .mappings()
             .one()
         )
+        work_units = (
+            connection.execute(
+                text(
+                    "SELECT count(*) AS reserved, "
+                    "count(*) FILTER (WHERE observed_at IS NOT NULL) AS observed "
+                    "FROM campaign_work_unit_reservations WHERE run_id = :run"
+                ),
+                {"run": run.run_id},
+            )
+            .mappings()
+            .one()
+        )
         job_status = connection.execute(
             text("SELECT status FROM jobs WHERE campaign_run_id = :run"),
             {"run": run.run_id},
@@ -649,6 +672,7 @@ def test_synthetic_campaign_executes_all_nine_cases_and_completes_atomically(
         for disposition in regression_dispositions
     )
     assert summary["attempt_count"] == summary["request_count"] == 9
+    assert dict(work_units) == {"reserved": 9, "observed": 9}
     assert summary["execution_profile"] == "synthetic"
     assert summary["provenance"] == "synthetic_offline"
     assert job_status == "completed"

@@ -110,6 +110,8 @@ export interface ApprovalReadModel extends AuthorizationScopeReadModel {
   approver_user_id: string | null;
   self_approval_override: boolean;
   decided_at: string | null;
+  expired: boolean;
+  consumed: boolean;
 }
 
 export interface CoverageReadModel extends JsonRecord {

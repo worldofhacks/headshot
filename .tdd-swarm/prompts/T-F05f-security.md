@@ -1,0 +1,4 @@
+# T-F05f Security Review — Model: capable
+Worktree `<WORKTREE>`; branch `ticket/T-F05f-smart-session-runner`. Inputs: ticket, diff, implementation/gate reports, frozen tests/review, P catalog review. Write only `.tdd-swarm/reports/T-F05f-security.md`; all else is read-only. Re-run gates; inspect catalog/hash divergence, disabled-surface or cross-target/session/patient dispatch, Web credential resolution, pre-validation mutation, claim spoofing, skipped/cached L/M refresh, abort dispatch, retryable rejection, arbitrary/internal detail disclosure, queue sanitation bypass, second resolution/context swap, dispatch after expiry/lost lease, cleanup resurrection, and replay bypass.
+
+No network/live DB/controller/Railway/provider/target, raw secrets/PHI, spend, main merge, or push. Maximum three reviews. Return exactly `DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED(reason)` plus highest severity; full output stays in the report.

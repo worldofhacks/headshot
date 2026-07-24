@@ -9,6 +9,7 @@ from agentforge.target.spec import (
     AuthMode,
     AuthorizationScope,
     DefinitionError,
+    HostedRunBinding,
     OwaspMapping,
     RiskLevel,
     SafetyCaps,
@@ -206,6 +207,74 @@ def test_safety_caps_reject_non_positive_or_non_finite_values(field: str, value:
         SafetyCaps(**values)  # type: ignore[arg-type]
 
 
+@pytest.mark.parametrize(
+    "omitted",
+    ("logical_case_limit", "physical_request_limit", "target_retries_per_turn"),
+)
+def test_requested_caps_must_declare_every_optional_cap_declared_by_target(
+    omitted: str,
+) -> None:
+    maximum = SafetyCaps(
+        budget_usd=10.0,
+        max_attempts_per_run=100,
+        target_requests_per_second=2.0,
+        run_timeout_seconds=60.0,
+        logical_case_limit=100,
+        physical_request_limit=121,
+        target_retries_per_turn=0,
+    )
+    requested_values: dict[str, object] = {
+        "budget_usd": 9.0,
+        "max_attempts_per_run": 100,
+        "target_requests_per_second": 1.0,
+        "run_timeout_seconds": 30.0,
+        "logical_case_limit": 100,
+        "physical_request_limit": 121,
+        "target_retries_per_turn": 0,
+    }
+    requested_values[omitted] = None
+    requested = SafetyCaps(**requested_values)  # type: ignore[arg-type]
+
+    assert requested.is_within(maximum) is False
+
+
+def test_explicit_optional_caps_may_narrow_target_maxima_but_never_exceed_them() -> None:
+    maximum = SafetyCaps(
+        budget_usd=10.0,
+        max_attempts_per_run=100,
+        target_requests_per_second=2.0,
+        run_timeout_seconds=60.0,
+        logical_case_limit=100,
+        physical_request_limit=121,
+        target_retries_per_turn=2,
+    )
+    requested = replace(
+        maximum,
+        logical_case_limit=99,
+        physical_request_limit=120,
+        target_retries_per_turn=0,
+    )
+
+    assert requested.is_within(maximum) is True
+    assert replace(requested, logical_case_limit=101).is_within(maximum) is False
+    assert replace(requested, physical_request_limit=122).is_within(maximum) is False
+    assert replace(requested, target_retries_per_turn=3).is_within(maximum) is False
+
+
+def test_legacy_optional_absence_is_compatible_only_when_both_sides_omit_it() -> None:
+    maximum = _caps()
+    requested = replace(
+        maximum,
+        budget_usd=9.0,
+        max_attempts_per_run=19,
+        target_requests_per_second=1.0,
+        run_timeout_seconds=30.0,
+    )
+
+    assert requested.is_within(maximum) is True
+    assert replace(requested, target_retries_per_turn=0).is_within(maximum) is False
+
+
 def test_surface_kind_set_is_explicit_and_complete() -> None:
     assert {kind.value for kind in SurfaceKind} == {
         "chat",
@@ -299,3 +368,64 @@ def test_scope_hash_binds_corpus_caps_and_run_nonce() -> None:
         replace(scope, run_nonce="run-nonce-000009"),
     )
     assert all(variant.scope_hash() != scope.scope_hash() for variant in variants)
+
+
+def test_scope_hash_binds_complete_non_secret_hosted_run_authority() -> None:
+    hosted = HostedRunBinding(
+        configuration_set_sha256="b" * 64,
+        generation_policy_sha256="c" * 64,
+        session_generation="generation-20260724",
+        provider_model_call_limit=56,
+        provider_model_spend_limit_usd="5",
+        provider_max_retries=1,
+        provider_max_concurrency=1,
+        provider_timeout_seconds=30.0,
+    )
+    scope = AuthorizationScope.for_definitions(
+        target=_target(),
+        surface=_surface(),
+        corpus_hash="a" * 64,
+        caps=_caps(),
+        run_nonce="run-nonce-000001",
+        hosted_run=hosted,
+    )
+
+    payload = scope.canonical_payload()
+    assert payload["hosted_run"] == hosted.canonical_payload()
+    assert "sid" not in repr(payload).lower()
+    variants = (
+        replace(scope, hosted_run=replace(hosted, configuration_set_sha256="d" * 64)),
+        replace(scope, hosted_run=replace(hosted, generation_policy_sha256="d" * 64)),
+        replace(scope, hosted_run=replace(hosted, session_generation="generation-next")),
+        replace(scope, hosted_run=replace(hosted, provider_model_call_limit=55)),
+        replace(scope, hosted_run=replace(hosted, provider_model_spend_limit_usd="4.99")),
+        replace(scope, hosted_run=replace(hosted, provider_timeout_seconds=29.0)),
+    )
+    assert all(variant.scope_hash() != scope.scope_hash() for variant in variants)
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    (
+        {"provider_model_call_limit": 57},
+        {"provider_model_spend_limit_usd": "5.01"},
+        {"provider_max_retries": 2},
+        {"provider_max_concurrency": 2},
+    ),
+)
+def test_hosted_run_binding_enforces_frozen_platform_ceilings(
+    overrides: dict[str, object],
+) -> None:
+    values: dict[str, object] = {
+        "configuration_set_sha256": "b" * 64,
+        "generation_policy_sha256": "c" * 64,
+        "session_generation": "generation-20260724",
+        "provider_model_call_limit": 56,
+        "provider_model_spend_limit_usd": "5",
+        "provider_max_retries": 1,
+        "provider_max_concurrency": 1,
+        "provider_timeout_seconds": 30.0,
+    }
+    values.update(overrides)
+    with pytest.raises(DefinitionError):
+        HostedRunBinding(**values)  # type: ignore[arg-type]

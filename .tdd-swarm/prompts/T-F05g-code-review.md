@@ -1,0 +1,4 @@
+# T-F05g Code Review — Model: capable
+Worktree `<WORKTREE>`; branch `ticket/T-F05g-smart-session-rotation`. Inputs: ticket, diff, implementation/gate reports, frozen tests, E/F/H/I/J/K/L/M/N/O/P reviews. Write only `.tdd-swarm/reports/T-F05g-code-review.md`; implementation/config/docs/tests are read-only. Re-run gates for P catalog/hash parity and chat-only pin, zero overlap/defaults, exact flags, complete authenticated hash chain, exact bounded terminal set, activation authenticity/order, one intended final generation, current-abort rejection, no single-snapshot shortcut, and sanitized guidance.
+
+No network/live DB/controller/Railway/deployment/provider/target, secrets/PHI, spend, main merge, or push. Maximum three reviews. Return exactly `DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED(reason)` plus verdict; full output stays in the report.

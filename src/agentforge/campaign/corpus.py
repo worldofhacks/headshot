@@ -5,13 +5,21 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from agentforge.agents.red_team.seed_replay import corpus_sha256, seed_to_attempt
-from agentforge.evals.validation import load_fixture_registry, validate_attack_case, validate_corpus
+from agentforge.evals.validation import (
+    detect_duplicate_sequences,
+    load_fixture_registry,
+    load_json_file,
+    load_json_file_bytes,
+    validate_attack_case,
+    validate_corpus,
+)
 from agentforge.security_tools.candidates import ToolAttackCandidate, parse_tool_attack_bundle
 
 MVP_CORPUS_ID = "m11-seed-corpus-v1"
@@ -19,6 +27,17 @@ MVP_CASE_COUNT = 9
 MVP_CATEGORIES = frozenset({"prompt_injection", "data_exfiltration", "tool_misuse"})
 FULL_SCAN_CORPUS_ID = "headshot-full-scan-v1"
 FULL_SCAN_CASE_COUNT = 14
+LIVE_100_CORPUS_ID = "headshot-live-100-v1"
+LIVE_100_CASE_COUNT = 100
+LIVE_100_PHYSICAL_REQUEST_COUNT = 121
+LIVE_100_CATEGORY_COUNTS = {
+    "prompt_injection": 34,
+    "data_exfiltration": 33,
+    "tool_misuse": 33,
+}
+TRUSTED_WORKLOAD_IDS = frozenset({MVP_CORPUS_ID, FULL_SCAN_CORPUS_ID, LIVE_100_CORPUS_ID})
+_WORKLOAD_ID = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9._:-]{0,127}\Z")
+_SHA256 = re.compile(r"\A[0-9a-f]{64}\Z")
 _REVIEWED_BUNDLES = {
     "garak.bundle.json": "b4e0ec281f720b68064dd3923d995f846f9a6498bf8cc0bc474dd5954c54c923",
     "promptfoo.bundle.json": "e84cf3faf492960c9d5e1b871833a4ba1a610d38823c8be033dce3c05c8071b3",
@@ -36,6 +55,9 @@ class AuthoredCase:
     content_hash: str
     source_tool: str | None = None
     source_technique: str | None = None
+    instance_id: str | None = None
+    review_record_sha256: str | None = None
+    source_generation_sha256: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,6 +68,26 @@ class AuthoredCorpus:
     categories: frozenset[str]
     root: Path
     tool_sources: tuple[str, ...] = ()
+
+
+def verified_case_payload(case: AuthoredCase) -> dict[str, Any]:
+    """Return an isolated payload only when it still matches its trusted resolution hash."""
+
+    if not isinstance(case, AuthoredCase) or not isinstance(case.payload, dict):
+        raise CorpusUnavailable("authored case is not a trusted resolved case")
+    try:
+        canonical = json.dumps(
+            case.payload,
+            allow_nan=False,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+    except (TypeError, ValueError, RecursionError) as exc:
+        raise CorpusUnavailable("authored case changed after trusted resolution") from exc
+    if hashlib.sha256(canonical).hexdigest() != case.content_hash:
+        raise CorpusUnavailable("authored case changed after trusted resolution")
+    return deepcopy(case.payload)
 
 
 def corpus_root(configured: str | os.PathLike[str] | None = None) -> Path:
@@ -262,17 +304,311 @@ def load_full_scan_corpus(
     )
 
 
+def load_live_100_corpus(
+    root: str | os.PathLike[str] | None = None,
+    *,
+    manifest_path: str | os.PathLike[str] | None = None,
+    expected_manifest_sha256: str | None = None,
+    bundle_root: str | os.PathLike[str] | None = None,
+) -> AuthoredCorpus:
+    """Load the externally reviewed 100-case workload, never synthesize it.
+
+    The workload is admitted only from a byte-pinned manifest.  The manifest references
+    individually validated attack-case JSON files below the eval root and carries immutable review
+    record hashes.  No code path expands the fourteen-case corpus into placeholder mutations.
+    """
+
+    selected = corpus_root(root).resolve()
+    path = (
+        Path(manifest_path)
+        if manifest_path is not None
+        else selected / "workloads" / f"{LIVE_100_CORPUS_ID}.json"
+    )
+    expected = (
+        expected_manifest_sha256
+        if expected_manifest_sha256 is not None
+        else os.environ.get("AGENTFORGE_WORKLOAD_SHA256", "").strip()
+    )
+    if _SHA256.fullmatch(expected or "") is None:
+        raise CorpusUnavailable("live-100 workload requires a pinned reviewed manifest digest")
+    try:
+        manifest, raw = load_json_file_bytes(path)
+    except Exception as exc:
+        raise CorpusUnavailable("live-100 reviewed workload manifest is unavailable") from exc
+    manifest_sha256 = hashlib.sha256(raw).hexdigest()
+    if manifest_sha256 != expected:
+        raise CorpusUnavailable(
+            "live-100 reviewed workload manifest differs from its pinned digest"
+        )
+    if (
+        not isinstance(manifest, dict)
+        or set(manifest) != {"schema_version", "workload_id", "cases"}
+        or manifest.get("schema_version") != "1"
+        or manifest.get("workload_id") != LIVE_100_CORPUS_ID
+        or not isinstance(manifest.get("cases"), list)
+        or len(manifest["cases"]) != LIVE_100_CASE_COUNT
+    ):
+        raise CorpusUnavailable("live-100 reviewed workload identity or case count is invalid")
+
+    fixture_registry = load_fixture_registry(selected / "fixtures")
+    cases: list[AuthoredCase] = []
+    instance_ids: set[str] = set()
+    case_paths: set[Path] = set()
+    hosted_variant_count = 0
+    for entry in manifest["cases"]:
+        if not isinstance(entry, dict) or set(entry) != {
+            "instance_id",
+            "case_path",
+            "case_sha256",
+            "review",
+        }:
+            raise CorpusUnavailable("live-100 workload case entry is invalid")
+        instance_id = entry["instance_id"]
+        if (
+            not isinstance(instance_id, str)
+            or _WORKLOAD_ID.fullmatch(instance_id) is None
+            or instance_id in instance_ids
+        ):
+            raise CorpusUnavailable("live-100 workload instance identity is invalid or duplicated")
+        instance_ids.add(instance_id)
+        relative = entry["case_path"]
+        if (
+            not isinstance(relative, str)
+            or not relative
+            or "\\" in relative
+            or Path(relative).is_absolute()
+            or ".." in Path(relative).parts
+        ):
+            raise CorpusUnavailable("live-100 workload case path is invalid")
+        candidate_path = selected / relative
+        if candidate_path.is_symlink() or not candidate_path.is_file():
+            raise CorpusUnavailable("live-100 workload case must be a regular non-symlink file")
+        case_path = candidate_path.resolve()
+        if not case_path.is_relative_to(selected) or case_path in case_paths:
+            raise CorpusUnavailable("live-100 workload case path escapes or is duplicated")
+        case_paths.add(case_path)
+        review = entry["review"]
+        if (
+            not isinstance(review, dict)
+            or set(review)
+            != {
+                "status",
+                "reviewer_id",
+                "review_record_path",
+                "review_record_sha256",
+                "source_generation_path",
+                "source_generation_sha256",
+                "source_kind",
+            }
+            or review.get("status") != "approved"
+            or not isinstance(review.get("reviewer_id"), str)
+            or _WORKLOAD_ID.fullmatch(review["reviewer_id"]) is None
+            or _SHA256.fullmatch(str(review.get("review_record_sha256", ""))) is None
+            or _SHA256.fullmatch(str(review.get("source_generation_sha256", ""))) is None
+            or review.get("source_kind")
+            not in {"m11_seed", "reviewed_full_scan", "hosted_red_team"}
+        ):
+            raise CorpusUnavailable("live-100 workload review provenance is invalid")
+        try:
+            payload = load_json_file(candidate_path)
+        except Exception as exc:
+            raise CorpusUnavailable("live-100 reviewed case is unavailable or invalid") from exc
+        if not isinstance(payload, dict):
+            raise CorpusUnavailable("live-100 reviewed case is not an object")
+        canonical = json.dumps(
+            payload, allow_nan=False, ensure_ascii=False, separators=(",", ":"), sort_keys=True
+        ).encode("utf-8")
+        case_sha256 = hashlib.sha256(canonical).hexdigest()
+        if entry["case_sha256"] != case_sha256:
+            raise CorpusUnavailable("live-100 reviewed case differs from its content hash")
+        generation_record = _load_hashed_provenance_artifact(
+            selected,
+            review["source_generation_path"],
+            review["source_generation_sha256"],
+            label="source generation",
+        )
+        generation_identity = {
+            "schema_version": "1",
+            "instance_id": instance_id,
+            "case_sha256": case_sha256,
+            "source_kind": review["source_kind"],
+        }
+        if not isinstance(generation_record, dict) or any(
+            generation_record.get(key) != value for key, value in generation_identity.items()
+        ):
+            raise CorpusUnavailable("live-100 source generation provenance is invalid")
+        review_record = _load_hashed_provenance_artifact(
+            selected,
+            review["review_record_path"],
+            review["review_record_sha256"],
+            label="review record",
+        )
+        review_identity = {
+            "schema_version": "1",
+            "instance_id": instance_id,
+            "case_sha256": case_sha256,
+            "status": "approved",
+            "reviewer_id": review["reviewer_id"],
+            "source_generation_sha256": review["source_generation_sha256"],
+            "source_kind": review["source_kind"],
+        }
+        if not isinstance(review_record, dict) or any(
+            review_record.get(key) != value for key, value in review_identity.items()
+        ):
+            raise CorpusUnavailable("live-100 review record provenance is invalid")
+        try:
+            validate_attack_case(
+                payload,
+                source=instance_id,
+                fixture_ids=fixture_registry.fixture_ids,
+                fixture_canaries=fixture_registry.canaries_by_fixture,
+                fixture_versions=fixture_registry.versions_by_fixture,
+                fixture_sources=fixture_registry.sources_by_fixture,
+            )
+        except Exception as exc:
+            raise CorpusUnavailable("live-100 reviewed case failed attack-case validation") from exc
+        if review["source_kind"] == "hosted_red_team":
+            hosted_variant_count += 1
+        cases.append(
+            AuthoredCase(
+                payload=payload,
+                content_hash=case_sha256,
+                source_tool=(
+                    "hosted_red_team" if review["source_kind"] == "hosted_red_team" else None
+                ),
+                source_technique=review["source_kind"],
+                instance_id=instance_id,
+                review_record_sha256=review["review_record_sha256"],
+                source_generation_sha256=review["source_generation_sha256"],
+            )
+        )
+
+    duplicate_issues = detect_duplicate_sequences([case.payload for case in cases])
+    if duplicate_issues:
+        raise CorpusUnavailable("live-100 workload contains duplicate identities or sequences")
+    category_counts = {
+        category: sum(case.payload["category"] == category for case in cases)
+        for category in MVP_CATEGORIES
+    }
+    turn_counts = [len(case.payload["input_sequence"]) for case in cases]
+    if category_counts != LIVE_100_CATEGORY_COUNTS:
+        raise CorpusUnavailable("live-100 workload category balance is invalid")
+    if turn_counts.count(1) != 79 or turn_counts.count(2) != 21 or sum(turn_counts) != 121:
+        raise CorpusUnavailable("live-100 workload turn and physical-request counts are invalid")
+
+    baseline = load_full_scan_corpus(selected, bundle_root=bundle_root)
+    actual_by_id = {case.payload["case_id"]: case for case in cases}
+    if any(
+        actual_by_id.get(case.payload["case_id"]) is None
+        or actual_by_id[case.payload["case_id"]].content_hash != case.content_hash
+        for case in baseline.cases
+    ):
+        raise CorpusUnavailable("live-100 workload does not contain the exact reviewed full scan")
+    for index, baseline_case in enumerate(baseline.cases):
+        expected_source_kind = "m11_seed" if index < MVP_CASE_COUNT else "reviewed_full_scan"
+        admitted = actual_by_id[baseline_case.payload["case_id"]]
+        if admitted.source_technique != expected_source_kind:
+            raise CorpusUnavailable("live-100 baseline review provenance is misclassified")
+    if hosted_variant_count != LIVE_100_CASE_COUNT - FULL_SCAN_CASE_COUNT:
+        raise CorpusUnavailable("live-100 workload hosted variants are absent or misclassified")
+
+    return AuthoredCorpus(
+        corpus_id=LIVE_100_CORPUS_ID,
+        content_hash=manifest_sha256,
+        cases=tuple(cases),
+        categories=frozenset(category_counts),
+        root=selected,
+        tool_sources=tuple(sorted((*baseline.tool_sources, "hosted_red_team"))),
+    )
+
+
+def _load_hashed_provenance_artifact(
+    root: Path,
+    relative_path: object,
+    expected_sha256: object,
+    *,
+    label: str,
+) -> Any:
+    """Load one strict, bounded, no-follow JSON provenance artifact below the eval root."""
+
+    if (
+        not isinstance(relative_path, str)
+        or not relative_path
+        or "\\" in relative_path
+        or Path(relative_path).is_absolute()
+        or ".." in Path(relative_path).parts
+        or not isinstance(expected_sha256, str)
+        or _SHA256.fullmatch(expected_sha256) is None
+    ):
+        raise CorpusUnavailable(f"live-100 {label} artifact reference is invalid")
+    candidate = root / relative_path
+    if candidate.is_symlink():
+        raise CorpusUnavailable(f"live-100 {label} artifact must be a regular non-symlink file")
+    try:
+        resolved = candidate.resolve(strict=True)
+    except OSError as exc:
+        raise CorpusUnavailable(f"live-100 {label} artifact is unavailable") from exc
+    if not resolved.is_relative_to(root) or not resolved.is_file():
+        raise CorpusUnavailable(f"live-100 {label} artifact path escapes the eval root")
+    try:
+        payload, raw = load_json_file_bytes(candidate)
+    except Exception as exc:
+        raise CorpusUnavailable(f"live-100 {label} artifact is unavailable or invalid") from exc
+    if hashlib.sha256(raw).hexdigest() != expected_sha256:
+        raise CorpusUnavailable(f"live-100 {label} artifact differs from its claimed digest")
+    return payload
+
+
+def resolve_workload(
+    workload_id: str | None = None,
+    *,
+    root: str | os.PathLike[str] | None = None,
+    bundle_root: str | os.PathLike[str] | None = None,
+    manifest_path: str | os.PathLike[str] | None = None,
+    expected_content_hash: str | None = None,
+) -> AuthoredCorpus:
+    """Resolve one of the three closed, trusted workload identities."""
+
+    selected_id = (
+        workload_id or os.environ.get("AGENTFORGE_WORKLOAD_ID", FULL_SCAN_CORPUS_ID).strip()
+    )
+    if selected_id == MVP_CORPUS_ID:
+        corpus = load_mvp_corpus(root)
+    elif selected_id == FULL_SCAN_CORPUS_ID:
+        corpus = load_full_scan_corpus(root, bundle_root=bundle_root)
+    elif selected_id == LIVE_100_CORPUS_ID:
+        corpus = load_live_100_corpus(
+            root,
+            manifest_path=manifest_path,
+            expected_manifest_sha256=expected_content_hash,
+            bundle_root=bundle_root,
+        )
+    else:
+        raise CorpusUnavailable("workload identity is not in the trusted registry")
+    if expected_content_hash is not None and corpus.content_hash != expected_content_hash:
+        raise CorpusUnavailable("resolved workload differs from its expected content hash")
+    return corpus
+
+
 __all__ = [
     "AuthoredCase",
     "AuthoredCorpus",
     "CorpusUnavailable",
     "FULL_SCAN_CASE_COUNT",
     "FULL_SCAN_CORPUS_ID",
+    "LIVE_100_CASE_COUNT",
+    "LIVE_100_CATEGORY_COUNTS",
+    "LIVE_100_CORPUS_ID",
+    "LIVE_100_PHYSICAL_REQUEST_COUNT",
     "MVP_CASE_COUNT",
     "MVP_CATEGORIES",
     "MVP_CORPUS_ID",
+    "TRUSTED_WORKLOAD_IDS",
     "corpus_root",
     "load_full_scan_corpus",
+    "load_live_100_corpus",
     "load_mvp_corpus",
+    "resolve_workload",
     "reviewed_bundle_root",
+    "verified_case_payload",
 ]

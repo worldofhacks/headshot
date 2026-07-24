@@ -9,6 +9,7 @@ from typing import Any
 from agentforge.target.spec import (
     AttackSurfaceDefinition,
     AuthorizationScope,
+    HostedRunBinding,
     OwaspMapping,
     SafetyCaps,
     TargetDefinition,
@@ -99,6 +100,8 @@ def scope_from_payload(payload: dict[str, Any]) -> AuthorizationScope:
     values.setdefault("corpus_id", "m11-seed-corpus-v1")
     values.setdefault("execution_profile", "live")
     values["caps"] = SafetyCaps(**values["caps"])
+    if values.get("hosted_run") is not None:
+        values["hosted_run"] = HostedRunBinding(**values["hosted_run"])
     return AuthorizationScope(**values)
 
 

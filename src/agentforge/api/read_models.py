@@ -32,6 +32,17 @@ class SafetyCapsReadModel(_ReadModel):
     run_timeout_seconds: float
 
 
+class HostedRunBindingReadModel(_ReadModel):
+    configuration_set_sha256: str
+    generation_policy_sha256: str
+    session_generation: str
+    provider_model_call_limit: int = Field(gt=0, le=56)
+    provider_model_spend_limit_usd: str
+    provider_max_retries: int = Field(ge=0, le=1)
+    provider_max_concurrency: Literal[1]
+    provider_timeout_seconds: float = Field(gt=0)
+
+
 class SafeAuthorizationScopeReadModel(_ReadModel):
     """Reviewable operation scope. Credential references are deliberately absent."""
 
@@ -54,6 +65,7 @@ class SafeAuthorizationScopeReadModel(_ReadModel):
     caps: SafetyCapsReadModel
     run_nonce: str
     execution_profile: Literal["synthetic", "live"]
+    hosted_run: HostedRunBindingReadModel | None = None
 
 
 class CampaignReadModel(SafeAuthorizationScopeReadModel):
@@ -115,6 +127,8 @@ class ApprovalReadModel(SafeAuthorizationScopeReadModel):
     approver_user_id: str | None = None
     self_approval_override: bool = False
     decided_at: datetime.datetime | None = None
+    expired: bool
+    consumed: bool
 
 
 class SurfaceReadModel(_ReadModel):

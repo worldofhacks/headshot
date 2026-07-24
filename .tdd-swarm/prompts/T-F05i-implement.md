@@ -1,0 +1,4 @@
+# T-F05i Implement — Model: capable
+Worktree `<WORKTREE>`; branch `ticket/T-F05i-runner-control-state`. Inputs: ticket, frozen tests/review, lessons, landed T-F05a/T-F05h. Write only the six ticket `file_scopes` and `.tdd-swarm/reports/T-F05i-implement.md`; never edit tests. Implement strict current-state projection/validation/attestation with one read-only repeatable-read transaction, empty sets, abort/live-claim bindings, stable row lineage for T-F05o, create-only outputs, and no caller DSN/state/trust seams. Do not implement bounded rotation history.
+
+Run local gates every GREEN loop; maximum three attempts. Fake-source tests only; no network/live PostgreSQL/Railway/controller/provider/target, secrets/PHI, spend, main merge, or push. Return exactly `DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED(reason)` plus commit/gate summary; full output stays in the report.

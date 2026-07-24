@@ -1,0 +1,4 @@
+# T-F05f Test Review — Model: capable
+Worktree `<WORKTREE>`; branch `ticket/T-F05f-smart-session-runner`. Inputs: ticket, focused test/report, landed E/J/K/L/M/P, queue/Runner tests. Write only `.tdd-swarm/reports/T-F05f-test-review.md`; tests/source are read-only. Attack catalog/hash divergence, disabled surface, cross-target/session/patient, Web credential access, pre-claim peeks, post-claim ordering, retryable/wrong code/status/message, leaked internal detail, fake claim, wrong job/ref/context, cached/replayed source, skipped L acquisition, second resolution, cleanup resurrection, and non-session regressions.
+
+Freeze only clean criterion-complete RED. No network/live DB/controller/Railway/provider/target, raw secrets/PHI, spend, main merge, or push. Maximum three reviews. Return exactly `DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED(reason)` plus freeze verdict; full output stays in the report.

@@ -31,7 +31,7 @@ import pytest
 from agentforge.config import EnvironmentIsolationError, Settings
 from agentforge.policy.allowlist import Allowlist, AllowlistEntry, OffAllowlistDenied
 from agentforge.policy.credentials import CredentialBinding
-from agentforge.policy.gateway import AbortError, PolicyGateway, RunPolicy
+from agentforge.policy.gateway import AbortError, PolicyGateway, RunPolicy, WorkUnitCoordinates
 from agentforge.secrets import Secret
 from agentforge.target.base import (
     RateLimitedError,
@@ -96,6 +96,8 @@ def _gateway(
     accounting: FakeAccounting | None = None,
     allowlist: Allowlist | None = None,
     settings: Settings | None = None,
+    pre_physical_send_gate=None,
+    post_physical_send_observer=None,
 ) -> PolicyGateway:
     """Construct a gateway wired to the deterministic doubles (all injectable)."""
     return PolicyGateway(
@@ -104,6 +106,8 @@ def _gateway(
         settings=settings or Settings(environment="local"),
         clock=clock or FakeClock(),
         accounting=accounting or FakeAccounting(),
+        pre_physical_send_gate=pre_physical_send_gate,
+        post_physical_send_observer=post_physical_send_observer,
     )
 
 
@@ -113,12 +117,18 @@ def _policy(
     max_attempts_per_run: int = 100,
     target_requests_per_second: float = 1000.0,
     run_timeout_seconds: float = 3600.0,
+    logical_case_limit: int | None = None,
+    physical_request_limit: int | None = None,
+    target_retries_per_turn: int | None = None,
 ) -> RunPolicy:
     return RunPolicy(
         budget_usd=budget_usd,
         max_attempts_per_run=max_attempts_per_run,
         target_requests_per_second=target_requests_per_second,
         run_timeout_seconds=run_timeout_seconds,
+        logical_case_limit=logical_case_limit,
+        physical_request_limit=physical_request_limit,
+        target_retries_per_turn=target_retries_per_turn,
     )
 
 
@@ -429,6 +439,138 @@ def test_budget_projection_requires_a_per_call_estimate_and_fails_closed() -> No
     with pytest.raises(AbortError):
         gw.execute(_attack_attempt(), _policy(budget_usd=100.0))
     assert adapter.calls == []  # fail closed: no dispatch when spend cannot be bounded
+
+
+def test_exact_100_case_workload_stops_before_the_122nd_physical_send() -> None:
+    class _SequentialFake(FakeTargetAdapter):
+        turn_delivery = "sequential"
+
+    adapter = _SequentialFake()
+    clock = FakeClock()
+    authorization_checks: list[WorkUnitCoordinates] = []
+    gateway = _gateway(
+        adapter=adapter,
+        clock=clock,
+        accounting=FakeAccounting(per_call_usd=0.01),
+        pre_physical_send_gate=authorization_checks.append,
+    )
+    policy = _policy(
+        budget_usd=2.0,
+        max_attempts_per_run=101,
+        logical_case_limit=101,
+        physical_request_limit=121,
+        target_retries_per_turn=0,
+    )
+
+    for index in range(79):
+        gateway.execute(_attack_attempt((f"single-{index}",)), policy, attempt_id=f"a-{index}")
+    for index in range(21):
+        gateway.execute(
+            _attack_attempt((f"multi-{index}-1", f"multi-{index}-2")),
+            policy,
+            attempt_id=f"b-{index}",
+        )
+
+    assert gateway.completed_logical_cases == 100
+    assert gateway.physical_send_count == len(adapter.calls) == 121
+    assert len(authorization_checks) == 121
+    assert authorization_checks[79:81] == [
+        WorkUnitCoordinates(attempt_id="b-0", turn_index=0, retry_index=0),
+        WorkUnitCoordinates(attempt_id="b-0", turn_index=1, retry_index=0),
+    ]
+    with pytest.raises(AbortError, match="physical request cap"):
+        gateway.execute(_attack_attempt(("send-122",)), policy, attempt_id="over-limit")
+    assert gateway.physical_send_count == len(adapter.calls) == 121
+    assert len(authorization_checks) == 121
+
+
+def test_zero_retry_policy_makes_one_failed_send_and_no_retry() -> None:
+    request = TargetRequest(turns=("no-retry",))
+    adapter = FakeTargetAdapter().fail(request, TargetUnreachableError("down"))
+    gateway = _gateway(adapter=adapter)
+
+    with pytest.raises(AbortError):
+        gateway.execute(
+            _attack_attempt(("no-retry",)),
+            _policy(
+                physical_request_limit=10,
+                target_retries_per_turn=0,
+            ),
+            attempt_id="no-retry-attempt",
+        )
+
+    assert gateway.physical_send_count == len(adapter.calls) == 1
+    assert gateway.completed_logical_cases == 0
+
+
+def test_retry_coordinates_and_raised_observations_are_stable() -> None:
+    request = TargetRequest(turns=("retry",))
+    adapter = FakeTargetAdapter().fail(request, TargetUnreachableError("down"))
+    reservations: list[WorkUnitCoordinates] = []
+    observations: list[tuple[WorkUnitCoordinates, str]] = []
+    gateway = _gateway(
+        adapter=adapter,
+        pre_physical_send_gate=reservations.append,
+        post_physical_send_observer=lambda coordinates, outcome: observations.append(
+            (coordinates, outcome)
+        ),
+    )
+
+    with pytest.raises(AbortError):
+        gateway.execute(
+            _attack_attempt(("retry",)),
+            _policy(physical_request_limit=2, target_retries_per_turn=1),
+            attempt_id="retry-attempt",
+        )
+
+    expected = [
+        WorkUnitCoordinates(attempt_id="retry-attempt", turn_index=0, retry_index=0),
+        WorkUnitCoordinates(attempt_id="retry-attempt", turn_index=0, retry_index=1),
+    ]
+    assert reservations == expected
+    assert observations == [(coordinate, "raised") for coordinate in expected]
+    assert len(adapter.calls) == 2
+    assert gateway.completed_logical_cases == 0
+
+
+def test_fresh_authorization_gate_runs_before_each_multi_turn_send() -> None:
+    class _SequentialFake(FakeTargetAdapter):
+        turn_delivery = "sequential"
+
+    checks: list[WorkUnitCoordinates] = []
+
+    def gate(coordinates: WorkUnitCoordinates) -> None:
+        checks.append(coordinates)
+        if len(checks) == 2:
+            raise RuntimeError("authorization revoked")
+
+    adapter = _SequentialFake()
+    gateway = PolicyGateway(
+        allowlist=_allowlist(),
+        adapter=adapter,
+        settings=Settings(environment="local"),
+        clock=FakeClock(),
+        accounting=FakeAccounting(per_call_usd=0.01),
+        pre_physical_send_gate=gate,
+    )
+
+    with pytest.raises(RuntimeError, match="authorization revoked"):
+        gateway.execute(
+            _attack_attempt(("turn-one", "turn-two")),
+            _policy(
+                budget_usd=1.0,
+                physical_request_limit=2,
+                target_retries_per_turn=0,
+            ),
+            attempt_id="multi-attempt",
+        )
+
+    assert checks == [
+        WorkUnitCoordinates(attempt_id="multi-attempt", turn_index=0, retry_index=0),
+        WorkUnitCoordinates(attempt_id="multi-attempt", turn_index=1, retry_index=0),
+    ]
+    assert gateway.physical_send_count == len(adapter.calls) == 1
+    assert gateway.completed_logical_cases == 0
 
 
 # ===========================================================================

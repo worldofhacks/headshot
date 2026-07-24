@@ -368,6 +368,18 @@ def _scope_command(args: argparse.Namespace) -> int:
     # it carries the credential MARKER (a no-auth marker or a ref digest) — never the raw credential
     # reference, never a secret value — and it deliberately carries NO deadline / grant, so it
     # cannot be used as (or silently become) a RunAuthorization.
+    caps_payload: dict[str, float | int] = {
+        "budget_usd": policy.budget_usd,
+        "max_attempts_per_run": policy.max_attempts_per_run,
+        "target_requests_per_second": policy.target_requests_per_second,
+        "run_timeout_seconds": policy.run_timeout_seconds,
+    }
+    if policy.logical_case_limit is not None:
+        caps_payload["logical_case_limit"] = policy.logical_case_limit
+    if policy.physical_request_limit is not None:
+        caps_payload["physical_request_limit"] = policy.physical_request_limit
+    if policy.target_retries_per_turn is not None:
+        caps_payload["target_retries_per_turn"] = policy.target_retries_per_turn
     request: dict[str, Any] = {
         "artifact": _AUTHORIZATION_REQUEST_ARTIFACT,
         "schema_version": "1",
@@ -381,12 +393,7 @@ def _scope_command(args: argparse.Namespace) -> int:
             "credential_marker": binding.credential_marker(),
             "corpus_id": args.corpus_id,
             "corpus_sha": corpus_sha,
-            "caps": {
-                "budget_usd": policy.budget_usd,
-                "max_attempts_per_run": policy.max_attempts_per_run,
-                "target_requests_per_second": policy.target_requests_per_second,
-                "run_timeout_seconds": policy.run_timeout_seconds,
-            },
+            "caps": caps_payload,
         },
         "notice": (
             "This is an authorization REQUEST, not a grant. It does NOT authorize any run. A "
