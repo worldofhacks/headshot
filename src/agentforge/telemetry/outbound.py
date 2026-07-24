@@ -18,12 +18,17 @@ import re
 import time
 import uuid
 from dataclasses import dataclass, field
+from decimal import Decimal
 from typing import Any
 from urllib.parse import urlsplit
 
 from sqlalchemy import Engine, text
 
 from agentforge.correlation import campaign_trace_id
+from agentforge.providers.lineage import (
+    ProviderInvocationContextV1,
+    ProviderTerminalEventV1,
+)
 from agentforge.secrets import looks_like_provider_key, redact_mapping
 from agentforge.target.base import TargetRequest
 
@@ -204,7 +209,7 @@ class _LangfuseBridge:
         metadata: dict[str, Any],
         parent_observation_id: str | None = None,
     ) -> tuple[Any, Any, str, str] | None:
-        """Start an agent root plus a cost-bearing runtime generation."""
+        """Start an agent root plus its logical runtime generation."""
 
         if not self.configured():
             return None
@@ -243,6 +248,77 @@ class _LangfuseBridge:
             raise
         return agent, generation, cost_source, str(agent.id)
 
+    def start_provider_attempt(
+        self,
+        agent_state: tuple[Any, Any, str, str] | None,
+        *,
+        model: str,
+        version: str,
+        input_payload: dict[str, Any],
+        metadata: dict[str, Any],
+    ) -> Any:
+        """Start a native generation beneath an already-open role AGENT observation."""
+
+        if agent_state is None:
+            raise RuntimeError("provider attempt has no parent agent observation")
+        agent = agent_state[0]
+        return agent.start_observation(
+            as_type="generation",
+            name="provider.openrouter.attempt",
+            model=model,
+            input=input_payload,
+            metadata=metadata,
+            version=version,
+        )
+
+    def finish_provider_attempt(
+        self,
+        state: Any,
+        *,
+        output: dict[str, Any],
+        metadata: dict[str, Any],
+        error_code: str | None,
+        status: str,
+        returned_model: str | None,
+        input_tokens: int | None,
+        output_tokens: int | None,
+        reasoning_tokens: int | None,
+        measured_cost: float | None,
+        cost_measurement_state: str,
+    ) -> None:
+        """Finish one cost-bearing physical generation from durable terminal facts."""
+
+        values: dict[str, Any] = {
+            "output": output,
+            "metadata": metadata,
+            "level": "ERROR" if error_code else "DEFAULT",
+            "status_message": error_code or status,
+        }
+        usage_details = {
+            key: value
+            for key, value in (
+                ("input", input_tokens),
+                ("output", output_tokens),
+                ("reasoning", reasoning_tokens),
+            )
+            if value is not None
+        }
+        if usage_details:
+            usage_details["total"] = sum(usage_details.values())
+            values["usage_details"] = usage_details
+        if cost_measurement_state in {"measured", "partial"} and measured_cost is not None:
+            values["cost_details"] = {"total": measured_cost}
+        if returned_model is not None:
+            values["model"] = returned_model
+        ended = False
+        try:
+            state.update(**values).end()
+            ended = True
+        finally:
+            if not ended:
+                with contextlib.suppress(Exception):
+                    state.end()
+
     def finish_agent(
         self,
         state: tuple[Any, Any, str, str] | None,
@@ -268,30 +344,21 @@ class _LangfuseBridge:
             "level": "ERROR" if error_code else "DEFAULT",
             "status_message": error_code or status,
         }
-        usage_details = {
-            key: value
-            for key, value in (
-                ("input", input_tokens),
-                ("output", output_tokens),
-                ("reasoning", reasoning_tokens),
-            )
-            if value is not None
-        }
-        if usage_details:
-            # The transport normalizes OpenRouter's inclusive completion count into disjoint
-            # final-output and reasoning counters before persistence.
-            usage_details["total"] = sum(usage_details.values())
-            generation_values["usage_details"] = usage_details
-        final_cost_source = (
-            "deterministic_zero"
-            if cost_source == "deterministic_zero"
-            else {
-                "measured": "provider_measured",
-                "partial": "provider_partial_known",
-                "not_observed": "unavailable",
-                "invalid": "invalid",
-            }[cost_measurement_state]
-        )
+        hosted = cost_source != "deterministic_zero"
+        if not hosted:
+            usage_details = {
+                key: value
+                for key, value in (
+                    ("input", input_tokens),
+                    ("output", output_tokens),
+                    ("reasoning", reasoning_tokens),
+                )
+                if value is not None
+            }
+            if usage_details:
+                usage_details["total"] = sum(usage_details.values())
+                generation_values["usage_details"] = usage_details
+        final_cost_source = "provider_attempt_generations" if hosted else "deterministic_zero"
         authoritative_metadata = {
             **metadata,
             "cost.source": final_cost_source,
@@ -299,11 +366,12 @@ class _LangfuseBridge:
             "agent.provider_event_ids": provider_event_ids,
         }
         generation_values["metadata"] = authoritative_metadata
-        # A deterministic execution has a real, observed cost of zero. For a hosted execution,
-        # only attach cost when provider usage/cost accounting was actually returned.
-        if cost_measurement_state in {"measured", "partial"} and measured_cost is not None:
+        # Hosted tokens/cost live exclusively on physical attempt generations. Keeping the
+        # logical runtime metadata-only prevents Langfuse from counting the same provider usage
+        # twice. Deterministic work retains its observed zero.
+        if not hosted and cost_measurement_state == "measured" and measured_cost is not None:
             generation_values["cost_details"] = {"total": measured_cost}
-        if returned_model is not None:
+        if not hosted and returned_model is not None:
             generation_values["model"] = returned_model
         generation_ended = False
         agent_ended = False
@@ -461,6 +529,12 @@ class _AgentHandle:
 
 
 @dataclass(frozen=True)
+class _ProviderAttemptHandle:
+    invocation: ProviderInvocationContextV1
+    langfuse_state: Any
+
+
+@dataclass(frozen=True)
 class _PendingAgentFinish:
     """Safe, bounded state retained while a terminal ledger read is retried."""
 
@@ -495,6 +569,7 @@ class OutboundHttpTelemetry:
         self._agent_campaign_ids: dict[str, str] = {}
         self._agent_attempt_ids: dict[str, str | None] = {}
         self._agent_roles: dict[str, str] = {}
+        self._provider_attempt_handles: dict[str, _ProviderAttemptHandle] = {}
         self._last_connection_check = 0.0
 
     def begin(
@@ -803,6 +878,186 @@ class OutboundHttpTelemetry:
         handle.metadata["attempt_id"] = attempt_id
         if execution_id in self._agent_observation_ids:
             self._agent_attempt_ids[execution_id] = attempt_id
+
+    def begin_provider_attempt(
+        self,
+        invocation: ProviderInvocationContextV1,
+    ) -> None:
+        """Open one redacted physical generation after reservation and before provider I/O."""
+
+        if not isinstance(invocation, ProviderInvocationContextV1):
+            raise TypeError("provider invocation context is invalid")
+        invocation_id = invocation.invocation_id
+        handle = self._agent_handles.get(invocation.logical_execution_id)
+        if (
+            handle is None
+            or handle.langfuse_state is None
+            or handle.campaign_run_id != invocation.campaign_run_id
+            or handle.role != invocation.agent_role
+            or handle.trace_id != campaign_trace_id(invocation.campaign_run_id)
+            or invocation_id in self._provider_attempt_handles
+        ):
+            self._mark_agent_langfuse_error(invocation.logical_execution_id)
+            raise RuntimeError("provider attempt parent observation is unavailable")
+        recorded_attempt_id = self._agent_attempt_ids.get(invocation.logical_execution_id)
+        if recorded_attempt_id != invocation.campaign_attempt_id:
+            self._mark_agent_langfuse_error(invocation.logical_execution_id)
+            raise RuntimeError("provider attempt correlation differs from its parent agent")
+
+        metadata = _sanitize(
+            {
+                "deployment.environment": self.environment,
+                "organization_id": invocation.organization_id,
+                "campaign_run_id": invocation.campaign_run_id,
+                "attempt_id": invocation.campaign_attempt_id,
+                "parent_execution_id": invocation.parent_execution_id,
+                "agent.execution_id": invocation.logical_execution_id,
+                "agent.role": invocation.agent_role,
+                "provider.name": "openrouter",
+                "provider.invocation_id": invocation.invocation_id,
+                "provider.physical_sequence": invocation.physical_sequence,
+                "provider.retry_number": invocation.physical_sequence - 1,
+                "provider.is_retry": invocation.physical_sequence > 1,
+                "provider.requested_model": invocation.requested_model,
+                "provider.configured_upstream": invocation.configured_upstream,
+                "provider.prompt_version": invocation.prompt_version,
+                "provider.prompt_sha256": invocation.prompt_sha256,
+                "provider.configuration_set_sha256": invocation.configuration_set_sha256,
+                "provider.role_configuration_sha256": invocation.role_configuration_sha256,
+                "provider.generation_policy_sha256": invocation.generation_policy_sha256,
+                "provider.status": "running",
+                "cost.source": "provider_pending",
+                "cost.measurement_state": "not_observed",
+            },
+            (),
+        )
+        input_payload = {
+            "prompt_sha256": invocation.prompt_sha256,
+            "configuration_set_sha256": invocation.configuration_set_sha256,
+            "role_configuration_sha256": invocation.role_configuration_sha256,
+            "generation_policy_sha256": invocation.generation_policy_sha256,
+        }
+        try:
+            state = self.langfuse.start_provider_attempt(
+                handle.langfuse_state,
+                model=invocation.requested_model,
+                version=invocation.prompt_version,
+                input_payload=input_payload,
+                metadata=metadata,
+            )
+            if not callable(getattr(state, "update", None)) or not callable(
+                getattr(state, "end", None)
+            ):
+                raise RuntimeError("provider attempt observation did not open")
+        except Exception:
+            self._mark_agent_langfuse_error(invocation.logical_execution_id)
+            raise
+        self._provider_attempt_handles[invocation_id] = _ProviderAttemptHandle(
+            invocation=invocation,
+            langfuse_state=state,
+        )
+
+    def finish_provider_attempt(
+        self,
+        invocation: ProviderInvocationContextV1,
+        event: ProviderTerminalEventV1,
+    ) -> None:
+        """Finish one physical generation only after its terminal event is durable."""
+
+        if not isinstance(invocation, ProviderInvocationContextV1):
+            raise TypeError("provider invocation context is invalid")
+        if not isinstance(event, ProviderTerminalEventV1):
+            raise TypeError("provider terminal event is invalid")
+        if (
+            event.invocation_id != invocation.invocation_id
+            or event.physical_sequence != invocation.physical_sequence
+        ):
+            raise ValueError("provider terminal event differs from its invocation")
+        attempt = self._provider_attempt_handles.pop(invocation.invocation_id, None)
+        if attempt is None or attempt.invocation != invocation:
+            self._mark_agent_langfuse_error(invocation.logical_execution_id)
+            raise RuntimeError("provider attempt observation handle is unavailable")
+
+        elapsed = event.finished_at - invocation.started_at
+        duration_microseconds = (
+            elapsed.days * 86_400_000_000 + elapsed.seconds * 1_000_000 + elapsed.microseconds
+        )
+        duration_ms = Decimal(duration_microseconds) / Decimal(1_000)
+        metadata = _sanitize(
+            {
+                "deployment.environment": self.environment,
+                "organization_id": invocation.organization_id,
+                "campaign_run_id": invocation.campaign_run_id,
+                "attempt_id": invocation.campaign_attempt_id,
+                "parent_execution_id": invocation.parent_execution_id,
+                "agent.execution_id": invocation.logical_execution_id,
+                "agent.role": invocation.agent_role,
+                "provider.name": "openrouter",
+                "provider.invocation_id": invocation.invocation_id,
+                "provider.event_id": event.event_id,
+                "provider.physical_sequence": invocation.physical_sequence,
+                "provider.retry_number": invocation.physical_sequence - 1,
+                "provider.is_retry": invocation.physical_sequence > 1,
+                "provider.requested_model": invocation.requested_model,
+                "provider.returned_model": event.returned_model,
+                "provider.configured_upstream": invocation.configured_upstream,
+                "provider.served_upstream": event.upstream_provider,
+                "provider.request_id": event.provider_request_id,
+                "provider.prompt_version": invocation.prompt_version,
+                "provider.prompt_sha256": invocation.prompt_sha256,
+                "provider.configuration_set_sha256": invocation.configuration_set_sha256,
+                "provider.role_configuration_sha256": invocation.role_configuration_sha256,
+                "provider.generation_policy_sha256": invocation.generation_policy_sha256,
+                "provider.status": event.status,
+                "provider.error_code": event.error_code,
+                "provider.duration_ms": format(duration_ms, "f"),
+                "cost.source": (
+                    "provider_measured"
+                    if event.cost_measurement_state == "measured"
+                    else (
+                        "provider_partial_known"
+                        if event.cost_measurement_state == "partial"
+                        else event.cost_measurement_state
+                    )
+                ),
+                "cost.measurement_state": event.cost_measurement_state,
+                "cost.usd": (
+                    format(event.measured_cost_usd, "f")
+                    if event.measured_cost_usd is not None
+                    else None
+                ),
+            },
+            (),
+        )
+        try:
+            self.langfuse.finish_provider_attempt(
+                attempt.langfuse_state,
+                output={"provider_event_id": event.event_id},
+                metadata=metadata,
+                error_code=event.error_code,
+                status=event.status,
+                returned_model=event.returned_model,
+                input_tokens=event.input_tokens,
+                output_tokens=event.output_tokens,
+                reasoning_tokens=event.reasoning_tokens,
+                measured_cost=(
+                    float(event.measured_cost_usd) if event.measured_cost_usd is not None else None
+                ),
+                cost_measurement_state=event.cost_measurement_state,
+            )
+        except Exception:
+            self._mark_agent_langfuse_error(invocation.logical_execution_id)
+            raise
+
+    def _mark_agent_langfuse_error(self, execution_id: str) -> None:
+        with contextlib.suppress(Exception), self.engine.begin() as connection:
+            connection.execute(
+                text(
+                    "UPDATE agent_executions SET langfuse_status = 'error' "
+                    "WHERE execution_id = :execution_id"
+                ),
+                {"execution_id": execution_id},
+            )
 
     def finish_agent(
         self,

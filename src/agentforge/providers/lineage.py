@@ -309,7 +309,28 @@ class ProviderLineageRecorder(Protocol):
     ) -> ProviderTerminalEventV1: ...
 
 
+class ProviderAttemptObserver(Protocol):
+    """Content-free projection seam around one already-reserved provider attempt.
+
+    The start hook runs after the durable invocation is committed and before network I/O. The
+    finish hook runs only after the terminal event is durably appended. Implementations must use
+    the invocation/event identities rather than provider request or response content.
+    """
+
+    def begin_provider_attempt(
+        self,
+        invocation: ProviderInvocationContextV1,
+    ) -> None: ...
+
+    def finish_provider_attempt(
+        self,
+        invocation: ProviderInvocationContextV1,
+        event: ProviderTerminalEventV1,
+    ) -> None: ...
+
+
 __all__ = [
+    "ProviderAttemptObserver",
     "ProviderInvocationContextV1",
     "ProviderLineageRecorder",
     "ProviderLogicalContextV1",

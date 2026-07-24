@@ -182,6 +182,37 @@ class _ProviderRecorder:
         return event
 
 
+class _AttemptObserver:
+    def __init__(
+        self,
+        recorder: _ProviderRecorder,
+        *,
+        fail_start: bool = False,
+        fail_finish: bool = False,
+    ) -> None:
+        self.recorder = recorder
+        self.fail_start = fail_start
+        self.fail_finish = fail_finish
+        self.started: list[ProviderInvocationContextV1] = []
+        self.finished: list[tuple[ProviderInvocationContextV1, ProviderTerminalEventV1]] = []
+
+    def begin_provider_attempt(self, invocation: ProviderInvocationContextV1) -> None:
+        self.started.append(invocation)
+        if self.fail_start:
+            raise RuntimeError("synthetic observer start failure")
+
+    def finish_provider_attempt(
+        self,
+        invocation: ProviderInvocationContextV1,
+        event: ProviderTerminalEventV1,
+    ) -> None:
+        # Projection completion is ordered after the append-only recorder.
+        assert self.recorder.events[-1] == event
+        self.finished.append((invocation, event))
+        if self.fail_finish:
+            raise RuntimeError("synthetic observer completion failure")
+
+
 def _success(request_id: str = "gen-1") -> httpx.Response:
     return httpx.Response(
         200,
@@ -500,6 +531,126 @@ def test_transport_records_each_actual_send_and_retry_as_physical_facts() -> Non
     assert recorder.events[1].measured_cost_usd == Decimal("0.000065")
 
 
+def test_attempt_observer_tracks_success_and_retry_in_physical_order() -> None:
+    responses = iter(
+        [
+            httpx.Response(503, headers={"Retry-After": "0"}),
+            _success("gen-observed-after-retry"),
+        ]
+    )
+    configuration = _configuration()
+    recorder = _ProviderRecorder()
+    observer = _AttemptObserver(recorder)
+    monotonic_values = iter((0.0, 0.0, 2.0))
+    transport = OpenRouterTransport(
+        configuration=configuration,
+        credential_resolver=lambda _reference: Secret("test-provider-value"),
+        client=httpx.Client(transport=httpx.MockTransport(lambda _request: next(responses))),
+        lineage_recorder=recorder,
+        attempt_observer=observer,
+        sleeper=lambda _seconds: None,
+        monotonic=lambda: next(monotonic_values),
+    )
+
+    result = transport.invoke(
+        role="judge",
+        messages=_messages(),
+        output_schema={"type": "object"},
+        schema_name="judge_verdict",
+        generation_policy_sha256=_digest("generation-policy"),
+        input_tokens_upper_bound=100,
+        max_output_tokens=50,
+        max_reasoning_tokens=20,
+        timeout_seconds=5,
+        provider_context=_provider_context(configuration),
+    )
+
+    assert result.physical_attempts == 2
+    assert [item.physical_sequence for item in observer.started] == [1, 2]
+    assert [item[1].status for item in observer.finished] == [
+        "retryable_failure",
+        "succeeded",
+    ]
+
+
+def test_attempt_observer_start_failure_prevents_http_and_retry() -> None:
+    configuration = _configuration()
+    recorder = _ProviderRecorder()
+    observer = _AttemptObserver(recorder, fail_start=True)
+    network_calls = 0
+
+    def send(_request: httpx.Request) -> httpx.Response:
+        nonlocal network_calls
+        network_calls += 1
+        return _success()
+
+    transport = OpenRouterTransport(
+        configuration=configuration,
+        credential_resolver=lambda _reference: Secret("test-provider-value"),
+        client=httpx.Client(transport=httpx.MockTransport(send)),
+        lineage_recorder=recorder,
+        attempt_observer=observer,
+    )
+    with pytest.raises(HostedProviderError, match="observation could not start") as raised:
+        transport.invoke(
+            role="judge",
+            messages=_messages(),
+            output_schema={"type": "object"},
+            schema_name="judge_verdict",
+            generation_policy_sha256=_digest("generation-policy"),
+            input_tokens_upper_bound=100,
+            max_output_tokens=50,
+            max_reasoning_tokens=20,
+            timeout_seconds=5,
+            provider_context=_provider_context(configuration),
+        )
+
+    assert raised.value.physical_attempts == 1
+    assert network_calls == 0
+    assert len(recorder.invocations) == 1
+    assert [event.status for event in recorder.events] == ["terminal_failure"]
+    assert len(observer.started) == 1
+    assert observer.finished == []
+
+
+def test_attempt_observer_completion_failure_after_send_never_retries() -> None:
+    configuration = _configuration()
+    recorder = _ProviderRecorder()
+    observer = _AttemptObserver(recorder, fail_finish=True)
+    network_calls = 0
+
+    def send(_request: httpx.Request) -> httpx.Response:
+        nonlocal network_calls
+        network_calls += 1
+        return _success()
+
+    transport = OpenRouterTransport(
+        configuration=configuration,
+        credential_resolver=lambda _reference: Secret("test-provider-value"),
+        client=httpx.Client(transport=httpx.MockTransport(send)),
+        lineage_recorder=recorder,
+        attempt_observer=observer,
+    )
+    with pytest.raises(HostedProviderError, match="observation could not complete") as raised:
+        transport.invoke(
+            role="judge",
+            messages=_messages(),
+            output_schema={"type": "object"},
+            schema_name="judge_verdict",
+            generation_policy_sha256=_digest("generation-policy"),
+            input_tokens_upper_bound=100,
+            max_output_tokens=50,
+            max_reasoning_tokens=20,
+            timeout_seconds=5,
+            provider_context=_provider_context(configuration),
+        )
+
+    assert raised.value.physical_attempts == 1
+    assert network_calls == 1
+    assert [event.status for event in recorder.events] == ["succeeded"]
+    assert len(observer.finished) == 1
+
+
 def test_q_generator_with_a_recorder_refuses_before_network_without_logical_context() -> None:
     seen: list[httpx.Request] = []
     configuration = _configuration()
@@ -633,6 +784,7 @@ def test_transport_records_served_provider_substitution_as_invalid_output() -> N
     payload["openrouter_metadata"]["endpoints"]["available"][0]["provider"] = "Together"
     configuration = _configuration()
     recorder = _ProviderRecorder()
+    observer = _AttemptObserver(recorder)
     transport = OpenRouterTransport(
         configuration=configuration,
         credential_resolver=lambda _reference: Secret("test-provider-value"),
@@ -640,6 +792,7 @@ def test_transport_records_served_provider_substitution_as_invalid_output() -> N
             transport=httpx.MockTransport(lambda _request: httpx.Response(200, json=payload))
         ),
         lineage_recorder=recorder,
+        attempt_observer=observer,
     )
 
     with pytest.raises(HostedProviderError, match="unauthorized provider route") as raised:
@@ -665,6 +818,7 @@ def test_transport_records_served_provider_substitution_as_invalid_output() -> N
     assert event.provider_request_id == "gen-1"
     assert event.cost_measurement_state == "measured"
     assert event.measured_cost_usd == Decimal("0.000065")
+    assert [item[1].status for item in observer.finished] == ["invalid_output"]
 
 
 def test_retry_then_pacing_failure_preserves_durable_attempt_count() -> None:

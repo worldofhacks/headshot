@@ -3,8 +3,9 @@
 
 This is an acceptance probe for a deployed Runner. It never launches work, sends target traffic,
 or uses a fixture. It polls Langfuse through the authenticated Public API until every durable
-agent execution is query-visible with its typed agent/generation pair, native parentage, terminal
-latency, and exact recorded usage/cost, and every physical target request is query-visible with
+agent execution is query-visible with its typed agent/logical-runtime pair and native parentage,
+every durable provider invocation is query-visible as one cost-bearing physical generation, and
+every physical target request is query-visible with
 content-addressed request/response lineage under its same-attempt Red Team agent. It also proves
 the durable per-attempt Orchestrator -> Red Team -> Judge chain and one Judge -> Documentation
 chain per finding evidence link. It is read-only unless the operator explicitly supplies
@@ -33,6 +34,7 @@ _BASE_REQUIRED_ROLES = frozenset({"orchestrator", "red_team", "judge"})
 _DEPLOYED_ENVIRONMENTS = ("staging", "production")
 _OBSERVATION_FIELDS = "core,basic,io,usage,metadata,model"
 _MAX_OBSERVATION_PAGES = 100
+_PROVIDER_OBSERVATION_NAME = "provider.openrouter.attempt"
 
 
 def _database_url() -> str:
@@ -286,6 +288,139 @@ def _assert_durable_requests(rows: list[dict[str, Any]], *, trace_id: str) -> No
             row["response_sha256"] = hashlib.sha256(response).hexdigest()
 
 
+def _assert_durable_provider_attempts(
+    rows: list[dict[str, Any]],
+    *,
+    agent_rows: list[dict[str, Any]],
+) -> None:
+    """Reconcile append-only physical attempts with every logical hosted execution."""
+
+    agents_by_execution = {row["execution_id"]: row for row in agent_rows}
+    hosted_ids = {
+        row["execution_id"] for row in agent_rows if row["execution_mode"] == "hosted_advisory"
+    }
+    rows_by_execution: defaultdict[str, list[dict[str, Any]]] = defaultdict(list)
+    invocation_ids: set[str] = set()
+    event_ids: set[str] = set()
+    for row in rows:
+        invocation_id = row["invocation_id"]
+        event_id = row["event_id"]
+        execution_id = row["logical_execution_id"]
+        if invocation_id in invocation_ids:
+            raise AssertionError(f"{invocation_id}: durable provider invocation is duplicated")
+        invocation_ids.add(invocation_id)
+        if not isinstance(event_id, str) or not event_id:
+            raise AssertionError(f"{invocation_id}: durable provider invocation is not terminal")
+        if event_id in event_ids:
+            raise AssertionError(f"{event_id}: durable provider event is duplicated")
+        event_ids.add(event_id)
+        agent = agents_by_execution.get(execution_id)
+        if agent is None or execution_id not in hosted_ids:
+            raise AssertionError(
+                f"{invocation_id}: durable provider invocation has no hosted logical execution"
+            )
+        expected_identity = {
+            "organization_id": agent["organization_id"],
+            "campaign_run_id": agent["campaign_run_id"],
+            "campaign_attempt_id": agent["attempt_id"],
+            "parent_execution_id": agent["parent_execution_id"],
+            "agent_role": agent["agent_role"],
+            "requested_model": agent["model"],
+        }
+        for key, value in expected_identity.items():
+            if row[key] != value:
+                raise AssertionError(
+                    f"{invocation_id}: durable provider {key} differs from logical execution"
+                )
+        if row["event_invocation_id"] != invocation_id:
+            raise AssertionError(
+                f"{invocation_id}: durable provider event identity is inconsistent"
+            )
+        if row["event_physical_sequence"] != row["physical_sequence"]:
+            raise AssertionError(f"{invocation_id}: durable provider sequence is inconsistent")
+        rows_by_execution[execution_id].append(row)
+
+    for agent in agent_rows:
+        execution_id = agent["execution_id"]
+        physical_rows = rows_by_execution.get(execution_id, [])
+        if agent["execution_mode"] != "hosted_advisory":
+            if physical_rows:
+                raise AssertionError(
+                    f"{execution_id}: deterministic execution has physical provider attempts"
+                )
+            continue
+        expected_count = agent["physical_attempts"]
+        if (
+            isinstance(expected_count, bool)
+            or not isinstance(expected_count, int)
+            or expected_count < 1
+            or len(physical_rows) != expected_count
+        ):
+            raise AssertionError(
+                f"{execution_id}: physical provider attempt count does not reconcile"
+            )
+        physical_rows.sort(key=lambda item: item["physical_sequence"])
+        if [item["physical_sequence"] for item in physical_rows] != list(
+            range(1, expected_count + 1)
+        ):
+            raise AssertionError(f"{execution_id}: physical provider sequence is not contiguous")
+        if [item["event_id"] for item in physical_rows] != agent["provider_event_ids"]:
+            raise AssertionError(f"{execution_id}: provider event order does not reconcile")
+
+        observed_rows = [
+            item
+            for item in physical_rows
+            if all(
+                item[field] is not None
+                for field in ("input_tokens", "output_tokens", "reasoning_tokens")
+            )
+        ]
+        aggregate_tokens = {
+            field: (sum(int(item[field]) for item in observed_rows) if observed_rows else None)
+            for field in ("input_tokens", "output_tokens", "reasoning_tokens")
+        }
+        if any(agent[field] != value for field, value in aggregate_tokens.items()):
+            raise AssertionError(
+                f"{execution_id}: logical provider token projection does not reconcile"
+            )
+        measured_rows = [item for item in physical_rows if item["measured_cost_usd"] is not None]
+        aggregate_cost = (
+            sum(
+                (
+                    _decimal(
+                        item["measured_cost_usd"],
+                        label=f"{item['event_id']} durable provider cost",
+                    )
+                    for item in measured_rows
+                ),
+                Decimal(0),
+            )
+            if measured_rows
+            else None
+        )
+        recorded_cost = (
+            _decimal(agent["measured_cost"], label=f"{execution_id} logical provider cost")
+            if agent["measured_cost"] is not None
+            else None
+        )
+        if aggregate_cost != recorded_cost:
+            raise AssertionError(
+                f"{execution_id}: logical provider cost projection does not reconcile"
+            )
+        states = {str(item["cost_measurement_state"]) for item in physical_rows}
+        expected_cost_state = (
+            "measured"
+            if len(measured_rows) == len(physical_rows) and states == {"measured"}
+            else (
+                "partial"
+                if measured_rows
+                else ("invalid" if "invalid" in states else "not_observed")
+            )
+        )
+        if agent["cost_measurement_state"] != expected_cost_state:
+            raise AssertionError(f"{execution_id}: logical provider cost state does not reconcile")
+
+
 def _assert_canonical_causality(
     agent_rows: list[dict[str, Any]],
     request_rows: list[dict[str, Any]],
@@ -450,32 +585,25 @@ def _assert_metadata(
 
 def _assert_usage_and_cost(row: dict[str, Any], generation: Any) -> None:
     execution_id = row["execution_id"]
-    recorded_cost = _decimal(row["measured_cost"], label="recorded agent cost")
     remote_cost = _cost_value(generation)
     metadata = _metadata(generation)
 
     remote_tokens = {
         "input": _usage_value(generation, "input"),
         "output": _usage_value(generation, "output"),
+        "reasoning": _usage_value(generation, "reasoning"),
     }
     usage_total = _usage_value(generation, "total")
-    recorded_tokens = {
-        "input": row["input_tokens"],
-        "output": row["output_tokens"],
-    }
-    if remote_tokens != recorded_tokens:
-        raise AssertionError(f"{execution_id}: provider token usage does not reconcile")
-    if any(value is not None for value in remote_tokens.values()):
-        expected_total = sum(value or 0 for value in remote_tokens.values())
-        if usage_total != expected_total:
-            raise AssertionError(f"{execution_id}: total token usage does not reconcile")
-    elif usage_total is not None:
-        raise AssertionError(f"{execution_id}: unavailable token usage has a remote total")
-
     if row["execution_mode"] == "deterministic":
+        recorded_cost = _decimal(row["measured_cost"], label="recorded agent cost")
         if (
             recorded_cost != 0
-            or any(value is not None for value in recorded_tokens.values())
+            or any(
+                row[field] is not None
+                for field in ("input_tokens", "output_tokens", "reasoning_tokens")
+            )
+            or any(value is not None for value in remote_tokens.values())
+            or usage_total is not None
             or metadata.get("cost.source") != "deterministic_zero"
             or remote_cost != 0
         ):
@@ -484,14 +612,15 @@ def _assert_usage_and_cost(row: dict[str, Any], generation: Any) -> None:
             )
         return
 
-    if any(value is None for value in recorded_tokens.values()):
-        raise AssertionError(f"{execution_id}: hosted provider accounting is unavailable")
     if (
-        metadata.get("cost.source") != "provider_measured"
-        or remote_cost is None
-        or remote_cost != recorded_cost
+        any(value is not None for value in remote_tokens.values())
+        or usage_total is not None
+        or remote_cost is not None
+        or metadata.get("cost.source") != "provider_attempt_generations"
     ):
-        raise AssertionError(f"{execution_id}: hosted provider cost does not reconcile")
+        raise AssertionError(
+            f"{execution_id}: hosted logical runtime double-counts physical provider usage"
+        )
 
 
 def _assert_observations(
@@ -529,6 +658,8 @@ def _assert_observations(
             raise AssertionError(
                 f"Langfuse observation {observation_id} references an unknown execution"
             )
+        if _field(observation, "name") == _PROVIDER_OBSERVATION_NAME:
+            continue
         observations_by_execution[execution_id].append(observation)
 
     for row in rows:
@@ -609,6 +740,194 @@ def _assert_observations(
         if _field(generation, "provided_model_name", "providedModelName") != row["model"]:
             raise AssertionError(f"{execution_id}: runtime generation model does not reconcile")
         _assert_usage_and_cost(row, generation)
+
+
+def _assert_provider_observations(
+    rows: list[dict[str, Any]],
+    observations: list[Any],
+    *,
+    agent_rows: list[dict[str, Any]],
+    expected_environment: str,
+) -> None:
+    """Require one exact, redacted Langfuse generation per durable provider event."""
+
+    rows_by_invocation = {row["invocation_id"]: row for row in rows}
+    agents_by_execution = {row["execution_id"]: row for row in agent_rows}
+    remote_agents = {
+        _metadata(observation).get("agent.execution_id"): observation
+        for observation in observations
+        if _field(observation, "type") == "AGENT"
+        and isinstance(_metadata(observation).get("agent.execution_id"), str)
+    }
+    remote_by_invocation: dict[str, Any] = {}
+    for observation in observations:
+        metadata = _metadata(observation)
+        invocation_id = metadata.get("provider.invocation_id")
+        is_named_attempt = _field(observation, "name") == _PROVIDER_OBSERVATION_NAME
+        if not is_named_attempt and invocation_id not in rows_by_invocation:
+            continue
+        if (
+            not is_named_attempt
+            or _field(observation, "type") != "GENERATION"
+            or not isinstance(invocation_id, str)
+            or not invocation_id
+        ):
+            raise AssertionError("Langfuse provider attempt has an invalid type, name, or identity")
+        if invocation_id not in rows_by_invocation:
+            raise AssertionError(
+                f"Langfuse provider attempt references unknown invocation {invocation_id}"
+            )
+        if invocation_id in remote_by_invocation:
+            raise AssertionError(f"{invocation_id}: provider attempt observation is duplicated")
+        remote_by_invocation[invocation_id] = observation
+
+    if set(remote_by_invocation) != set(rows_by_invocation):
+        missing = sorted(set(rows_by_invocation) - set(remote_by_invocation))
+        raise AssertionError(
+            f"{len(missing)} durable provider attempt observation(s) are not query-visible"
+        )
+
+    for invocation_id, row in rows_by_invocation.items():
+        observation = remote_by_invocation[invocation_id]
+        execution_id = row["logical_execution_id"]
+        agent = agents_by_execution[execution_id]
+        expected_cost_source = {
+            "measured": "provider_measured",
+            "partial": "provider_partial_known",
+            "not_observed": "not_observed",
+            "invalid": "invalid",
+        }[row["cost_measurement_state"]]
+        expected_metadata = {
+            "deployment.environment": expected_environment,
+            "organization_id": row["organization_id"],
+            "campaign_run_id": row["campaign_run_id"],
+            "attempt_id": row["campaign_attempt_id"],
+            "parent_execution_id": row["parent_execution_id"],
+            "agent.execution_id": execution_id,
+            "agent.role": row["agent_role"],
+            "provider.name": "openrouter",
+            "provider.invocation_id": invocation_id,
+            "provider.event_id": row["event_id"],
+            "provider.physical_sequence": row["physical_sequence"],
+            "provider.retry_number": row["physical_sequence"] - 1,
+            "provider.is_retry": row["physical_sequence"] > 1,
+            "provider.requested_model": row["requested_model"],
+            "provider.returned_model": row["returned_model"],
+            "provider.configured_upstream": row["configured_upstream"],
+            "provider.served_upstream": row["upstream_provider"],
+            "provider.request_id": row["provider_request_id"],
+            "provider.prompt_version": row["prompt_version"],
+            "provider.prompt_sha256": row["prompt_sha256"],
+            "provider.configuration_set_sha256": row["configuration_set_sha256"],
+            "provider.role_configuration_sha256": row["role_configuration_sha256"],
+            "provider.generation_policy_sha256": row["generation_policy_sha256"],
+            "provider.status": row["status"],
+            "provider.error_code": row["error_code"],
+            "provider.duration_ms": None,
+            "cost.source": expected_cost_source,
+            "cost.measurement_state": row["cost_measurement_state"],
+            "cost.usd": None,
+        }
+        metadata = _metadata(observation)
+        if set(metadata) != set(expected_metadata):
+            raise AssertionError(f"{invocation_id}: provider metadata field set does not reconcile")
+        value_mismatches = sorted(
+            key
+            for key, expected in expected_metadata.items()
+            if key not in {"provider.duration_ms", "cost.usd"} and metadata.get(key) != expected
+        )
+        if value_mismatches:
+            raise AssertionError(
+                f"{invocation_id}: provider metadata does not reconcile: {value_mismatches}"
+            )
+        if _decimal(
+            metadata.get("provider.duration_ms"),
+            label=f"{invocation_id} Langfuse provider duration",
+        ) != _decimal(row["duration_ms"], label=f"{invocation_id} durable duration"):
+            raise AssertionError(f"{invocation_id}: provider duration does not reconcile")
+        expected_metadata_cost = (
+            _decimal(
+                row["measured_cost_usd"],
+                label=f"{invocation_id} durable provider cost",
+            )
+            if row["measured_cost_usd"] is not None
+            else None
+        )
+        remote_metadata_cost = (
+            _decimal(
+                metadata.get("cost.usd"),
+                label=f"{invocation_id} Langfuse provider metadata cost",
+            )
+            if metadata.get("cost.usd") is not None
+            else None
+        )
+        if remote_metadata_cost != expected_metadata_cost:
+            mismatched = sorted(key for key in ("cost.usd",) if metadata.get(key) is not None)
+            raise AssertionError(
+                f"{invocation_id}: provider metadata does not reconcile: {mismatched}"
+            )
+        _assert_observation_environment(
+            observation,
+            expected_environment=expected_environment,
+            observation_label=invocation_id,
+        )
+        if _field(observation, "trace_id", "traceId") != agent["trace_id"]:
+            raise AssertionError(f"{invocation_id}: provider attempt trace does not reconcile")
+        remote_agent = remote_agents.get(execution_id)
+        if remote_agent is None or _field(
+            observation,
+            "parent_observation_id",
+            "parentObservationId",
+        ) != _field(remote_agent, "id"):
+            raise AssertionError(
+                f"{invocation_id}: provider attempt is not a native child of its role agent"
+            )
+        if _field(observation, "end_time", "endTime") is None:
+            raise AssertionError(f"{invocation_id}: provider attempt observation is not terminal")
+        expected_status = row["error_code"] or row["status"]
+        if _field(observation, "status_message", "statusMessage") != expected_status:
+            raise AssertionError(f"{invocation_id}: provider terminal status does not reconcile")
+        expected_model = row["returned_model"] or row["requested_model"]
+        if _field(observation, "provided_model_name", "providedModelName") != expected_model:
+            raise AssertionError(f"{invocation_id}: provider model does not reconcile")
+        expected_input = {
+            "prompt_sha256": row["prompt_sha256"],
+            "configuration_set_sha256": row["configuration_set_sha256"],
+            "role_configuration_sha256": row["role_configuration_sha256"],
+            "generation_policy_sha256": row["generation_policy_sha256"],
+        }
+        if _structured_io(observation, "input") != expected_input:
+            raise AssertionError(f"{invocation_id}: provider input identities do not reconcile")
+        if _structured_io(observation, "output") != {"provider_event_id": row["event_id"]}:
+            raise AssertionError(f"{invocation_id}: provider output identity does not reconcile")
+
+        expected_usage = {
+            "input": row["input_tokens"],
+            "output": row["output_tokens"],
+            "reasoning": row["reasoning_tokens"],
+        }
+        remote_usage = {
+            key: _usage_value(observation, key) for key in ("input", "output", "reasoning")
+        }
+        if remote_usage != expected_usage:
+            raise AssertionError(f"{invocation_id}: provider token usage does not reconcile")
+        expected_total = (
+            sum(value for value in expected_usage.values() if value is not None)
+            if any(value is not None for value in expected_usage.values())
+            else None
+        )
+        if _usage_value(observation, "total") != expected_total:
+            raise AssertionError(f"{invocation_id}: provider total usage does not reconcile")
+        expected_cost = (
+            _decimal(
+                row["measured_cost_usd"],
+                label=f"{invocation_id} durable provider cost",
+            )
+            if row["measured_cost_usd"] is not None
+            else None
+        )
+        if _cost_value(observation) != expected_cost:
+            raise AssertionError(f"{invocation_id}: provider cost does not reconcile")
 
 
 def _assert_target_observations(
@@ -753,6 +1072,23 @@ def _exact_expected_ids(values: list[str], *, label: str) -> set[str]:
     return expected
 
 
+def _exact_provider_pairs(
+    values: list[tuple[str, str]],
+) -> set[tuple[str, str]]:
+    if any(
+        not isinstance(invocation_id, str)
+        or not invocation_id
+        or not isinstance(event_id, str)
+        or not event_id
+        for invocation_id, event_id in values
+    ):
+        raise AssertionError("provider invocation/event expected identities are invalid")
+    expected = set(values)
+    if len(expected) != len(values):
+        raise AssertionError("provider invocation/event expected identities are duplicated")
+    return expected
+
+
 def _record_queryback_verification(
     database_url: str,
     *,
@@ -760,6 +1096,7 @@ def _record_queryback_verification(
     campaign_run_id: str,
     agent_execution_ids: list[str],
     target_request_ids: list[str],
+    provider_invocation_event_ids: list[tuple[str, str]],
 ) -> None:
     """Atomically persist successful remote query-back for the exact durable rows."""
 
@@ -771,9 +1108,34 @@ def _record_queryback_verification(
         target_request_ids,
         label="target request",
     )
+    expected_provider_pairs = _exact_provider_pairs(provider_invocation_event_ids)
     engine = create_engine(database_url, pool_pre_ping=True)
     try:
         with engine.begin() as connection:
+            recorded_provider_pairs = set(
+                connection.execute(
+                    text(
+                        "SELECT i.invocation_id, e.event_id "
+                        "FROM provider_call_invocations i "
+                        "JOIN provider_call_events e "
+                        "ON e.organization_id = i.organization_id "
+                        "AND e.invocation_id = i.invocation_id "
+                        "WHERE i.organization_id = :org AND i.campaign_run_id = :run_id"
+                    ),
+                    {
+                        "org": organization_id,
+                        "run_id": campaign_run_id,
+                    },
+                ).tuples()
+            )
+            if recorded_provider_pairs != expected_provider_pairs:
+                missing = sorted(expected_provider_pairs - recorded_provider_pairs)
+                unexpected = sorted(recorded_provider_pairs - expected_provider_pairs)
+                raise AssertionError(
+                    "provider verification persistence binding did not match expected IDs: "
+                    f"missing={missing}, unexpected={unexpected}"
+                )
+
             recorded_agent_ids = set(
                 connection.execute(
                     text(
@@ -888,8 +1250,10 @@ def main() -> int:
                         "SELECT execution_id, organization_id, campaign_run_id, attempt_id, "
                         "parent_execution_id, agent_role, provider, model, execution_mode, "
                         "configuration_version, status, error_code, duration_ms, input_sha256, "
-                        "output_sha256, input_tokens, output_tokens, measured_cost, currency, "
-                        "trace_id, langfuse_status, langfuse_verified_at, detail "
+                        "output_sha256, input_tokens, output_tokens, reasoning_tokens, "
+                        "measured_cost, currency, trace_id, returned_model, upstream_provider, "
+                        "provider_request_id, physical_attempts, cost_measurement_state, "
+                        "provider_event_ids, langfuse_status, langfuse_verified_at, detail "
                         "FROM agent_executions WHERE organization_id = :org "
                         "AND campaign_run_id = :run_id ORDER BY id"
                     ),
@@ -954,6 +1318,37 @@ def main() -> int:
                 .mappings()
                 .all()
             ]
+            provider_rows = [
+                dict(row)
+                for row in connection.execute(
+                    text(
+                        "SELECT i.invocation_id, i.organization_id, i.campaign_run_id, "
+                        "i.campaign_attempt_id, i.logical_execution_id, "
+                        "i.parent_execution_id, i.agent_role, i.physical_sequence, "
+                        "i.requested_model, i.configured_upstream, i.prompt_version, "
+                        "i.prompt_sha256, i.configuration_set_sha256, "
+                        "i.role_configuration_sha256, i.generation_policy_sha256, "
+                        "i.started_at, e.event_id, e.invocation_id AS event_invocation_id, "
+                        "e.physical_sequence AS event_physical_sequence, e.status, "
+                        "e.returned_model, e.upstream_provider, e.provider_request_id, "
+                        "e.input_tokens, e.output_tokens, e.reasoning_tokens, "
+                        "e.cost_measurement_state, e.measured_cost_usd, e.error_code, "
+                        "e.finished_at, e.duration_ms "
+                        "FROM provider_call_invocations i "
+                        "LEFT JOIN provider_call_events e "
+                        "ON e.organization_id = i.organization_id "
+                        "AND e.invocation_id = i.invocation_id "
+                        "WHERE i.organization_id = :org AND i.campaign_run_id = :run_id "
+                        "ORDER BY i.logical_execution_id, i.physical_sequence"
+                    ),
+                    {
+                        "org": campaign["organization_id"],
+                        "run_id": args.campaign_run_id,
+                    },
+                )
+                .mappings()
+                .all()
+            ]
     finally:
         engine.dispose()
 
@@ -965,6 +1360,7 @@ def main() -> int:
             trace_id=trace_id,
         )
         _assert_durable_requests(request_rows, trace_id=trace_id)
+        _assert_durable_provider_attempts(provider_rows, agent_rows=rows)
         _assert_canonical_causality(rows, request_rows, finding_rows)
     except AssertionError as exc:
         raise SystemExit(str(exc)) from exc
@@ -980,6 +1376,12 @@ def main() -> int:
             _assert_observations(
                 rows,
                 observations,
+                expected_environment=args.expected_environment,
+            )
+            _assert_provider_observations(
+                provider_rows,
+                observations,
+                agent_rows=rows,
                 expected_environment=args.expected_environment,
             )
             _assert_target_observations(
@@ -1000,6 +1402,9 @@ def main() -> int:
                     campaign_run_id=args.campaign_run_id,
                     agent_execution_ids=[row["execution_id"] for row in rows],
                     target_request_ids=[row["request_id"] for row in request_rows],
+                    provider_invocation_event_ids=[
+                        (row["invocation_id"], row["event_id"]) for row in provider_rows
+                    ],
                 )
             except AssertionError as exc:
                 raise SystemExit(f"Langfuse verification persistence failed: {exc}") from exc
@@ -1015,6 +1420,7 @@ def main() -> int:
                     "trace_id": trace_id,
                     "agent_execution_count": len(rows),
                     "target_request_count": len(request_rows),
+                    "provider_attempt_count": len(provider_rows),
                     "roles": sorted(roles),
                     "langfuse_observation_count": len(observations),
                     "status": "observed",

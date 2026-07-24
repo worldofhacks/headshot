@@ -31,6 +31,7 @@ from agentforge.agents.hosted import (
 )
 from agentforge.agents.runtime import AgentRole
 from agentforge.providers.lineage import (
+    ProviderAttemptObserver,
     ProviderInvocationContextV1,
     ProviderLineageRecorder,
     ProviderLogicalContextV1,
@@ -398,6 +399,7 @@ class OpenRouterTransport:
         client: httpx.Client | None = None,
         ledger: HostedUsageLedger | None = None,
         lineage_recorder: ProviderLineageRecorder | None = None,
+        attempt_observer: ProviderAttemptObserver | None = None,
         sleeper: Callable[[float], None] = time.sleep,
         monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
@@ -414,6 +416,15 @@ class OpenRouterTransport:
         ):
             raise TypeError("provider lineage recorder is invalid")
         self._lineage_recorder = lineage_recorder
+        if attempt_observer is not None and (
+            not callable(getattr(attempt_observer, "begin_provider_attempt", None))
+            or not callable(getattr(attempt_observer, "finish_provider_attempt", None))
+        ):
+            raise TypeError("provider attempt observer is invalid")
+        if attempt_observer is not None and lineage_recorder is None:
+            raise TypeError("provider attempt observer requires durable lineage")
+        self._attempt_observer = attempt_observer
+        self._observed_invocation_ids: set[str] = set()
         self._sleeper = sleeper
         self._monotonic = monotonic
         self._last_request_at: float | None = None
@@ -524,6 +535,7 @@ class OpenRouterTransport:
                         sequence=attempt,
                     )
                     physical_attempts = attempt
+                    self._begin_attempt_observation(invocation)
                     result = self._send(
                         configuration=configuration,
                         credential=credential,
@@ -628,6 +640,23 @@ class OpenRouterTransport:
         ):
             raise HostedProviderError("physical provider invocation returned invalid identity")
         return invocation
+
+    def _begin_attempt_observation(
+        self,
+        invocation: ProviderInvocationContextV1 | None,
+    ) -> None:
+        if self._attempt_observer is None:
+            return
+        if invocation is None:
+            raise HostedProviderError("physical provider observation has no durable identity")
+        try:
+            self._attempt_observer.begin_provider_attempt(invocation)
+        except Exception as exc:
+            raise HostedProviderError(
+                "physical provider observation could not start",
+                physical_attempts=invocation.physical_sequence,
+            ) from exc
+        self._observed_invocation_ids.add(invocation.invocation_id)
 
     def _record_success(
         self,
@@ -751,6 +780,20 @@ class OpenRouterTransport:
                 "physical provider terminal recorder changed observed facts",
                 physical_attempts=invocation.physical_sequence,
             )
+        if (
+            self._attempt_observer is not None
+            and invocation.invocation_id in self._observed_invocation_ids
+        ):
+            self._observed_invocation_ids.discard(invocation.invocation_id)
+            try:
+                self._attempt_observer.finish_provider_attempt(invocation, event)
+            except Exception as exc:
+                # The provider send and durable terminal append already happened. Propagate out of
+                # the current attempt so the logical role fails, but never enter the retry loop.
+                raise HostedProviderError(
+                    "physical provider observation could not complete",
+                    physical_attempts=invocation.physical_sequence,
+                ) from exc
 
     def _pace(self, configuration: HostedRoleConfiguration) -> None:
         rate = min(

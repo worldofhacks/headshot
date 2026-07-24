@@ -2740,7 +2740,7 @@ def test_failed_logical_projection_preserves_192_character_returned_model(
     assert returned_model == "m" * 192
 
 
-def test_langfuse_generation_uses_returned_model_and_reasoning_usage(
+def test_hosted_logical_langfuse_generation_is_metadata_only(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     bridge = _LangfuseBridge()
@@ -2774,16 +2774,78 @@ def test_langfuse_generation_uses_returned_model_and_reasoning_usage(
         returned_model=_MODELS["judge"],
     )
 
-    assert generation.updated[0]["model"] == _MODELS["judge"]
-    assert generation.updated[0]["usage_details"] == {
+    assert "model" not in generation.updated[0]
+    assert "usage_details" not in generation.updated[0]
+    assert "cost_details" not in generation.updated[0]
+    assert generation.updated[0]["metadata"]["cost.source"] == "provider_attempt_generations"
+    assert generation.ended is True
+    assert client.agent.ended is True
+
+
+def test_langfuse_physical_generation_carries_native_usage_and_cost_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bridge = _LangfuseBridge()
+    client = _LangfuseClient()
+    bridge.client = client
+    monkeypatch.setattr(bridge, "configured", lambda: True)
+    agent_state = bridge.start_agent(
+        trace_id="a" * 32,
+        role="judge",
+        provider="openrouter",
+        model=_MODELS["judge"],
+        execution_mode="hosted_advisory",
+        version="1",
+        input_payload={"sha256": "b" * 64},
+        metadata={"agent.execution_id": "execution-physical"},
+    )
+    assert agent_state is not None
+    physical = bridge.start_provider_attempt(
+        agent_state,
+        model=_MODELS["judge"],
+        version="judge-v1",
+        input_payload={
+            "prompt_sha256": "c" * 64,
+            "configuration_set_sha256": "d" * 64,
+        },
+        metadata={
+            "agent.execution_id": "execution-physical",
+            "provider.invocation_id": "e" * 64,
+        },
+    )
+    bridge.finish_provider_attempt(
+        physical,
+        output={"provider_event_id": "f" * 64},
+        metadata={
+            "provider.status": "succeeded",
+            "cost.measurement_state": "measured",
+        },
+        error_code=None,
+        status="succeeded",
+        returned_model=_MODELS["judge"],
+        input_tokens=100,
+        output_tokens=30,
+        reasoning_tokens=9,
+        measured_cost=0.0125,
+        cost_measurement_state="measured",
+    )
+
+    physical_start = client.agent.started[1]
+    assert physical_start["name"] == "provider.openrouter.attempt"
+    assert physical_start["as_type"] == "generation"
+    assert physical_start["input"] == {
+        "prompt_sha256": "c" * 64,
+        "configuration_set_sha256": "d" * 64,
+    }
+    assert physical.updated[0]["model"] == _MODELS["judge"]
+    assert physical.updated[0]["usage_details"] == {
         "input": 100,
         "output": 30,
         "reasoning": 9,
         "total": 139,
     }
-    assert generation.updated[0]["cost_details"] == {"total": 0.0125}
-    assert generation.ended is True
-    assert client.agent.ended is True
+    assert physical.updated[0]["cost_details"] == {"total": 0.0125}
+    assert physical.ended is True
 
 
 def test_langfuse_generation_does_not_invent_unobserved_zero_cost(
@@ -2822,6 +2884,6 @@ def test_langfuse_generation_does_not_invent_unobserved_zero_cost(
 
     assert "cost_details" not in generation.updated[0]
     metadata = generation.updated[0]["metadata"]
-    assert metadata["cost.source"] == "unavailable"
+    assert metadata["cost.source"] == "provider_attempt_generations"
     assert metadata["cost.measurement_state"] == "not_observed"
     assert metadata["agent.provider_event_ids"] == ["d" * 64]

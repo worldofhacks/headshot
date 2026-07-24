@@ -1437,6 +1437,7 @@ class DurableCampaignRunner:
                     generation_policy=prepared.hosted.generation_policy,
                 ),
                 lineage_recorder=self.store,
+                attempt_observer=self.telemetry,
                 sleeper=self.sleeper,
             )
             hosted_runtime = HostedRoleRuntime(

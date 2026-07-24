@@ -2,10 +2,18 @@
 
 from __future__ import annotations
 
+import datetime
+import hashlib
+from decimal import Decimal
+
 import pytest
 from sqlalchemy import Engine, text
 
 from agentforge.control_plane.store import ControlPlaneStore
+from agentforge.providers.lineage import (
+    ProviderInvocationContextV1,
+    ProviderTerminalEventV1,
+)
 from agentforge.secrets import Secret
 from agentforge.target.base import TargetRequest
 from agentforge.target.openemr_adapter import OpenEmrAdapter
@@ -37,6 +45,8 @@ class _Langfuse:
         self.finished: list[dict] = []
         self.agent_started: list[dict] = []
         self.agent_finished: list[dict] = []
+        self.provider_started: list[dict] = []
+        self.provider_finished: list[dict] = []
         self.flushed = False
 
     @staticmethod
@@ -62,6 +72,14 @@ class _Langfuse:
     def finish_agent(self, _state, **values) -> None:
         self.agent_finished.append(values)
 
+    def start_provider_attempt(self, _agent_state, **values):
+        self.provider_started.append(values)
+        return _FakeObservation()
+
+    def finish_provider_attempt(self, state, **values) -> None:
+        self.provider_finished.append(values)
+        state.update(**values).end()
+
     def flush(self) -> None:
         self.flushed = True
 
@@ -73,6 +91,19 @@ class _DisabledLangfuse(_Langfuse):
     @staticmethod
     def configured() -> bool:
         return False
+
+
+class _FakeObservation:
+    def __init__(self) -> None:
+        self.updated: list[dict] = []
+        self.ended = False
+
+    def update(self, **values):
+        self.updated.append(values)
+        return self
+
+    def end(self) -> None:
+        self.ended = True
 
 
 class _TransientReadFailureEngine:
@@ -251,6 +282,84 @@ def test_target_projection_uses_postgres_canonical_duration_and_cost(
     assert langfuse.started[0]["metadata"]["cost.usd"] == canonical_cost
     assert langfuse.finished[0]["measured_cost"] == canonical_cost
     assert langfuse.finished[0]["metadata"]["duration_ms"] == canonical_duration
+
+
+def test_physical_provider_projection_is_identity_only_and_cost_bearing_once(
+    migrated_db: Engine,
+) -> None:
+    organization_id, run_id = _seed_campaign(migrated_db, suffix="provider-attempt-redaction")
+    store = ControlPlaneStore(migrated_db, environment="staging")
+    raw_input = "raw-model-prompt-that-must-not-be-projected"
+    execution_id = store.start_agent_execution(
+        run_id=run_id,
+        agent_role="judge",
+        input_payload={"prompt": raw_input},
+    )
+    telemetry = OutboundHttpTelemetry(migrated_db, environment="staging")
+    langfuse = _Langfuse()
+    telemetry.langfuse = langfuse  # type: ignore[assignment]
+    assert telemetry.begin_agent(
+        execution_id=execution_id,
+        input_payload={"prompt": raw_input},
+    )
+
+    started_at = datetime.datetime.now(datetime.UTC)
+    invocation = ProviderInvocationContextV1(
+        invocation_id="1" * 64,
+        organization_id=organization_id,
+        campaign_run_id=run_id,
+        campaign_attempt_id=None,
+        logical_execution_id=execution_id,
+        parent_execution_id=None,
+        agent_role="judge",
+        physical_sequence=1,
+        idempotency_key=f"provider-call:{'1' * 64}",
+        requested_model="provider/model",
+        configured_upstream="google-vertex/global",
+        prompt_version="judge-v1",
+        prompt_sha256="2" * 64,
+        configuration_set_sha256="3" * 64,
+        role_configuration_sha256="4" * 64,
+        generation_policy_sha256="5" * 64,
+        started_at=started_at,
+    )
+    telemetry.begin_provider_attempt(invocation)
+    event = ProviderTerminalEventV1(
+        invocation_id=invocation.invocation_id,
+        physical_sequence=1,
+        status="succeeded",
+        returned_model=invocation.requested_model,
+        upstream_provider="Google",
+        provider_request_id="provider-request-redacted",
+        input_tokens=100,
+        output_tokens=20,
+        reasoning_tokens=5,
+        cost_measurement_state="measured",
+        measured_cost_usd=Decimal("0.00125"),
+        error_code=None,
+        finished_at=started_at + datetime.timedelta(milliseconds=12.5),
+        event_id="6" * 64,
+    )
+    telemetry.finish_provider_attempt(invocation, event)
+
+    started = langfuse.provider_started[0]
+    finished = langfuse.provider_finished[0]
+    assert started["input_payload"] == {
+        "prompt_sha256": invocation.prompt_sha256,
+        "configuration_set_sha256": invocation.configuration_set_sha256,
+        "role_configuration_sha256": invocation.role_configuration_sha256,
+        "generation_policy_sha256": invocation.generation_policy_sha256,
+    }
+    assert set(finished["output"]) == {"provider_event_id"}
+    assert finished["input_tokens"] == 100
+    assert finished["output_tokens"] == 20
+    assert finished["reasoning_tokens"] == 5
+    assert finished["measured_cost"] == 0.00125
+    assert finished["metadata"]["provider.duration_ms"] == "12.5"
+    assert raw_input not in repr(langfuse.agent_started)
+    assert raw_input not in repr(langfuse.provider_started)
+    assert raw_input not in repr(langfuse.provider_finished)
+    assert hashlib.sha256(raw_input.encode()).hexdigest() not in repr(langfuse.provider_started)
 
 
 def test_many_requests_share_one_campaign_trace_and_reconcile_individually(

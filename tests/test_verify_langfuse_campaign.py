@@ -20,9 +20,11 @@ _VERIFIER = runpy.run_path(
 _OBSERVATION_FIELDS = _VERIFIER["_OBSERVATION_FIELDS"]
 _assert_canonical_causality = _VERIFIER["_assert_canonical_causality"]
 _assert_durable_campaign = _VERIFIER["_assert_durable_campaign"]
+_assert_durable_provider_attempts = _VERIFIER["_assert_durable_provider_attempts"]
 _assert_durable_requests = _VERIFIER["_assert_durable_requests"]
 _assert_environment_binding = _VERIFIER["_assert_environment_binding"]
 _assert_observations = _VERIFIER["_assert_observations"]
+_assert_provider_observations = _VERIFIER["_assert_provider_observations"]
 _assert_target_observations = _VERIFIER["_assert_target_observations"]
 _main = _VERIFIER["main"]
 _payload_digest = _VERIFIER["_payload_digest"]
@@ -41,6 +43,7 @@ def _durable_row(
     execution_mode: str = "deterministic",
     input_tokens: int | None = None,
     output_tokens: int | None = None,
+    reasoning_tokens: int | None = None,
     measured_cost: str = "0",
     detail: dict[str, Any] | None = None,
     langfuse_status: str = "queued",
@@ -64,7 +67,11 @@ def _durable_row(
         "output_sha256": "b" * 64,
         "input_tokens": input_tokens,
         "output_tokens": output_tokens,
+        "reasoning_tokens": reasoning_tokens,
         "measured_cost": Decimal(measured_cost),
+        "cost_measurement_state": "measured",
+        "physical_attempts": 1 if hosted else None,
+        "provider_event_ids": ["e" * 64] if hosted else [],
         "currency": "USD",
         "trace_id": _TRACE_ID,
         "langfuse_status": langfuse_status,
@@ -83,6 +90,7 @@ def _base_rows() -> list[dict[str, Any]]:
             execution_mode="hosted_advisory",
             input_tokens=101,
             output_tokens=23,
+            reasoning_tokens=0,
             measured_cost="0.0042",
         ),
         _durable_row(
@@ -112,24 +120,13 @@ def _observation_pair(row: dict[str, Any]) -> list[dict[str, Any]]:
         "agent.status": row["status"],
         "agent.duration_ms": float(row["duration_ms"]),
     }
-    recorded_usage = row["input_tokens"] is not None or row["output_tokens"] is not None
-    measured = row["measured_cost"] > 0 or recorded_usage
     if row["execution_mode"] == "deterministic":
         cost_source = "deterministic_zero"
         cost_details: dict[str, float] | None = {"total": 0.0}
-    elif measured:
-        cost_source = "provider_measured"
-        cost_details = {"total": float(row["measured_cost"])}
     else:
-        cost_source = "unavailable"
+        cost_source = "provider_attempt_generations"
         cost_details = None
     usage_details = None
-    if recorded_usage:
-        usage_details = {
-            "input": row["input_tokens"],
-            "output": row["output_tokens"],
-            "total": (row["input_tokens"] or 0) + (row["output_tokens"] or 0),
-        }
     status_message = row["error_code"] or row["status"]
     return [
         {
@@ -170,6 +167,101 @@ def _observation_pair(row: dict[str, Any]) -> list[dict[str, Any]]:
 
 def _observations(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [observation for row in rows for observation in _observation_pair(row)]
+
+
+def _provider_row(agent: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "invocation_id": "1" * 64,
+        "organization_id": agent["organization_id"],
+        "campaign_run_id": agent["campaign_run_id"],
+        "campaign_attempt_id": agent["attempt_id"],
+        "logical_execution_id": agent["execution_id"],
+        "parent_execution_id": agent["parent_execution_id"],
+        "agent_role": agent["agent_role"],
+        "physical_sequence": 1,
+        "requested_model": agent["model"],
+        "configured_upstream": "atlas-cloud/fp8",
+        "prompt_version": "red-team-v1",
+        "prompt_sha256": "2" * 64,
+        "configuration_set_sha256": "3" * 64,
+        "role_configuration_sha256": "4" * 64,
+        "generation_policy_sha256": "5" * 64,
+        "started_at": "2026-07-24T12:00:00Z",
+        "event_id": agent["provider_event_ids"][0],
+        "event_invocation_id": "1" * 64,
+        "event_physical_sequence": 1,
+        "status": "succeeded",
+        "returned_model": agent["model"],
+        "upstream_provider": "AtlasCloud",
+        "provider_request_id": "provider-request-live",
+        "input_tokens": agent["input_tokens"],
+        "output_tokens": agent["output_tokens"],
+        "reasoning_tokens": agent["reasoning_tokens"],
+        "cost_measurement_state": "measured",
+        "measured_cost_usd": agent["measured_cost"],
+        "error_code": None,
+        "finished_at": "2026-07-24T12:00:00.005250Z",
+        "duration_ms": Decimal("5.250000"),
+    }
+
+
+def _provider_observation(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": "observation-provider-attempt",
+        "trace_id": _TRACE_ID,
+        "parent_observation_id": f"observation-agent-{row['logical_execution_id']}",
+        "type": "GENERATION",
+        "name": "provider.openrouter.attempt",
+        "environment": "production",
+        "end_time": "2026-07-24T12:00:00.005250Z",
+        "status_message": row["status"],
+        "provided_model_name": row["returned_model"],
+        "input": {
+            "prompt_sha256": row["prompt_sha256"],
+            "configuration_set_sha256": row["configuration_set_sha256"],
+            "role_configuration_sha256": row["role_configuration_sha256"],
+            "generation_policy_sha256": row["generation_policy_sha256"],
+        },
+        "output": {"provider_event_id": row["event_id"]},
+        "usage_details": {
+            "input": row["input_tokens"],
+            "output": row["output_tokens"],
+            "reasoning": row["reasoning_tokens"],
+            "total": row["input_tokens"] + row["output_tokens"] + row["reasoning_tokens"],
+        },
+        "cost_details": {"total": float(row["measured_cost_usd"])},
+        "metadata": {
+            "deployment.environment": "production",
+            "organization_id": row["organization_id"],
+            "campaign_run_id": row["campaign_run_id"],
+            "attempt_id": row["campaign_attempt_id"],
+            "parent_execution_id": row["parent_execution_id"],
+            "agent.execution_id": row["logical_execution_id"],
+            "agent.role": row["agent_role"],
+            "provider.name": "openrouter",
+            "provider.invocation_id": row["invocation_id"],
+            "provider.event_id": row["event_id"],
+            "provider.physical_sequence": row["physical_sequence"],
+            "provider.retry_number": 0,
+            "provider.is_retry": False,
+            "provider.requested_model": row["requested_model"],
+            "provider.returned_model": row["returned_model"],
+            "provider.configured_upstream": row["configured_upstream"],
+            "provider.served_upstream": row["upstream_provider"],
+            "provider.request_id": row["provider_request_id"],
+            "provider.prompt_version": row["prompt_version"],
+            "provider.prompt_sha256": row["prompt_sha256"],
+            "provider.configuration_set_sha256": row["configuration_set_sha256"],
+            "provider.role_configuration_sha256": row["role_configuration_sha256"],
+            "provider.generation_policy_sha256": row["generation_policy_sha256"],
+            "provider.status": row["status"],
+            "provider.error_code": row["error_code"],
+            "provider.duration_ms": "5.25",
+            "cost.source": "provider_measured",
+            "cost.measurement_state": row["cost_measurement_state"],
+            "cost.usd": "0.0042",
+        },
+    }
 
 
 def _target_row() -> dict[str, Any]:
@@ -387,6 +479,7 @@ def test_record_queryback_verification_is_atomic_exact_and_idempotent(
             campaign_run_id=campaign_run_id,
             agent_execution_ids=[execution_id],
             target_request_ids=[request_id],
+            provider_invocation_event_ids=[],
         )
         with migrated_db.connect() as connection:
             first_agent_state = connection.execute(
@@ -416,6 +509,7 @@ def test_record_queryback_verification_is_atomic_exact_and_idempotent(
             campaign_run_id=campaign_run_id,
             agent_execution_ids=[execution_id],
             target_request_ids=[request_id],
+            provider_invocation_event_ids=[],
         )
         with migrated_db.connect() as connection:
             assert (
@@ -472,6 +566,7 @@ def test_record_queryback_verification_rolls_back_both_tables_on_mismatch(
                 campaign_run_id=campaign_run_id,
                 agent_execution_ids=[execution_id],
                 target_request_ids=[request_id],
+                provider_invocation_event_ids=[],
             )
         with migrated_db.connect() as connection:
             assert (
@@ -709,6 +804,88 @@ def test_target_request_query_back_reconciles_one_for_one() -> None:
         agent_rows=_base_rows(),
         expected_environment=_EXPECTED_ENVIRONMENT,
     )
+
+
+def test_provider_attempt_query_back_reconciles_exact_physical_generation() -> None:
+    rows = _base_rows()
+    provider = _provider_row(rows[1])
+    _assert_durable_provider_attempts([provider], agent_rows=rows)
+    observations = [*_observations(rows), _provider_observation(provider)]
+
+    _assert_observations(
+        rows,
+        observations,
+        expected_environment=_EXPECTED_ENVIRONMENT,
+    )
+    _assert_provider_observations(
+        [provider],
+        observations,
+        agent_rows=rows,
+        expected_environment=_EXPECTED_ENVIRONMENT,
+    )
+
+
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    [
+        (
+            lambda observation: observation["metadata"].update(
+                {"provider.request_id": "wrong-request"}
+            ),
+            "provider metadata does not reconcile",
+        ),
+        (
+            lambda observation: observation["usage_details"].update({"input": 999}),
+            "provider token usage does not reconcile",
+        ),
+        (
+            lambda observation: observation.update({"parent_observation_id": "wrong-parent"}),
+            "native child of its role agent",
+        ),
+        (
+            lambda observation: observation["metadata"].update(
+                {"raw_prompt": "must never be present"}
+            ),
+            "metadata field set does not reconcile",
+        ),
+    ],
+)
+def test_provider_attempt_query_back_rejects_mismatch_and_content_fields(
+    mutate: Any,
+    message: str,
+) -> None:
+    rows = _base_rows()
+    provider = _provider_row(rows[1])
+    observation = _provider_observation(provider)
+    mutate(observation)
+
+    with pytest.raises(AssertionError, match=message):
+        _assert_provider_observations(
+            [provider],
+            [*_observations(rows), observation],
+            agent_rows=rows,
+            expected_environment=_EXPECTED_ENVIRONMENT,
+        )
+
+
+def test_hosted_logical_runtime_rejects_double_counted_provider_usage() -> None:
+    rows = _base_rows()
+    observations = _observations(rows)
+    hosted_runtime = observations[3]
+    hosted_runtime["usage_details"] = {
+        "input": 101,
+        "output": 23,
+        "reasoning": 0,
+        "total": 124,
+    }
+    hosted_runtime["cost_details"] = {"total": 0.0042}
+
+    with pytest.raises(AssertionError, match="double-counts physical provider usage"):
+        _assert_observations(
+            rows,
+            observations,
+            expected_environment=_EXPECTED_ENVIRONMENT,
+        )
 
 
 def test_query_back_accepts_v2_json_text_io_without_weakening_exactness() -> None:
@@ -982,8 +1159,13 @@ def test_token_and_cost_semantics_fail_closed() -> None:
     rows = _base_rows()
 
     observations = _observations(rows)
-    observations[3]["usage_details"]["output"] += 1
-    with pytest.raises(AssertionError, match="token usage does not reconcile"):
+    observations[3]["usage_details"] = {
+        "input": 101,
+        "output": 23,
+        "reasoning": 0,
+        "total": 124,
+    }
+    with pytest.raises(AssertionError, match="double-counts physical provider usage"):
         _assert_observations(
             rows,
             observations,
@@ -991,17 +1173,8 @@ def test_token_and_cost_semantics_fail_closed() -> None:
         )
 
     observations = _observations(rows)
-    observations[3]["usage_details"]["total"] += 1
-    with pytest.raises(AssertionError, match="total token usage does not reconcile"):
-        _assert_observations(
-            rows,
-            observations,
-            expected_environment=_EXPECTED_ENVIRONMENT,
-        )
-
-    observations = _observations(rows)
-    observations[3]["cost_details"]["total"] += 0.01
-    with pytest.raises(AssertionError, match="hosted provider cost does not reconcile"):
+    observations[3]["cost_details"] = {"total": 0.0042}
+    with pytest.raises(AssertionError, match="double-counts physical provider usage"):
         _assert_observations(
             rows,
             observations,
@@ -1013,12 +1186,8 @@ def test_token_and_cost_semantics_fail_closed() -> None:
         "execution-documentation",
         execution_mode="hosted_advisory",
     )
-    with pytest.raises(AssertionError, match="hosted provider accounting is unavailable"):
-        _assert_observations(
-            [unavailable],
-            _observation_pair(unavailable),
-            expected_environment=_EXPECTED_ENVIRONMENT,
-        )
+    with pytest.raises(AssertionError, match="physical provider attempt count"):
+        _assert_durable_provider_attempts([], agent_rows=[unavailable])
 
     deterministic = _durable_row("judge", "execution-judge", measured_cost="0.01")
     with pytest.raises(AssertionError, match="deterministic zero-cost accounting"):
