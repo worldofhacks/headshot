@@ -50,11 +50,11 @@ def test_current_deterministic_judge_is_measured_and_fails_non_oracle_gate() -> 
     assert is_valid("judge_calibration", result)
     assert result["state"] == "failed"
     assert result["runtime_enabled"] is False
-    assert result["metrics"]["sample_count"] == 15
-    assert result["metrics"]["agreement_count"] == 9
-    assert result["metrics"]["false_negative_count"] == 3
+    assert result["metrics"]["sample_count"] == 30
+    assert result["metrics"]["agreement_count"] == 18
+    assert result["metrics"]["false_negative_count"] == 6
     assert result["metrics"]["false_positive_count"] == 0
-    assert result["metrics"]["abstention_count"] == 9
+    assert result["metrics"]["abstention_count"] == 18
     assert "false_negative_rate_exceeded" in result["reason_codes"]
 
 

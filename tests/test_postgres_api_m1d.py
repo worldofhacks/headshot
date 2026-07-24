@@ -16,6 +16,7 @@ from agentforge.auth.dependencies import get_clerk_auth_config, require_authenti
 from agentforge.auth.principal import Principal
 from agentforge.campaign.corpus import load_full_scan_corpus
 from agentforge.control_plane import ControlPlaneStore
+from agentforge.correlation import campaign_trace_id
 from agentforge.security_tools.repository import SecurityToolEvidenceRepository
 from agentforge.target.spec import TargetLifecycle
 from agentforge.web import WebSecurityConfig, create_web_app
@@ -833,7 +834,12 @@ def _seed_run_summary(engine: Engine, org_id: str, run_id: str) -> None:
                 "request": f"req-{run_id}",
                 "org": org_id,
                 "hash": "b" * 64,
-                "payload": json.dumps({"caps": {"budget_usd": 2}}),
+                "payload": json.dumps(
+                    {
+                        "caps": {"budget_usd": 2},
+                        "execution_profile": "synthetic",
+                    }
+                ),
                 "launcher": LAUNCHER_ID,
                 "session": "sess_M1dApiLauncher",
             },
@@ -886,6 +892,96 @@ def _seed_trace(engine: Engine, org_id: str, run_id: str, attempt_id: str, trace
             ),
             {"state": "NO_EXPLOIT_OBSERVED", "run": run_id, "att": attempt_id, "org": org_id},
         )
+
+
+def _seed_agent_observations(engine: Engine, org_id: str, run_id: str) -> None:
+    roles = ("orchestrator", "red_team", "judge", "documentation")
+    delivery = ("exported", "queued", "error", "disabled")
+    parent: str | None = None
+    trace_id = campaign_trace_id(run_id)
+    with engine.begin() as connection:
+        connection.execute(text("SET LOCAL session_replication_role = replica"))
+        for index, (role, langfuse_status) in enumerate(zip(roles, delivery, strict=True), start=1):
+            execution_id = f"agent-observation-{role}"
+            connection.execute(
+                text(
+                    "INSERT INTO agent_executions "
+                    "(execution_id, organization_id, campaign_run_id, attempt_id, "
+                    "parent_execution_id, agent_role, status, provider, model, execution_mode, "
+                    "configuration_version, input_sha256, output_sha256, input_tokens, "
+                    "output_tokens, measured_cost, trace_id, langfuse_status, detail, "
+                    "started_at, finished_at, duration_ms) VALUES "
+                    "(:execution, :org, :run, :attempt, :parent, :role, 'succeeded', "
+                    "'headshot', :model, 'deterministic', 1, :input_hash, :output_hash, "
+                    ":input_tokens, :output_tokens, :cost, :trace, :langfuse_status, "
+                    "'{}'::jsonb, TIMESTAMPTZ '2026-07-21 10:00:00+00' + "
+                    ":index * INTERVAL '1 second', "
+                    "TIMESTAMPTZ '2026-07-21 10:00:01+00' + :index * INTERVAL '1 second', "
+                    ":duration_ms)"
+                ),
+                {
+                    "execution": execution_id,
+                    "org": org_id,
+                    "run": run_id,
+                    "attempt": f"agent-attempt-{index}",
+                    "parent": parent,
+                    "role": role,
+                    "model": f"{role}-engine-v1",
+                    "input_hash": f"{index:x}" * 64,
+                    "output_hash": f"{index + 4:x}" * 64,
+                    "input_tokens": index * 100,
+                    "output_tokens": index * 10,
+                    "cost": index / 100,
+                    "trace": trace_id,
+                    "langfuse_status": langfuse_status,
+                    "index": index,
+                    "duration_ms": index * 25,
+                },
+            )
+            parent = execution_id
+
+
+def test_agent_observability_reconciles_agents_costs_and_traces(
+    migrated_db: Engine,
+) -> None:
+    org_id = "org_M1dAgentObservability"
+    run_id = "run-agent-observability-0001"
+    _seed_run_summary(migrated_db, org_id, run_id)
+    _seed_agent_observations(migrated_db, org_id, run_id)
+    client = TestClient(_app_for(migrated_db, _reader(org_id)))
+
+    agents = client.get("/api/v1/agents").json()
+    costs = client.get("/api/v1/costs").json()
+    traces = client.get("/api/v1/traces").json()
+
+    assert agents["state"] == costs["state"] == traces["state"] == "ready"
+    agents_by_role = {row["role"]: row for row in agents["data"]}
+    assert agents_by_role["orchestrator"]["p50_duration_ms"] == 25.0
+    assert agents_by_role["documentation"]["p95_duration_ms"] == 100.0
+    assert agents_by_role["orchestrator"]["langfuse_exported_count"] == 1
+    assert agents_by_role["red_team"]["langfuse_queued_count"] == 1
+    assert agents_by_role["judge"]["langfuse_error_count"] == 1
+    assert agents_by_role["documentation"]["langfuse_disabled_count"] == 1
+    assert agents_by_role["documentation"]["input_tokens"] == 400
+    assert agents_by_role["documentation"]["measured_cost"] == 0.04
+
+    agent_costs = [row for row in costs["data"] if row["record_kind"] == "agent"]
+    assert len(agent_costs) == 4
+    documentation_cost = next(
+        row for row in agent_costs if row["agent_role"] == "documentation"
+    )
+    assert documentation_cost["measured_cost"] == 0.04
+    assert documentation_cost["input_tokens"] == 400
+    assert documentation_cost["output_tokens"] == 40
+
+    agent_traces = [row for row in traces["data"] if row["agent_role"] is not None]
+    assert len(agent_traces) == 4
+    red_team_trace = next(row for row in agent_traces if row["agent_role"] == "red_team")
+    assert red_team_trace["parent_execution_id"] == "agent-observation-orchestrator"
+    assert red_team_trace["duration_ms"] == 50.0
+    assert red_team_trace["measured_cost"] == 0.02
+    assert red_team_trace["input_tokens"] == 200
+    assert red_team_trace["langfuse_status"] == "queued"
 
 
 def test_costs_projection_is_empty_for_org_without_persisted_summaries(

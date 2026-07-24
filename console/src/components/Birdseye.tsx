@@ -53,6 +53,21 @@ const age = (seconds: number | null) => {
 const latency = (value: number | null) =>
   value === null ? "Not observed" : `${value.toFixed(1)} ms`;
 
+const langfuseDelivery = (node: BirdseyeNodeReadModel) => {
+  if (node.execution_count === null || node.execution_count === 0) return "Not observed";
+  const states = [
+    ["submitted", node.langfuse_exported_count],
+    ["queued", node.langfuse_queued_count],
+    ["error", node.langfuse_error_count],
+    ["disabled", node.langfuse_disabled_count],
+    ["not attempted", node.langfuse_not_attempted_count],
+  ] as const;
+  return states
+    .filter(([, value]) => value !== null && value > 0)
+    .map(([label, value]) => `${value} ${label}`)
+    .join(" · ");
+};
+
 const humanize = (value: string) =>
   value
     .replaceAll("_", " ")
@@ -515,13 +530,16 @@ function NodeInspector({ node }: { node: BirdseyeNodeReadModel | null }) {
               </dd>
             </div>
             <div>
-              <dt>Langfuse delivery</dt>
+              <dt>Input / output tokens</dt>
               <dd className="mono">
-                {node.langfuse_status ?? "Not observed"}
-                {node.langfuse_exported_count === null
-                  ? ""
-                  : ` · ${node.langfuse_exported_count}/${node.execution_count} submitted`}
+                {node.token_observation_count
+                  ? `${count(node.input_tokens ?? 0)} / ${count(node.output_tokens ?? 0)} · ${node.token_observation_count} observation(s)`
+                  : "Not reported"}
               </dd>
+            </div>
+            <div>
+              <dt>Langfuse delivery</dt>
+              <dd className="mono">{langfuseDelivery(node)}</dd>
             </div>
           </>
         )}

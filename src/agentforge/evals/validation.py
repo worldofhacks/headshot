@@ -156,6 +156,12 @@ CATEGORY_SUBCATEGORIES: dict[str, frozenset[str]] = {
         {"privilege_escalation", "persona_hijacking", "trust_boundary_violation"}
     ),
 }
+REQUIRED_PRD_CATEGORIES = frozenset(CATEGORY_SUBCATEGORIES)
+REQUIRED_OWASP_LLM_IDS = frozenset(
+    identifier
+    for framework, version, identifier in OWASP_NAMES
+    if framework == "OWASP LLM" and version == "2025"
+)
 
 REQUIRED_AUTH_CONTROLS = frozenset(
     {
@@ -761,7 +767,13 @@ def _oracle_issues(payload: Mapping[str, Any], *, source: str | Path) -> list[Ev
             and canary_ref.startswith("SYNTH_CANARY_")
             and live_provisioning in {"pending_authorization", "unavailable"}
         )
-    elif kind in {"forbidden_tool_call", "patient_scope_violation"}:
+    elif kind in {
+        "forbidden_tool_call",
+        "patient_scope_violation",
+        "state_integrity_violation",
+        "resource_limit_violation",
+        "identity_role_violation",
+    }:
         valid = (
             availability in {"local_fixture_only", "pending_runtime"}
             and deterministic is True
@@ -1683,10 +1695,14 @@ def validate_corpus(root: Path) -> CorpusSummary:
 
     seed_files, seed_load_issues = _load_directory(root / "seeds")
     issues.extend(seed_load_issues)
+    draft_files, draft_load_issues = _load_directory(root / "drafts")
+    issues.extend(draft_load_issues)
     cases: list[Mapping[str, Any]] = []
     case_index: dict[str, Mapping[str, Any]] = {}
     categories: set[str] = set()
-    for path, case in seed_files:
+    subcategories_by_category: dict[str, set[str]] = {}
+    llm_mappings: set[str] = set()
+    for path, case in (*seed_files, *draft_files):
         issues.extend(
             _collect_validation(
                 validate_attack_case,
@@ -1706,6 +1722,19 @@ def validate_corpus(root: Path) -> CorpusSummary:
                 case_index[case_id] = case
             if isinstance(category, str):
                 categories.add(category)
+                subcategory = case.get("subcategory")
+                if isinstance(subcategory, str):
+                    subcategories_by_category.setdefault(category, set()).add(subcategory)
+                tags = case.get("owasp")
+                if isinstance(tags, list):
+                    llm_mappings.update(
+                        tag["id"]
+                        for tag in tags
+                        if isinstance(tag, Mapping)
+                        and tag.get("framework") == "OWASP LLM"
+                        and tag.get("version") == "2025"
+                        and isinstance(tag.get("id"), str)
+                    )
     issues.extend(detect_duplicate_sequences(cases))
 
     slice_files, slice_load_issues = _load_directory(root / "ground-truth")
@@ -1814,6 +1843,9 @@ def validate_corpus(root: Path) -> CorpusSummary:
                         elif expectation_kind in {
                             "forbidden_tool_call",
                             "patient_scope_violation",
+                            "state_integrity_violation",
+                            "resource_limit_violation",
+                            "identity_role_violation",
                         }:
                             allowed_signal_field = "oracle_results"
                         for field, expected_field in (
@@ -1855,16 +1887,42 @@ def validate_corpus(root: Path) -> CorpusSummary:
                                         )
                                     )
 
-    if len(categories) < 3:
+    missing_categories = sorted(REQUIRED_PRD_CATEGORIES - categories)
+    if missing_categories:
         issues.append(
             _issue(
                 EvalValidationCode.COVERAGE_INCOMPLETE,
                 root / "seeds",
                 "",
-                "M11 requires at least three distinct threat-model categories",
+                "PRD threat-model categories are missing: " + ", ".join(missing_categories),
             )
         )
-    for category in sorted(categories):
+    missing_subcategories = [
+        f"{category}/{subcategory}"
+        for category, required in sorted(CATEGORY_SUBCATEGORIES.items())
+        for subcategory in sorted(required - subcategories_by_category.get(category, set()))
+    ]
+    if missing_subcategories:
+        issues.append(
+            _issue(
+                EvalValidationCode.COVERAGE_INCOMPLETE,
+                root / "seeds",
+                "",
+                "PRD threat-model subcategories are missing: "
+                + ", ".join(missing_subcategories),
+            )
+        )
+    missing_llm = sorted(REQUIRED_OWASP_LLM_IDS - llm_mappings)
+    if missing_llm:
+        issues.append(
+            _issue(
+                EvalValidationCode.COVERAGE_INCOMPLETE,
+                root / "seeds",
+                "",
+                "OWASP LLM 2025 mappings have no authored case: " + ", ".join(missing_llm),
+            )
+        )
+    for category in sorted(REQUIRED_PRD_CATEGORIES):
         labels = labels_by_category.get(category, [])
         kinds = {
             label.get("sample_kind")

@@ -44,7 +44,13 @@
     "target_id": { "type": "string", "minLength": 1, "maxLength": 64 },
     "source_target_version": { "type": "string", "minLength": 1, "maxLength": 128 },
     "replay_target_version": { "type": "string", "minLength": 1, "maxLength": 128 },
-    "trigger": { "enum": ["target_version_changed", "manual_authorized_replay"] },
+    "trigger": {
+      "enum": [
+        "deterministic_reproduction",
+        "target_version_changed",
+        "manual_authorized_replay"
+      ]
+    },
     "attack_attempt": { "$ref": "#/$defs/attack_attempt" },
     "attack_sequence_sha256": { "$ref": "#/$defs/sha256" },
     "required_oracle_ids": {

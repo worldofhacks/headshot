@@ -404,7 +404,17 @@ class _AgentHandle:
     role: str
     trace_id: str
     redactions: tuple[str, ...]
+    metadata: dict[str, Any]
     langfuse_state: tuple[Any, Any, str, str] | None
+
+
+@dataclass(frozen=True)
+class _PendingAgentFinish:
+    """Safe, bounded state retained while a terminal ledger read is retried."""
+
+    error_code: str | None
+    output_sha256: str
+    output_bytes: int
 
 
 class OutboundHttpTelemetry:
@@ -428,6 +438,7 @@ class OutboundHttpTelemetry:
         self._queued_request_ids: set[str] = set()
         self._queued_agent_execution_ids: set[str] = set()
         self._agent_handles: dict[str, _AgentHandle] = {}
+        self._pending_agent_finishes: dict[str, _PendingAgentFinish] = {}
         self._agent_observation_ids: dict[str, str] = {}
         self._agent_campaign_ids: dict[str, str] = {}
         self._last_connection_check = 0.0
@@ -568,7 +579,8 @@ class OutboundHttpTelemetry:
             _logger.warning("agent telemetry start persistence failed")
             return
 
-        metadata = {
+        metadata = _sanitize(
+            {
             "deployment.environment": self.environment,
             "organization_id": str(row["organization_id"]),
             "campaign_run_id": str(row["campaign_run_id"]),
@@ -582,7 +594,9 @@ class OutboundHttpTelemetry:
             "agent.model": str(row["model"]),
             "agent.execution_mode": str(row["execution_mode"]),
             "agent.input_sha256": str(row["input_sha256"]),
-        }
+            },
+            redactions,
+        )
         langfuse_state = None
         if configured:
             try:
@@ -626,6 +640,7 @@ class OutboundHttpTelemetry:
             role=str(row["agent_role"]),
             trace_id=str(row["trace_id"]),
             redactions=redactions,
+            metadata=dict(metadata),
             langfuse_state=langfuse_state,
         )
 
@@ -639,8 +654,41 @@ class OutboundHttpTelemetry:
         """Finish one agent observation from the already-terminal durable accounting row."""
 
         handle = self._agent_handles.get(execution_id)
-        if handle is None or handle.langfuse_state is None:
+        if handle is None:
             return
+        if handle.langfuse_state is None:
+            self._agent_handles.pop(execution_id, None)
+            self._pending_agent_finishes.pop(execution_id, None)
+            return
+        safe_output = _sanitize(output_payload, handle.redactions)
+        encoded_output = json.dumps(
+            safe_output,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        pending = _PendingAgentFinish(
+            error_code=(
+                _sanitize_text(error_code, handle.redactions) if error_code is not None else None
+            ),
+            output_sha256=hashlib.sha256(encoded_output).hexdigest(),
+            output_bytes=len(encoded_output),
+        )
+        if not self._complete_agent_finish(handle=handle, pending=pending):
+            self._pending_agent_finishes[execution_id] = pending
+
+    def _complete_agent_finish(
+        self,
+        *,
+        handle: _AgentHandle,
+        pending: _PendingAgentFinish,
+    ) -> bool:
+        """Complete an agent from its authoritative terminal row.
+
+        ``False`` means only that the ledger read should be retried. Langfuse completion failures
+        are terminal for this in-process handle and are reconciled as ``error`` instead.
+        """
+
+        execution_id = handle.execution_id
         try:
             with self.engine.connect() as connection:
                 row = (
@@ -657,8 +705,12 @@ class OutboundHttpTelemetry:
                 )
         except Exception:
             _logger.warning("agent telemetry completion persistence read failed")
-            return
+            return False
+        if str(row["status"]) == "running" or row["output_sha256"] is None:
+            _logger.warning("agent telemetry completion row is not terminal")
+            return False
         metadata = {
+            **handle.metadata,
             "agent.execution_id": execution_id,
             "agent.role": handle.role,
             "agent.status": str(row["status"]),
@@ -668,14 +720,14 @@ class OutboundHttpTelemetry:
             "agent.output_sha256": str(row["output_sha256"]),
             "cost.usd": float(row["measured_cost"] or 0.0),
             "currency": str(row["currency"]),
-            "error_code": error_code,
+            "error_code": pending.error_code,
         }
         try:
             self.langfuse.finish_agent(
                 handle.langfuse_state,
                 output={"sha256": str(row["output_sha256"])},
                 metadata=metadata,
-                error_code=error_code,
+                error_code=pending.error_code,
                 status=str(row["status"]),
                 input_tokens=row["input_tokens"],
                 output_tokens=row["output_tokens"],
@@ -692,9 +744,23 @@ class OutboundHttpTelemetry:
                     {"execution_id": execution_id},
                 )
             self._agent_handles.pop(execution_id, None)
-            return
+            self._pending_agent_finishes.pop(execution_id, None)
+            return True
         self._agent_handles.pop(execution_id, None)
+        self._pending_agent_finishes.pop(execution_id, None)
         self._queued_agent_execution_ids.add(execution_id)
+        return True
+
+    def _drain_pending_agent_finishes(self) -> None:
+        """Retry each pending ledger read at most once per flush checkpoint."""
+
+        for execution_id, pending in tuple(self._pending_agent_finishes.items()):
+            handle = self._agent_handles.get(execution_id)
+            if handle is None or handle.langfuse_state is None:
+                self._agent_handles.pop(execution_id, None)
+                self._pending_agent_finishes.pop(execution_id, None)
+                continue
+            self._complete_agent_finish(handle=handle, pending=pending)
 
     def release_campaign(self, campaign_run_id: str) -> None:
         """Release terminal parent-observation IDs after a campaign checkpoint is flushed."""
@@ -706,6 +772,7 @@ class OutboundHttpTelemetry:
             self._agent_observation_ids.pop(execution_id, None)
 
     def flush(self) -> None:
+        self._drain_pending_agent_finishes()
         request_ids = tuple(self._queued_request_ids)
         agent_execution_ids = tuple(self._queued_agent_execution_ids)
         if not request_ids and not agent_execution_ids:

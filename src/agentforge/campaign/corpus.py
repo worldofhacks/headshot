@@ -104,13 +104,15 @@ def corpus_root(configured: str | os.PathLike[str] | None = None) -> Path:
 
 def load_mvp_corpus(root: str | os.PathLike[str] | None = None) -> AuthoredCorpus:
     selected = corpus_root(root)
-    summary = validate_corpus(selected)
-    if summary.case_count != MVP_CASE_COUNT or summary.categories != MVP_CATEGORIES:
-        raise CorpusUnavailable("MVP corpus identity or category coverage differs from policy")
+    validate_corpus(selected)
     cases: list[AuthoredCase] = []
     attempts: list[dict[str, Any]] = []
     for path in sorted((selected / "seeds").glob("*.json")):
         payload = json.loads(path.read_text(encoding="utf-8"))
+        # Draft metadata expands authoring coverage without silently changing an already reviewed
+        # live workload. Only explicitly active cases participate in the immutable MVP corpus.
+        if payload.get("lifecycle_status") != "active":
+            continue
         canonical = json.dumps(
             payload, allow_nan=False, ensure_ascii=False, separators=(",", ":"), sort_keys=True
         ).encode("utf-8")
@@ -123,11 +125,14 @@ def load_mvp_corpus(root: str | os.PathLike[str] | None = None) -> AuthoredCorpu
         attempts.append(seed_to_attempt(payload))
     if len(cases) != MVP_CASE_COUNT:
         raise CorpusUnavailable("MVP corpus does not contain exactly nine authored cases")
+    categories = frozenset(case.payload["category"] for case in cases)
+    if categories != MVP_CATEGORIES:
+        raise CorpusUnavailable("MVP corpus identity or category coverage differs from policy")
     return AuthoredCorpus(
         corpus_id=MVP_CORPUS_ID,
         content_hash=corpus_sha256(attempts),
         cases=tuple(cases),
-        categories=summary.categories,
+        categories=categories,
         root=selected.resolve(),
     )
 

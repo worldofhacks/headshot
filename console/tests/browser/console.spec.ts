@@ -1,17 +1,18 @@
 import { expect, test } from "@playwright/test";
 
 test("direct routes and browser history restore authoritative screens", async ({ page }) => {
-  await page.goto("/coverage");
-  await expect(page.getByRole("heading", { name: "Coverage", exact: true, level: 1 })).toBeVisible();
-  await expect(page.getByText("Verified attempts", { exact: true }).first()).toBeVisible();
+  await page.goto("/reports/browser-report-prompt-injection");
+  await expect(page.getByRole("heading", { name: "Reports", exact: true, level: 1 })).toBeVisible();
+  await expect(page.getByText("Validated drafts", { exact: true }).first()).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Vulnerability report", exact: true })).toBeVisible();
 
   await page.getByRole("button", { name: "Targets", exact: true }).click();
   await expect(page).toHaveURL(/\/targets$/);
   await expect(page.getByRole("heading", { name: "Targets", exact: true, level: 1 })).toBeVisible();
 
   await page.goBack();
-  await expect(page).toHaveURL(/\/coverage$/);
-  await expect(page.getByRole("heading", { name: "Coverage", exact: true, level: 1 })).toBeVisible();
+  await expect(page).toHaveURL(/\/reports\/browser-report-prompt-injection$/);
+  await expect(page.getByRole("heading", { name: "Reports", exact: true, level: 1 })).toBeVisible();
 
   await page.goto("/findings/server-record");
   await expect(page.getByRole("heading", { name: "Findings", exact: true })).toBeVisible();

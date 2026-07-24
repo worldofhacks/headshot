@@ -97,6 +97,31 @@ _REQUIRED_WEB = frozenset({"A01", "A03", "A04", "A06", "A07", "A09", "A10"})
 _REQUIRED_LLM = frozenset({"LLM01", "LLM02", "LLM03", "LLM05", "LLM06"})
 _REQUIRED_CATEGORIES = frozenset({"prompt_injection", "data_exfiltration", "tool_misuse"})
 _RUNNER_HEARTBEAT_FRESHNESS_SECONDS = 30
+_SAFE_ACCOUNTING_COUNTERS = frozenset(
+    {"input_tokens", "output_tokens", "token_observation_count"}
+)
+
+
+def _restore_safe_accounting_counters(redacted: Any, source: Any) -> None:
+    """Restore only typed aggregate counters masked by generic deep secret redaction."""
+
+    if isinstance(redacted, dict) and isinstance(source, Mapping):
+        for key, source_value in source.items():
+            if (
+                key in _SAFE_ACCOUNTING_COUNTERS
+                and (
+                    source_value is None
+                    or (isinstance(source_value, int) and not isinstance(source_value, bool))
+                )
+            ):
+                redacted[key] = source_value
+                continue
+            if key in redacted:
+                _restore_safe_accounting_counters(redacted[key], source_value)
+        return
+    if isinstance(redacted, list) and isinstance(source, (list, tuple)):
+        for redacted_item, source_item in zip(redacted, source, strict=False):
+            _restore_safe_accounting_counters(redacted_item, source_item)
 
 
 def _safe(value: Any) -> Any:
@@ -120,17 +145,10 @@ def _safe(value: Any) -> Any:
         separate_authorization = value.get("requires_separate_authorization")
         if isinstance(separate_authorization, bool):
             redacted["requires_separate_authorization"] = separate_authorization
-        # Aggregate model usage counters are non-secret accounting values. The generic
-        # key-hint scrubber masks every key containing "token", so restore only these
-        # explicitly typed counts after all credential-bearing structures were removed.
-        for counter_key in ("input_tokens", "output_tokens", "token_observation_count"):
-            if counter_key not in value:
-                continue
-            counter_value = value.get(counter_key)
-            if counter_value is None or (
-                isinstance(counter_value, int) and not isinstance(counter_value, bool)
-            ):
-                redacted[counter_key] = counter_value
+        # Deep redaction masks keys containing "token" at any depth. Restore only explicitly
+        # typed aggregate counters from the original shape; strings, booleans, and mappings stay
+        # masked, so this cannot reintroduce credentials.
+        _restore_safe_accounting_counters(redacted, value)
         return {str(key): _safe(item) for key, item in redacted.items()}
     if isinstance(value, (tuple, list, set)):
         return [_safe(item) for item in value]

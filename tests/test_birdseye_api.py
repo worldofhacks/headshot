@@ -318,12 +318,13 @@ def test_birdseye_projects_security_outcomes_and_recorded_agent_causality(
                     "INSERT INTO agent_executions "
                     "(execution_id, organization_id, campaign_run_id, attempt_id, "
                     "parent_execution_id, agent_role, status, provider, model, execution_mode, "
-                    "configuration_version, input_sha256, output_sha256, measured_cost, "
+                    "configuration_version, input_sha256, output_sha256, input_tokens, "
+                    "output_tokens, measured_cost, "
                     "trace_id, langfuse_status, detail, started_at, finished_at, "
                     "duration_ms) VALUES "
                     "(:execution, :org, :run, :attempt, :parent, :role, 'succeeded', "
                     "'headshot', 'fixture-engine-v1', 'deterministic', 1, :input_hash, "
-                    ":output_hash, :cost, :trace, 'exported', "
+                    ":output_hash, :input_tokens, :output_tokens, :cost, :trace, 'exported', "
                     '\'{"phase":"recorded_fixture"}\'::jsonb, '
                     "clock_timestamp() - (:offset + 2) * INTERVAL '1 second', "
                     "clock_timestamp() - (:offset + 1) * INTERVAL '1 second', :duration_ms)"
@@ -340,6 +341,8 @@ def test_birdseye_projects_security_outcomes_and_recorded_agent_causality(
                     "trace": str(offset) * 32,
                     "offset": offset,
                     "duration_ms": duration_ms,
+                    "input_tokens": offset * 10,
+                    "output_tokens": offset * 2,
                     "cost": cost,
                 },
             )
@@ -394,6 +397,12 @@ def test_birdseye_projects_security_outcomes_and_recorded_agent_causality(
     assert nodes["agent:judge"]["measured_cost_usd"] == 0.0
     assert nodes["agent:documentation"]["measured_cost_usd"] == 0.01
     assert nodes["agent:documentation"]["execution_count"] == 1
+    assert nodes["agent:documentation"]["input_tokens"] == 40
+    assert nodes["agent:documentation"]["output_tokens"] == 8
+    assert nodes["agent:documentation"]["token_observation_count"] == 1
+    assert nodes["agent:documentation"]["langfuse_queued_count"] == 0
     assert nodes["agent:documentation"]["langfuse_exported_count"] == 1
+    assert nodes["agent:orchestrator"]["langfuse_queued_count"] == 1
+    assert nodes["agent:orchestrator"]["langfuse_exported_count"] == 0
     assert nodes["agent:documentation"]["langfuse_status"] == "exported"
     assert nodes["langfuse"]["queue_depth"] == 1
