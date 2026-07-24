@@ -1,0 +1,4 @@
+# T-F16a Test Review — Model: gpt-5.6-sol (capable)
+Worktree `<WORKTREE>`; branch `ticket/T-F16a-surface-policy`. Inputs: ticket, all T-F16a tests, test report, baseline `1ac3ee0`. Allowed write only `.tdd-swarm/reports/T-F16a-test-review.md`; never edit tests. Run focused pytest; attack UI `session_id` acceptance, evidence secret resolution, exact-field omission, incomplete fixture identity, retry undercount, 54b3a4d target-wide-profile fallback, scope-hash downgrade, and weak migration assertions.
+
+Freeze only clean feature-missing RED after Critical/Important closure. No network, credentials, owner files, source edit, main merge, or push. Maximum three review attempts. Gate `.tdd-swarm/run-local-gates.sh tickets/T-F16a.md <DIFF_BASE>`. Return the four-status contract plus freeze verdict.

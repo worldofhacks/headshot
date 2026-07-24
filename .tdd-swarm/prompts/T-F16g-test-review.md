@@ -1,0 +1,4 @@
+# T-F16g Test Review — Model: gpt-5.6-sol (capable)
+Worktree `<WORKTREE>`; branch `ticket/T-F16g-final-target-preflight`; execution base `1ac3ee0`. Inputs: ticket, all frozen T-F16g tests, and test report. Allowed write only: `.tdd-swarm/reports/T-F16g-test-review.md`. Attack unsigned/caller-signed/fabricated/stale/replayed observations, clock/max-age edges, key rotation, monotonic rollback, raw-digest omission, cross-environment promotion, pre-deploy fixture claims, interpreter PATH substitution, dependency/script drift, side effects before verdict, and tests that merely compare mutually caller-supplied files.
+
+Run focused pytest/conformance and freeze only clean feature-missing RED. No external network, credentials, fixture/signing-key read, target/provider/Railway actions, main merge, or push. Maximum three review attempts. Return `DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED(reason)` plus freeze verdict.

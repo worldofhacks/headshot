@@ -1,0 +1,4 @@
+# T-F16c Test Review — Model: gpt-5.6-sol (capable)
+Worktree `<WORKTREE>`; branch `ticket/T-F16c-evidence-ui-adapters`; baseline `1ac3ee0`. Inputs: ticket, both T-F16c test files, and test report. Allowed write only: `.tdd-swarm/reports/T-F16c-test-review.md`; tests are frozen. Attack evidence credential resolution, schema slack, `k` coercion, UI use of anything except query key `sid`, credential URL retention, redirect/subresource/browser behavior, body persistence, profile fallback, and tautological redaction assertions.
+
+Run focused pytest and freeze only clean feature-missing RED. No network, credentials, owner bundle/fixture read, screenshots, target calls, main merge, or push. Maximum three review attempts. Return `DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED(reason)` plus freeze verdict.

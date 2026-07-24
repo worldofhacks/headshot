@@ -1,0 +1,4 @@
+# T-F16g Code Review — Model: gpt-5.6-sol (capable)
+Worktree `<WORKTREE>`; branch `ticket/T-F16g-final-target-preflight`; execution base `1ac3ee0`. Inputs: ticket, diff, implement/gate reports, and frozen tests. Allowed write only: `.tdd-swarm/reports/T-F16g-code-review.md`. Re-run gates/conformance/exact CLI and issue SPEC/CODE verdicts for signed trusted provenance/freshness, transition monotonicity, post-Runner fixture proof, exact `python3` bootstrap, complete grant/input binding, exit-4 zero-action behavior, safe output, environment separation, sequence, and rollback.
+
+No external network, credentials, fixture/signing-key read, target/provider/Railway actions, main merge, or push. Maximum three review attempts. Return `DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED(reason)` plus verdict.

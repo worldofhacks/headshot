@@ -1,0 +1,4 @@
+# T-F16f Test Review — Model: gpt-5.6-sol (capable)
+Worktree `<WORKTREE>`; branch `ticket/T-F16f-multi-surface-scan`; execution base `1ac3ee0`. Inputs: ticket, all frozen T-F16f tests, and test report. Allowed write only: `.tdd-swarm/reports/T-F16f-test-review.md`. Attack Runner-only authority expansion, missing/self-approved/drifted child decisions, queue-as-authority, non-durable/recovery shortcuts, idempotency races, missing document records, v2.0 or failed-proof declared completeness, `full_surface_scan` acceptance, cap undercount, credential reuse, and adapter-list tests that bypass the API/store.
+
+Run focused pytest/conformance and freeze only clean feature-missing RED. No external network, credentials, fixtures, target/provider calls, main merge, or push. Maximum three review attempts. Return `DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED(reason)` plus freeze verdict.

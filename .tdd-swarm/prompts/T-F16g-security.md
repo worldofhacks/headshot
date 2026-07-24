@@ -1,0 +1,4 @@
+# T-F16g Security Review — Model: gpt-5.6-sol (capable)
+Worktree `<WORKTREE>`; branch `ticket/T-F16g-final-target-preflight`; execution base `1ac3ee0`. Inputs: ticket, diff, implement/gate reports, and frozen tests. Allowed write only: `.tdd-swarm/reports/T-F16g-security.md`. Re-run gates; inspect signature/canonicalization/key substitution, stale/replay/clock/monotonic TOCTOU, provider digest spoofing, environment confusion, path/symlink reads, bootstrap PATH/interpreter/dependency substitution, incomplete fixture/session/cap binding, parser/resource abuse, signing-key leakage, side-channel output, and pre-verdict effects.
+
+No external network, credentials, fixture/signing-key read, target/provider/Railway actions, main merge, or push. Maximum three review attempts. Return `DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED(reason)` plus highest severity.

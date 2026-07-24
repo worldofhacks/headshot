@@ -1,0 +1,4 @@
+# T-F16e Test Review — Model: gpt-5.6-sol (capable)
+Worktree `<WORKTREE>`; branch `ticket/T-F16e-final-target-composition`; baseline `1ac3ee0`. Inputs: ticket, frozen integration test, and test report. Allowed write only: `.tdd-swarm/reports/T-F16e-test-review.md`. Attack in-place v1 mutation, cross-environment ref/hash reuse, alias retention, path/profile fallback, anonymous secret lookup, session crossover, document activation without complete fixture proof, non-idempotent sync/state/rollback, and false multi-surface-scan claims.
+
+Run focused pytest and freeze only clean feature-missing RED. No network, credentials, owner bundle/fixture read, screenshots, target/Railway calls, main merge, or push. Maximum three review attempts. Return `DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED(reason)` plus freeze verdict.
