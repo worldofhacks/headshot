@@ -8,15 +8,24 @@ import datetime
 import hashlib
 import json
 import time
+from decimal import Decimal
 from types import SimpleNamespace
 from typing import NamedTuple
 
 import pytest
 from sqlalchemy import Engine, text
 
+from agentforge.agents.hosted import (
+    HostedConfigurationSet,
+    HostedLimits,
+    HostedRoleConfiguration,
+    TokenPrices,
+)
 from agentforge.agents.hosted_policy import DEFAULT_HOSTED_GENERATION_POLICY
+from agentforge.agents.hosted_runtime import HostedExecutionLineage
 from agentforge.agents.judge.calibration_runtime import JudgeCalibrationStatus
 from agentforge.agents.judge.envelope import EvidenceEnvelopeBuilder
+from agentforge.agents.prompts import load_prompt_registry
 from agentforge.api.postgres import PostgresApiBackend
 from agentforge.auth.permissions import CAMPAIGN_AUTHORIZE, CAMPAIGN_LAUNCH
 from agentforge.auth.principal import Principal
@@ -34,12 +43,15 @@ from agentforge.policy.scoped_credentials import (
     SealedEnvironmentCredentialResolver,
     SessionLeaseMetadata,
 )
+from agentforge.providers.lineage import ProviderLogicalContextV1
+from agentforge.providers.openrouter import HostedProviderError, OpenRouterResult
 from agentforge.runner import (
     DispatchUnavailable,
     DurableCampaignRunner,
     PreflightReport,
     _campaign_session_required_until,
     _DurableHostedExecutionLifecycle,
+    _generate_quarantined_hosted_red_team,
     _PreManifestHostedJudge,
     _reconcile_runner_evaluator,
     _require_hosted_workload_capacity,
@@ -89,6 +101,262 @@ class _RecordingAgentTelemetry:
 
     def release_campaign(self, campaign_run_id: str) -> None:
         self.released_campaigns.append(campaign_run_id)
+
+
+_HOSTED_TEST_MODELS = {
+    "orchestrator": "anthropic/claude-opus-4.8",
+    "red_team": "qwen/qwen3.5-397b-a17b",
+    "judge": "google/gemini-2.5-pro",
+    "documentation": "openai/gpt-5.4",
+}
+_HOSTED_TEST_UPSTREAMS = {
+    "orchestrator": "amazon-bedrock/eu-west-1",
+    "red_team": "atlas-cloud/fp8",
+    "judge": "google-vertex/global",
+    "documentation": "azure/eu",
+}
+_HOSTED_TEST_COMPLETION_PARAMETERS = {
+    "orchestrator": "max_tokens",
+    "red_team": "max_tokens",
+    "judge": "max_tokens",
+    "documentation": "max_completion_tokens",
+}
+
+
+def _runner_hosted_configuration() -> HostedConfigurationSet:
+    prompts = {prompt.role: prompt for prompt in load_prompt_registry()}
+    roles = tuple(
+        HostedRoleConfiguration(
+            role=role,  # type: ignore[arg-type]
+            provider="openrouter",
+            model_id=_HOSTED_TEST_MODELS[role],
+            upstream_provider=_HOSTED_TEST_UPSTREAMS[role],
+            completion_token_parameter=_HOSTED_TEST_COMPLETION_PARAMETERS[role],
+            credential_reference=f"secretref://test/openrouter/{role}/generation-1",
+            prompt_sha256=prompts[role].sha256,
+            policy_sha256=hashlib.sha256(f"policy:{role}:v1".encode()).hexdigest(),
+            prices=TokenPrices(
+                input_usd_per_million_tokens=Decimal("1"),
+                output_usd_per_million_tokens=Decimal("2"),
+                reasoning_usd_per_million_tokens=Decimal("2"),
+            ),
+            limits=HostedLimits(
+                max_calls=1,
+                max_input_tokens=200_000,
+                max_output_tokens=20_000,
+                max_reasoning_tokens=20_000,
+                max_usd=Decimal("0.5"),
+                max_retries=0,
+                max_requests_per_second=Decimal("0.5"),
+                max_concurrency=1,
+            ),
+        )
+        for role in ("orchestrator", "red_team", "judge", "documentation")
+    )
+    return HostedConfigurationSet(
+        roles=roles,
+        global_limits=HostedLimits(
+            max_calls=4,
+            max_input_tokens=800_000,
+            max_output_tokens=80_000,
+            max_reasoning_tokens=80_000,
+            max_usd=Decimal("2"),
+            max_retries=0,
+            max_requests_per_second=Decimal("0.5"),
+            max_concurrency=1,
+        ),
+    )
+
+
+class _RunnerHostedRedTeamLifecycle:
+    def __init__(self, configuration: HostedConfigurationSet) -> None:
+        self.configuration = configuration
+        self.invocations: list[dict[str, object]] = []
+        self.starts: list[dict[str, object]] = []
+        self.finishes: list[dict[str, object]] = []
+
+    @contextlib.contextmanager
+    def invocation(self, **values: object):
+        self.invocations.append(dict(values))
+        yield
+
+    def start(self, **values: object) -> str:
+        self.starts.append(dict(values))
+        return "execution-hosted-red-team-runner"
+
+    def provider_context(
+        self,
+        *,
+        execution_id: str,
+        prompt_version: str,
+        prompt_sha256: str,
+    ) -> ProviderLogicalContextV1:
+        role = next(item for item in self.configuration.roles if item.role == "red_team")
+        return ProviderLogicalContextV1(
+            organization_id="org-hosted-red-team-runner",
+            campaign_run_id="run-hosted-red-team-runner",
+            campaign_attempt_id="attempt-hosted-red-team-runner",
+            logical_execution_id=execution_id,
+            parent_execution_id="execution-orchestrator-runner",
+            agent_role="red_team",
+            requested_model=role.model_id,
+            configured_upstream=role.upstream_provider,
+            prompt_version=prompt_version,
+            prompt_sha256=prompt_sha256,
+            configuration_set_sha256=self.configuration.configuration_sha256,
+            role_configuration_sha256=role.configuration_sha256,
+            generation_policy_sha256=DEFAULT_HOSTED_GENERATION_POLICY.policy_sha256,
+        )
+
+    def finish(self, **values: object) -> None:
+        self.finishes.append(dict(values))
+
+
+class _RunnerHostedRedTeamTransport:
+    def __init__(
+        self,
+        configuration: HostedConfigurationSet,
+        *,
+        error: Exception | None = None,
+    ) -> None:
+        self.configuration = configuration
+        self.error = error
+        self.calls: list[dict[str, object]] = []
+
+    def invoke(self, **values: object) -> OpenRouterResult:
+        self.calls.append(dict(values))
+        if self.error is not None:
+            raise self.error
+        role = next(item for item in self.configuration.roles if item.role == "red_team")
+        return OpenRouterResult(
+            output={"variants": ["unreviewed synthetic continuation"]},
+            requested_model=role.model_id,
+            returned_model=role.model_id,
+            upstream_provider="AtlasCloud",
+            request_id="provider-request-hosted-red-team",
+            input_tokens=101,
+            output_tokens=23,
+            reasoning_tokens=7,
+            measured_cost_usd=Decimal("0.001234"),
+            configuration_sha256=self.configuration.configuration_sha256,
+            role_configuration_sha256=role.configuration_sha256,
+            generation_policy_sha256=DEFAULT_HOSTED_GENERATION_POLICY.policy_sha256,
+            physical_attempts=1,
+        )
+
+
+def test_runner_hosted_red_team_quarantines_generation_and_closes_full_lineage() -> None:
+    configuration = _runner_hosted_configuration()
+    lifecycle = _RunnerHostedRedTeamLifecycle(configuration)
+    transport = _RunnerHostedRedTeamTransport(configuration)
+    seed = {
+        "schema_version": "1",
+        "case_ref": "AF-M11-PI-001",
+        "input_sequence": ["reviewed frozen prompt"],
+        "category": "prompt_injection",
+    }
+
+    result = _generate_quarantined_hosted_red_team(
+        configuration=configuration,
+        generation_policy=DEFAULT_HOSTED_GENERATION_POLICY,
+        transport=transport,  # type: ignore[arg-type]
+        lifecycle=lifecycle,  # type: ignore[arg-type]
+        seed=seed,
+        category="prompt_injection",
+        cycle=3,
+        corpus_sha256="a" * 64,
+        attempt_id="attempt-hosted-red-team-runner",
+        parent_execution_id="execution-orchestrator-runner",
+        parent_request_id="provider-request-orchestrator-runner",
+    )
+
+    assert len(transport.calls) == 1
+    assert transport.calls[0]["role"] == "red_team"
+    assert lifecycle.invocations == [
+        {
+            "role": "red_team",
+            "attempt_id": "attempt-hosted-red-team-runner",
+            "detail": {
+                "phase": "hosted_advisory_generation",
+                "cycle": 3,
+                "dispatch_authority": "byte_exact_authorized_seed_replay",
+                "generated_output_disposition": "quarantined_not_dispatched",
+                "target_payload_source": "frozen_corpus",
+            },
+        }
+    ]
+    start = lifecycle.starts[0]
+    assert start["upstream_provider"] == "atlas-cloud/fp8"
+    assert start["model"] == "qwen/qwen3.5-397b-a17b"
+    assert start["parent_execution_id"] == "execution-orchestrator-runner"
+    finish = lifecycle.finishes[0]
+    assert finish["status"] == "succeeded"
+    assert finish["output_payload"]["generated_output_disposition"] == (
+        "quarantined_not_dispatched"
+    )
+    assert finish["output_payload"]["target_payload_source"] == (
+        "byte_exact_authorized_seed_replay"
+    )
+    assert finish["output_payload"]["generated_output_sha256"] == (result.generated_output_sha256)
+    assert finish["terminal_detail"] == {
+        "generated_output_sha256": result.generated_output_sha256,
+        "generated_variant_count": 1,
+    }
+    lineage = finish["lineage"]
+    assert isinstance(lineage, HostedExecutionLineage)
+    assert lineage.execution_id == result.execution_id
+    assert lineage.parent_execution_id == "execution-orchestrator-runner"
+    assert lineage.parent_request_id == "provider-request-orchestrator-runner"
+    assert lineage.provider_request_id == "provider-request-hosted-red-team"
+    assert lineage.returned_model == "qwen/qwen3.5-397b-a17b"
+    assert lineage.upstream_provider == "AtlasCloud"
+    assert (lineage.input_tokens, lineage.output_tokens, lineage.reasoning_tokens) == (
+        101,
+        23,
+        7,
+    )
+    assert lineage.measured_cost_usd == "0.001234"
+    assert lineage.physical_attempts == 1
+
+
+def test_runner_hosted_red_team_failure_prevents_target_send() -> None:
+    configuration = _runner_hosted_configuration()
+    lifecycle = _RunnerHostedRedTeamLifecycle(configuration)
+    transport = _RunnerHostedRedTeamTransport(
+        configuration,
+        error=HostedProviderError(
+            "synthetic provider observation failure",
+            physical_attempts=1,
+        ),
+    )
+    target_sends: list[dict[str, object]] = []
+
+    with pytest.raises(HostedProviderError):
+        _generate_quarantined_hosted_red_team(
+            configuration=configuration,
+            generation_policy=DEFAULT_HOSTED_GENERATION_POLICY,
+            transport=transport,  # type: ignore[arg-type]
+            lifecycle=lifecycle,  # type: ignore[arg-type]
+            seed={
+                "schema_version": "1",
+                "case_ref": "AF-M11-PI-001",
+                "input_sequence": ["reviewed frozen prompt"],
+                "category": "prompt_injection",
+            },
+            category="prompt_injection",
+            cycle=0,
+            corpus_sha256="b" * 64,
+            attempt_id="attempt-hosted-red-team-runner",
+            parent_execution_id="execution-orchestrator-runner",
+            parent_request_id="provider-request-orchestrator-runner",
+        )
+        target_sends.append({"unexpected": True})
+
+    assert len(transport.calls) == 1
+    assert target_sends == []
+    assert lifecycle.finishes[0]["status"] == "failed"
+    assert lifecycle.finishes[0]["error_code"] == "hosted-provider-unavailable"
+    assert lifecycle.finishes[0]["failed_physical_attempts"] == 1
 
 
 def test_hosted_evaluator_transcript_exactly_redacts_the_sealed_target_session() -> None:
@@ -171,7 +439,10 @@ def test_pre_manifest_hosted_judge_reconciles_before_return_and_preserves_local_
         def evaluate(self, value: object, **kwargs: object) -> SimpleNamespace:
             events.append("hosted")
             self.calls.append({"envelope": value, **kwargs})
-            return SimpleNamespace(execution_id="execution-judge-pre-manifest")
+            return SimpleNamespace(
+                execution_id="execution-judge-pre-manifest",
+                provider_request_id="provider-judge-pre-manifest",
+            )
 
     class Lifecycle:
         def __init__(self) -> None:
@@ -189,7 +460,15 @@ def test_pre_manifest_hosted_judge_reconciles_before_return_and_preserves_local_
 
     evaluator = Evaluator()
     lifecycle = Lifecycle()
-    executions: list[tuple[str, str]] = []
+    executions: list[tuple[str, str, str]] = []
+
+    def record_execution(
+        observed_attempt: str,
+        execution_id: str,
+        provider_request_id: str,
+    ) -> None:
+        executions.append((observed_attempt, execution_id, provider_request_id))
+
     bridge = _PreManifestHostedJudge(
         deterministic_judge=DeterministicJudge(),  # type: ignore[arg-type]
         hosted_evaluator=evaluator,  # type: ignore[arg-type]
@@ -203,15 +482,14 @@ def test_pre_manifest_hosted_judge_reconciles_before_return_and_preserves_local_
             source="configured_file",
         ),
         target_credential_resolver=lambda: Secret(raw_session),
-        execution_recorder=lambda attempt_id, execution_id: executions.append(
-            (attempt_id, execution_id)
-        ),
+        execution_recorder=record_execution,
     )
 
     with bridge.attempt(
         attempt_id="attempt-pre-manifest",
         expected_safe_behavior="The assistant must refuse the synthetic request.",
         parent_execution_id="execution-red-team-pre-manifest",
+        parent_request_id="provider-red-team-pre-manifest",
     ):
         verdict = bridge.evaluate(envelope, integrity_ok=True)
 
@@ -226,9 +504,16 @@ def test_pre_manifest_hosted_judge_reconciles_before_return_and_preserves_local_
         "The assistant must refuse the synthetic request."
     )
     assert evaluator.calls[0]["parent_execution_id"] == ("execution-red-team-pre-manifest")
+    assert evaluator.calls[0]["parent_request_id"] == ("provider-red-team-pre-manifest")
     assert lifecycle.invocations[0]["ground_truth_verdict"] == deterministic
     assert lifecycle.taken == ["execution-judge-pre-manifest"]
-    assert executions == [("attempt-pre-manifest", "execution-judge-pre-manifest")]
+    assert executions == [
+        (
+            "attempt-pre-manifest",
+            "execution-judge-pre-manifest",
+            "provider-judge-pre-manifest",
+        )
+    ]
 
 
 @pytest.mark.parametrize(
@@ -392,18 +677,27 @@ def test_pre_manifest_hosted_judge_applies_exact_authority_and_records_lineage(
                 ),
                 error_code=None,
             )
-            return SimpleNamespace(execution_id=execution_id)
+            return SimpleNamespace(
+                execution_id=execution_id,
+                provider_request_id=f"provider-{attempt_id}",
+            )
 
-    executions: list[tuple[str, str]] = []
+    executions: list[tuple[str, str, str]] = []
+
+    def record_execution(
+        observed_attempt: str,
+        execution_id: str,
+        provider_request_id: str,
+    ) -> None:
+        executions.append((observed_attempt, execution_id, provider_request_id))
+
     bridge = _PreManifestHostedJudge(
         deterministic_judge=DeterministicJudge(),  # type: ignore[arg-type]
         hosted_evaluator=Evaluator(),  # type: ignore[arg-type]
         lifecycle=lifecycle,
         calibration=calibration,
         target_credential_resolver=lambda: None,
-        execution_recorder=lambda observed_attempt, execution_id: executions.append(
-            (observed_attempt, execution_id)
-        ),
+        execution_recorder=record_execution,
     )
     envelope = EvidenceEnvelopeBuilder().build(
         campaign_run_id="run-authority-matrix",
@@ -418,6 +712,7 @@ def test_pre_manifest_hosted_judge_applies_exact_authority_and_records_lineage(
         attempt_id=attempt_id,
         expected_safe_behavior="The assistant preserves the synthetic policy boundary.",
         parent_execution_id="execution-red-team-authority-matrix",
+        parent_request_id="provider-red-team-authority-matrix",
     ):
         effective = bridge.evaluate(envelope, integrity_ok=True)
 
@@ -426,7 +721,13 @@ def test_pre_manifest_hosted_judge_applies_exact_authority_and_records_lineage(
     detail = store.finishes[0]["detail"]
     assert isinstance(detail, dict)
     assert detail["decision_authority_basis"] == expected_authority_basis
-    assert executions == [(attempt_id, f"execution-{attempt_id}")]
+    assert executions == [
+        (
+            attempt_id,
+            f"execution-{attempt_id}",
+            f"provider-{attempt_id}",
+        )
+    ]
 
 
 def _clean(engine: Engine) -> None:
@@ -1404,6 +1705,58 @@ def test_two_person_control_violation_is_not_dispatchable(
     queue = PostgresJobQueue(migrated_db)
     claimed = queue.claim(LogicalQueue.AGENT_WORK, worker_id="runner-test", lease_duration=_LEASE)
     assert claimed is None
+
+
+def test_deterministic_campaign_never_selects_the_hosted_red_team(
+    migrated_db: Engine,
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    authorized = _authorize_synthetic_run(migrated_db)
+    selected: list[bool] = []
+
+    def forbidden_hosted_generation(**_values: object) -> None:
+        selected.append(True)
+        raise AssertionError("deterministic campaign selected the hosted Red Team")
+
+    monkeypatch.setattr(
+        "agentforge.runner._generate_quarantined_hosted_red_team",
+        forbidden_hosted_generation,
+    )
+    clock = _AdvancingClock()
+    runner = DurableCampaignRunner(
+        engine=migrated_db,
+        environment="staging",
+        corpus=authorized.corpus,
+        catalog=authorized.catalog,
+        manifest_root=tmp_path,
+        clock=clock,
+        sleeper=clock.advance,
+    )
+
+    assert runner.run_once(worker_id="runner-deterministic-red-team-test") is True
+    assert selected == []
+    with migrated_db.connect() as connection:
+        rows = (
+            connection.execute(
+                text(
+                    "SELECT execution_mode, provider, model, physical_attempts "
+                    "FROM agent_executions WHERE campaign_run_id = :run "
+                    "AND agent_role = 'red_team'"
+                ),
+                {"run": authorized.run.run_id},
+            )
+            .mappings()
+            .all()
+        )
+    assert len(rows) == len(authorized.corpus.cases)
+    assert all(
+        row["execution_mode"] == "deterministic"
+        and row["provider"] == "headshot"
+        and row["model"] == "full-scan-corpus-v1"
+        and row["physical_attempts"] is None
+        for row in rows
+    )
 
 
 def test_synthetic_campaign_executes_all_nine_cases_and_completes_atomically(

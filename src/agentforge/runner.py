@@ -50,6 +50,11 @@ from agentforge.agents.judge.hosted import (
 from agentforge.agents.judge.judge import Judge
 from agentforge.agents.orchestrator import HostedPlanner, Orchestrator, OrchestratorHalt
 from agentforge.agents.red_team import SeedReplayRedTeam
+from agentforge.agents.red_team.hosted_generation import (
+    RedTeamRoleIdentity,
+    TracedHostedRedTeamProvider,
+    require_red_team_subcap,
+)
 from agentforge.campaign.authorization import RunAuthorization
 from agentforge.campaign.binding import TargetBinding
 from agentforge.campaign.coordinator import CampaignAbort, RunConfig, SecureCampaignCoordinator
@@ -64,6 +69,7 @@ from agentforge.campaign.corpus import (
 )
 from agentforge.campaign.manifest import ManifestStore
 from agentforge.campaign.runtime import SystemClock, accounting_from_environment, production_engine
+from agentforge.control_plane.serialization import content_hash
 from agentforge.control_plane.store import ControlPlaneStore
 from agentforge.policy.gateway import RunPolicy, WorkUnitCoordinates
 from agentforge.policy.scoped_credentials import (
@@ -148,6 +154,173 @@ class _HostedJudgeAttemptContext:
     attempt_id: str
     expected_safe_behavior: str
     parent_execution_id: str
+    parent_request_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class _QuarantinedHostedRedTeamResult:
+    """One observed hosted generation that is explicitly outside target-dispatch authority."""
+
+    execution_id: str
+    generated_output_sha256: str
+    lineage: HostedExecutionLineage
+
+
+def _generate_quarantined_hosted_red_team(
+    *,
+    configuration: HostedConfigurationSet,
+    generation_policy: HostedGenerationPolicy,
+    transport: OpenRouterTransport,
+    lifecycle: _DurableHostedExecutionLifecycle,
+    seed: dict[str, Any],
+    category: str,
+    cycle: int,
+    corpus_sha256: str,
+    attempt_id: str,
+    parent_execution_id: str,
+    parent_request_id: str,
+) -> _QuarantinedHostedRedTeamResult:
+    """Run the authorized hosted Red Team while keeping new text out of the frozen corpus.
+
+    The model output is unreviewed proposed input. The campaign grant binds the byte-exact frozen
+    corpus, so this generation is durably marked as quarantined and is never returned as a target
+    payload. Provider/tracing/budget failure is terminal here, before adapter construction.
+    """
+
+    require_red_team_subcap(configuration)
+    try:
+        role = next(item for item in configuration.roles if item.role == "red_team")
+    except StopIteration as exc:  # defensive; HostedConfigurationSet already closes the role set
+        raise DispatchUnavailable("hosted_red_team_authority_missing") from exc
+    if (
+        role.upstream_provider != "atlas-cloud/fp8"
+        or role.completion_token_parameter != "max_tokens"
+    ):
+        raise DispatchUnavailable("hosted_red_team_endpoint_authority_mismatch")
+    provider = TracedHostedRedTeamProvider(
+        transport=transport,
+        lifecycle=lifecycle,
+        role_identity=RedTeamRoleIdentity(
+            provider=role.provider,
+            model=role.model_id,
+            upstream_provider=role.upstream_provider,
+            prompt_version=role.prompt_version,
+            prompt_sha256=role.prompt_sha256,
+            role_configuration_sha256=role.configuration_sha256,
+        ),
+        configuration_sha256=configuration.configuration_sha256,
+        generation_policy_sha256=generation_policy.policy_sha256,
+        call_bounds=generation_policy.call_bounds["red_team"],
+        parent_execution_id=parent_execution_id,
+        parent_request_id=parent_request_id,
+    )
+    detail = {
+        "phase": "hosted_advisory_generation",
+        "cycle": cycle,
+        "dispatch_authority": "byte_exact_authorized_seed_replay",
+        "generated_output_disposition": "quarantined_not_dispatched",
+        "target_payload_source": "frozen_corpus",
+    }
+    with lifecycle.invocation(
+        role="red_team",
+        attempt_id=attempt_id,
+        detail=detail,
+    ):
+        execution_id = lifecycle.start(
+            role="red_team",
+            parent_execution_id=parent_execution_id,
+            input_payload={
+                "cycle": cycle,
+                "authorized_case_ref": seed.get("case_ref"),
+                "directive_category": category,
+                "corpus_sha256": corpus_sha256,
+                "generation_disposition": "quarantined_not_dispatched",
+            },
+            provider=role.provider,
+            model=role.model_id,
+            upstream_provider=role.upstream_provider,
+            configuration_sha256=configuration.configuration_sha256,
+            role_configuration_sha256=role.configuration_sha256,
+            generation_policy_sha256=generation_policy.policy_sha256,
+            judge_calibration_id=None,
+        )
+        try:
+            generation = provider.generate_traced(
+                seed,
+                count=1,
+                category=category,
+                execution_id=execution_id,
+            )
+        except Exception as exc:
+            error_code = getattr(exc, "code", None)
+            if not isinstance(error_code, str) or not error_code:
+                error_code = "hosted-red-team-generation-failed"
+            physical_attempts = getattr(exc, "physical_attempts", None)
+            terminal: dict[str, Any] = {
+                "execution_id": execution_id,
+                "status": "failed",
+                "output_payload": {
+                    "status": "failed",
+                    "generated_output_disposition": "quarantined_not_dispatched",
+                },
+                "lineage": None,
+                "error_code": error_code,
+            }
+            if type(physical_attempts) is int and physical_attempts > 0:
+                terminal["failed_physical_attempts"] = physical_attempts
+            try:
+                lifecycle.finish(**terminal)
+            except Exception as lifecycle_exc:
+                exc.add_note(
+                    "hosted Red Team terminal finalization also failed "
+                    f"({type(lifecycle_exc).__name__})"
+                )
+            raise
+
+        generated_output_sha256 = content_hash({"variants": generation.variants})
+        lineage = HostedExecutionLineage(
+            execution_id=execution_id,
+            parent_execution_id=parent_execution_id,
+            role="red_team",
+            parent_request_id=parent_request_id,
+            requested_model=role.model_id,
+            returned_model=generation.returned_model,
+            upstream_provider=generation.upstream_provider,
+            provider_request_id=generation.provider_request_id,
+            input_tokens=generation.input_tokens,
+            output_tokens=generation.output_tokens,
+            reasoning_tokens=generation.reasoning_tokens,
+            measured_cost_usd=generation.measured_cost_usd,
+            configuration_sha256=configuration.configuration_sha256,
+            role_configuration_sha256=role.configuration_sha256,
+            generation_policy_sha256=generation_policy.policy_sha256,
+            physical_attempts=generation.physical_attempts,
+        )
+        try:
+            lifecycle.finish(
+                execution_id=execution_id,
+                status="succeeded",
+                output_payload={
+                    "authorized_case_ref": seed.get("case_ref"),
+                    "generated_variant_count": len(generation.variants),
+                    "generated_output_sha256": generated_output_sha256,
+                    "generated_output_disposition": "quarantined_not_dispatched",
+                    "target_payload_source": "byte_exact_authorized_seed_replay",
+                },
+                lineage=lineage,
+                error_code=None,
+                terminal_detail={
+                    "generated_output_sha256": generated_output_sha256,
+                    "generated_variant_count": len(generation.variants),
+                },
+            )
+        except Exception as exc:
+            raise DispatchUnavailable("hosted_red_team_terminal_record_unavailable") from exc
+    return _QuarantinedHostedRedTeamResult(
+        execution_id=execution_id,
+        generated_output_sha256=generated_output_sha256,
+        lineage=lineage,
+    )
 
 
 def _evaluator_calibration_state(status: JudgeCalibrationStatus) -> str:
@@ -388,6 +561,7 @@ class _DurableHostedExecutionLifecycle:
         lineage: HostedExecutionLineage | None,
         error_code: str | None,
         failed_physical_attempts: int | None = None,
+        terminal_detail: Mapping[str, Any] | None = None,
     ) -> None:
         context = self._execution_context.pop(execution_id, None)
         if context is None:
@@ -396,6 +570,7 @@ class _DurableHostedExecutionLifecycle:
         decision_authority: str | None = None
         reconciliation: JudgeReconciliation | None = None
         detail = dict(context.detail)
+        detail.update(dict(terminal_detail or {}))
         if status == "succeeded" and context.role == "judge":
             if lineage is None or context.ground_truth_verdict is None:
                 raise DispatchUnavailable("hosted_judge_reconciliation_missing")
@@ -466,7 +641,7 @@ class _PreManifestHostedJudge:
         lifecycle: _DurableHostedExecutionLifecycle,
         calibration: JudgeCalibrationStatus,
         target_credential_resolver: Callable[[], Secret | None],
-        execution_recorder: Callable[[str, str], None],
+        execution_recorder: Callable[[str, str, str], None],
     ) -> None:
         self._deterministic_judge = deterministic_judge
         self._hosted_evaluator = hosted_evaluator
@@ -483,6 +658,7 @@ class _PreManifestHostedJudge:
         attempt_id: str,
         expected_safe_behavior: str,
         parent_execution_id: str,
+        parent_request_id: str,
     ) -> Iterator[None]:
         """Bind only the current authorized case context to the coordinator callback."""
 
@@ -490,13 +666,19 @@ class _PreManifestHostedJudge:
             raise DispatchUnavailable("hosted_judge_attempt_context_overlap")
         if not all(
             isinstance(value, str) and value
-            for value in (attempt_id, expected_safe_behavior, parent_execution_id)
+            for value in (
+                attempt_id,
+                expected_safe_behavior,
+                parent_execution_id,
+                parent_request_id,
+            )
         ):
             raise DispatchUnavailable("hosted_judge_attempt_context_invalid")
         self._attempt_context = _HostedJudgeAttemptContext(
             attempt_id=attempt_id,
             expected_safe_behavior=expected_safe_behavior,
             parent_execution_id=parent_execution_id,
+            parent_request_id=parent_request_id,
         )
         try:
             yield
@@ -550,11 +732,16 @@ class _PreManifestHostedJudge:
                 sanitized=True,
                 judge_calibration_id=self._calibration.calibration_id,
                 parent_execution_id=context.parent_execution_id,
+                parent_request_id=context.parent_request_id,
             )
         reconciliation = self._lifecycle.take_judge_reconciliation(
             execution_id=result.execution_id,
         )
-        self._execution_recorder(context.attempt_id, result.execution_id)
+        self._execution_recorder(
+            context.attempt_id,
+            result.execution_id,
+            result.provider_request_id,
+        )
         return dict(reconciliation.effective_verdict)
 
 
@@ -1248,6 +1435,15 @@ class DurableCampaignRunner:
                     agent_role="orchestrator",
                 )
                 configuration = hosted_authority.configuration
+                red_team_role = next(
+                    role for role in configuration.roles if role.role == "red_team"
+                )
+                require_red_team_subcap(configuration)
+                if (
+                    red_team_role.upstream_provider != "atlas-cloud/fp8"
+                    or red_team_role.completion_token_parameter != "max_tokens"
+                ):
+                    raise DispatchUnavailable("hosted_red_team_endpoint_authority_mismatch")
                 if hosted_authority.authorization != scope.hosted_run:
                     raise DispatchUnavailable("hosted_authorization_mismatch")
                 generation_policy = resolve_hosted_generation_policy(
@@ -1467,6 +1663,9 @@ class DurableCampaignRunner:
         next_ordinal = 0
         first_decision_recorded = False
         latest_terminal_execution: str | None = None
+        red_team_provider_requests: dict[str, str] = {}
+        judge_executions: dict[str, str] = {}
+        judge_provider_requests: dict[str, str] = {}
 
         def select_next_work() -> tuple[Any, dict[str, Any], Any, str]:
             """Run one feedback-driven Orchestrator/Red Team cycle over remaining authority."""
@@ -1479,6 +1678,7 @@ class DurableCampaignRunner:
                 previous_category=previous_category,
             )
             orchestrator_execution: str
+            orchestrator_request_id: str | None = None
             orchestrator_failure_code = "orchestrator_execution_failed"
             orchestrator_failure_output: dict[str, Any] = {"cycle": orchestration_cycle}
             try:
@@ -1511,6 +1711,7 @@ class DurableCampaignRunner:
                                 parent_execution_id=latest_terminal_execution,
                             )
                         orchestrator_execution = planner_result.execution_id
+                        orchestrator_request_id = planner_result.provider_request_id
                         decision = planner_result.decision
                 except OrchestratorHalt as exc:
                     orchestrator_failure_code = exc.code
@@ -1594,20 +1795,13 @@ class DurableCampaignRunner:
                     )
                 raise
 
-            red_team_execution = self._start_agent_execution(
-                run_id=authorized.run.run_id,
-                agent_role="red_team",
-                input_payload={
-                    "cycle": orchestration_cycle,
-                    "directive_category": directive["category"],
-                    "authorized_remaining_case_count": len(remaining),
-                    "corpus_sha256": scope.corpus_hash,
-                },
-                parent_execution_id=orchestrator_execution,
-                detail={"phase": "authorized_case_selection"},
-            )
-            red_team_failure_code = "red_team_execution_failed"
-            try:
+            if (
+                prepared.hosted is not None
+                and hosted_lifecycle is not None
+                and self._hosted_transport is not None
+            ):
+                if not orchestrator_request_id:
+                    raise DispatchUnavailable("hosted_orchestrator_provider_identity_missing")
                 try:
                     proposals = self.red_team.propose(
                         cases=[verified_case_payload(case) for case in remaining],
@@ -1619,12 +1813,10 @@ class DurableCampaignRunner:
                         corpus_id=prepared.corpus.corpus_id,
                     )
                 except Exception as exc:
-                    red_team_failure_code = "red_team_proposal_failed"
                     raise CampaignAbort(
                         "Red Team could not select an exact authorized case",
                         code="red_team_proposal_failed",
                     ) from exc
-
                 payload = verified_case_payload(case)
                 attempt = self.store.ensure_campaign_attempt(
                     run_id=job.campaign_run_id,
@@ -1639,33 +1831,102 @@ class DurableCampaignRunner:
                     source_tool=case.source_tool,
                     source_technique=case.source_technique,
                 )
-                self._bind_agent_execution_attempt(
-                    execution_id=red_team_execution,
+                try:
+                    hosted_red_team = _generate_quarantined_hosted_red_team(
+                        configuration=prepared.hosted.configuration,
+                        generation_policy=prepared.hosted.generation_policy,
+                        transport=self._hosted_transport,
+                        lifecycle=hosted_lifecycle,
+                        seed=proposal,
+                        category=str(directive["category"]),
+                        cycle=orchestration_cycle,
+                        corpus_sha256=scope.corpus_hash,
+                        attempt_id=attempt.attempt_id,
+                        parent_execution_id=orchestrator_execution,
+                        parent_request_id=orchestrator_request_id,
+                    )
+                except Exception as exc:
+                    raise CampaignAbort(
+                        "Hosted Red Team generation failed before target dispatch",
+                        code="hosted_red_team_generation_failed",
+                    ) from exc
+                red_team_execution = hosted_red_team.execution_id
+                red_team_provider_requests[attempt.attempt_id] = (
+                    hosted_red_team.lineage.provider_request_id
+                )
+            else:
+                red_team_execution = self._start_agent_execution(
                     run_id=authorized.run.run_id,
-                    attempt_id=attempt.attempt_id,
-                )
-                self._finish_agent_execution(
-                    execution_id=red_team_execution,
-                    status="succeeded",
-                    output_payload={
+                    agent_role="red_team",
+                    input_payload={
                         "cycle": orchestration_cycle,
-                        "case_ref": payload["case_id"],
-                        "category": payload["category"],
-                        "source_tool": case.source_tool or "headshot-authored",
-                        "proposal_count_considered": len(proposals),
+                        "directive_category": directive["category"],
+                        "authorized_remaining_case_count": len(remaining),
+                        "corpus_sha256": scope.corpus_hash,
                     },
+                    parent_execution_id=orchestrator_execution,
                     detail={"phase": "authorized_case_selection"},
                 )
-            except Exception as exc:
-                self._fail_agent_execution_preserving_error(
-                    primary_error=exc,
-                    execution_id=red_team_execution,
-                    status="failed",
-                    output_payload={"cycle": orchestration_cycle},
-                    error_code=red_team_failure_code,
-                    detail={"phase": "authorized_case_selection"},
-                )
-                raise
+                red_team_failure_code = "red_team_execution_failed"
+                try:
+                    try:
+                        proposals = self.red_team.propose(
+                            cases=[verified_case_payload(case) for case in remaining],
+                            directive=directive,
+                        )
+                        case, proposal = _select_authorized_proposal(
+                            remaining,
+                            proposals,
+                            corpus_id=prepared.corpus.corpus_id,
+                        )
+                    except Exception as exc:
+                        red_team_failure_code = "red_team_proposal_failed"
+                        raise CampaignAbort(
+                            "Red Team could not select an exact authorized case",
+                            code="red_team_proposal_failed",
+                        ) from exc
+
+                    payload = verified_case_payload(case)
+                    attempt = self.store.ensure_campaign_attempt(
+                        run_id=job.campaign_run_id,
+                        ordinal=next_ordinal,
+                        case_id=payload["case_id"],
+                        case_content_hash=case.content_hash,
+                        category=payload["category"],
+                        severity=payload["severity"]["rating"],
+                        attack_class=payload["test_design"]["classification"],
+                        owasp_mappings=payload["owasp"],
+                        fixture_provenance=payload["fixture_provenance"],
+                        source_tool=case.source_tool,
+                        source_technique=case.source_technique,
+                    )
+                    self._bind_agent_execution_attempt(
+                        execution_id=red_team_execution,
+                        run_id=authorized.run.run_id,
+                        attempt_id=attempt.attempt_id,
+                    )
+                    self._finish_agent_execution(
+                        execution_id=red_team_execution,
+                        status="succeeded",
+                        output_payload={
+                            "cycle": orchestration_cycle,
+                            "case_ref": payload["case_id"],
+                            "category": payload["category"],
+                            "source_tool": case.source_tool or "headshot-authored",
+                            "proposal_count_considered": len(proposals),
+                        },
+                        detail={"phase": "authorized_case_selection"},
+                    )
+                except Exception as exc:
+                    self._fail_agent_execution_preserving_error(
+                        primary_error=exc,
+                        execution_id=red_team_execution,
+                        status="failed",
+                        output_payload={"cycle": orchestration_cycle},
+                        error_code=red_team_failure_code,
+                        detail={"phase": "authorized_case_selection"},
+                    )
+                    raise
             orchestration_cycle += 1
             next_ordinal += 1
             return case, proposal, attempt, red_team_execution
@@ -1745,8 +2006,16 @@ class DurableCampaignRunner:
             else "live_target"
         )
         current_red_team_execution: str | None = None
-        judge_executions: dict[str, str] = {}
         pre_manifest_hosted_judge: _PreManifestHostedJudge | None = None
+
+        def record_hosted_judge_execution(
+            attempt_id: str,
+            execution_id: str,
+            provider_request_id: str,
+        ) -> None:
+            judge_executions[attempt_id] = execution_id
+            judge_provider_requests[attempt_id] = provider_request_id
+
         if (
             hosted_evaluator is not None
             and hosted_lifecycle is not None
@@ -1758,10 +2027,7 @@ class DurableCampaignRunner:
                 lifecycle=hosted_lifecycle,
                 calibration=prepared.hosted.calibration,
                 target_credential_resolver=lambda: credential_lease.resolve(scope.credential_ref),
-                execution_recorder=lambda attempt_id, execution_id: judge_executions.__setitem__(
-                    attempt_id,
-                    execution_id,
-                ),
+                execution_recorder=record_hosted_judge_execution,
             )
 
         def start_coordinator_agent_execution(**values: Any) -> str:
@@ -1834,6 +2100,7 @@ class DurableCampaignRunner:
                     attempt_id=attempt.attempt_id,
                     expected_safe_behavior=str(dispatch_payload["expected_safe_behavior"]),
                     parent_execution_id=current_red_team_execution,
+                    parent_request_id=red_team_provider_requests[attempt.attempt_id],
                 ):
                     outcome = coordinator.run_case(
                         dispatch_payload,
@@ -1899,6 +2166,7 @@ class DurableCampaignRunner:
                                 verdict=effective_verdict,
                                 report_input=report_input,
                                 parent_execution_id=judge_executions.get(attempt.attempt_id),
+                                parent_request_id=judge_provider_requests.get(attempt.attempt_id),
                             )
                         documentation_execution = report_writer_result.execution_id
                         report = dict(report_writer_result.report)
