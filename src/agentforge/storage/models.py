@@ -1232,10 +1232,25 @@ class CampaignRunRecord(Base):
     created_at: Mapped[datetime.datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
     )
-    authorization_request_id: Mapped[str] = mapped_column(String(64), nullable=False)
-    scope_hash: Mapped[str] = mapped_column(String(64), nullable=False)
-    launcher_user_id: Mapped[str] = mapped_column(String(128), nullable=False)
-    launcher_session_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    run_kind: Mapped[str] = mapped_column(
+        String(32), nullable=False, server_default=text("'campaign'")
+    )
+    authorization_request_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    scope_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    launcher_user_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    launcher_session_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    acceptance_configuration_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    acceptance_generation_policy_sha256: Mapped[str | None] = mapped_column(
+        String(64), nullable=True
+    )
+    acceptance_context_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    acceptance_attempt_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    acceptance_limits: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    acceptance_expires_at: Mapped[datetime.datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    acceptance_actor_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    acceptance_provenance: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
     __table_args__ = (
         ForeignKeyConstraint(
@@ -1247,11 +1262,143 @@ class CampaignRunRecord(Base):
             ],
             name="fk_campaign_run_authorization_request",
         ),
+        ForeignKeyConstraint(
+            ["organization_id", "acceptance_configuration_sha256"],
+            [
+                "hosted_configuration_sets.organization_id",
+                "hosted_configuration_sets.configuration_sha256",
+            ],
+            name="fk_campaign_run_acceptance_configuration",
+        ),
+        ForeignKeyConstraint(
+            ["organization_id", "run_id", "acceptance_attempt_id"],
+            [
+                "campaign_attempts.organization_id",
+                "campaign_attempts.run_id",
+                "campaign_attempts.attempt_id",
+            ],
+            name="fk_campaign_run_acceptance_attempt",
+            deferrable=True,
+            initially="DEFERRED",
+        ),
         UniqueConstraint(
             "organization_id", "authorization_request_id", name="uq_campaign_run_authorization_once"
         ),
         UniqueConstraint("organization_id", "run_id", name="uq_campaign_runs_org_run"),
         CheckConstraint("scope_hash ~ '^[0-9a-f]{64}$'", name="campaign_run_scope_hash"),
+        CheckConstraint(
+            "run_kind IN ('campaign','agent_acceptance')",
+            name="campaign_run_kind",
+        ),
+        CheckConstraint(
+            "(run_kind = 'campaign' "
+            "AND authorization_request_id IS NOT NULL "
+            "AND scope_hash IS NOT NULL "
+            "AND launcher_user_id IS NOT NULL "
+            "AND launcher_session_id IS NOT NULL "
+            "AND acceptance_configuration_sha256 IS NULL "
+            "AND acceptance_generation_policy_sha256 IS NULL "
+            "AND acceptance_context_sha256 IS NULL "
+            "AND acceptance_attempt_id IS NULL "
+            "AND acceptance_limits IS NULL "
+            "AND acceptance_expires_at IS NULL "
+            "AND acceptance_actor_id IS NULL "
+            "AND acceptance_provenance IS NULL) OR "
+            "(run_kind = 'agent_acceptance' "
+            "AND authorization_request_id IS NULL "
+            "AND scope_hash IS NULL "
+            "AND launcher_user_id IS NULL "
+            "AND launcher_session_id IS NULL "
+            "AND acceptance_configuration_sha256 IS NOT NULL "
+            "AND acceptance_generation_policy_sha256 IS NOT NULL "
+            "AND acceptance_context_sha256 IS NOT NULL "
+            "AND acceptance_attempt_id IS NOT NULL "
+            "AND acceptance_limits IS NOT NULL "
+            "AND acceptance_expires_at IS NOT NULL "
+            "AND acceptance_actor_id IS NOT NULL "
+            "AND acceptance_provenance IS NOT NULL)",
+            name="campaign_run_authority_shape",
+        ),
+        CheckConstraint(
+            "run_kind <> 'agent_acceptance' OR "
+            "(run_id LIKE 'AR-%' "
+            "AND acceptance_actor_id ~ '^system:[A-Za-z0-9._:-]+$')",
+            name="campaign_run_acceptance_identity",
+        ),
+        CheckConstraint(
+            "acceptance_configuration_sha256 IS NULL OR "
+            "(acceptance_configuration_sha256 ~ '^[0-9a-f]{64}$' "
+            "AND acceptance_generation_policy_sha256 ~ '^[0-9a-f]{64}$' "
+            "AND acceptance_context_sha256 ~ '^[0-9a-f]{64}$' "
+            "AND acceptance_attempt_id ~ '^[0-9a-f]{64}$')",
+            name="campaign_run_acceptance_hashes",
+        ),
+        CheckConstraint(
+            "acceptance_provenance IS NULL OR "
+            "(jsonb_typeof(acceptance_provenance) = 'object' "
+            "AND acceptance_provenance - "
+            "ARRAY['actor_type','schema_version','source'] = '{}'::jsonb "
+            "AND acceptance_provenance->>'actor_type' = 'system' "
+            "AND acceptance_provenance->>'schema_version' = '1' "
+            "AND acceptance_provenance->>'source' = 'agentforge.live_acceptance')",
+            name="campaign_run_acceptance_provenance",
+        ),
+        CheckConstraint(
+            "acceptance_limits IS NULL OR "
+            "(jsonb_typeof(acceptance_limits) = 'object' "
+            "AND acceptance_limits - "
+            "ARRAY['schema_version','network_scope','target_call_limit','allowed_roles',"
+            "'role_call_caps','role_usd_caps','global_call_cap','global_usd_cap'] = '{}'::jsonb "
+            "AND acceptance_limits->>'schema_version' = '1' "
+            "AND acceptance_limits->>'network_scope' = 'openrouter_langfuse_only' "
+            "AND jsonb_typeof(acceptance_limits->'target_call_limit') = 'number' "
+            "AND (acceptance_limits->>'target_call_limit')::numeric = 0 "
+            "AND jsonb_typeof(acceptance_limits->'allowed_roles') = 'array' "
+            "AND jsonb_array_length(acceptance_limits->'allowed_roles') = 3 "
+            "AND acceptance_limits->'allowed_roles' "
+            '@> \'["orchestrator","judge","documentation"]\'::jsonb '
+            "AND jsonb_typeof(acceptance_limits->'role_call_caps') = 'object' "
+            "AND (acceptance_limits->'role_call_caps') - "
+            "ARRAY['orchestrator','judge','documentation'] = '{}'::jsonb "
+            "AND jsonb_typeof(acceptance_limits->'role_call_caps'->'orchestrator') = 'number' "
+            "AND jsonb_typeof(acceptance_limits->'role_call_caps'->'judge') = 'number' "
+            "AND jsonb_typeof(acceptance_limits->'role_call_caps'->'documentation') = 'number' "
+            "AND (acceptance_limits->'role_call_caps'->>'orchestrator')::numeric = 1 "
+            "AND (acceptance_limits->'role_call_caps'->>'judge')::numeric = 1 "
+            "AND (acceptance_limits->'role_call_caps'->>'documentation')::numeric = 1 "
+            "AND jsonb_typeof(acceptance_limits->'role_usd_caps') = 'object' "
+            "AND (acceptance_limits->'role_usd_caps') - "
+            "ARRAY['orchestrator','judge','documentation'] = '{}'::jsonb "
+            "AND jsonb_typeof(acceptance_limits->'role_usd_caps'->'orchestrator') = 'string' "
+            "AND jsonb_typeof(acceptance_limits->'role_usd_caps'->'judge') = 'string' "
+            "AND jsonb_typeof(acceptance_limits->'role_usd_caps'->'documentation') = 'string' "
+            "AND acceptance_limits->'role_usd_caps'->>'orchestrator' "
+            "~ '^(0|[1-9][0-9]*)(\\.[0-9]+)?$' "
+            "AND acceptance_limits->'role_usd_caps'->>'judge' "
+            "~ '^(0|[1-9][0-9]*)(\\.[0-9]+)?$' "
+            "AND acceptance_limits->'role_usd_caps'->>'documentation' "
+            "~ '^(0|[1-9][0-9]*)(\\.[0-9]+)?$' "
+            "AND (acceptance_limits->'role_usd_caps'->>'orchestrator')::numeric > 0 "
+            "AND (acceptance_limits->'role_usd_caps'->>'orchestrator')::numeric <= 1.5 "
+            "AND (acceptance_limits->'role_usd_caps'->>'judge')::numeric > 0 "
+            "AND (acceptance_limits->'role_usd_caps'->>'judge')::numeric <= 4 "
+            "AND (acceptance_limits->'role_usd_caps'->>'documentation')::numeric > 0 "
+            "AND (acceptance_limits->'role_usd_caps'->>'documentation')::numeric <= 1 "
+            "AND jsonb_typeof(acceptance_limits->'global_call_cap') = 'number' "
+            "AND (acceptance_limits->>'global_call_cap')::numeric = 3 "
+            "AND jsonb_typeof(acceptance_limits->'global_usd_cap') = 'string' "
+            "AND acceptance_limits->>'global_usd_cap' "
+            "~ '^(0|[1-9][0-9]*)(\\.[0-9]+)?$' "
+            "AND (acceptance_limits->>'global_usd_cap')::numeric > 0 "
+            "AND (acceptance_limits->>'global_usd_cap')::numeric <= 10)",
+            name="campaign_run_acceptance_limits",
+        ),
+        Index(
+            "ix_campaign_runs_acceptance_expiry",
+            "organization_id",
+            "acceptance_expires_at",
+            postgresql_where=text("run_kind = 'agent_acceptance'"),
+        ),
     )
 
 
