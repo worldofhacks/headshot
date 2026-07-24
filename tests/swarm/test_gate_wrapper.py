@@ -3,11 +3,8 @@
 from __future__ import annotations
 
 import ast
-import builtins
 import contextlib
 import hashlib
-import importlib.util
-import io
 import json
 import os
 import shutil
@@ -18,7 +15,6 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Final
-from unittest import mock
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 SWARM_FILES = (
@@ -1159,7 +1155,7 @@ def test_wrapper_killed_before_publication_preserves_the_prior_complete_report(
 def test_fixed_report_publisher_uses_only_one_atomic_replace(
     tmp_path: Path,
 ) -> None:
-    """spec(T-F00:AC-5) — the fixed boundary has one replace and no alternate write path."""
+    """spec(T-F00:AC-5) — a fresh audit permits only the fixed boundary's one replace."""
     publisher_path = REPOSITORY_ROOT / ".tdd-swarm" / REPORT_PUBLISHER
     assert publisher_path.is_file(), (
         f"fixed report publisher is missing: .tdd-swarm/{REPORT_PUBLISHER}"
@@ -1189,156 +1185,161 @@ def test_fixed_report_publisher_uses_only_one_atomic_replace(
         encoding="utf-8",
     )
     arbitrary_publisher.chmod(0o755)
-
     source_before_state = _file_state(staged_path)
     destination_before_state = _file_state(report_path)
     source_before_hash = hashlib.sha256(staged_bytes).hexdigest()
     destination_before_hash = hashlib.sha256(prior).hexdigest()
-    replace_events: list[dict[str, object]] = []
-    forbidden_operations: list[tuple[str, str]] = []
-    real_replace = os.replace
-    real_builtin_open = builtins.open
-    real_io_open = io.open
-    real_os_open = os.open
-    expected_destination = report_path.resolve()
-    report_directory_stat = report_directory.stat()
-    report_directory_identity = (
-        report_directory_stat.st_dev,
-        report_directory_stat.st_ino,
+    audit_harness = tmp_path / "publisher-audit-harness.py"
+    audit_result = tmp_path / "publisher-audit-result.json"
+    audit_harness.write_text(
+        "import hashlib\n"
+        "import importlib.util\n"
+        "import json\n"
+        "import os\n"
+        "import sys\n"
+        "from pathlib import Path\n"
+        "publisher, source, destination, result_path = map(Path, sys.argv[1:])\n"
+        "publisher = publisher.resolve()\n"
+        "source = source.resolve()\n"
+        "destination = destination.resolve()\n"
+        "directory = destination.parent\n"
+        "directory_stat = directory.stat()\n"
+        "directory_identity = (directory_stat.st_dev, directory_stat.st_ino)\n"
+        "phase = 'import'\n"
+        "security_events = []\n"
+        "replace_calls = []\n"
+        "def state(path):\n"
+        "    status = path.lstat()\n"
+        "    return [status.st_dev, status.st_ino, status.st_mode, status.st_size,\n"
+        "            status.st_mtime_ns, status.st_ctime_ns]\n"
+        "def digest(path):\n"
+        "    return hashlib.sha256(path.read_bytes()).hexdigest()\n"
+        "def resolve_at(value, dir_fd=None):\n"
+        "    candidate = Path(os.fsdecode(os.fspath(value)))\n"
+        "    if candidate.is_absolute() or dir_fd in (None, -1):\n"
+        "        return candidate.resolve()\n"
+        "    status = os.fstat(dir_fd)\n"
+        "    assert (status.st_dev, status.st_ino) == directory_identity\n"
+        "    assert candidate.parent == Path('.')\n"
+        "    return (directory / candidate).resolve()\n"
+        "def deny(event, args):\n"
+        "    raise RuntimeError(f'forbidden audit event during {phase}: {event} {args!r}')\n"
+        "def audit(event, args):\n"
+        "    if phase not in {'import', 'call'}:\n"
+        "        return\n"
+        "    if event == 'os.rename':\n"
+        "        raw_source, raw_destination, source_fd, destination_fd = args\n"
+        "        effective_source = resolve_at(raw_source, source_fd)\n"
+        "        effective_destination = resolve_at(raw_destination, destination_fd)\n"
+        "        entry = {'event': event, 'source': str(effective_source),\n"
+        "                 'destination': str(effective_destination)}\n"
+        "        security_events.append(entry)\n"
+        "        if (phase != 'call' or effective_source != source or\n"
+        "                effective_destination != destination or len(security_events) != 1):\n"
+        "            deny(event, args)\n"
+        "        return\n"
+        "    if event == 'open':\n"
+        "        _path, mode, flags = args\n"
+        "        write_flags = os.O_WRONLY | os.O_RDWR | os.O_APPEND | os.O_CREAT | os.O_TRUNC\n"
+        "        if (isinstance(mode, str) and any(flag in mode for flag in 'wax+')) or (\n"
+        "                isinstance(flags, int) and flags & write_flags):\n"
+        "            deny(event, args)\n"
+        "        return\n"
+        "    if event.startswith('os.') and event not in {'os.listdir', 'os.scandir'}:\n"
+        "        deny(event, args)\n"
+        "    if event.startswith(('subprocess.', 'ctypes.', 'cffi.', 'pty.', '_thread.')):\n"
+        "        deny(event, args)\n"
+        "    if event == 'import' and str(args[0]).split('.')[0] in {\n"
+        "            'ctypes', '_ctypes', 'cffi', '_cffi_backend', 'subprocess',\n"
+        "            'multiprocessing', 'pty'}:\n"
+        "        deny(event, args)\n"
+        "    if event in {'sys.addaudithook', 'sys.settrace', 'sys.setprofile'}:\n"
+        "        deny(event, args)\n"
+        "    if phase == 'call' and event in {'compile', 'exec'}:\n"
+        "        deny(event, args)\n"
+        "sys.addaudithook(audit)\n"
+        "real_replace = os.replace\n"
+        "def replace_spy(raw_source, raw_destination, *args, **kwargs):\n"
+        "    assert phase == 'call'\n"
+        "    assert not args\n"
+        "    assert set(kwargs) <= {'src_dir_fd', 'dst_dir_fd'}\n"
+        "    effective_source = resolve_at(raw_source, kwargs.get('src_dir_fd'))\n"
+        "    effective_destination = resolve_at(raw_destination, kwargs.get('dst_dir_fd'))\n"
+        "    assert effective_source == source\n"
+        "    assert effective_destination == destination\n"
+        "    record = {'source': str(effective_source),\n"
+        "              'destination': str(effective_destination),\n"
+        "              'source_before_state': state(effective_source),\n"
+        "              'destination_before_state': state(effective_destination),\n"
+        "              'source_before_hash': digest(effective_source),\n"
+        "              'destination_before_hash': digest(effective_destination)}\n"
+        "    real_replace(raw_source, raw_destination, *args, **kwargs)\n"
+        "    record.update({'source_exists_after': effective_source.exists(),\n"
+        "                   'destination_after_state': state(effective_destination),\n"
+        "                   'destination_after_hash': digest(effective_destination)})\n"
+        "    replace_calls.append(record)\n"
+        "os.replace = replace_spy\n"
+        "spec = importlib.util.spec_from_file_location('audited_tdd_swarm_publisher', publisher)\n"
+        "assert spec is not None and spec.loader is not None\n"
+        "module = importlib.util.module_from_spec(spec)\n"
+        "spec.loader.exec_module(module)\n"
+        "boundary = getattr(module, 'publish_report', None)\n"
+        "assert callable(boundary)\n"
+        "phase = 'call'\n"
+        "boundary(source, destination)\n"
+        "assert len(replace_calls) == 1\n"
+        "assert security_events == [{'event': 'os.rename', 'source': str(source),\n"
+        "                            'destination': str(destination)}]\n"
+        "phase = 'done'\n"
+        "result_path.write_text(json.dumps({'replace_calls': replace_calls,\n"
+        "                                  'security_events': security_events}, sort_keys=True),\n"
+        "                       encoding='utf-8')\n",
+        encoding="utf-8",
+    )
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "PYTHONDONTWRITEBYTECODE": "1",
+            "TDD_SWARM_TEST_REPORT_PUBLISHER": str(arbitrary_publisher),
+        }
+    )
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(audit_harness),
+            str(publisher_path),
+            str(staged_path),
+            str(report_path),
+            str(audit_result),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=environment,
+        timeout=5,
     )
 
-    def resolve_operand(path: object, dir_fd: object = None) -> Path:
-        candidate = Path(os.fsdecode(os.fspath(path)))
-        if candidate.is_absolute() or dir_fd is None:
-            return candidate.resolve()
-        assert isinstance(dir_fd, int)
-        directory_stat = os.fstat(dir_fd)
-        assert (directory_stat.st_dev, directory_stat.st_ino) == report_directory_identity
-        assert candidate.parent == Path(".")
-        return (report_directory / candidate).resolve()
-
-    def resolves_to_destination(path: object, dir_fd: object = None) -> bool:
-        if isinstance(path, int):
-            return False
-        try:
-            candidate = resolve_operand(path, dir_fd)
-        except (AssertionError, TypeError, ValueError):
-            return False
-        return candidate == expected_destination
-
-    def replace_spy(source: object, destination: object, *args: object, **kwargs: object) -> None:
-        assert not args
-        assert set(kwargs) <= {"src_dir_fd", "dst_dir_fd"}
-        source_path = resolve_operand(source, kwargs.get("src_dir_fd"))
-        destination_path = resolve_operand(destination, kwargs.get("dst_dir_fd"))
-        assert source_path == staged_path.resolve()
-        assert destination_path == report_path.resolve()
-        before_source_state = _file_state(source_path)
-        before_destination_state = _file_state(destination_path)
-        before_source_hash = hashlib.sha256(source_path.read_bytes()).hexdigest()
-        before_destination_hash = hashlib.sha256(destination_path.read_bytes()).hexdigest()
-        real_replace(source, destination, *args, **kwargs)
-        replace_events.append(
-            {
-                "source": source_path,
-                "destination": destination_path,
-                "source_before_state": before_source_state,
-                "destination_before_state": before_destination_state,
-                "source_before_hash": before_source_hash,
-                "destination_before_hash": before_destination_hash,
-                "source_exists_after": source_path.exists(),
-                "destination_after_state": _file_state(destination_path),
-                "destination_after_hash": hashlib.sha256(destination_path.read_bytes()).hexdigest(),
-            }
-        )
-
-    def reject_path_operation(operation: str) -> Callable[..., None]:
-        def reject(path: object, *_args: object, **_kwargs: object) -> None:
-            forbidden_operations.append((operation, os.fsdecode(os.fspath(path))))
-            raise AssertionError(f"publisher attempted forbidden {operation}")
-
-        return reject
-
-    def guarded_builtin_open(
-        file: object,
-        mode: str = "r",
-        *args: object,
-        **kwargs: object,
-    ) -> object:
-        if resolves_to_destination(file) and any(flag in mode for flag in "wax+"):
-            forbidden_operations.append(("destination-open", mode))
-            raise AssertionError("publisher opened destination for direct writing")
-        return real_builtin_open(file, mode, *args, **kwargs)
-
-    def guarded_io_open(
-        file: object,
-        mode: str = "r",
-        *args: object,
-        **kwargs: object,
-    ) -> object:
-        if resolves_to_destination(file) and any(flag in mode for flag in "wax+"):
-            forbidden_operations.append(("destination-open", mode))
-            raise AssertionError("publisher opened destination for direct writing")
-        return real_io_open(file, mode, *args, **kwargs)
-
-    def guarded_os_open(
-        path: object,
-        flags: int,
-        mode: int = 0o777,
-        *,
-        dir_fd: int | None = None,
-    ) -> int:
-        write_flags = os.O_WRONLY | os.O_RDWR | os.O_APPEND | os.O_CREAT | os.O_TRUNC
-        if resolves_to_destination(path, dir_fd) and flags & write_flags:
-            forbidden_operations.append(("destination-os.open", str(flags)))
-            raise AssertionError("publisher opened destination with write/create/truncate flags")
-        options = {} if dir_fd is None else {"dir_fd": dir_fd}
-        return real_os_open(path, flags, mode, **options)
-
-    def reject_process(*args: object, **_kwargs: object) -> None:
-        forbidden_operations.append(("process", repr(args[0] if args else None)))
-        raise AssertionError("publisher attempted to select an executable")
-
-    spec = importlib.util.spec_from_file_location("tdd_swarm_publish_report_test", publisher_path)
-    assert spec is not None and spec.loader is not None
-    publisher_module = importlib.util.module_from_spec(spec)
-    with contextlib.ExitStack() as stack:
-        stack.enter_context(mock.patch.object(os, "replace", new=replace_spy))
-        stack.enter_context(mock.patch.object(os, "unlink", new=reject_path_operation("unlink")))
-        stack.enter_context(mock.patch.object(os, "remove", new=reject_path_operation("remove")))
-        stack.enter_context(mock.patch.object(os, "rename", new=reject_path_operation("rename")))
-        stack.enter_context(mock.patch.object(builtins, "open", new=guarded_builtin_open))
-        stack.enter_context(mock.patch.object(io, "open", new=guarded_io_open))
-        stack.enter_context(mock.patch.object(os, "open", new=guarded_os_open))
-        stack.enter_context(mock.patch.object(subprocess, "Popen", new=reject_process))
-        stack.enter_context(mock.patch.object(os, "system", new=reject_process))
-        stack.enter_context(mock.patch.object(sys, "dont_write_bytecode", True))
-        stack.enter_context(
-            mock.patch.dict(
-                os.environ,
-                {"TDD_SWARM_TEST_REPORT_PUBLISHER": str(arbitrary_publisher)},
-            )
-        )
-        spec.loader.exec_module(publisher_module)
-        publish_report = getattr(publisher_module, "publish_report", None)
-        assert callable(publish_report), (
-            "fixed module must expose publish_report(staged, destination)"
-        )
-        publish_report(staged_path, report_path)
-
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    result = json.loads(audit_result.read_text(encoding="utf-8"))
     destination_after_state = _file_state(report_path)
-    assert forbidden_operations == []
     assert not marker.exists()
-    assert replace_events == [
+    assert result["security_events"] == [
         {
-            "source": staged_path.resolve(),
-            "destination": report_path.resolve(),
-            "source_before_state": source_before_state,
-            "destination_before_state": destination_before_state,
+            "event": "os.rename",
+            "source": str(staged_path.resolve()),
+            "destination": str(report_path.resolve()),
+        }
+    ]
+    assert result["replace_calls"] == [
+        {
+            "source": str(staged_path.resolve()),
+            "destination": str(report_path.resolve()),
+            "source_before_state": list(source_before_state),
+            "destination_before_state": list(destination_before_state),
             "source_before_hash": source_before_hash,
             "destination_before_hash": destination_before_hash,
             "source_exists_after": False,
-            "destination_after_state": destination_after_state,
+            "destination_after_state": list(destination_after_state),
             "destination_after_hash": source_before_hash,
         }
     ]
@@ -1409,8 +1410,6 @@ def test_wrapper_uses_the_fixed_report_publisher_and_ignores_an_env_override(
         in expected_text
     )
     assert "| import-cycles | `python3 .tdd-swarm/check-import-cycles.py` | 0 |" in expected_text
-    wrapper_source = (tmp_path / ".tdd-swarm" / "run-local-gates.sh").read_text(encoding="utf-8")
-    assert f"python3 .tdd-swarm/{REPORT_PUBLISHER}" in wrapper_source
 
     prior = b"prior-complete-report\n"
     report_path.write_bytes(prior)
@@ -1476,6 +1475,99 @@ def test_wrapper_uses_the_fixed_report_publisher_and_ignores_an_env_override(
     assert published_state[1] == staged_state[1]
     assert report_path.read_bytes() == staged_bytes
     assert not staged_path.exists()
+    assert not marker.exists()
+
+    trap_nonce = os.urandom(16).hex()
+    trap_sentinel = 73
+    trap_record = tmp_path.parent / f".{tmp_path.name}-{trap_nonce}.jsonl"
+    fixture_publisher = tmp_path / ".tdd-swarm" / REPORT_PUBLISHER
+    fixture_publisher.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json\n"
+        "import sys\n"
+        "from pathlib import Path\n"
+        f"record = Path({str(trap_record)!r})\n"
+        f"payload = {{'nonce': {trap_nonce!r}, 'argv': sys.argv[1:]}}\n"
+        "with record.open('a', encoding='utf-8') as stream:\n"
+        "    stream.write(json.dumps(payload, sort_keys=True) + '\\n')\n"
+        f"raise SystemExit({trap_sentinel})\n",
+        encoding="utf-8",
+    )
+    fixture_publisher.chmod(0o755)
+    _run(["git", "add", f".tdd-swarm/{REPORT_PUBLISHER}"], cwd=tmp_path)
+    _run(["git", "commit", "-qm", "fixture fixed publisher trap"], cwd=tmp_path)
+    trap_head = _run(["git", "rev-parse", "HEAD"], cwd=tmp_path).stdout.strip()
+    _write_signed_approval(tmp_path)
+    trap_publisher_hash = hashlib.sha256(fixture_publisher.read_bytes()).hexdigest()
+    real_publisher_hash = expected_identities["publisher-sha256"]
+    assert expected_report.count(f"head: {base}".encode()) == 1
+    assert expected_report.count(f"publisher-sha256: {real_publisher_hash}".encode()) == 1
+    expected_trap_report = expected_report.replace(
+        f"head: {base}".encode(),
+        f"head: {trap_head}".encode(),
+    ).replace(
+        f"publisher-sha256: {real_publisher_hash}".encode(),
+        f"publisher-sha256: {trap_publisher_hash}".encode(),
+    )
+
+    report_path.write_bytes(prior)
+    trap_destination_state = _file_state(report_path)
+    trap_ready = tmp_path / "trap-failpoint-ready"
+    trap_resume = tmp_path / "trap-failpoint-continue"
+    trap_process = _start_wrapper_at_failpoint(
+        tmp_path,
+        base,
+        failpoint="before-report-publish",
+        ready_file=trap_ready,
+        continue_file=trap_resume,
+        extra_environment={"TDD_SWARM_TEST_REPORT_PUBLISHER": str(malicious_publisher)},
+    )
+
+    try:
+        assert _poll_until(
+            lambda: trap_ready.exists() or trap_process.poll() is not None,
+            deadline_seconds=3,
+        )
+        assert trap_ready.exists(), "wrapper did not expose the fixed-publisher trap boundary"
+        assert report_path.read_bytes() == prior
+        trap_stages = [
+            path
+            for path in report_directory.iterdir()
+            if path != report_path
+            and not path.is_symlink()
+            and path.is_file()
+            and path.read_bytes() == expected_trap_report
+        ]
+        assert len(trap_stages) == 1, (
+            "trap must receive one complete regular same-directory staged report"
+        )
+        trap_stage = trap_stages[0]
+        trap_stage_state = _file_state(trap_stage)
+        trap_resume.touch()
+        try:
+            trap_stdout, trap_stderr = trap_process.communicate(timeout=4)
+        except subprocess.TimeoutExpired:
+            trap_stdout, trap_stderr = _terminate_process_group(trap_process)
+            raise AssertionError("wrapper did not leave the fixed-publisher trap") from None
+    finally:
+        if trap_process.poll() is None:
+            _terminate_process_group(trap_process)
+
+    assert trap_process.returncode == trap_sentinel, trap_stdout + trap_stderr
+    assert report_path.read_bytes() == prior
+    assert _file_state(report_path) == trap_destination_state
+    assert trap_stage_state[1] != trap_destination_state[1]
+    records = [json.loads(line) for line in trap_record.read_text(encoding="utf-8").splitlines()]
+    assert len(records) == 1
+    assert records[0]["nonce"] == trap_nonce
+    assert len(records[0]["argv"]) == 2
+
+    def resolve_fixture_argument(value: str) -> Path:
+        path = Path(value)
+        return path.resolve() if path.is_absolute() else (tmp_path / path).resolve()
+
+    assert resolve_fixture_argument(records[0]["argv"][0]) == trap_stage.resolve()
+    assert resolve_fixture_argument(records[0]["argv"][1]) == report_path.resolve()
     assert not marker.exists()
 
 
