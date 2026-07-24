@@ -1,7 +1,7 @@
 # T-F18 console remediation final pass review
 
-Reviewed console commit: `7bd41fa2f69e16460e4642adfbc03474c93d4e49`  
-Companion runtime HEAD inspected: `c48892844edd0723ede0315f1eefb99f31f2cf8d`  
+Reviewed console commit: `7bd41fa2f69e16460e4642adfbc03474c93d4e49`
+Companion runtime HEAD inspected: `c48892844edd0723ede0315f1eefb99f31f2cf8d`
 Verdict: **CHANGES_REQUIRED**
 
 ## Closure audit

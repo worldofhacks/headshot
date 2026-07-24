@@ -1,7 +1,7 @@
 # T-F18 cross-worktree final pass re-review
 
-Console commit: `7bd41fa2f69e16460e4642adfbc03474c93d4e49`  
-Runtime commit: `0803849aab0e99387ee80566b359384cb216f2b1`  
+Console commit: `7bd41fa2f69e16460e4642adfbc03474c93d4e49`
+Runtime commit: `0803849aab0e99387ee80566b359384cb216f2b1`
 Verdict: **PASS**
 
 The sole blocker from `T-F18-plan-final-pass-review.md` is closed:
