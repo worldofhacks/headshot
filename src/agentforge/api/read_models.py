@@ -76,6 +76,9 @@ class SafeAuthorizationScopeReadModel(_ReadModel):
     adapter_kind: str
     environment: str
     exact_host: str
+    allowlisted_hosts: tuple[str, ...]
+    synthetic_data_only: Literal[True]
+    synthetic_data_attestation_ref: str
     auth_mode: str
     explicit_no_auth: bool
     auth_posture: str

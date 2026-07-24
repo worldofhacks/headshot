@@ -1237,6 +1237,9 @@ def test_exact_scope_two_person_flow_reaches_persistence_but_not_unwired_runner(
     assert pending_scope["endpoint"] == (
         "https://target.example.test/openemr/apis/default/api/copilot/message"
     )
+    assert pending_scope["allowlisted_hosts"] == ["target.example.test"]
+    assert pending_scope["synthetic_data_only"] is True
+    assert pending_scope["synthetic_data_attestation_ref"] == "attestation://synthetic/api-fixture"
     assert pending_scope["auth_posture"] == "bearer"
     assert pending_scope["run_nonce"] == "nonce-api-fixture-0001"
     assert "credential_ref" not in pending.text

@@ -277,9 +277,23 @@ def test_command_ignores_forged_identity_and_requires_idempotency(
             "X-Permissions": "org:campaign:authorize",
         },
     )
+    forged_target_policy = client.post(
+        "/api/v1/campaign-authorization-requests",
+        json={
+            **payload,
+            "allowlisted_hosts": ["browser-authority.invalid"],
+            "synthetic_data_only": True,
+            "synthetic_data_attestation_ref": "attestation://browser/forged",
+        },
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Idempotency-Key": "idem-policy-1234567890",
+        },
+    )
 
     assert absent_key.status_code == 400
     assert forged.status_code == 422
+    assert forged_target_policy.status_code == 422
     assert backend.commands == []
 
 

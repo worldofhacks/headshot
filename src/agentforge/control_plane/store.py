@@ -4392,7 +4392,13 @@ class ControlPlaneStore:
         if row is None:
             raise RecordNotFoundError("authorization request does not exist")
         payload = dict(row["scope_payload"])
-        if scope_from_payload(payload).scope_hash() != row["scope_hash"]:
+        try:
+            persisted_scope = scope_from_payload(payload)
+        except (KeyError, TypeError, ValueError) as exc:
+            raise AuthorizationDeniedError(
+                "authorization request scope integrity check failed"
+            ) from exc
+        if persisted_scope.scope_hash() != row["scope_hash"]:
             raise AuthorizationDeniedError("authorization request scope integrity check failed")
         return AuthorizationRequestRecord(
             request_id=row["request_id"],

@@ -199,7 +199,12 @@ def test_duplicate_versions_cannot_overwrite_registry_history() -> None:
     [
         {"target_id": "target-beta"},
         {"surface_id": "surface-other"},
-        {"exact_host": "other.example.test"},
+        {
+            "exact_host": "other.example.test",
+            "allowlisted_hosts": ("other.example.test",),
+        },
+        {"allowlisted_hosts": ("alpha.example.test", "secondary.example.test")},
+        {"synthetic_data_attestation_ref": ("attestation://fixtures/target-alpha-alternate")},
         {"adapter_kind": "other-json"},
         {"target_version": "9.0.0"},
         {"surface_version": "9.0.0"},

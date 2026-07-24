@@ -625,6 +625,9 @@ class AuthorizationScope:
     adapter_kind: str
     environment: TargetEnvironment
     exact_host: str
+    allowlisted_hosts: tuple[str, ...]
+    synthetic_data_only: bool
+    synthetic_data_attestation_ref: str
     auth_mode: AuthMode
     credential_ref: str | None
     explicit_no_auth: bool
@@ -652,6 +655,28 @@ class AuthorizationScope:
             _coerce_enum(self.environment, TargetEnvironment, "environment"),
         )
         object.__setattr__(self, "exact_host", _require_host(self.exact_host))
+        if not isinstance(self.allowlisted_hosts, (tuple, list)) or not self.allowlisted_hosts:
+            raise DefinitionError("authorization scope requires exact allowlisted hosts")
+        hosts = tuple(_require_host(host) for host in self.allowlisted_hosts)
+        if len(set(hosts)) != len(hosts):
+            raise DefinitionError(
+                "authorization scope allowlisted hosts must not contain duplicates"
+            )
+        if self.exact_host not in hosts:
+            raise DefinitionError(
+                "authorization scope exact host must appear in its allowlisted hosts"
+            )
+        object.__setattr__(self, "allowlisted_hosts", hosts)
+        if self.synthetic_data_only is not True:
+            raise DefinitionError("authorization scope must assert synthetic data only")
+        object.__setattr__(
+            self,
+            "synthetic_data_attestation_ref",
+            _require_reference(
+                self.synthetic_data_attestation_ref,
+                "authorization scope synthetic-data attestation reference",
+            ),
+        )
         auth_mode = _coerce_enum(self.auth_mode, AuthMode, "auth_mode")
         object.__setattr__(self, "auth_mode", auth_mode)
         if not isinstance(self.explicit_no_auth, bool):
@@ -710,6 +735,9 @@ class AuthorizationScope:
             adapter_kind=target.adapter_kind,
             environment=target.environment,
             exact_host=target.exact_host,
+            allowlisted_hosts=target.allowlisted_hosts,
+            synthetic_data_only=target.synthetic_data_only,
+            synthetic_data_attestation_ref=target.synthetic_data_attestation_ref,
             auth_mode=target.auth_mode,
             credential_ref=target.credential_ref,
             explicit_no_auth=target.explicit_no_auth,
@@ -733,6 +761,9 @@ class AuthorizationScope:
             "adapter_kind": self.adapter_kind,
             "environment": self.environment.value,
             "exact_host": self.exact_host,
+            "allowlisted_hosts": list(self.allowlisted_hosts),
+            "synthetic_data_only": self.synthetic_data_only,
+            "synthetic_data_attestation_ref": self.synthetic_data_attestation_ref,
             "auth_mode": self.auth_mode.value,
             "credential_ref": self.credential_ref,
             "explicit_no_auth": self.explicit_no_auth,

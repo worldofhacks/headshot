@@ -1089,6 +1089,9 @@ class DurableCampaignRunner:
                 target.version == scope.target_version
                 and target.environment is scope.environment
                 and target.exact_host == scope.exact_host
+                and target.allowlisted_hosts == scope.allowlisted_hosts
+                and target.synthetic_data_only is scope.synthetic_data_only
+                and target.synthetic_data_attestation_ref == scope.synthetic_data_attestation_ref
                 and target.adapter_kind == scope.adapter_kind
                 and target.auth_mode is scope.auth_mode
                 and target.credential_ref == scope.credential_ref
