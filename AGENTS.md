@@ -33,8 +33,11 @@ deployed URL. No target code here.
 
 ## Dual-remote law (GitHub + GitLab)
 Every checkpoint and release must be pushed to both `origin` (GitHub) and `gitlab` (Gauntlet Labs).
-The two `main` refs must resolve to the same commit, and both CI systems must be green. `main` tracks
-`origin`; push the same commit to `gitlab` with `git push gitlab main` (never `-u`/`--mirror`/force).
+GitHub Actions is the sole CI gate: its required checks must be green on the exact commit. GitLab is
+a passive exact mirror with project CI/CD disabled in Settings; do not edit `.gitlab-ci.yml` merely
+to disable it and never wait for a GitLab pipeline. The two `main` refs must resolve to the same
+commit. `main` tracks `origin`; push that exact commit to `gitlab` with `git push gitlab main`
+(never `-u`/`--mirror`/force).
 
 ## Skills
 Dev-workflow skills live in `.claude/skills/` (this repo is **Claude-Code-primary**).
