@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "agentforge/contracts/v1/regression_admission",
+  "title": "RegressionAdmissionCandidate",
+  "version": "1",
+  "description": "Judge -> Regression. A candidate for the regression corpus. Admission requires deterministic reproduction AND passes_for_right_reason=true (ARCHITECTURE.md §10, PRD-24).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "exploit_ref", "determinism_evidence", "passes_for_right_reason"],
+  "properties": {
+    "schema_version": { "const": "1" },
+    "exploit_ref": { "type": "string", "minLength": 1 },
+    "determinism_evidence": { "type": "string", "minLength": 1 },
+    "passes_for_right_reason": { "type": "boolean" },
+    "campaign_run_id": { "type": "string" }
+  }
+}

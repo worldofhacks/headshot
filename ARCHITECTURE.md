@@ -140,10 +140,12 @@ loop the platform runs attacks randomly; with it, coverage compounds. The loop c
 
 ## §4. Inter-Agent Contracts (versioned, framework-neutral)
 
-- **Format:** versioned **JSON Schema** in `contracts/v1/` (minimum v1), framework-neutral so the stack
-  choice never forces a rewrite (D10). Any breaking change → version bump + migration note + updated
-  contract tests (all three, or the run fails — enforced by `contract-steward`). Owned by us; LangGraph
-  never owns the contract (§7).
+- **Format:** versioned **JSON Schema** published in `contracts/v1/` (minimum v1), framework-neutral
+  so the stack choice never forces a rewrite (D10). The package-owned runtime source is
+  `src/agentforge/contracts/v1/`; an automated byte-equality/registry test prevents its
+  reviewer-facing root publication from drifting. Any breaking change → version bump + migration
+  note + updated contract tests (all three, or the run fails — enforced by `contract-steward`).
+  Owned by us; LangGraph never owns the contract (§7).
 - **Physical message boundaries (typed success schemas), corrected per F2:**
   - `Orchestrator → RedTeam`: **CampaignDirective** (target ref, category, coverage goal, budget/rate
     caps, mutation policy, `campaign_id`).
