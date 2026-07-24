@@ -16,7 +16,6 @@ from agentforge.agents.hosted import (
     HostedRoleConfiguration,
     TokenPrices,
 )
-from agentforge.agents.hosted_prompts import hosted_prompt
 from agentforge.agents.hosted_runtime import (
     HostedCallBounds,
     HostedRoleRuntime,
@@ -28,6 +27,7 @@ from agentforge.agents.judge.hosted import (
     HostedEvaluatorError,
 )
 from agentforge.agents.orchestrator import HostedPlanner, Orchestrator, OrchestratorHalt
+from agentforge.agents.prompts import load_prompt_registry
 from agentforge.providers.openrouter import OpenRouterResult
 from agentforge.target.spec import HostedRunBinding
 
@@ -37,6 +37,7 @@ _MODELS = {
     "judge": ("google/gemini-2.5-pro", "google-vertex", Decimal("4")),
     "documentation": ("openai/gpt-5.4", "openai", Decimal("1")),
 }
+_PROMPTS = {record.role: record for record in load_prompt_registry()}
 
 
 def _digest(value: str) -> str:
@@ -51,7 +52,7 @@ def _configuration() -> HostedConfigurationSet:
             model_id=model,
             upstream_provider=upstream,
             credential_reference=f"secretref://staging/openrouter/{role}/generation-1",
-            prompt_sha256=hosted_prompt(role).prompt_sha256,
+            prompt_sha256=_PROMPTS[role].sha256,
             policy_sha256=_digest(f"{role}:policy"),
             prices=TokenPrices(Decimal("1"), Decimal("2"), Decimal("3")),
             limits=HostedLimits(

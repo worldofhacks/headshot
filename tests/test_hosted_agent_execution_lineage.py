@@ -17,7 +17,7 @@ from agentforge.agents.hosted import (
     TokenPrices,
 )
 from agentforge.agents.hosted_policy import DEFAULT_HOSTED_GENERATION_POLICY
-from agentforge.agents.hosted_prompts import hosted_prompt
+from agentforge.agents.prompts import load_prompt_registry
 from agentforge.auth.permissions import (
     CAMPAIGN_AUTHORIZE,
     CAMPAIGN_LAUNCH,
@@ -50,6 +50,7 @@ from agentforge.telemetry.outbound import _LangfuseBridge
 _ORGANIZATION_ID = "org_HostedLineage"
 _SESSION_GENERATION = "generation-20260724"
 _GENERATION_POLICY = "d" * 64
+_PROMPTS = {record.role: record for record in load_prompt_registry()}
 _MODELS = {
     "orchestrator": "anthropic/claude-opus-4.8",
     "red_team": "qwen/qwen3.5-397b-a17b",
@@ -144,7 +145,7 @@ def _configuration() -> HostedConfigurationSet:
                 credential_reference=(
                     f"secretref://staging/providers/openrouter/{role}/{_SESSION_GENERATION}"
                 ),
-                prompt_sha256=hosted_prompt(role).prompt_sha256,  # type: ignore[arg-type]
+                prompt_sha256=_PROMPTS[role].sha256,
                 policy_sha256=hashlib.sha256(f"{role}:policy:v1".encode()).hexdigest(),
                 prices=TokenPrices(
                     input_usd_per_million_tokens=Decimal("1"),

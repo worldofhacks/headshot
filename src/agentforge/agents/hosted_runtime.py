@@ -17,9 +17,9 @@ from typing import Any, Literal, Protocol
 
 from agentforge.agents.hosted import (
     HostedConfigurationSet,
+    resolve_hosted_prompt,
     validate_hosted_configuration_set,
 )
-from agentforge.agents.hosted_prompts import hosted_prompt
 from agentforge.agents.judge import CalibrationGateClosed, JudgeIdentity
 from agentforge.agents.judge.enablement import require_model_judge_enablement
 from agentforge.agents.runtime import AgentRole
@@ -271,11 +271,12 @@ class HostedRoleRuntime:
         if validate_output is not None and not callable(validate_output):
             raise HostedCompositionError("hosted output validator is unavailable")
 
-        prompt = hosted_prompt(role)
-        if configuration.prompt_sha256 != prompt.prompt_sha256:
+        try:
+            prompt = resolve_hosted_prompt(role, configuration.prompt_sha256)
+        except ValueError:
             raise HostedCompositionError(
                 "configured prompt identity differs from the server-owned role prompt"
-            )
+            ) from None
         try:
             canonical_input = json.loads(
                 json.dumps(
@@ -310,7 +311,7 @@ class HostedRoleRuntime:
             result = self._transport.invoke(
                 role=role,
                 messages=(
-                    {"role": "system", "content": prompt.system_prompt},
+                    {"role": "system", "content": prompt.content},
                     {
                         "role": "user",
                         "content": json.dumps(

@@ -12,7 +12,7 @@ from sqlalchemy import Engine, text
 
 from agentforge.agents.hosted import HostedConfigurationSet
 from agentforge.agents.hosted_policy import DEFAULT_HOSTED_GENERATION_POLICY
-from agentforge.agents.hosted_prompts import hosted_prompt
+from agentforge.agents.prompts import load_prompt_registry
 from agentforge.agents.runtime import default_assignment
 from agentforge.api.postgres import PostgresApiBackend, _redact_evidence_display, _safe
 from agentforge.auth.config import ClerkAuthConfig
@@ -31,6 +31,7 @@ ORIGIN = "https://staging.headshot.example"
 ORG_ID = "org_M1dApiFixture"
 LAUNCHER_ID = "user_M1dApiLauncher"
 APPROVER_ID = "user_M1dApiApprover"
+_PROMPTS = {record.role: record for record in load_prompt_registry()}
 
 
 def _headers(key: str) -> dict[str, str]:
@@ -153,7 +154,7 @@ def _hosted_configuration_payload() -> dict[str, Any]:
                 "credential_reference": (
                     f"secretref://staging/openrouter/{role}/generation-20260724"
                 ),
-                "prompt_sha256": hosted_prompt(role).prompt_sha256,
+                "prompt_sha256": _PROMPTS[role].sha256,
                 "policy_sha256": hashlib.sha256(f"{role}:policy".encode()).hexdigest(),
                 "prices": {
                     "input_usd_per_million_tokens": "1",
@@ -439,8 +440,9 @@ def test_agent_models_and_tool_scope_are_real_configurable_projections(
     assert staged_red_team["model"] == "qwen/qwen3.5-397b-a17b"
     assert staged_red_team["resolved_model"] is None
     assert staged_red_team["upstream_provider"] is None
-    assert staged_red_team["prompt_sha256"] == hosted_prompt("red_team").prompt_sha256
-    assert staged_red_team["prompt_version"] == hosted_prompt("red_team").version
+    red_team_prompt = _PROMPTS["red_team"]
+    assert staged_red_team["prompt_sha256"] == red_team_prompt.sha256
+    assert staged_red_team["prompt_version"] == red_team_prompt.version
     assert staged_red_team["configuration_sha256"] == configuration_sha256
     assert "system_prompt" not in staged_agents_response.text
 
@@ -499,15 +501,27 @@ def test_agent_models_and_tool_scope_are_real_configurable_projections(
     )
     assert authorized.status_code == 200, authorized.text
 
-    prompt = client.get("/api/v1/agents/red_team/prompt")
+    prompt = client.get(
+        f"/api/v1/agent-prompts/red_team/{red_team_prompt.version}/{red_team_prompt.sha256}"
+        f"?configuration_set_sha256={configuration_sha256}"
+    )
     assert prompt.status_code == 200
     assert prompt.json()["state"] == "ready"
     assert prompt.json()["data"] == {
         "role": "red_team",
-        "prompt_version": hosted_prompt("red_team").version,
-        "prompt_sha256": hosted_prompt("red_team").prompt_sha256,
-        "system_prompt": hosted_prompt("red_team").system_prompt,
+        "prompt_version": red_team_prompt.version,
+        "prompt_sha256": red_team_prompt.sha256,
+        "system_prompt": red_team_prompt.content,
     }
+    assert client.get("/api/v1/agents/red_team/prompt").status_code == 404
+    judge_prompt = _PROMPTS["judge"]
+    mismatched_prompt = client.get(
+        f"/api/v1/agent-prompts/red_team/{judge_prompt.version}/{judge_prompt.sha256}"
+        f"?configuration_set_sha256={configuration_sha256}"
+    )
+    assert mismatched_prompt.status_code == 200
+    assert mismatched_prompt.json()["state"] == "empty"
+    assert "system_prompt" not in mismatched_prompt.text
     preflight = client.get(f"/api/v1/hosted-configuration-sets/{configuration_sha256}/preflight")
     assert preflight.status_code == 200
     assert preflight.json()["state"] == "degraded"

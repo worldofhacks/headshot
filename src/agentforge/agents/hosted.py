@@ -18,7 +18,7 @@ from types import MappingProxyType
 from typing import Any
 from urllib.parse import urlsplit
 
-from agentforge.agents.hosted_prompts import hosted_prompt
+from agentforge.agents.prompts import PromptRecord, PromptRegistryError, load_prompt_registry
 from agentforge.agents.runtime import AGENT_ROLES, AgentRole
 from agentforge.secrets import looks_like_provider_key
 
@@ -121,6 +121,32 @@ def _require_sha256(label: str, value: object) -> str:
     if not isinstance(value, str) or _HEX64.fullmatch(value) is None:
         raise ValueError(f"{label} must be a lowercase SHA-256 digest")
     return value
+
+
+def resolve_hosted_prompt(role: str, prompt_sha256: str) -> PromptRecord:
+    """Resolve one package-owned prompt only through its configured role/hash identity.
+
+    The staged configuration deliberately retains ``prompt_sha256`` as its authorization-bound
+    wire field. The prompt version and content come only from the validated package manifest;
+    callers cannot select a role-only fallback or supply prompt text.
+    """
+
+    if role not in AGENT_ROLES:
+        raise ValueError("hosted prompt role is outside the exact four-role catalog")
+    _require_sha256("prompt identity", prompt_sha256)
+    try:
+        matches = tuple(
+            record
+            for record in load_prompt_registry()
+            if record.role == role and record.sha256 == prompt_sha256
+        )
+    except PromptRegistryError:
+        raise ValueError(
+            "configured prompt identity does not match the server-owned role prompt"
+        ) from None
+    if len(matches) != 1:
+        raise ValueError("configured prompt identity does not match the server-owned role prompt")
+    return matches[0]
 
 
 def _validate_model_id(value: object) -> str:
@@ -327,11 +353,7 @@ class HostedRoleConfiguration:
             raise ValueError("hosted role model differs from the frozen recovery assignment")
         _validate_upstream_provider(self.upstream_provider)
         _validate_credential_reference(self.credential_reference)
-        _require_sha256("prompt identity", self.prompt_sha256)
-        if self.prompt_sha256 != hosted_prompt(self.role).prompt_sha256:
-            raise ValueError(
-                "configured prompt identity does not match the server-owned role prompt"
-            )
+        resolve_hosted_prompt(self.role, self.prompt_sha256)
         _require_sha256("policy identity", self.policy_sha256)
         if not isinstance(self.prices, TokenPrices):
             raise TypeError("hosted prices must use TokenPrices")
@@ -354,7 +376,7 @@ class HostedRoleConfiguration:
 
     @property
     def prompt_version(self) -> str:
-        return hosted_prompt(self.role).version
+        return resolve_hosted_prompt(self.role, self.prompt_sha256).version
 
     def canonical_payload(self) -> dict[str, Any]:
         return {
@@ -573,5 +595,6 @@ __all__ = [
     "HostedRolePreflight",
     "TokenPrices",
     "preflight_hosted_configuration_set",
+    "resolve_hosted_prompt",
     "validate_hosted_configuration_set",
 ]

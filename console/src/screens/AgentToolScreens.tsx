@@ -90,13 +90,19 @@ const activityAccountingValue = (activity: AgentActivityReadModel) =>
 function AgentPromptPanel({
   client,
   role,
+  version,
+  sha256,
+  configurationSha256,
 }: {
   client: ApiClient;
   role: AgentRole;
+  version: string;
+  sha256: string;
+  configurationSha256: string;
 }) {
   const prompt = useResource<AgentPromptReadModel>(
     client,
-    RESOURCE_PATHS.agentPrompt(role),
+    RESOURCE_PATHS.agentPrompt(role, version, sha256, configurationSha256),
     decodeAgentPrompt,
   );
 
@@ -148,6 +154,20 @@ export function AgentsScreen({
   const [model, setModel] = useState(deterministicModels.orchestrator[0]);
   const [rationale, setRationale] = useState("");
   const selectedAssignment = selected?.active_assignment;
+  const promptIdentity = selected?.staged_assignment?.prompt_version
+    && selected.staged_assignment.prompt_sha256
+    ? {
+        version: selected.staged_assignment.prompt_version,
+        sha256: selected.staged_assignment.prompt_sha256,
+        configurationSha256: selected.staged_assignment.configuration_sha256,
+      }
+    : selected?.active_assignment.prompt_version && selected.active_assignment.prompt_sha256
+      ? {
+          version: selected.active_assignment.prompt_version,
+          sha256: selected.active_assignment.prompt_sha256,
+          configurationSha256: selected.active_assignment.configuration_sha256,
+        }
+      : null;
 
   useEffect(() => {
     if (!selectedAssignment) return;
@@ -469,7 +489,22 @@ export function AgentsScreen({
         </Panel>
       </div>
 
-      {canConfigure && <AgentPromptPanel client={client} role={selectedRole} />}
+      {canConfigure && promptIdentity ? (
+        <AgentPromptPanel
+          client={client}
+          role={selectedRole}
+          version={promptIdentity.version}
+          sha256={promptIdentity.sha256}
+          configurationSha256={promptIdentity.configurationSha256}
+        />
+      ) : canConfigure ? (
+        <Panel title="System prompt" meta="CONFIG_MANAGE only" eyebrow="SERVER-OWNED PROMPT">
+          <StateNotice
+            state="unavailable"
+            detail="No exact configuration-bound prompt identity is active or staged for this role."
+          />
+        </Panel>
+      ) : null}
 
       <Panel
         title={`${selected?.display_name ?? selectedRole} activity`}

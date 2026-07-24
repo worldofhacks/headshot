@@ -18,7 +18,6 @@ from agentforge.agents.hosted import (
     HostedRoleConfiguration,
     TokenPrices,
 )
-from agentforge.agents.hosted_prompts import hosted_prompt
 from agentforge.agents.hosted_runtime import (
     HostedCallBounds,
     HostedCompositionError,
@@ -26,10 +25,12 @@ from agentforge.agents.hosted_runtime import (
     hosted_judge_identity,
 )
 from agentforge.agents.judge import CalibrationGate
+from agentforge.agents.prompts import load_prompt_registry
 from agentforge.providers.openrouter import OpenRouterResult
 from agentforge.target.spec import HostedRunBinding
 
 _GROUND_TRUTH = Path(__file__).resolve().parents[1] / "evals" / "ground-truth"
+_PROMPTS = {record.role: record for record in load_prompt_registry()}
 
 
 def _digest(value: str) -> str:
@@ -57,7 +58,7 @@ def _configuration() -> HostedConfigurationSet:
                 model_id=model,
                 upstream_provider=provider,
                 credential_reference=f"secretref://production/openrouter/{role}/generation-1",
-                prompt_sha256=hosted_prompt(role).prompt_sha256,
+                prompt_sha256=_PROMPTS[role].sha256,
                 policy_sha256=_digest(f"{role}:policy"),
                 prices=TokenPrices(Decimal("1"), Decimal("2"), Decimal("3")),
                 limits=HostedLimits(
@@ -404,15 +405,15 @@ def test_runtime_sends_the_exact_registry_prompt_as_the_system_message() -> None
     assert transport.calls == ["orchestrator", "red_team", "judge", "documentation"]
     for invocation in transport.invocations:
         role = invocation["role"]
-        prompt = hosted_prompt(role)
+        prompt = _PROMPTS[role]
         messages = invocation["messages"]
         assert messages[0] == {
             "role": "system",
-            "content": prompt.system_prompt,
+            "content": prompt.content,
         }
         assert messages[1]["role"] == "user"
         configured = next(item for item in transport.configuration.roles if item.role == role)
-        assert configured.prompt_sha256 == prompt.prompt_sha256
+        assert configured.prompt_sha256 == prompt.sha256
 
 
 def test_deterministic_error_remains_error_and_skips_documentation() -> None:

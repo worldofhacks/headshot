@@ -22,7 +22,14 @@ export const RESOURCE_PATHS = {
   configuration: "configuration",
   components: "components",
   agents: "agents",
-  agentPrompt: (agentRole: string) => `agents/${segment(agentRole)}/prompt`,
+  agentPrompt: (
+    agentRole: string,
+    promptVersion: string,
+    promptSha256: string,
+    configurationSha256: string,
+  ) =>
+    `agent-prompts/${segment(agentRole)}/${segment(promptVersion)}/${segment(promptSha256)}`
+    + `?configuration_set_sha256=${segment(configurationSha256)}`,
   agentActivity: "agent-activity",
   tooling: "tooling",
   birdseye: "birdseye",
