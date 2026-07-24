@@ -1,100 +1,141 @@
-# T-F17a Test Design Re-review
+# T-F17a Final Test Design Review
 
 Status: `REVIEW_CHANGES_REQUIRED`
 
 Freeze verdict: `NOT_FROZEN`
 
-Review attempt: `2/3`
+Review attempt: `3/3`
 
-Reviewed commit: `ff36e0db89466eaf498b60057b607d89df18ec44`
+Reviewed commit: `1f2bc4f3b99f820ea596d9b258a7621f9f66c327`
 
-Reviewed test snapshot:
+Reviewed candidate snapshot:
 
-- `tests/test_agent_prompts.py`:
-  `8e5b003c2160fdee2333e56da6c0e4e505708296f0325de76eb27262a15014bc`
-- `tests/test_packaging.py`:
-  `e6ecca56d11be0b0ec0e7140f4dbdd040ba90f49c2fe8420a77ab59489c786cd`
-- `.tdd-swarm/reports/T-F17a-test.md`:
-  `9f7f002156032365514c77c567574fe987f898d3b3a287be22b1ddfb9bd8f6b6`
+- `tests/test_agent_prompts.py`
+  - SHA-256: `8e5b003c2160fdee2333e56da6c0e4e505708296f0325de76eb27262a15014bc`
+  - Git blob: `ea8940325146877f22038a8e275b025bcf798cbb`
+- `tests/test_packaging.py`
+  - SHA-256: `d1f5af0d844abb3432bd07c8be7d74f41186e9511295977aac16a59c780550cb`
+  - Git blob: `3dc7306736a344804a3a0b87db72b7d74fce7a2c`
+- `.tdd-swarm/reports/T-F17a-test.md`
+  - SHA-256: `359203ff68253a25dcb28062e02f47978c27521a6c46bbd3a6a6bc3b96cf6b6f`
 
-These hashes identify the reviewed repair snapshot. They are not frozen implementation contracts.
+These hashes identify the rejected final-review candidate. They are not frozen implementation
+contracts.
 
 ## Prior finding closure
 
-All five Important findings from `d630bbb` are materially closed:
+The five Important findings and one Minor finding from `d630bbb`, plus the direct-wheel portion of
+I-6 from `78b28ca`, are materially closed:
 
-1. The exact hosted model table is now reached only after the missing prompt registry loads, so all
-   new tests are feature-missing RED.
-2. The new prompt-wheel test uses a deterministic stdlib wheel, `--no-index --no-deps`, disabled
-   pip configuration/version checks, and no build isolation or dependency acquisition. A separate
-   local-wheel install smoke exits `0`.
-3. An autouse socket/urllib/http.client denial guard covers every in-process registry, lookup,
-   validation, and trust-boundary test. The installed subprocess installs offline and applies the
-   same connection guards before importing the registry.
-4. All four record identity fields receive hostile mutation attempts; identity lookup spans every
-   role/version/hash combination; and all 23 non-identity role/resource/hash/content permutations
-   are rejected.
-5. Every role now carries a unique short canary. Hostile validation and lookup errors are checked
-   through both `str` and `repr` for prefix, middle, suffix, and canary fragments.
+1. Every new test reaches the missing registry or packaged-resource assertion before any
+   pre-existing model assertion can pass.
+2. The deterministic stdlib wheel builder and local install require no build frontend or dependency
+   acquisition; pip is configured with `--no-index --no-deps`.
+3. In-process and isolated registry paths deny socket, urllib, and HTTP-client connection attempts
+   before registry import/use.
+4. Record mutation, identity lookup, and all 23 non-identity role/resource/hash/content
+   permutations cover every role.
+5. Error checks cover prefix, middle, suffix, and unique-canary fragments through both `str` and
+   `repr`.
+6. The unsupported public size constant/minimum is gone; a private one-MiB-plus-one input proves a
+   finite upper bound.
+7. The AC-4 subprocess now imports the package directly from the `.whl`, proves the traversable is
+   zip-backed, loads all four records, and compares their exact manifest/content/hash identities.
 
-The unsupported public `MAX_PROMPT_BYTES` and 256-byte minimum from the prior Minor finding are
-also removed. The repaired private one-MiB-plus-one case proves a finite upper-bound rejection
-without prescribing a production constant.
+One Important gap remains in the claimed proof that the registry itself resolves through
+`importlib.resources` with zero filesystem fallback attempts.
 
 ## Important finding
 
-### I-6 — The AC-4 probe still allows a package-filesystem loader instead of `importlib.resources`
+### I-7 — The zip probe can pass without registry use of `importlib.resources` and misses filesystem attempts
 
-The test-review prompt explicitly requires proof that a lazy filesystem fallback cannot pass, and
-AC-4 requires resolution through `importlib.resources`. The repaired test verifies archive
-membership at `tests/test_packaging.py:322-338`, but then installs and unpacks the wheel at lines
-340-369. Its isolated probe imports that unpacked package directory at lines 405-447.
+The subprocess patches only `Path.open` and `builtins.open` for archive-member pseudo-paths
+(`tests/test_packaging.py:413-439`). It does not observe `io.open`, `os.open`, or Python's `open`
+audit event. A filesystem-first loader can therefore attempt one of those APIs, catch the failure,
+and continue while `filesystem_attempts` remains empty.
 
-Consequently, an implementation that reads
-`Path(__file__).parent / "registry.v1.json"` and
-`Path(__file__).parent / "v1" / f"{role}.txt"` passes this probe. Those files exist in the unpacked
-installation and are byte-identical to the archive. The decoy at lines 371-385 and environment
-variables at lines 425-431 rule out caller/environment override directories only; they do not
-distinguish package-relative filesystem reads from `importlib.resources`.
+The probe also creates `resource_root = importlib.resources.files(prompts)` itself
+(`tests/test_packaging.py:443-449`). That proves an independently constructed traversable is
+zip-backed, but no instrumentation proves `prompts.load_prompt_registry()` at line 451 called
+`importlib.resources.files`. A loader that reads members directly with `zipfile.ZipFile` can return
+the correct four records while the probe's unrelated `resource_root` supplies the passing backend
+assertion.
 
-That is the exact lazy fallback the review prompt says must not pass. It also loses zip-safe
-resource behavior despite the otherwise correct installed-wheel assertions.
+An isolated reproduction reused the candidate's two open wrappers against the deterministic wheel,
+then:
 
-Required repair: retain the offline installed-wheel proof, and add a second isolated probe that
-imports directly from the `.whl` archive on `sys.path` (or another behaviorally equivalent
-zip-backed package-resource test). Assert all four manifest/content/hash records load there with
-network denied. A `Path(__file__)` reader will then fail while `importlib.resources` remains valid.
-The repair must stay deterministic and must not inspect production source text as a substitute for
-behavior.
+1. attempted `io.open` on a package-member pseudo-path and caught its `OSError`;
+2. confirmed the candidate tracker still contained zero attempts;
+3. manually read a packaged member through `zipfile.ZipFile`, without using the resource
+   traversable for that load; and
+4. retained the passing independent `zipfile` backend assertion.
 
-## Bounded review evidence
-
-Focused zero-network RED:
+It exited `0` and printed:
 
 ```text
-PIP_NO_INDEX=1 python -m pytest -o addopts='' \
+UNRECORDED_IO_FALLBACK_AND_MANUAL_ZIP_LOAD_PASSED
+```
+
+This is the lazy hybrid implementation that AC-4 and the review prompt require the frozen tests to
+reject. Direct-from-wheel success closes package-relative `Path(__file__)` as the sole loader, but
+the current instrumentation does not prove the registry used `importlib.resources` or made zero
+filesystem attempts.
+
+Required repair:
+
+- wrap `importlib.resources.files` before importing/loading the prompt registry, keep the probe's
+  independent backend inspection outside that counter, and require the registry load itself to
+  request resources for `agentforge.agents.prompts`; and
+- install an audit hook (or equivalently complete wrappers) before import/load that records every
+  archive-member filesystem `open` attempt, including `io.open` and `os.open`, then require the
+  attempt list to remain empty.
+
+The direct wheel, exact-byte, no-network, and installed-wheel checks should remain unchanged.
+
+## Independent evidence
+
+Focused intentional RED:
+
+```text
+PIP_NO_INDEX=1 PYTHONPATH=src python -m pytest -o addopts='' \
   tests/test_agent_prompts.py \
   tests/test_packaging.py::test_spec_T_F17a_AC_4_offline_installed_wheel_preserves_prompt_authority \
   -q
--> exit 1; 8 failed
 ```
 
-All seven registry tests fail only at the explicit
-`T-F17a prompt registry package is missing` assertion. The wheel test builds without a frontend and
-fails only because `agentforge/agents/prompts/registry.v1.json` is absent. There are no collection,
-fixture, dependency-acquisition, provider, target, or network errors.
+Result: exit `1`; `8 failed`. All seven registry tests fail only at
+`T-F17a prompt registry package is missing`; the wheel case builds locally and fails only because
+`agentforge/agents/prompts/registry.v1.json` is absent. There are no collection, fixture, build,
+install, provider, target, or network errors.
 
-Independent offline installation smoke of `_build_stdlib_test_wheel` with `--no-index --no-deps`
-exits `0`. Existing hosted-configuration and non-wheel packaging baseline:
-`14 passed, 2 deselected`.
+Existing hosted-configuration and non-wheel packaging baseline:
 
-- Test collection: `tests/test_agent_prompts.py: 7`; `tests/test_packaging.py: 6`.
-- Ruff check on both test-owned files: pass.
-- Ruff format check on both test-owned files: pass.
-- `git diff --check d630bbb..ff36e0d`: pass.
-- Repair commit changes only the two test files and Test Agent report; no product file changed.
-- No test or product file was edited during this review.
+```text
+PYTHONPATH=src python -m pytest -o addopts='' \
+  tests/test_hosted_configuration.py tests/test_packaging.py \
+  -k 'not wheel_installed_outside_repo_validates_corpus and
+      not spec_T_F17a_AC_4_offline_installed_wheel_preserves_prompt_authority' -q
+```
 
-Verdict: Critical findings: `0`; Important findings: `1`; Minor findings: `0`.
-The repaired tests must return once more to the Test Agent, then receive a third independent review
-and new hash freeze before implementation begins.
+Result: exit `0`; `14 passed, 2 deselected`.
+
+Independent offline smoke of the stdlib wheel builder plus
+`pip install --no-index --no-deps --target ...` exited `0` and printed
+`OFFLINE_INSTALL_OK`. A network-denied isolated direct-wheel probe loaded an existing packaged
+schema through a zip-backed `importlib.resources` traversable with zero `Path.open`/`builtins.open`
+member attempts and printed `ZIP_RESOURCE_SMOKE_OK`. This proves the intended mechanism is viable;
+I-7 concerns whether the candidate test requires the prompt registry to use it.
+
+- Ruff check: pass.
+- Ruff format check: pass; both owned tests already formatted.
+- `git diff --check 0803849..1f2bc4f`: pass.
+- Secret scan: `secret scan clean (845 files)`.
+- Diff from `0803849` changes only the two declared test scopes and the Test Agent/Test Reviewer
+  reports. No product, provider, target, credential, fixture, deployment, or configuration file
+  changed.
+- No network, provider call, target call, credential read, deployment, or main-branch operation was
+  performed during this review.
+
+Verdict: Critical findings: `0`; Important findings: `1`; Minor findings: `0`. The candidate remains
+unfrozen and must not be given to an Implementation Agent until I-7 is repaired and independently
+re-reviewed.
