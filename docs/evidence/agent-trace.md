@@ -7,12 +7,11 @@
 
 > **Honesty note (read first).** The captured live campaign exercised the **full five-agent
 > pipeline** against **week1** using the **authored seed corpus** as the Red Team source
-> (`red_team = seed_replay corpus-replay-v1`). The hosted DeepSeek generation path
-> (`deepseek/deepseek-chat-v3-0324`) was **implemented and unit-tested** this session
-> (`src/agentforge/agents/red_team/providers.py::HostedProvider._generate_via_client`,
-> `tests/test_red_team_hosted_generation.py`) but was **not** exercised against the live target,
-> because launching *new* live traffic requires a two-person authorization an agent cannot self-mint
-> (see §1). A **week2** coordinator run is scoped but **not approved** and therefore did **not** run.
+> (`red_team = seed_replay corpus-replay-v1`). The superseded standalone hosted-provider generator
+> is not part of this evidence. The canonical traced qwen component is covered by deterministic
+> tests, but it was **not** composed into or exercised by this live run. Launching *new* live traffic
+> requires a two-person authorization an agent cannot self-mint (see §1). A **week2** coordinator
+> run is scoped but **not approved** and therefore did **not** run.
 > Live HTTP evidence for **both** week1 and week2 surfaces exists separately via the Bruno probe
 > suite (`evals/results/bruno-20260724/`), which grounds the web-layer vulnerability reports.
 
@@ -49,14 +48,14 @@ script). Source: `summary.json` `agents_exercised` + per-attempt manifests.
 | # | Agent | Role in this run | Model / hosted spend |
 |---|---|---|---|
 | 1 | **Orchestrator** | Selected the authored `m11-seed-corpus-v1` scope (category coverage: `data_exfiltration`, `prompt_injection`, `tool_misuse`); bound target + caps; gated on authorization before any dispatch. | none (local) |
-| 2 | **Red Team** | `seed_replay corpus-replay-v1` — replayed the authored corpus → `attack_attempt`. *(Hosted DeepSeek generation is now implemented + tested but was not the source for this human-approved run.)* | **$0** — offline corpus replay, no hosted LLM call |
+| 2 | **Red Team** | `seed_replay corpus-replay-v1` — replayed the authored corpus → `attack_attempt`. *(The canonical traced qwen component was not composed into or exercised by this run.)* | **$0** — offline corpus replay, no hosted LLM call |
 | 3 | **Policy Gateway** | budget / rate / timeout / abort + host allowlist + sequential turn delivery. Rate cap **0.5 req/s (1 request / 2 s)**; per-attempt `policy_decision_id` issued (§3). | none (local) |
 | 3b | **Execution Recorder** | Append evidence to Postgres → re-read → `content_hash` verify (`integrity_ok = true` on every attempt). Raw payloads are never persisted (redaction guarantee). | none (local) |
 | 4 | **Judge** | `oracle-precedence-v1` — **deterministic, independent** of attack generation. No oracle/canary hit → `INDETERMINATE` (`non_oracle_uncalibrated_indeterminate`); the LLM-only path is disabled, so the Judge **never** confirms an exploit without decisive evidence (invariant preserved). | none (deterministic) |
 | 5 | **Documentation** | Renders **only** confirmed findings. `exploit_confirmed = 0` → **nothing drafted** by the runtime agent. (The reports in `docs/vulnerabilities/` are human-drafted from the Bruno HTTP evidence — see §5.) | none (local) |
 
 **Total hosted-model spend this run: $0** (budget cap `$1.00`, unused — seed-replay needs no model).
-Had the hosted DeepSeek path been the Red Team source, spend would accrue under the same `$1.00` cap.
+No hosted generator was invoked, so this evidence reports no hosted-generation cost.
 
 ---
 
@@ -112,8 +111,8 @@ publish/remediation gate.
   (`approver != launcher`), rate-limited to 1 req/2 s, synthetic-only; the independent deterministic
   Judge returned `INDETERMINATE` on all captured cases and **confirmed zero exploits** — the Judge
   invariant (never approve a confirmed exploit; never confirm without decisive evidence) held.
-- The **Red Team hosted generator** (`deepseek/deepseek-chat-v3-0324`) is **implemented and
-  unit-tested** but was **not** used as the live source; the human-approved run used seed replay.
+- The canonical **traced qwen component** exists with deterministic test coverage, but it was
+  **not composed into or exercised by this live run**; the human-approved run used seed replay.
 - A **week2** coordinator run and any **fresh hosted-generation** live run are **scoped but not
   approved** — the agent emitted the `scope` requests and **did not self-authorize** live traffic,
   preserving the two-person human-approval gate.
