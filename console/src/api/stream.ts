@@ -125,11 +125,7 @@ export function applyOrderedEvent(
   if (incoming.cursor <= state.cursor) {
     return { kind: "duplicate", cursor: state.cursor, events: state.events };
   }
-  if (
-    state.cursor !== 0 &&
-    incoming.event !== "snapshot" &&
-    incoming.cursor !== state.cursor + 1
-  ) {
+  if (incoming.event === "gap") {
     return {
       kind: "gap",
       expectedCursor: state.cursor + 1,

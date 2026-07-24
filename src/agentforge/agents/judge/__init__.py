@@ -24,8 +24,33 @@ from agentforge.agents.judge.calibration import (
     CalibrationThresholds,
     JudgeIdentity,
 )
+from agentforge.agents.judge.calibration_runtime import (
+    JudgeCalibrationStatus,
+    load_judge_calibration_status,
+)
 from agentforge.agents.judge.enablement import require_model_judge_enablement
 from agentforge.agents.judge.judge import Judge, is_safe
+
+_HOSTED_EXPORTS = frozenset(
+    {
+        "HostedEvaluator",
+        "HostedEvaluatorError",
+        "HostedEvaluatorResult",
+        "JudgeReconciliation",
+        "reconcile_judge_assessment",
+    }
+)
+
+
+def __getattr__(name: str):
+    """Load hosted evaluator symbols lazily to avoid a hosted-runtime import cycle."""
+
+    if name not in _HOSTED_EXPORTS:
+        raise AttributeError(name)
+    from agentforge.agents.judge import hosted
+
+    return getattr(hosted, name)
+
 
 __all__ = [
     "Judge",
@@ -36,4 +61,11 @@ __all__ = [
     "CalibrationThresholds",
     "JudgeIdentity",
     "require_model_judge_enablement",
+    "JudgeCalibrationStatus",
+    "load_judge_calibration_status",
+    "HostedEvaluator",
+    "HostedEvaluatorError",
+    "HostedEvaluatorResult",
+    "JudgeReconciliation",
+    "reconcile_judge_assessment",
 ]

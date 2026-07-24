@@ -92,3 +92,77 @@ def test_shared_campaign_traces_survive_0016_downgrade_and_reupgrade(
         if engine is not None:
             engine.dispose()
         _db.drop_database(admin_url, database_name)
+
+
+def test_hosted_agent_lineage_columns_survive_0017_round_trip(admin_url: str) -> None:
+    database_name = f"agentforge_hosted_lineage_{uuid.uuid4().hex[:12]}"
+    base, _ = _db.split_db(admin_url)
+    database_url = f"{base}/{database_name}"
+    _db.create_fresh_database(admin_url, database_name)
+    engine: Engine | None = None
+    lineage_columns = (
+        "returned_model",
+        "upstream_provider",
+        "provider_request_id",
+        "reasoning_tokens",
+        "configuration_set_sha256",
+        "role_configuration_sha256",
+        "generation_policy_sha256",
+        "physical_attempts",
+        "judge_calibration_id",
+        "judge_calibration_state",
+        "oracle_agreement",
+        "decision_authority",
+    )
+    try:
+        _db.alembic_upgrade(database_url, "0017")
+        engine = _db.build_engine(database_url)
+        with engine.connect() as connection:
+            columns = set(
+                connection.execute(
+                    text(
+                        "SELECT column_name FROM information_schema.columns "
+                        "WHERE table_name = 'agent_executions' "
+                        "AND column_name = ANY(:columns)"
+                    ),
+                    {"columns": list(lineage_columns)},
+                ).scalars()
+            )
+            cost_shape = connection.execute(
+                text(
+                    "SELECT numeric_precision, numeric_scale "
+                    "FROM information_schema.columns "
+                    "WHERE table_name = 'agent_executions' "
+                    "AND column_name = 'measured_cost'"
+                )
+            ).one()
+        assert columns == set(lineage_columns)
+        assert cost_shape == (20, 12)
+
+        _db.alembic_downgrade(database_url, "0016")
+        with engine.connect() as connection:
+            assert (
+                connection.execute(
+                    text(
+                        "SELECT count(*) FROM information_schema.columns "
+                        "WHERE table_name = 'agent_executions' "
+                        "AND column_name = ANY(:columns)"
+                    ),
+                    {"columns": list(lineage_columns)},
+                ).scalar_one()
+                == 0
+            )
+            assert connection.execute(
+                text(
+                    "SELECT numeric_precision, numeric_scale "
+                    "FROM information_schema.columns "
+                    "WHERE table_name = 'agent_executions' "
+                    "AND column_name = 'measured_cost'"
+                )
+            ).one() == (14, 6)
+
+        _db.alembic_upgrade(database_url, "0017")
+    finally:
+        if engine is not None:
+            engine.dispose()
+        _db.drop_database(admin_url, database_name)

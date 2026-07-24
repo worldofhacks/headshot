@@ -15,6 +15,7 @@ import {
   MetricStrip,
   money,
   Panel,
+  percent,
   ScreenHeading,
   shortId,
   TagMatrix,
@@ -23,7 +24,10 @@ import {
 } from "../components/Analytics";
 import { CommandButton } from "../components/CommandButton";
 import { RecordTable, ResourceView, StateNotice } from "../components/ResourceView";
-import { useResource } from "../hooks/useResource";
+import {
+  LIVE_RESOURCE_POLL_INTERVAL_MS,
+  useResource,
+} from "../hooks/useResource";
 import {
   PERMISSIONS,
   type AgentActivityReadModel,
@@ -121,11 +125,17 @@ export function AgentsScreen({
   client: ApiClient;
   principal: Principal;
 }) {
-  const agents = useResource<AgentReadModel[]>(client, RESOURCE_PATHS.agents, decodeAgents);
+  const agents = useResource<AgentReadModel[]>(
+    client,
+    RESOURCE_PATHS.agents,
+    decodeAgents,
+    { pollIntervalMs: LIVE_RESOURCE_POLL_INTERVAL_MS },
+  );
   const activity = useResource<AgentActivityReadModel[]>(
     client,
     RESOURCE_PATHS.agentActivity,
     decodeAgentActivity,
+    { pollIntervalMs: LIVE_RESOURCE_POLL_INTERVAL_MS },
   );
   const [selectedRole, setSelectedRole] = useState<AgentRole>("orchestrator");
   const selected = agents.result.data?.find((agent) => agent.role === selectedRole) ?? null;
@@ -135,14 +145,20 @@ export function AgentsScreen({
   const [provider, setProvider] = useState("headshot");
   const [model, setModel] = useState(deterministicModels.orchestrator[0]);
   const [rationale, setRationale] = useState("");
+  const selectedAssignment = selected?.active_assignment;
 
   useEffect(() => {
-    if (!selected) return;
-    setExecutionMode(selected.active_assignment.execution_mode);
-    setProvider(selected.active_assignment.provider);
-    setModel(selected.active_assignment.model);
+    if (!selectedAssignment) return;
+    setExecutionMode(selectedAssignment.execution_mode);
+    setProvider(selectedAssignment.provider);
+    setModel(selectedAssignment.model);
     setRationale("");
-  }, [selected]);
+  }, [
+    selectedRole,
+    selectedAssignment?.execution_mode,
+    selectedAssignment?.provider,
+    selectedAssignment?.model,
+  ]);
 
   const records = agents.result.data ?? [];
   const activities = activity.result.data ?? [];
@@ -151,17 +167,29 @@ export function AgentsScreen({
     running: records.reduce((sum, agent) => sum + agent.running_count, 0),
     cost: records.reduce((sum, agent) => sum + agent.measured_cost, 0),
     observedTokens: records.reduce(
-      (sum, agent) => sum + (agent.input_tokens ?? 0) + (agent.output_tokens ?? 0),
+      (sum, agent) =>
+        sum
+        + (agent.input_tokens ?? 0)
+        + (agent.output_tokens ?? 0)
+        + (agent.reasoning_tokens ?? 0),
       0,
     ),
+    physicalCalls: records.reduce((sum, agent) => sum + agent.physical_call_count, 0),
     tokenObservations: records.reduce((sum, agent) => sum + agent.token_observation_count, 0),
     incompleteAccounting: records.filter(
       (agent) => ["partial", "unavailable"].includes(agent.accounting_status),
     ).length,
   }), [records]);
   const selectedActivity = activities.filter((row) => row.agent_role === selectedRole);
-  const hostedEligible = selectedRole === "red_team" || selectedRole === "documentation";
   const canConfigure = principal.organization_permissions.includes(PERMISSIONS.configManage);
+  const normalizedRationale = rationale.trim();
+  const deterministicActivationReady =
+    canConfigure
+    && executionMode === "deterministic"
+    && provider === "headshot"
+    && deterministicModels[selectedRole].includes(model)
+    && normalizedRationale.length > 0
+    && normalizedRationale.length <= 2_000;
 
   const changeMode = (value: "deterministic" | "hosted_advisory") => {
     setExecutionMode(value);
@@ -191,14 +219,14 @@ export function AgentsScreen({
               value: totals.incompleteAccounting > 0 ? `${money(totals.cost)} known` : money(totals.cost),
               note: totals.incompleteAccounting > 0
                 ? `${totals.incompleteAccounting} role(s) have incomplete provider accounting`
-                : "Zero is valid for deterministic local engines",
+                : `${totals.physicalCalls} provider call(s) with complete accounting`,
             },
             {
               label: "Token observations",
               value: count(totals.observedTokens),
               note: totals.tokenObservations > 0
-                ? `${totals.tokenObservations} hosted observations`
-                : "Not reported by deterministic engines",
+                ? `${totals.tokenObservations} hosted observations · ${totals.physicalCalls} provider calls`
+                : "No hosted provider token observations yet",
             },
           ]} />
         )}
@@ -269,11 +297,46 @@ export function AgentsScreen({
                 <div><dt>Prompt SHA-256</dt><dd className="mono">{selected.active_assignment.prompt_sha256 ?? "not applicable"}</dd></div>
                 <div><dt>Role-history p50 / p95 latency</dt><dd className="mono">{selected.p50_duration_ms === null || selected.p95_duration_ms === null ? "not yet executed" : `${selected.p50_duration_ms.toFixed(1)} / ${selected.p95_duration_ms.toFixed(1)} ms`}</dd></div>
                 <div><dt>Role-history cost</dt><dd className="mono">{accountingValue(selected)}</dd></div>
-                <div><dt>Input / output tokens</dt><dd className="mono">{selected.token_observation_count > 0 ? `${count(selected.input_tokens ?? 0)} / ${count(selected.output_tokens ?? 0)} · ${selected.token_observation_count} observation(s)` : "not reported"}</dd></div>
+                <div><dt>Input / output / reasoning tokens</dt><dd className="mono">{selected.token_observation_count > 0 ? `${count(selected.input_tokens ?? 0)} / ${count(selected.output_tokens ?? 0)} / ${count(selected.reasoning_tokens ?? 0)} · ${selected.token_observation_count} observation(s)` : "not reported"}</dd></div>
+                <div><dt>Provider calls</dt><dd className="mono">{count(selected.physical_call_count)}</dd></div>
                 <div><dt>Langfuse delivery</dt><dd className="mono">{langfuseDelivery(selected)}</dd></div>
                 <div><dt>Last Langfuse query-back</dt><dd className="mono">{selected.last_langfuse_verified_at ? time(selected.last_langfuse_verified_at) : "not yet observed remotely"}</dd></div>
                 <div><dt>Last activity</dt><dd className="mono">{selected.last_activity_at ? time(selected.last_activity_at) : "not yet executed"}</dd></div>
               </dl>
+              <div className="evidence-stack">
+                <p className="field-label">Provider budget guard</p>
+                {selected.provider_budget.status === "unavailable" ? (
+                  <StateNotice
+                    state="unavailable"
+                    detail="No authorized hosted subcap is active or staged for this role."
+                  />
+                ) : (
+                  <dl className="agent-ledger-summary">
+                    <div><dt>Budget state</dt><dd className="mono">{selected.provider_budget.status.replaceAll("_", " ")}</dd></div>
+                    <div><dt>Role USD remaining</dt><dd className="mono">{money(selected.provider_budget.role_usd_remaining ?? 0)} / {money(selected.provider_budget.role_usd_cap ?? 0)}</dd></div>
+                    <div><dt>Role calls remaining</dt><dd className="mono">{count(selected.provider_budget.role_calls_remaining ?? 0)} / {count(selected.provider_budget.role_call_cap ?? 0)}</dd></div>
+                    <div><dt>Global USD remaining</dt><dd className="mono">{money(selected.provider_budget.global_usd_remaining ?? 0)} / {money(selected.provider_budget.global_usd_cap ?? 0)}</dd></div>
+                    <div><dt>Global calls remaining</dt><dd className="mono">{count(selected.provider_budget.global_calls_remaining ?? 0)} / {count(selected.provider_budget.global_call_cap ?? 0)}</dd></div>
+                  </dl>
+                )}
+              </div>
+              {selected.judge_calibration && (
+                <div className="evidence-stack">
+                  <p className="field-label">Evaluator calibration and authority</p>
+                  <StateNotice
+                    state={selected.judge_calibration.decision_authority === "model"
+                      ? "ready"
+                      : selected.judge_calibration.oracle_comparison_count > 0
+                        ? "degraded"
+                        : "empty"}
+                    detail={`${selected.judge_calibration.status_label} · calibration ${selected.judge_calibration.state} · ${selected.judge_calibration.decision_authority} decisive`}
+                  />
+                  <dl className="agent-ledger-summary">
+                    <div><dt>LLM / oracle agreement</dt><dd className="mono">{selected.judge_calibration.oracle_agreement_rate === null ? "not yet measured" : `${percent(selected.judge_calibration.oracle_agreement_rate)} · ${selected.judge_calibration.oracle_agreement_count}/${selected.judge_calibration.oracle_comparison_count}`}</dd></div>
+                    <div><dt>Calibration artifact</dt><dd className="mono">{selected.judge_calibration.calibration_id ?? "unavailable"}</dd></div>
+                  </dl>
+                </div>
+              )}
               {selected.staged_assignment && (
                 <>
                   <StateNotice
@@ -303,11 +366,15 @@ export function AgentsScreen({
             Execution mode
             <select
               value={executionMode}
-              disabled
+              disabled={!canConfigure}
               onChange={(event) => changeMode(event.target.value as "deterministic" | "hosted_advisory")}
             >
-              <option value="deterministic">Deterministic production engine</option>
-              {hostedEligible && <option value="hosted_advisory">Hosted advisory model (stage only)</option>}
+              <option value="deterministic">Server-owned deterministic engine</option>
+              {executionMode === "hosted_advisory" && (
+                <option value="hosted_advisory" disabled>
+                  Hosted role assignment · managed as an atomic four-role set
+                </option>
+              )}
             </select>
           </label>
           <label className="form-field">
@@ -329,7 +396,11 @@ export function AgentsScreen({
           <label className="form-field">
             Configured model / engine
             {executionMode === "deterministic" ? (
-              <select disabled value={model} onChange={(event) => setModel(event.target.value)}>
+              <select
+                disabled={!canConfigure}
+                value={model}
+                onChange={(event) => setModel(event.target.value)}
+              >
                 {deterministicModels[selectedRole].map((item) => <option key={item}>{item}</option>)}
               </select>
             ) : (
@@ -346,9 +417,10 @@ export function AgentsScreen({
             Rationale
             <textarea
               value={rationale}
-              disabled
+              disabled={!canConfigure || executionMode !== "deterministic"}
+              maxLength={2000}
               onChange={(event) => setRationale(event.target.value)}
-              placeholder="Why this engine is appropriate for this role"
+              placeholder="Required audit rationale for restoring this server-owned engine"
             />
           </label>
           <div className="command-row">
@@ -359,20 +431,28 @@ export function AgentsScreen({
                 provider,
                 model: model.trim(),
                 execution_mode: executionMode,
-                rationale: rationale.trim(),
+                rationale: normalizedRationale,
               }}
-              label="Per-role activation unavailable"
-              allowed={false}
-              unavailableReason={canConfigure
-                ? "atomic four-role configuration-set staging through API v1"
-                : PERMISSIONS.configManage}
-              onAcknowledged={() => agents.refresh()}
+              label="Activate deterministic role engine"
+              allowed={deterministicActivationReady}
+              unavailableReason={!canConfigure
+                ? PERMISSIONS.configManage
+                : executionMode !== "deterministic"
+                  ? "selecting the server-owned deterministic engine first"
+                  : normalizedRationale.length === 0
+                    ? "an audit rationale"
+                    : "a server-owned engine for this role"}
+              onAcknowledged={() => {
+                setRationale("");
+                agents.refresh();
+              }}
             />
           </div>
           <p className="data-note">
-            Recovery configuration is atomic across all four hosted roles. This read-only panel
-            cannot stage or activate one role independently, and staged sets cannot alter a
-            previously approved campaign.
+            This per-role control can only restore a reviewed, server-owned deterministic engine.
+            Hosted assignments remain an immutable four-role configuration set and become active
+            only through an exact human-authorized campaign binding; this control cannot create
+            partial hosted authority.
           </p>
         </Panel>
       </div>
@@ -388,7 +468,7 @@ export function AgentsScreen({
           <Timeline rows={selectedActivity.slice(0, 30).map((row) => ({
             id: row.execution_id,
             title: `${row.agent_role.replace("_", " ")} · ${row.status}`,
-            detail: `${shortId(row.campaign_run_id)} · ${row.model} · ${row.duration_ms === null ? "running" : `${row.duration_ms.toFixed(1)} ms`} · ${activityAccountingValue(row)} · ${langfuseDeliveryState(row)}`,
+            detail: `${shortId(row.campaign_run_id)} · ${row.returned_model ?? row.model} · ${row.duration_ms === null ? "running" : `${row.duration_ms.toFixed(1)} ms`} · ${activityAccountingValue(row)} · ${langfuseDeliveryState(row)}${row.agent_role === "judge" ? ` · calibration ${row.judge_calibration_state ?? "unavailable"} · ${row.decision_authority ?? "no"} authority` : ""}`,
             at: row.started_at,
             tone: statusTone(row.status),
           }))} />
@@ -417,12 +497,19 @@ export function AgentsScreen({
                 { key: "attempt_id", label: "Attempt", mono: true },
                 { key: "parent_execution_id", label: "Parent", mono: true },
                 { key: "model", label: "Engine", mono: true },
+                { key: "returned_model", label: "Served model", mono: true },
+                { key: "upstream_provider", label: "Upstream", mono: true },
                 { key: "duration_ms", label: "Latency ms", mono: true },
                 { key: "input_tokens", label: "Input tokens", mono: true },
                 { key: "output_tokens", label: "Output tokens", mono: true },
+                { key: "reasoning_tokens", label: "Reasoning tokens", mono: true },
+                { key: "physical_attempts", label: "Provider calls", mono: true },
                 { key: "accounting_status", label: "Accounting" },
                 { key: "measured_cost_display", label: "Cost USD", mono: true },
                 { key: "trace_id", label: "Trace", mono: true },
+                { key: "judge_calibration_state", label: "Calibration" },
+                { key: "oracle_agreement", label: "Oracle agreement", mono: true },
+                { key: "decision_authority", label: "Authority" },
                 { key: "langfuse_status", label: "Langfuse", mono: true },
                 { key: "langfuse_verified_at", label: "Verified at", mono: true, timestamp: true },
               ]}

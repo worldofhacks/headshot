@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import type { ApiClient } from "../api/client";
 import {
@@ -23,6 +23,7 @@ import {
   decodeTargets,
 } from "../api/read-models";
 import { AdversarialText } from "../components/AdversarialText";
+import { AgentActivityPanel } from "../components/AgentActivityPanel";
 import { Birdseye } from "../components/Birdseye";
 import {
   count,
@@ -45,7 +46,10 @@ import {
   StateNotice,
 } from "../components/ResourceView";
 import { useConsoleEvents } from "../hooks/useConsoleEvents";
-import { useResource } from "../hooks/useResource";
+import {
+  LIVE_RESOURCE_POLL_INTERVAL_MS,
+  useResource,
+} from "../hooks/useResource";
 import { navigateTo } from "../router";
 import {
   PERMISSIONS,
@@ -499,6 +503,11 @@ export function LiveScreen({ client, principal, entityId, getToken }: ScreenProp
       </div>
         </>
       )}
+      <AgentActivityPanel
+        client={client}
+        campaignRunId={selectedCampaignId}
+        title="Selected campaign agents"
+      />
     </div>
   );
 }
@@ -657,6 +666,7 @@ function FindingDetail({
     client,
     RESOURCE_PATHS.finding(findingId),
     decodeFinding,
+    { pollIntervalMs: LIVE_RESOURCE_POLL_INTERVAL_MS },
   );
   const [rationale, setRationale] = useState("");
   const refresh = () => {
@@ -754,7 +764,11 @@ export function FindingsScreen({ client, principal, entityId }: ScreenProps) {
     client,
     RESOURCE_PATHS.findings,
     decodeFindings,
+    { pollIntervalMs: LIVE_RESOURCE_POLL_INTERVAL_MS },
   );
+  const selectedFinding = entityId
+    ? findings.result.data?.find((finding) => finding.finding_id === entityId) ?? null
+    : null;
   return (
     <div className="screen-stack">
       <ScreenHeading
@@ -826,6 +840,11 @@ export function FindingsScreen({ client, principal, entityId }: ScreenProps) {
           refreshList={findings.refresh}
         />
       )}
+      <AgentActivityPanel
+        client={client}
+        campaignRunId={selectedFinding?.campaign_run_id}
+        title={selectedFinding ? "Finding verification agents" : "Recent finding agents"}
+      />
     </div>
   );
 }
@@ -833,15 +852,24 @@ export function FindingsScreen({ client, principal, entityId }: ScreenProps) {
 function ApprovalVerificationDetail({
   client,
   requestId,
+  onCampaignRunId,
 }: {
   client: ApiClient;
   requestId: string;
+  onCampaignRunId: (campaignRunId: string | null) => void;
 }) {
   const detail = useResource<ApprovalDetailReadModel>(
     client,
     RESOURCE_PATHS.approval(requestId),
     decodeApprovalDetail,
+    { pollIntervalMs: LIVE_RESOURCE_POLL_INTERVAL_MS },
   );
+  const campaignRunId = detail.result.data?.campaign_run_id;
+  useEffect(() => {
+    if (detail.result.data !== null) {
+      onCampaignRunId(campaignRunId ?? null);
+    }
+  }, [campaignRunId, detail.result.data, onCampaignRunId]);
   return (
     <div className="evidence-stack">
       <p className="field-label">Post-run verification chain</p>
@@ -880,12 +908,19 @@ export function ApprovalsScreen({ client, principal, entityId }: ScreenProps) {
     client,
     RESOURCE_PATHS.approvals,
     decodeApprovals,
+    { pollIntervalMs: LIVE_RESOURCE_POLL_INTERVAL_MS },
   );
   const records = approvals.result.data ?? [];
   const selected = entityId
     ? records.find((record) => identity(record, ["request_id", "approval_id"]) === entityId) ?? null
     : null;
   const requestId = selected ? identity(selected, ["request_id", "approval_id"]) : null;
+  const [selectedCampaignRunId, setSelectedCampaignRunId] = useState<
+    string | null | undefined
+  >(undefined);
+  useEffect(() => {
+    setSelectedCampaignRunId(undefined);
+  }, [requestId]);
   const launcher = selected && typeof selected.launcher_user_id === "string"
     ? selected.launcher_user_id
     : null;
@@ -907,7 +942,6 @@ export function ApprovalsScreen({ client, principal, entityId }: ScreenProps) {
       <ResourceView result={approvals.result} emptyLabel="No approval requests are pending or recorded.">
         {(data) => {
           const pendingCount = data.filter((approval) => approval.status === "pending").length;
-          const approvedCount = data.filter((approval) => approval.status === "approved").length;
           const decidedCount = data.length - pendingCount;
           const totalBudget = data.reduce((total, approval) => total + approval.caps.budget_usd, 0);
           const totalAttempts = data.reduce((total, approval) => total + approval.caps.max_attempts_per_run, 0);
@@ -916,7 +950,6 @@ export function ApprovalsScreen({ client, principal, entityId }: ScreenProps) {
               <MetricStrip label="Approval summary" values={[
                 { label: "Authorization scopes", value: count(data.length), note: `${unique(data.map((approval) => approval.target_id)).length} targets` },
                 { label: "Pending review", value: count(pendingCount), note: `${decidedCount} decided` },
-                { label: "Approval rate", value: decidedCount ? percent(approvedCount / decidedCount) : "—", note: `${approvedCount} approved` },
                 { label: "Budget authorized", value: money(totalBudget), note: `${count(totalAttempts)} maximum attempts` },
               ]} />
               <div className="panel-grid analytical-grid">
@@ -966,6 +999,51 @@ export function ApprovalsScreen({ client, principal, entityId }: ScreenProps) {
             { label: "Request rate", value: `${selected.caps.target_requests_per_second}/s` },
             { label: "Run timeout", value: `${selected.caps.run_timeout_seconds}s` },
           ]} />
+          {selected.hosted_run ? (
+            <div className="evidence-stack">
+              <p className="field-label">Exact hosted four-role binding</p>
+              <StateNotice
+                state="ready"
+                detail="This approval binds the immutable hosted configuration, generation policy, and provider call envelope shown below. It contains no credential reference."
+              />
+              <EvidenceGrid values={[
+                {
+                  label: "Provider call cap",
+                  value: count(selected.hosted_run.provider_model_call_limit),
+                },
+                {
+                  label: "Provider spend cap",
+                  value: `$${selected.hosted_run.provider_model_spend_limit_usd}`,
+                },
+                {
+                  label: "Provider retries",
+                  value: count(selected.hosted_run.provider_max_retries),
+                },
+                {
+                  label: "Provider timeout",
+                  value: `${selected.hosted_run.provider_timeout_seconds}s`,
+                },
+              ]} />
+              <RecordDetails
+                data={selected.hosted_run}
+                preferredKeys={[
+                  "configuration_set_sha256",
+                  "generation_policy_sha256",
+                  "session_generation",
+                  "provider_model_call_limit",
+                  "provider_model_spend_limit_usd",
+                  "provider_max_retries",
+                  "provider_max_concurrency",
+                  "provider_timeout_seconds",
+                ]}
+              />
+            </div>
+          ) : (
+            <StateNotice
+              state="empty"
+              detail="This authorization does not permit hosted role model calls."
+            />
+          )}
           <RecordDetails
             data={selected}
             preferredKeys={[
@@ -988,7 +1066,11 @@ export function ApprovalsScreen({ client, principal, entityId }: ScreenProps) {
               "consumed",
             ]}
           />
-          <ApprovalVerificationDetail client={client} requestId={requestId} />
+          <ApprovalVerificationDetail
+            client={client}
+            requestId={requestId}
+            onCampaignRunId={setSelectedCampaignRunId}
+          />
           {selected.expired && (
             <StateNotice
               state="unavailable"
@@ -1053,6 +1135,27 @@ export function ApprovalsScreen({ client, principal, entityId }: ScreenProps) {
               onAcknowledged={approvals.refresh}
             />
           </div>
+        </Panel>
+      )}
+      {!selected && !entityId && (
+        <AgentActivityPanel
+          client={client}
+          title="Recent authorization and review agents"
+        />
+      )}
+      {selected && selectedCampaignRunId && (
+        <AgentActivityPanel
+          client={client}
+          campaignRunId={selectedCampaignRunId}
+          title="Selected authorization agents"
+        />
+      )}
+      {selected && selectedCampaignRunId === null && (
+        <Panel title="Selected authorization agents" eyebrow="AGENT EXECUTION LEDGER">
+          <StateNotice
+            state="empty"
+            detail="No campaign has consumed this authorization, so it has no scoped agent executions."
+          />
         </Panel>
       )}
     </div>
@@ -1178,6 +1281,7 @@ function TargetManagement({
   const targetId = identity(selected, ["target_id"]);
   const surfaces = selected.surfaces;
   const template = selected.campaign_template;
+  const canManageTargets = hasPermission(principal, PERMISSIONS.targetsManage);
   // Pre-filled bounded defaults so an Operator can request a campaign without hand-entering
   // caps or a nonce. The nonce is freshly generated per mount (unused → replay-safe); every
   // field stays editable, and the server still validates caps against the target's ceiling.
@@ -1259,10 +1363,57 @@ function TargetManagement({
             : <StateNotice state="empty" detail="No versioned surfaces are attached." />}
         </div>
       </div>
+      <div className="evidence-stack">
+        <p className="field-label">Immutable surface state</p>
+        {surfaces.length > 0 ? (
+          <div className="surface-stack">
+            {surfaces.map((surface) => {
+              const mayEnable = !surface.enabled && selected.lifecycle === "draft";
+              const allowed = canManageTargets && (surface.enabled || mayEnable);
+              return (
+                <div
+                  className="surface-row"
+                  key={`${surface.surface_id}:${surface.version}`}
+                >
+                  <span>
+                    <span className="mono">{surface.surface_id}@{surface.version}</span>
+                    {" · "}
+                    {surface.enabled ? "enabled" : "disabled"}
+                    {" · "}
+                    {surface.kind}
+                  </span>
+                  <CommandButton
+                    client={client}
+                    path={COMMAND_PATHS.changeSurfaceState(
+                      selected.target_id,
+                      surface.surface_id,
+                    )}
+                    payload={{ version: surface.version, enabled: !surface.enabled }}
+                    label={surface.enabled ? "Disable surface" : "Enable surface"}
+                    allowed={allowed}
+                    unavailableReason={!canManageTargets
+                      ? PERMISSIONS.targetsManage
+                      : "a server-reported draft target before re-enabling"}
+                    destructive={surface.enabled}
+                    onAcknowledged={refresh}
+                  />
+                </div>
+              );
+            })}
+          </div>
+        ) : (
+          <StateNotice state="empty" detail="No immutable surfaces are attached." />
+        )}
+        <p className="data-note">
+          Disabling an existing immutable surface is immediately fail-closed. The backend permits
+          re-enabling only while its target is in the draft lifecycle; reviewed targets expose no
+          recovery control here.
+        </p>
+      </div>
       <StateNotice
         state="unavailable"
-        reason="frozen_target_catalog"
-        detail="Target authoring, lifecycle changes, surface changes, and standalone probes are unavailable in this recovery. Campaign requests use only the registered immutable target and surface below."
+        reason="trusted_target_authoring_catalog_missing"
+        detail="Target and surface authoring remains closed until the server exposes a reviewed catalog. The browser never supplies target URLs, adapters, or credential references as authority."
       />
       {template && (
         <div className="evidence-stack">
@@ -1338,8 +1489,13 @@ export function TargetsScreen({ client, principal }: ScreenProps) {
     RESOURCE_PATHS.targets,
     decodeTargets,
   );
-  const [selected, setSelected] = useState<TargetReadModel | null>(null);
+  const [selectedIdentity, setSelectedIdentity] = useState<string | null>(null);
   const records = targets.result.data ?? [];
+  const selected = selectedIdentity
+    ? records.find(
+        (target) => `${target.target_id}\n${target.version}` === selectedIdentity,
+      ) ?? null
+    : null;
   const surfaces = records.flatMap((target) => target.surfaces);
   const enabledSurfaces = surfaces.filter((surface) => surface.enabled).length;
   const readyTargets = records.filter((target) => target.lifecycle.toLowerCase().includes("ready")).length;
@@ -1391,12 +1547,16 @@ export function TargetsScreen({ client, principal }: ScreenProps) {
                 { key: "lifecycle", label: "Lifecycle" },
                 { key: "environment", label: "Environment" },
               ]}
-              onSelect={setSelected}
+              onSelect={(target) =>
+                setSelectedIdentity(`${target.target_id}\n${target.version}`)}
             />
           )}
         </ResourceView>
         <div className="command-row">
-          <MissingCommand label="Create target" dependency="a trusted target authoring catalog" />
+          <MissingCommand
+            label="Create target from trusted catalog"
+            dependency="a server-projected reviewed target catalog (browser URLs and credentials are never accepted)"
+          />
         </div>
       </Panel>
       {selected && (

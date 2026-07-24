@@ -18,7 +18,10 @@ import {
   decodeCampaigns,
   decodePrincipal,
 } from "./api/read-models";
-import { useResource } from "./hooks/useResource";
+import {
+  LIVE_RESOURCE_POLL_INTERVAL_MS,
+  useResource,
+} from "./hooks/useResource";
 import { parseConsoleRoute, routePath, type ConsoleRoute, type ScreenName } from "./router";
 import {
   ApprovalsScreen,
@@ -132,12 +135,23 @@ function ConsoleShell({
   const [route, navigate] = useBrowserRoute();
   const [theme, setTheme] = useState<"dark" | "light">("dark");
   const [mobileMore, setMobileMore] = useState(false);
-  const campaigns = useResource<CampaignReadModel[]>(client, RESOURCE_PATHS.campaigns, decodeCampaigns);
-  const approvals = useResource<ApprovalReadModel[]>(client, RESOURCE_PATHS.approvals, decodeApprovals);
+  const campaigns = useResource<CampaignReadModel[]>(
+    client,
+    RESOURCE_PATHS.campaigns,
+    decodeCampaigns,
+    { pollIntervalMs: LIVE_RESOURCE_POLL_INTERVAL_MS },
+  );
+  const approvals = useResource<ApprovalReadModel[]>(
+    client,
+    RESOURCE_PATHS.approvals,
+    decodeApprovals,
+    { pollIntervalMs: LIVE_RESOURCE_POLL_INTERVAL_MS },
+  );
   const birdseye = useResource<BirdseyeSnapshotReadModel>(
     client,
     RESOURCE_PATHS.birdseye,
     decodeBirdseye,
+    { pollIntervalMs: LIVE_RESOURCE_POLL_INTERVAL_MS },
   );
   const activeCampaign = campaigns.result.data?.find((campaign) => campaign.state === "running")
     ?? campaigns.result.data?.find((campaign) => campaign.state === "queued")

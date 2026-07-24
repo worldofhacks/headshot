@@ -20,13 +20,17 @@ from agentforge.control_plane.records import (
     SurfaceSnapshotRecord,
     TargetSnapshotRecord,
 )
-from agentforge.control_plane.store import ControlPlaneStore
+from agentforge.control_plane.store import (
+    AuthorizedHostedRoleConfiguration,
+    ControlPlaneStore,
+)
 
 __all__ = [
     "AuditEventRecord",
     "AuthorizationDecisionRecord",
     "AuthorizationDeniedError",
     "AuthorizationRequestRecord",
+    "AuthorizedHostedRoleConfiguration",
     "AuthorizedRunRecord",
     "CampaignAttemptRecord",
     "CampaignRunRecord",

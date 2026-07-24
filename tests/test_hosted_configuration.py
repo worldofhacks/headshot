@@ -16,7 +16,13 @@ from agentforge.agents.hosted import (
     TokenPrices,
     preflight_hosted_configuration_set,
 )
-from agentforge.agents.hosted_prompts import HOSTED_PROMPTS, hosted_prompt
+from agentforge.agents.hosted_prompts import (
+    HOSTED_JUDGE_PROMPT_VERSION,
+    HOSTED_PROMPT_LIVE_ROLE_VERSION,
+    HOSTED_PROMPT_VERSION,
+    HOSTED_PROMPTS,
+    hosted_prompt,
+)
 
 MODELS = {
     "orchestrator": "anthropic/claude-opus-4.8",
@@ -25,22 +31,22 @@ MODELS = {
     "documentation": "openai/gpt-5.4",
 }
 CALL_CAPS = {
-    "orchestrator": 8,
-    "red_team": 21,
-    "judge": 21,
-    "documentation": 6,
+    "orchestrator": 9,
+    "red_team": 19,
+    "judge": 19,
+    "documentation": 9,
 }
 USD_CAPS = {
     "orchestrator": Decimal("0.75"),
-    "red_team": Decimal("1.25"),
+    "red_team": Decimal("1"),
     "judge": Decimal("2.50"),
     "documentation": Decimal("0.50"),
 }
 UPSTREAM_PROVIDERS = {
-    "orchestrator": "Anthropic",
-    "red_team": "Together",
-    "judge": "Google",
-    "documentation": "OpenAI",
+    "orchestrator": "anthropic",
+    "red_team": "together",
+    "judge": "google-vertex",
+    "documentation": "openai",
 }
 
 
@@ -203,6 +209,11 @@ def test_prompt_registry_is_exact_content_addressed_and_versioned() -> None:
         )
         assert prompt.system_prompt == prompt.system_prompt.strip()
 
+    assert hosted_prompt("orchestrator").version == HOSTED_PROMPT_LIVE_ROLE_VERSION
+    assert hosted_prompt("judge").version == HOSTED_JUDGE_PROMPT_VERSION
+    assert hosted_prompt("red_team").version == HOSTED_PROMPT_VERSION
+    assert hosted_prompt("documentation").version == HOSTED_PROMPT_VERSION
+
     with pytest.raises(ValueError, match="four-role catalog"):
         hosted_prompt("unknown")
 
@@ -225,16 +236,33 @@ def test_prices_and_limits_require_decimal_units_and_closed_bounds() -> None:
     with pytest.raises(ValueError, match="between zero and 1"):
         replace(_limits("judge"), max_retries=2)
     with pytest.raises(ValueError, match="closed platform maximum"):
-        replace(_limits("judge"), max_usd=Decimal("5.01"))
+        replace(_limits("judge"), max_usd=Decimal("10.01"))
     with pytest.raises(ValueError, match="positive"):
         replace(_limits("judge"), max_calls=0)
+
+
+@pytest.mark.parametrize(
+    ("role", "invalid_cap"),
+    (
+        ("orchestrator", Decimal("1.51")),
+        ("red_team", Decimal("1.01")),
+        ("judge", Decimal("4.01")),
+        ("documentation", Decimal("1.01")),
+    ),
+)
+def test_role_cash_caps_cannot_exceed_governance_ceilings(
+    role: str,
+    invalid_cap: Decimal,
+) -> None:
+    with pytest.raises(ValueError, match="role ceiling"):
+        replace(_role(role), limits=replace(_limits(role), max_usd=invalid_cap))
 
 
 def test_every_identity_price_and_cap_change_rebinds_the_hash() -> None:
     baseline = _configuration()
     changed_upstream = replace(
         baseline.roles[0],
-        upstream_provider="Anthropic Enterprise",
+        upstream_provider="anthropic-beta",
     )
     changed_price = replace(
         baseline.roles[0],
@@ -257,6 +285,14 @@ def test_every_identity_price_and_cap_change_rebinds_the_hash() -> None:
     assert replace(baseline, global_limits=changed_cap).configuration_sha256 != (
         baseline.configuration_sha256
     )
+
+
+@pytest.mark.parametrize("routing_slug", ("Google", "google vertex", "auto"))
+def test_routing_provider_requires_an_exact_lowercase_openrouter_slug(
+    routing_slug: str,
+) -> None:
+    with pytest.raises(ValueError, match="provider slug"):
+        replace(_role("judge"), upstream_provider=routing_slug)
 
 
 def test_decimal_canonicalization_is_independent_of_ambient_context() -> None:

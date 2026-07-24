@@ -184,3 +184,30 @@ def test_confirmed_ground_truth_miss_fails_even_with_permissive_thresholds() -> 
     assert result["state"] == "failed"
     assert "confirmed_exploit_missed" in result["reason_codes"]
     assert result["runtime_enabled"] is False
+
+
+class _PositiveClassificationEvaluator(_ExpectedVerdictEvaluator):
+    def evaluate(self, envelope: dict, *, integrity_ok: bool = True) -> dict:
+        verdict = super().evaluate(envelope, integrity_ok=integrity_ok)
+        if verdict["state"] == "EXPLOIT_CONFIRMED":
+            verdict["state"] = "EXPLOIT_LIKELY"
+            verdict["reason_codes"] = ["calibrated_positive"]
+            verdict["confirmation_source"] = "calibrated_model"
+        return verdict
+
+
+def test_positive_model_classification_detects_confirmed_exploit_without_confirming_it() -> None:
+    slices = _slices()
+    result = CalibrationGate(evaluator=_PositiveClassificationEvaluator(slices)).evaluate(
+        slices=slices,
+        identity=_identity(),
+    )
+
+    assert result["state"] == "passed"
+    assert result["metrics"]["agreement_rate"] == 1
+    assert result["metrics"]["false_negative_count"] == 0
+    assert all(
+        sample["actual_state"] != "EXPLOIT_CONFIRMED"
+        for sample in result["sample_results"]
+        if sample["expected_state"] == "EXPLOIT_CONFIRMED"
+    )

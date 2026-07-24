@@ -24,6 +24,14 @@ test("direct routes and browser history restore authoritative screens", async ({
   await expect(page.getByText("Configured provider", { exact: true })).toBeVisible();
   await expect(page.getByText("Provider-served model", { exact: true })).toBeVisible();
   await expect(page.getByText("unavailable — not durably recorded", { exact: true }).first()).toBeVisible();
+  await expect(page.getByLabel("Execution mode")).toBeEnabled();
+  await expect(page.getByRole("button", {
+    name: "Activate deterministic role engine",
+  })).toBeDisabled();
+  await page.getByLabel("Rationale").fill("Restore the reviewed deterministic planner engine.");
+  await expect(page.getByRole("button", {
+    name: "Activate deterministic role engine",
+  })).toBeEnabled();
 });
 
 test("390px navigation exposes every screen without application overflow", async ({ page }) => {
@@ -45,6 +53,10 @@ test("390px navigation exposes every screen without application overflow", async
   await page.getByRole("button", { name: "Targets", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Targets", exact: true })).toBeVisible();
   await page.getByText("Browser Test Target", { exact: true }).click();
+  await expect(page.getByRole("button", { name: "Disable surface" })).toBeEnabled();
+  await expect(page.getByRole("button", {
+    name: "Create target from trusted catalog",
+  })).toBeDisabled();
   await expect(page.getByLabel("Budget USD")).toHaveValue("1");
   await expect(page.getByLabel("Maximum attempts")).toHaveValue("9");
   await expect(page.getByLabel("Target requests / second")).toHaveValue("1");
@@ -149,7 +161,7 @@ test("trace and cost screens visualize measured Langfuse-correlated telemetry", 
   });
   await expect(accounting).toBeVisible();
   await expect(
-    accounting.getByRole("columnheader", { name: "Confirmed findings", exact: true }),
+    accounting.getByRole("columnheader", { name: "Campaign findings", exact: true }),
   ).toBeVisible();
   await expect(
     accounting.getByRole("columnheader", { name: "Role p50", exact: true }),

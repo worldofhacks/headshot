@@ -18,7 +18,10 @@ import {
   time,
 } from "../components/Analytics";
 import { ResourceView, StateNotice } from "../components/ResourceView";
-import { useResource } from "../hooks/useResource";
+import {
+  LIVE_RESOURCE_POLL_INTERVAL_MS,
+  useResource,
+} from "../hooks/useResource";
 import type { CostReadModel, TraceReadModel } from "../types";
 
 const sum = (values: number[]) => values.reduce((total, value) => total + value, 0);
@@ -189,6 +192,10 @@ function TraceDetails({ trace }: { trace: TraceReadModel }) {
         <div><dt>Latency</dt><dd className="mono">{trace.duration_ms === null ? "Running" : duration(trace.duration_ms)}</dd></div>
         <div><dt>HTTP status</dt><dd className="mono">{isAgent ? "Not applicable" : trace.status_code ?? "—"}</dd></div>
         <div><dt>Measured cost</dt><dd className="mono">{traceCostValue(trace)}</dd></div>
+        {isAgent && <div><dt>Requested model</dt><dd className="mono">{trace.provider}</dd></div>}
+        {isAgent && <div><dt>Provider-served model</dt><dd className="mono">{trace.returned_model ?? "unavailable"}</dd></div>}
+        {isAgent && <div><dt>Provider-served upstream</dt><dd className="mono">{trace.upstream_provider ?? "unavailable"}</dd></div>}
+        {isAgent && <div><dt>Provider request</dt><dd className="mono">{trace.provider_request_id ?? "unavailable"}</dd></div>}
         {isAgent && (
           <div>
             <dt>Campaign role p50 / p95</dt>
@@ -205,7 +212,11 @@ function TraceDetails({ trace }: { trace: TraceReadModel }) {
         <div><dt>Request</dt><dd className="mono" title={trace.request_id ?? undefined}>{shortId(trace.request_id)}</dd></div>
         {isAgent && <div><dt>Agent execution</dt><dd className="mono" title={trace.execution_id ?? undefined}>{shortId(trace.execution_id)}</dd></div>}
         {isAgent && <div><dt>Parent execution</dt><dd className="mono" title={trace.parent_execution_id ?? undefined}>{shortId(trace.parent_execution_id)}</dd></div>}
-        {isAgent && <div><dt>Input / output tokens</dt><dd className="mono">{trace.input_tokens === null && trace.output_tokens === null ? "Not reported by engine" : `${count(trace.input_tokens ?? 0)} / ${count(trace.output_tokens ?? 0)}`}</dd></div>}
+        {isAgent && <div><dt>Input / output / reasoning tokens</dt><dd className="mono">{trace.input_tokens === null && trace.output_tokens === null && trace.reasoning_tokens === null ? "Not reported by engine" : `${count(trace.input_tokens ?? 0)} / ${count(trace.output_tokens ?? 0)} / ${count(trace.reasoning_tokens ?? 0)}`}</dd></div>}
+        {isAgent && <div><dt>Physical provider calls</dt><dd className="mono">{trace.physical_attempts === null ? "Unavailable" : count(trace.physical_attempts)}</dd></div>}
+        {trace.agent_role === "judge" && <div><dt>Evaluator calibration</dt><dd className="mono">{trace.judge_calibration_state ?? "unavailable"}</dd></div>}
+        {trace.agent_role === "judge" && <div><dt>LLM / oracle agreement</dt><dd className="mono">{trace.oracle_agreement === null ? "unavailable" : trace.oracle_agreement ? "agrees" : "disagrees"}</dd></div>}
+        {trace.agent_role === "judge" && <div><dt>Decisive authority</dt><dd className="mono">{trace.decision_authority ?? "unavailable"}</dd></div>}
       </dl>
       <div className="correlation-chain" aria-label="Observation correlation chain">
         <span>Campaign</span><i>→</i><span>Attempt</span><i>→</i><span>{isAgent ? "Agent execution" : "Request"}</span><i>→</i><span>Langfuse delivery</span>
@@ -320,7 +331,11 @@ function TraceDashboard({ traces }: { traces: TraceReadModel[] }) {
 }
 
 function CostBars({ costs }: { costs: CostReadModel[] }) {
-  const maximum = Math.max(...costs.map((record) => record.budget_usd ?? record.measured_cost), 1);
+  const cap = (record: CostReadModel) =>
+    record.provider_budget?.role_usd_cap
+    ?? record.budget_usd
+    ?? record.measured_cost;
+  const maximum = Math.max(...costs.map(cap), 1);
   return (
     <div className="cost-bars">
       {costs.map((record) => (
@@ -330,10 +345,16 @@ function CostBars({ costs }: { costs: CostReadModel[] }) {
             <strong className="mono">{costValue(record)}</strong>
           </div>
           <div className="cost-bar-track">
-            <span className="cost-budget" style={{ width: `${((record.budget_usd ?? record.measured_cost) / maximum) * 100}%` }} />
+            <span className="cost-budget" style={{ width: `${(cap(record) / maximum) * 100}%` }} />
             <span className="cost-spend" style={{ width: `${(record.measured_cost / maximum) * 100}%` }} />
           </div>
-          <small>{record.agent_role ? record.provider : record.budget_usd === null ? "No approved budget projection" : `${percent(record.budget_utilization ?? 0)} of ${money(record.budget_usd)} cap`}</small>
+          <small>{record.agent_role
+            ? record.provider_budget?.status === "unavailable"
+              ? "No authorized hosted subcap"
+              : `${money(record.provider_budget?.role_usd_remaining ?? 0)} role budget remaining · ${count(record.provider_budget?.role_calls_remaining ?? 0)} calls remaining`
+            : record.budget_usd === null
+              ? "No approved budget projection"
+              : `${percent(record.budget_utilization ?? 0)} of ${money(record.budget_usd)} cap`}</small>
         </div>
       ))}
     </div>
@@ -344,21 +365,25 @@ function CostTable({ costs }: { costs: CostReadModel[] }) {
   return (
     <div className="table-scroll" tabIndex={0}>
       <table className="record-table cost-table" aria-label="Campaign and agent accounting records">
-        <thead><tr><th>Campaign</th><th>Source</th><th>Profile</th><th>Requests</th><th>Executions</th><th>Attempts</th><th>Confirmed findings</th><th>Observed tokens</th><th>Role p50</th><th>Role p95</th><th>Cost / request</th><th>Total</th><th>Run time</th></tr></thead>
+        <thead><tr><th>Campaign</th><th>Source</th><th>Profile</th><th>Target requests</th><th>Provider calls</th><th>Executions</th><th>Attempts</th><th>Campaign findings</th><th>Observed tokens</th><th>Reasoning tokens</th><th>Role budget remaining</th><th>Role p50</th><th>Role p95</th><th>Cost / target request</th><th>Cost / provider call</th><th>Total</th><th>Run time</th></tr></thead>
         <tbody>
           {costs.map((record) => (
             <tr key={record.accounting_id}>
               <td className="mono" title={record.campaign_id}>{shortId(record.campaign_id)}</td>
               <td>{record.agent_role?.replace("_", " ") ?? record.provider}</td>
               <td>{record.execution_profile}</td>
-              <td className="mono">{count(record.request_count)}</td>
+              <td className="mono">{record.agent_role ? "Not applicable" : count(record.request_count)}</td>
+              <td className="mono">{record.agent_role ? count(record.physical_call_count) : "Not applicable"}</td>
               <td className="mono">{count(record.execution_count)}</td>
               <td className="mono">{count(record.attempt_count)}</td>
-              <td className="mono">{count(record.confirmed_finding_count)}</td>
-              <td className="mono">{record.token_observation_count > 0 ? count((record.input_tokens ?? 0) + (record.output_tokens ?? 0)) : "Not reported by engine"}</td>
+              <td className="mono">{record.agent_role ? "Not applicable" : count(record.confirmed_finding_count)}</td>
+              <td className="mono">{record.token_observation_count > 0 ? count((record.input_tokens ?? 0) + (record.output_tokens ?? 0) + (record.reasoning_tokens ?? 0)) : "Not reported by engine"}</td>
+              <td className="mono">{record.reasoning_tokens === null ? "Not reported" : count(record.reasoning_tokens)}</td>
+              <td className="mono">{record.provider_budget?.role_usd_remaining === null || record.provider_budget?.role_usd_remaining === undefined ? "Not applicable" : money(record.provider_budget.role_usd_remaining)}</td>
               <td className="mono">{costRoleLatencyValue(record, "p50_duration_ms")}</td>
               <td className="mono">{costRoleLatencyValue(record, "p95_duration_ms")}</td>
               <td className="mono">{record.agent_role ? "Not applicable" : money(record.average_cost_per_request)}</td>
+              <td className="mono">{record.agent_role ? money(record.average_cost_per_request) : "Not applicable"}</td>
               <td className="mono">{costValue(record)}</td>
               <td className="mono">{duration(record.duration_ms)}</td>
             </tr>
@@ -397,6 +422,25 @@ function CostDashboard({ costs, traces, traceState }: { costs: CostReadModel[]; 
   const requestLedger = physicalRequests(traces);
   const agentCosts = costs.filter((record) => record.record_kind === "agent");
   const agentSpend = sum(agentCosts.map((record) => record.measured_cost));
+  const newestActiveCampaign = agentCosts
+    .filter((record) => record.provider_budget?.status === "active")
+    .sort((left, right) => right.recorded_at.localeCompare(left.recorded_at))[0]
+    ?.campaign_id;
+  const currentBudgetsByRole = new Map<string, NonNullable<CostReadModel["provider_budget"]>>();
+  for (const record of agentCosts) {
+    if (
+      record.campaign_id === newestActiveCampaign
+      && record.agent_role !== null
+      && record.provider_budget?.status === "active"
+    ) {
+      currentBudgetsByRole.set(record.agent_role, record.provider_budget);
+    }
+  }
+  const activeProviderBudgets = [...currentBudgetsByRole.values()];
+  const roleBudgetRemaining = sum(activeProviderBudgets.map(
+    (budget) => budget.role_usd_remaining ?? 0,
+  ));
+  const globalBudget = activeProviderBudgets[0] ?? null;
   const incompleteAgentAccounting = agentCosts.filter(
     (record) => ["partial", "unavailable"].includes(record.accounting_status),
   ).length;
@@ -415,6 +459,13 @@ function CostDashboard({ costs, traces, traceState }: { costs: CostReadModel[]; 
           note: incompleteAgentAccounting
             ? `${incompleteAgentAccounting} record(s) have incomplete provider accounting`
             : `${count(agentCosts.length)} role-level records`,
+        },
+        {
+          label: "Provider budget remaining",
+          value: activeProviderBudgets.length > 0 ? money(roleBudgetRemaining) : "—",
+          note: globalBudget
+            ? `${money(globalBudget.global_usd_remaining ?? 0)} global · ${count(globalBudget.global_calls_remaining ?? 0)} calls · latest active run`
+            : "No active hosted budget",
         },
         { label: "Approved budget used", value: totalBudget ? percent(budgetedSpend / totalBudget) : "—", note: totalBudget ? `${money(budgetedSpend)} of ${money(totalBudget)}` : "No budget projection available" },
       ]} />
@@ -446,7 +497,12 @@ function CostDashboard({ costs, traces, traceState }: { costs: CostReadModel[]; 
 }
 
 export function TracesScreen({ client }: { client: ApiClient }) {
-  const traces = useResource<TraceReadModel[]>(client, RESOURCE_PATHS.traces, decodeTraces);
+  const traces = useResource<TraceReadModel[]>(
+    client,
+    RESOURCE_PATHS.traces,
+    decodeTraces,
+    { pollIntervalMs: LIVE_RESOURCE_POLL_INTERVAL_MS },
+  );
   return (
     <div className="screen-stack">
       <ScreenHeading title="Traces" detail="A bounded newest-first drill-in of recent agent executions and physical target requests, correlated across campaign, attempt, durable ledger and Langfuse with PostgreSQL-backed canonical-role latency and spend." eyebrow="HEADSHOT OBSERVABILITY" />
@@ -458,8 +514,18 @@ export function TracesScreen({ client }: { client: ApiClient }) {
 }
 
 export function CostsScreen({ client }: { client: ApiClient }) {
-  const costs = useResource<CostReadModel[]>(client, RESOURCE_PATHS.costs, decodeCosts);
-  const traces = useResource<TraceReadModel[]>(client, RESOURCE_PATHS.traces, decodeTraces);
+  const costs = useResource<CostReadModel[]>(
+    client,
+    RESOURCE_PATHS.costs,
+    decodeCosts,
+    { pollIntervalMs: LIVE_RESOURCE_POLL_INTERVAL_MS },
+  );
+  const traces = useResource<TraceReadModel[]>(
+    client,
+    RESOURCE_PATHS.traces,
+    decodeTraces,
+    { pollIntervalMs: LIVE_RESOURCE_POLL_INTERVAL_MS },
+  );
   return (
     <div className="screen-stack">
       <ScreenHeading title="Costs" detail="Measured campaign and agent spend, canonical-role p50/p95 latency, approved budget utilization and ledger reconciliation—without token-cost estimates." eyebrow="HEADSHOT OBSERVABILITY" />

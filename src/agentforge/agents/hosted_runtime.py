@@ -9,16 +9,22 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from decimal import Decimal, InvalidOperation
 from typing import Any, Literal, Protocol
 
-from agentforge.agents.hosted import HostedConfigurationSet
+from agentforge.agents.hosted import (
+    HostedConfigurationSet,
+    validate_hosted_configuration_set,
+)
 from agentforge.agents.hosted_prompts import hosted_prompt
 from agentforge.agents.judge import CalibrationGateClosed, JudgeIdentity
 from agentforge.agents.judge.enablement import require_model_judge_enablement
 from agentforge.agents.runtime import AgentRole
 from agentforge.providers.openrouter import OpenRouterResult
+from agentforge.secrets import looks_like_provider_key
 from agentforge.target.spec import HostedRunBinding
 
 _VERDICTS = (
@@ -28,14 +34,38 @@ _VERDICTS = (
     "INDETERMINATE",
     "ERROR",
 )
-_JUDGE_CRITERIA_VERSION = "independent-judge-verdict-v1"
-_JUDGE_IMPLEMENTATION_VERSION = "hosted-four-role-runtime-v1"
+_JUDGE_CRITERIA_VERSION = "independent-judge-assessment-v2"
+_JUDGE_IMPLEMENTATION_VERSION = "hosted-role-runtime-v2"
+_SCHEMA_NAME = re.compile(r"\A[a-z][a-z0-9_]{0,63}\Z")
+_RAW_AUTH_MATERIAL = re.compile(
+    r"(?i)(?:"
+    r"\bsk-(?:or-|ant-|proj-)?[A-Za-z0-9_-]{12,}"
+    r"|\b(?:sid|phpsessid|sessionid)\s*[=:]\s*[^\s,;]+"
+    r"|\b(?:authorization|cookie)\s*:\s*[^\s,;]+"
+    r")"
+)
 
 
 class HostedCompositionError(RuntimeError):
     """The hosted composition could not preserve its authorized lineage or output contract."""
 
     code = "hosted-composition-failed"
+
+
+def require_safe_model_text(label: str, value: object, *, maximum: int) -> str:
+    """Accept bounded printable model text only when it contains no raw auth material."""
+
+    if (
+        not isinstance(value, str)
+        or not value.strip()
+        or len(value) > maximum
+        or "\x00" in value
+        or any(ord(character) < 32 and character not in "\n\t" for character in value)
+        or looks_like_provider_key(value.strip())
+        or _RAW_AUTH_MATERIAL.search(value) is not None
+    ):
+        raise HostedCompositionError(f"{label} is unsafe or outside its bound")
+    return value
 
 
 class _Invoker(Protocol):
@@ -109,13 +139,427 @@ class HostedExecutionLifecycle(Protocol):
         output_payload: Mapping[str, Any],
         lineage: HostedExecutionLineage | None,
         error_code: str | None,
+        failed_physical_attempts: int | None = None,
     ) -> None: ...
 
 
 @dataclass(frozen=True, slots=True)
-class _HostedInvocation:
+class HostedRoleInvocation:
+    """One durable hosted result with the provider and execution identities kept together."""
+
     result: OpenRouterResult
     execution_id: str
+    lineage: HostedExecutionLineage
+
+    @property
+    def provider_request_id(self) -> str:
+        return self.lineage.provider_request_id
+
+
+def _validate_hosted_authority(
+    *,
+    configuration: HostedConfigurationSet,
+    authorization: HostedRunBinding,
+    call_bounds: Mapping[AgentRole, HostedCallBounds],
+) -> dict[AgentRole, HostedCallBounds]:
+    try:
+        validate_hosted_configuration_set(configuration)
+    except (TypeError, ValueError) as exc:
+        raise HostedCompositionError("hosted configuration failed integrity validation") from exc
+    if not isinstance(authorization, HostedRunBinding):
+        raise HostedCompositionError("hosted run authorization is invalid")
+    if (
+        authorization.configuration_set_sha256 != configuration.configuration_sha256
+        or authorization.provider_model_call_limit != configuration.global_limits.max_calls
+        or authorization.provider_model_spend_limit_usd
+        != format(configuration.global_limits.max_usd, "f")
+        or authorization.provider_max_retries != configuration.global_limits.max_retries
+        or authorization.provider_max_concurrency != configuration.global_limits.max_concurrency
+    ):
+        raise HostedCompositionError(
+            "hosted runtime configuration differs from campaign authorization"
+        )
+    roles = {role.role: role for role in configuration.roles}
+    if set(call_bounds) != set(roles):
+        raise HostedCompositionError("call bounds must cover the exact four roles")
+    normalized = dict(call_bounds)
+    for role, bounds in normalized.items():
+        if not isinstance(bounds, HostedCallBounds):
+            raise HostedCompositionError("hosted call bounds are invalid")
+        limits = roles[role].limits
+        if (
+            bounds.input_tokens > limits.max_input_tokens
+            or bounds.output_tokens > limits.max_output_tokens
+            or bounds.reasoning_tokens > limits.max_reasoning_tokens
+        ):
+            raise HostedCompositionError("hosted call bounds exceed the authorized role limits")
+        if bounds.timeout_seconds > authorization.provider_timeout_seconds:
+            raise HostedCompositionError("hosted call timeout exceeds campaign authorization")
+    return normalized
+
+
+class HostedRoleRuntime:
+    """Make one authorization-bound OpenRouter call and durably close its execution lifecycle.
+
+    Semantic role adapters validate their inputs before calling this boundary and provide an
+    optional output validator. The validator runs before a successful output is persisted, so an
+    invalid or unsafe model response is recorded only as a typed failed execution.
+    """
+
+    def __init__(
+        self,
+        *,
+        configuration: HostedConfigurationSet,
+        transport: _Invoker,
+        authorization: HostedRunBinding,
+        call_bounds: Mapping[AgentRole, HostedCallBounds],
+        execution_lifecycle: HostedExecutionLifecycle,
+    ) -> None:
+        if (
+            not callable(getattr(transport, "invoke", None))
+            or not callable(getattr(execution_lifecycle, "start", None))
+            or not callable(getattr(execution_lifecycle, "finish", None))
+        ):
+            raise HostedCompositionError("hosted runtime dependency is unavailable")
+        self._configuration = configuration
+        self._authorization = authorization
+        self._call_bounds = _validate_hosted_authority(
+            configuration=configuration,
+            authorization=authorization,
+            call_bounds=call_bounds,
+        )
+        self._roles = {role.role: role for role in configuration.roles}
+        self._transport = transport
+        self._execution_lifecycle = execution_lifecycle
+
+    def invoke(
+        self,
+        role: AgentRole,
+        *,
+        input_payload: Mapping[str, Any],
+        output_schema: Mapping[str, Any],
+        schema_name: str,
+        parent_request_id: str | None = None,
+        parent_execution_id: str | None = None,
+        judge_calibration_id: str | None = None,
+        validate_output: Callable[[Mapping[str, Any]], Mapping[str, Any]] | None = None,
+    ) -> HostedRoleInvocation:
+        """Invoke one exact configured role through its shared ledger and lifecycle."""
+
+        # Recompute the complete binding immediately before every provider call. This catches
+        # object tampering and prevents construction-time validation from becoming stale authority.
+        _validate_hosted_authority(
+            configuration=self._configuration,
+            authorization=self._authorization,
+            call_bounds=self._call_bounds,
+        )
+        configuration = self._roles.get(role)
+        if configuration is None:
+            raise HostedCompositionError("hosted role is outside the authorized configuration")
+        if not isinstance(input_payload, Mapping) or not isinstance(output_schema, Mapping):
+            raise HostedCompositionError("hosted invocation payload or schema is invalid")
+        if not isinstance(schema_name, str) or _SCHEMA_NAME.fullmatch(schema_name) is None:
+            raise HostedCompositionError("hosted response schema name is invalid")
+        if role != "judge" and judge_calibration_id is not None:
+            raise HostedCompositionError("Judge calibration identity cannot bind another role")
+        if judge_calibration_id is not None and (
+            not isinstance(judge_calibration_id, str)
+            or not judge_calibration_id
+            or len(judge_calibration_id) > 160
+        ):
+            raise HostedCompositionError("Judge calibration identity is invalid")
+        if validate_output is not None and not callable(validate_output):
+            raise HostedCompositionError("hosted output validator is unavailable")
+
+        prompt = hosted_prompt(role)
+        if configuration.prompt_sha256 != prompt.prompt_sha256:
+            raise HostedCompositionError(
+                "configured prompt identity differs from the server-owned role prompt"
+            )
+        try:
+            canonical_input = json.loads(
+                json.dumps(
+                    dict(input_payload),
+                    allow_nan=False,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                    sort_keys=True,
+                )
+            )
+        except (TypeError, ValueError) as exc:
+            raise HostedCompositionError("hosted input is not canonical JSON") from exc
+
+        execution_id = self._execution_lifecycle.start(
+            role=role,
+            parent_execution_id=parent_execution_id,
+            input_payload=canonical_input,
+            provider=configuration.provider,
+            model=configuration.model_id,
+            upstream_provider=configuration.upstream_provider,
+            configuration_sha256=self._configuration.configuration_sha256,
+            role_configuration_sha256=configuration.configuration_sha256,
+            generation_policy_sha256=self._authorization.generation_policy_sha256,
+            judge_calibration_id=(judge_calibration_id if role == "judge" else None),
+        )
+        if not isinstance(execution_id, str) or not execution_id:
+            raise HostedCompositionError("hosted execution lifecycle returned no identity")
+
+        result: OpenRouterResult | None = None
+        try:
+            bounds = self._call_bounds[role]
+            result = self._transport.invoke(
+                role=role,
+                messages=(
+                    {"role": "system", "content": prompt.system_prompt},
+                    {
+                        "role": "user",
+                        "content": json.dumps(
+                            canonical_input,
+                            allow_nan=False,
+                            ensure_ascii=False,
+                            separators=(",", ":"),
+                            sort_keys=True,
+                        ),
+                    },
+                ),
+                output_schema=output_schema,
+                schema_name=schema_name,
+                generation_policy_sha256=self._authorization.generation_policy_sha256,
+                input_tokens_upper_bound=bounds.input_tokens,
+                max_output_tokens=bounds.output_tokens,
+                max_reasoning_tokens=bounds.reasoning_tokens,
+                timeout_seconds=bounds.timeout_seconds,
+            )
+            self._validate_result(role=role, result=result, bounds=bounds)
+            if validate_output is not None:
+                validated_output = validate_output(result.output)
+                if not isinstance(validated_output, Mapping):
+                    raise HostedCompositionError("hosted output validator returned invalid data")
+                result = replace(result, output=dict(validated_output))
+        except Exception as exc:
+            observed_result = getattr(exc, "observed_result", None)
+            if not isinstance(observed_result, OpenRouterResult):
+                observed_result = result
+            observed_lineage = self._observed_failure_lineage(
+                execution_id=execution_id,
+                parent_execution_id=parent_execution_id,
+                role=role,
+                parent_request_id=parent_request_id,
+                result=observed_result,
+            )
+            physical_attempts = getattr(exc, "physical_attempts", None)
+            if (
+                physical_attempts is None
+                and isinstance(observed_result, OpenRouterResult)
+                and type(observed_result.physical_attempts) is int
+            ):
+                physical_attempts = observed_result.physical_attempts
+            max_attempts = 1 + min(
+                configuration.limits.max_retries,
+                self._configuration.global_limits.max_retries,
+            )
+            if type(physical_attempts) is not int or not 1 <= physical_attempts <= max_attempts:
+                physical_attempts = None
+            self._record_failure(
+                execution_id=execution_id,
+                cause=exc,
+                lineage=observed_lineage,
+                physical_attempts=(None if observed_lineage is not None else physical_attempts),
+            )
+            raise
+
+        record = HostedExecutionLineage(
+            execution_id=execution_id,
+            parent_execution_id=parent_execution_id,
+            role=role,
+            parent_request_id=parent_request_id,
+            requested_model=result.requested_model,
+            returned_model=result.returned_model,
+            upstream_provider=result.upstream_provider,
+            provider_request_id=result.request_id,
+            input_tokens=result.input_tokens,
+            output_tokens=result.output_tokens,
+            reasoning_tokens=result.reasoning_tokens,
+            measured_cost_usd=format(result.measured_cost_usd, "f"),
+            configuration_sha256=result.configuration_sha256,
+            role_configuration_sha256=result.role_configuration_sha256,
+            generation_policy_sha256=result.generation_policy_sha256,
+            physical_attempts=result.physical_attempts,
+        )
+        try:
+            self._execution_lifecycle.finish(
+                execution_id=execution_id,
+                status="succeeded",
+                output_payload=result.output,
+                lineage=record,
+                error_code=None,
+            )
+        except Exception as exc:
+            failure = HostedCompositionError(
+                "hosted provider result could not be durably terminally recorded"
+            )
+            failure.add_note(f"lifecycle failure type: {type(exc).__name__}")
+            raise failure from exc
+        return HostedRoleInvocation(
+            result=result,
+            execution_id=execution_id,
+            lineage=record,
+        )
+
+    def _validate_result(
+        self,
+        *,
+        role: AgentRole,
+        result: OpenRouterResult,
+        bounds: HostedCallBounds,
+    ) -> None:
+        configuration = self._roles[role]
+        if not isinstance(result, OpenRouterResult):
+            raise HostedCompositionError("hosted provider returned an invalid result")
+        if (
+            result.configuration_sha256 != self._configuration.configuration_sha256
+            or result.role_configuration_sha256 != configuration.configuration_sha256
+            or result.generation_policy_sha256 != self._authorization.generation_policy_sha256
+        ):
+            raise HostedCompositionError("provider result lineage differs from authorization")
+        if (
+            result.requested_model != configuration.model_id
+            or result.returned_model != configuration.model_id
+            or not isinstance(result.upstream_provider, str)
+            or not result.upstream_provider
+            or len(result.upstream_provider) > 64
+            or not isinstance(result.request_id, str)
+            or not result.request_id
+        ):
+            raise HostedCompositionError("provider result identity differs from authorization")
+        if any(
+            type(value) is not int or value < 0
+            for value in (
+                result.input_tokens,
+                result.output_tokens,
+                result.reasoning_tokens,
+            )
+        ) or (
+            result.input_tokens > bounds.input_tokens
+            or result.output_tokens > bounds.output_tokens
+            or result.reasoning_tokens > bounds.reasoning_tokens
+        ):
+            raise HostedCompositionError("provider result usage exceeds the authorized call bounds")
+        try:
+            measured_cost = Decimal(result.measured_cost_usd)
+        except (InvalidOperation, TypeError, ValueError) as exc:
+            raise HostedCompositionError("provider result measured cost is invalid") from exc
+        if not measured_cost.is_finite() or measured_cost < 0:
+            raise HostedCompositionError("provider result measured cost is invalid")
+        max_attempts = 1 + min(
+            configuration.limits.max_retries,
+            self._configuration.global_limits.max_retries,
+        )
+        if (
+            type(result.physical_attempts) is not int
+            or not 1 <= result.physical_attempts <= max_attempts
+        ):
+            raise HostedCompositionError("provider result physical-attempt count is invalid")
+
+    def _observed_failure_lineage(
+        self,
+        *,
+        execution_id: str,
+        parent_execution_id: str | None,
+        role: AgentRole,
+        parent_request_id: str | None,
+        result: OpenRouterResult | None,
+    ) -> HostedExecutionLineage | None:
+        """Preserve exact charged usage without trusting a rejected response's output."""
+
+        if not isinstance(result, OpenRouterResult):
+            return None
+        configuration = self._roles[role]
+        if (
+            result.requested_model != configuration.model_id
+            or result.returned_model != configuration.model_id
+            or not isinstance(result.upstream_provider, str)
+            or not result.upstream_provider
+            or len(result.upstream_provider) > 64
+            or result.configuration_sha256 != self._configuration.configuration_sha256
+            or result.role_configuration_sha256 != configuration.configuration_sha256
+            or result.generation_policy_sha256 != self._authorization.generation_policy_sha256
+            or not isinstance(result.request_id, str)
+            or not result.request_id
+            or any(
+                type(value) is not int or value < 0
+                for value in (
+                    result.input_tokens,
+                    result.output_tokens,
+                    result.reasoning_tokens,
+                )
+            )
+        ):
+            return None
+        try:
+            measured_cost = Decimal(result.measured_cost_usd)
+        except (InvalidOperation, TypeError, ValueError):
+            return None
+        max_attempts = 1 + min(
+            configuration.limits.max_retries,
+            self._configuration.global_limits.max_retries,
+        )
+        if (
+            not measured_cost.is_finite()
+            or measured_cost < 0
+            or type(result.physical_attempts) is not int
+            or not 1 <= result.physical_attempts <= max_attempts
+        ):
+            return None
+        return HostedExecutionLineage(
+            execution_id=execution_id,
+            parent_execution_id=parent_execution_id,
+            role=role,
+            parent_request_id=parent_request_id,
+            requested_model=result.requested_model,
+            returned_model=result.returned_model,
+            upstream_provider=result.upstream_provider,
+            provider_request_id=result.request_id,
+            input_tokens=result.input_tokens,
+            output_tokens=result.output_tokens,
+            reasoning_tokens=result.reasoning_tokens,
+            measured_cost_usd=format(measured_cost, "f"),
+            configuration_sha256=result.configuration_sha256,
+            role_configuration_sha256=result.role_configuration_sha256,
+            generation_policy_sha256=result.generation_policy_sha256,
+            physical_attempts=result.physical_attempts,
+        )
+
+    def _record_failure(
+        self,
+        *,
+        execution_id: str,
+        cause: Exception,
+        lineage: HostedExecutionLineage | None,
+        physical_attempts: int | None,
+    ) -> None:
+        error_code = getattr(cause, "code", "hosted-agent-failed")
+        if not isinstance(error_code, str) or not error_code:
+            error_code = "hosted-agent-failed"
+        try:
+            terminal: dict[str, Any] = {
+                "execution_id": execution_id,
+                "status": "failed",
+                "output_payload": {"status": "failed"},
+                "lineage": lineage,
+                "error_code": error_code,
+            }
+            if physical_attempts is not None:
+                terminal["failed_physical_attempts"] = physical_attempts
+            self._execution_lifecycle.finish(
+                **terminal,
+            )
+        except Exception as lifecycle_exc:
+            failure = HostedCompositionError(
+                "hosted execution failure could not be terminally recorded"
+            )
+            failure.add_note(f"lifecycle failure type: {type(lifecycle_exc).__name__}")
+            raise failure from cause
 
 
 @dataclass(frozen=True, slots=True)
@@ -143,35 +587,15 @@ class HostedFourRoleRuntime:
         execution_lifecycle: HostedExecutionLifecycle,
         judge_calibration: Mapping[str, Any] | None = None,
     ) -> None:
-        if not isinstance(authorization, HostedRunBinding):
-            raise HostedCompositionError("hosted run authorization is invalid")
-        if (
-            authorization.configuration_set_sha256 != configuration.configuration_sha256
-            or authorization.provider_model_call_limit != configuration.global_limits.max_calls
-            or authorization.provider_model_spend_limit_usd
-            != format(configuration.global_limits.max_usd, "f")
-            or authorization.provider_max_retries != configuration.global_limits.max_retries
-            or authorization.provider_max_concurrency != configuration.global_limits.max_concurrency
-        ):
-            raise HostedCompositionError(
-                "hosted runtime configuration differs from campaign authorization"
-            )
-        roles = {role.role for role in configuration.roles}
-        if set(call_bounds) != roles:
-            raise HostedCompositionError("call bounds must cover the exact four roles")
-        if any(
-            bounds.timeout_seconds > authorization.provider_timeout_seconds
-            for bounds in call_bounds.values()
-        ):
-            raise HostedCompositionError("hosted call timeout exceeds campaign authorization")
-        if (
-            not callable(getattr(transport, "invoke", None))
-            or not callable(policy_gateway_dispatch)
-            or not callable(deterministic_judge)
-            or not callable(getattr(execution_lifecycle, "start", None))
-            or not callable(getattr(execution_lifecycle, "finish", None))
-        ):
+        if not callable(policy_gateway_dispatch) or not callable(deterministic_judge):
             raise HostedCompositionError("hosted runtime dependency is unavailable")
+        role_runtime = HostedRoleRuntime(
+            configuration=configuration,
+            transport=transport,
+            authorization=authorization,
+            call_bounds=call_bounds,
+            execution_lifecycle=execution_lifecycle,
+        )
         judge_identity = hosted_judge_identity(configuration)
         try:
             calibration = require_model_judge_enablement(
@@ -180,14 +604,10 @@ class HostedFourRoleRuntime:
             )
         except CalibrationGateClosed as exc:
             raise HostedCompositionError("model Judge calibration gate is closed") from exc
-        self._configuration = configuration
-        self._transport = transport
-        self._generation_policy_sha256 = authorization.generation_policy_sha256
-        self._call_bounds = dict(call_bounds)
+        self._role_runtime = role_runtime
         self._policy_gateway_dispatch = policy_gateway_dispatch
         self._deterministic_judge = deterministic_judge
         self._judge_calibration_id = calibration["calibration_id"]
-        self._execution_lifecycle = execution_lifecycle
 
     def run_attempt(
         self,
@@ -353,106 +773,18 @@ class HostedFourRoleRuntime:
         output_schema: Mapping[str, Any],
         schema_name: str,
         lineage: list[HostedExecutionLineage],
-    ) -> _HostedInvocation:
-        bounds = self._call_bounds[role]
-        prompt = hosted_prompt(role)
-        configuration = next(item for item in self._configuration.roles if item.role == role)
-        if configuration.prompt_sha256 != prompt.prompt_sha256:
-            raise HostedCompositionError(
-                "configured prompt identity differs from the server-owned role prompt"
-            )
-        execution_id = self._execution_lifecycle.start(
-            role=role,
+    ) -> HostedRoleInvocation:
+        invocation = self._role_runtime.invoke(
+            role,
+            parent_request_id=parent_request_id,
             parent_execution_id=parent_execution_id,
             input_payload=input_payload,
-            provider=configuration.provider,
-            model=configuration.model_id,
-            upstream_provider=configuration.upstream_provider,
-            configuration_sha256=self._configuration.configuration_sha256,
-            role_configuration_sha256=configuration.configuration_sha256,
-            generation_policy_sha256=self._generation_policy_sha256,
+            output_schema=output_schema,
+            schema_name=schema_name,
             judge_calibration_id=(self._judge_calibration_id if role == "judge" else None),
         )
-        if not isinstance(execution_id, str) or not execution_id:
-            raise HostedCompositionError("hosted execution lifecycle returned no identity")
-        try:
-            result = self._transport.invoke(
-                role=role,
-                messages=(
-                    {
-                        "role": "system",
-                        "content": prompt.system_prompt,
-                    },
-                    {
-                        "role": "user",
-                        "content": json.dumps(
-                            input_payload,
-                            allow_nan=False,
-                            ensure_ascii=False,
-                            separators=(",", ":"),
-                            sort_keys=True,
-                        ),
-                    },
-                ),
-                output_schema=output_schema,
-                schema_name=schema_name,
-                generation_policy_sha256=self._generation_policy_sha256,
-                input_tokens_upper_bound=bounds.input_tokens,
-                max_output_tokens=bounds.output_tokens,
-                max_reasoning_tokens=bounds.reasoning_tokens,
-                timeout_seconds=bounds.timeout_seconds,
-            )
-            if (
-                result.configuration_sha256 != self._configuration.configuration_sha256
-                or result.generation_policy_sha256 != self._generation_policy_sha256
-            ):
-                raise HostedCompositionError("provider result lineage differs from authorization")
-        except Exception as exc:
-            error_code = getattr(exc, "code", "hosted-agent-failed")
-            if not isinstance(error_code, str) or not error_code:
-                error_code = "hosted-agent-failed"
-            try:
-                self._execution_lifecycle.finish(
-                    execution_id=execution_id,
-                    status="failed",
-                    output_payload={"status": "failed"},
-                    lineage=None,
-                    error_code=error_code,
-                )
-            except Exception as lifecycle_exc:
-                failure = HostedCompositionError(
-                    "hosted execution failure could not be terminally recorded"
-                )
-                failure.add_note(f"lifecycle failure type: {type(lifecycle_exc).__name__}")
-                raise failure from exc
-            raise
-        record = HostedExecutionLineage(
-            execution_id=execution_id,
-            parent_execution_id=parent_execution_id,
-            role=role,
-            parent_request_id=parent_request_id,
-            requested_model=result.requested_model,
-            returned_model=result.returned_model,
-            upstream_provider=result.upstream_provider,
-            provider_request_id=result.request_id,
-            input_tokens=result.input_tokens,
-            output_tokens=result.output_tokens,
-            reasoning_tokens=result.reasoning_tokens,
-            measured_cost_usd=format(result.measured_cost_usd, "f"),
-            configuration_sha256=result.configuration_sha256,
-            role_configuration_sha256=result.role_configuration_sha256,
-            generation_policy_sha256=result.generation_policy_sha256,
-            physical_attempts=result.physical_attempts,
-        )
-        self._execution_lifecycle.finish(
-            execution_id=execution_id,
-            status="succeeded",
-            output_payload=result.output,
-            lineage=record,
-            error_code=None,
-        )
-        lineage.append(record)
-        return _HostedInvocation(result=result, execution_id=execution_id)
+        lineage.append(invocation.lineage)
+        return invocation
 
     @staticmethod
     def _deterministic_precedence(
@@ -522,6 +854,9 @@ __all__ = [
     "HostedExecutionLineage",
     "HostedExecutionLifecycle",
     "HostedFourRoleRuntime",
+    "HostedRoleInvocation",
+    "HostedRoleRuntime",
     "hosted_judge_identity",
     "payload_sha256",
+    "require_safe_model_text",
 ]

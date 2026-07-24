@@ -4,6 +4,7 @@ import type {
   ApprovalDetailReadModel,
   AgentActivityReadModel,
   AgentAssignmentReadModel,
+  AgentBudgetReadModel,
   AgentPromptReadModel,
   AgentReadModel,
   AttackCaseEvidenceReadModel,
@@ -31,6 +32,7 @@ import type {
   FindingReadModel,
   FindingVerificationReadModel,
   HostedRunBindingReadModel,
+  JudgeCalibrationSummaryReadModel,
   RegressionDispositionReadModel,
   ReportReadModel,
   SafetyCapsReadModel,
@@ -144,6 +146,11 @@ const boolean = (value: JsonRecord, key: string, name: string): boolean => {
   return candidate;
 };
 
+const nullableBoolean = (value: JsonRecord, key: string, name: string): boolean | null => {
+  if (value[key] === null) return null;
+  return boolean(value, key, name);
+};
+
 const object = (value: JsonRecord, key: string, name: string): JsonRecord =>
   record(value[key], name);
 
@@ -182,6 +189,16 @@ const nullableLiteral = <T extends string>(
   const candidate = nullableString(value, key, name);
   return candidate === null || allowed.includes(candidate as T) ? candidate as T | null : invalid(name);
 };
+
+const judgeCalibrationStates = [
+  "unavailable",
+  "failed",
+  "passed",
+  "invalidated",
+  "enabled",
+] as const;
+
+const judgeDecisionAuthorities = ["oracle", "model", "none"] as const;
 
 const scopeKeys = [
   "target_id",
@@ -243,13 +260,17 @@ const decodeHostedRun = (value: unknown): HostedRunBindingReadModel => {
     "provider_max_concurrency",
     "provider_timeout_seconds",
   ], name);
-  for (const key of [
-    "configuration_set_sha256",
-    "generation_policy_sha256",
-    "session_generation",
-    "provider_model_spend_limit_usd",
-  ]) {
-    string(result, key, name);
+  sha256(result, "configuration_set_sha256", name);
+  sha256(result, "generation_policy_sha256", name);
+  const sessionGeneration = string(result, "session_generation", name);
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(sessionGeneration)) invalid(name);
+  const spendLimit = string(result, "provider_model_spend_limit_usd", name);
+  if (
+    !/^(?:0|[1-9][0-9]*)(?:\.[0-9]+)?$/.test(spendLimit)
+    || Number(spendLimit) <= 0
+    || Number(spendLimit) > 10
+  ) {
+    invalid(name);
   }
   const callLimit = number(
     result,
@@ -263,7 +284,8 @@ const decodeHostedRun = (value: unknown): HostedRunBindingReadModel => {
   if (number(result, "provider_max_concurrency", name, { integer: true }) !== 1) {
     invalid(name);
   }
-  if (number(result, "provider_timeout_seconds", name, { minimum: 0 }) === 0) invalid(name);
+  const timeout = number(result, "provider_timeout_seconds", name, { minimum: 0 });
+  if (timeout === 0 || timeout > 300) invalid(name);
   return result as HostedRunBindingReadModel;
 };
 
@@ -780,6 +802,234 @@ export const decodeReports: ReadModelDecoder<ReportReadModel[]> = (value) =>
 
 export const decodeReportDetail: ReadModelDecoder<ReportReadModel> = decodeReport;
 
+const decodeAgentBudget = (value: unknown): AgentBudgetReadModel => {
+  const name = "agent budget";
+  const result = record(value, name);
+  exactKeys(result, [
+    "status",
+    "campaign_run_id",
+    "configuration_set_sha256",
+    "role_usd_cap",
+    "role_usd_spent",
+    "role_usd_remaining",
+    "role_usd_overrun",
+    "role_call_cap",
+    "role_physical_calls",
+    "role_calls_remaining",
+    "role_call_overrun",
+    "global_usd_cap",
+    "global_usd_spent",
+    "global_usd_remaining",
+    "global_usd_overrun",
+    "global_call_cap",
+    "global_physical_calls",
+    "global_calls_remaining",
+    "global_call_overrun",
+  ], name);
+  const status = literal(
+    result,
+    "status",
+    ["staged_pending_authorization", "active", "unavailable"],
+    name,
+  );
+  const campaignRunId = nullableString(result, "campaign_run_id", name);
+  const configurationSha256 = nullableString(
+    result,
+    "configuration_set_sha256",
+    name,
+  );
+  if (
+    configurationSha256 !== null
+    && !/^[0-9a-f]{64}$/.test(configurationSha256)
+  ) {
+    invalid(name);
+  }
+  const roleUsdCap = nullableNumber(result, "role_usd_cap", name);
+  const roleUsdSpent = number(result, "role_usd_spent", name, { minimum: 0 });
+  const roleUsdRemaining = nullableNumber(result, "role_usd_remaining", name);
+  const roleUsdOverrun = number(result, "role_usd_overrun", name, { minimum: 0 });
+  const roleCallCap = nullableNonnegativeInteger(result, "role_call_cap", name);
+  const rolePhysicalCalls = number(
+    result,
+    "role_physical_calls",
+    name,
+    { integer: true, minimum: 0 },
+  );
+  const roleCallsRemaining = nullableNonnegativeInteger(
+    result,
+    "role_calls_remaining",
+    name,
+  );
+  const roleCallOverrun = number(
+    result,
+    "role_call_overrun",
+    name,
+    { integer: true, minimum: 0 },
+  );
+  const globalUsdCap = nullableNumber(result, "global_usd_cap", name);
+  const globalUsdSpent = number(result, "global_usd_spent", name, { minimum: 0 });
+  const globalUsdRemaining = nullableNumber(result, "global_usd_remaining", name);
+  const globalUsdOverrun = number(result, "global_usd_overrun", name, { minimum: 0 });
+  const globalCallCap = nullableNonnegativeInteger(result, "global_call_cap", name);
+  const globalPhysicalCalls = number(
+    result,
+    "global_physical_calls",
+    name,
+    { integer: true, minimum: 0 },
+  );
+  const globalCallsRemaining = nullableNonnegativeInteger(
+    result,
+    "global_calls_remaining",
+    name,
+  );
+  const globalCallOverrun = number(
+    result,
+    "global_call_overrun",
+    name,
+    { integer: true, minimum: 0 },
+  );
+  for (const candidate of [
+    roleUsdCap,
+    roleUsdRemaining,
+    globalUsdCap,
+    globalUsdRemaining,
+  ]) {
+    if (candidate !== null && candidate < 0) invalid(name);
+  }
+  const caps = [
+    roleUsdCap,
+    roleUsdRemaining,
+    roleCallCap,
+    roleCallsRemaining,
+    globalUsdCap,
+    globalUsdRemaining,
+    globalCallCap,
+    globalCallsRemaining,
+  ];
+  if (status === "unavailable") {
+    if (
+      caps.some((candidate) => candidate !== null)
+      || campaignRunId !== null
+      || configurationSha256 !== null
+      || [
+        roleUsdSpent,
+        roleUsdOverrun,
+        rolePhysicalCalls,
+        roleCallOverrun,
+        globalUsdSpent,
+        globalUsdOverrun,
+        globalPhysicalCalls,
+        globalCallOverrun,
+      ].some((candidate) => candidate !== 0)
+    ) {
+      invalid(name);
+    }
+    return result as AgentBudgetReadModel;
+  }
+  if (
+    caps.some((candidate) => candidate === null)
+    || configurationSha256 === null
+    || (status === "active" && campaignRunId === null)
+    || (status === "staged_pending_authorization" && campaignRunId !== null)
+    || roleCallCap === 0
+    || globalCallCap === 0
+  ) {
+    invalid(name);
+  }
+  if (
+    Math.abs(
+      roleUsdSpent + (roleUsdRemaining ?? 0)
+      - ((roleUsdCap ?? 0) + roleUsdOverrun),
+    ) > 0.000001
+    || rolePhysicalCalls + (roleCallsRemaining ?? 0)
+      !== (roleCallCap ?? 0) + roleCallOverrun
+    || Math.abs(
+      globalUsdSpent + (globalUsdRemaining ?? 0)
+      - ((globalUsdCap ?? 0) + globalUsdOverrun),
+    ) > 0.000001
+    || globalPhysicalCalls + (globalCallsRemaining ?? 0)
+      !== (globalCallCap ?? 0) + globalCallOverrun
+  ) {
+    invalid(name);
+  }
+  return result as AgentBudgetReadModel;
+};
+
+const decodeJudgeCalibration = (
+  value: unknown,
+): JudgeCalibrationSummaryReadModel => {
+  const name = "judge calibration";
+  const result = record(value, name);
+  exactKeys(result, [
+    "state",
+    "calibration_id",
+    "decision_authority",
+    "oracle_comparison_count",
+    "oracle_agreement_count",
+    "oracle_agreement_rate",
+    "status_label",
+  ], name);
+  const state = literal(result, "state", judgeCalibrationStates, name);
+  const calibrationId = nullableString(result, "calibration_id", name);
+  const authority = literal(
+    result,
+    "decision_authority",
+    judgeDecisionAuthorities,
+    name,
+  );
+  const comparisons = number(
+    result,
+    "oracle_comparison_count",
+    name,
+    { integer: true, minimum: 0 },
+  );
+  const agreements = number(
+    result,
+    "oracle_agreement_count",
+    name,
+    { integer: true, minimum: 0 },
+  );
+  const rate = nullableNumber(result, "oracle_agreement_rate", name);
+  const label = literal(
+    result,
+    "status_label",
+    [
+      "not yet measured",
+      "live, verified against oracle",
+      "live, model-decisive after calibration",
+    ],
+    name,
+  );
+  if (
+    agreements > comparisons
+    || (rate !== null && (rate < 0 || rate > 1))
+    || (comparisons === 0 && rate !== null)
+    || (
+      comparisons > 0
+      && (rate === null || Math.abs(rate - agreements / comparisons) > 1e-9)
+    )
+    || (state === "unavailable" && calibrationId !== null)
+    || (state !== "unavailable" && calibrationId === null)
+    || (
+      authority === "model"
+      && (state !== "enabled" || label !== "live, model-decisive after calibration")
+    )
+    || (
+      authority !== "model"
+      && label === "live, model-decisive after calibration"
+    )
+    || (comparisons === 0 && label !== "not yet measured")
+    || (
+      comparisons > 0
+      && authority !== "model"
+      && label !== "live, verified against oracle"
+    )
+  ) {
+    invalid(name);
+  }
+  return result as JudgeCalibrationSummaryReadModel;
+};
+
 const decodeTrace = (value: unknown): TraceReadModel => {
   const name = "trace";
   const result = record(value, name);
@@ -794,6 +1044,13 @@ const decodeTrace = (value: unknown): TraceReadModel => {
     "provider",
     "agent_role",
     "execution_mode",
+    "returned_model",
+    "upstream_provider",
+    "provider_request_id",
+    "configuration_set_sha256",
+    "role_configuration_sha256",
+    "generation_policy_sha256",
+    "physical_attempts",
     "method",
     "destination_host",
     "relative_path",
@@ -810,6 +1067,11 @@ const decodeTrace = (value: unknown): TraceReadModel => {
     "currency",
     "input_tokens",
     "output_tokens",
+    "reasoning_tokens",
+    "judge_calibration_id",
+    "judge_calibration_state",
+    "oracle_agreement",
+    "decision_authority",
     "p50_duration_ms",
     "p95_duration_ms",
     "langfuse_status",
@@ -838,7 +1100,44 @@ const decodeTrace = (value: unknown): TraceReadModel => {
   );
   nullableLiteral(result, "agent_role", agentRoles, name);
   nullableLiteral(result, "execution_mode", ["deterministic", "hosted_advisory"], name);
-  for (const key of ["request_id", "execution_id", "parent_execution_id", "attempt_id", "method", "destination_host", "relative_path", "error_code", "request_preview", "response_preview", "request_sha256", "response_sha256"]) nullableString(result, key, name);
+  for (const key of [
+    "request_id",
+    "execution_id",
+    "parent_execution_id",
+    "attempt_id",
+    "returned_model",
+    "upstream_provider",
+    "provider_request_id",
+    "configuration_set_sha256",
+    "role_configuration_sha256",
+    "generation_policy_sha256",
+    "method",
+    "destination_host",
+    "relative_path",
+    "error_code",
+    "request_preview",
+    "response_preview",
+    "request_sha256",
+    "response_sha256",
+    "judge_calibration_id",
+  ]) nullableString(result, key, name);
+  const providerIdentity = [
+    result.returned_model,
+    result.upstream_provider,
+    result.provider_request_id,
+  ];
+  if (
+    providerIdentity.some((candidate) => candidate === null)
+    !== providerIdentity.every((candidate) => candidate === null)
+  ) {
+    invalid(name);
+  }
+  const physicalAttempts = nullableNonnegativeInteger(
+    result,
+    "physical_attempts",
+    name,
+  );
+  if (physicalAttempts === 0) invalid(name);
   nullableNumber(result, "status_code", name);
   timestamp(result, "started_at", name);
   nullableTimestamp(result, "finished_at", name);
@@ -849,11 +1148,25 @@ const decodeTrace = (value: unknown): TraceReadModel => {
   const accountingStatus = literal(
     result,
     "accounting_status",
-    ["measured", "unavailable"],
+    ["measured", "partial", "unavailable"],
     name,
   );
-  nullableNumber(result, "input_tokens", name);
-  nullableNumber(result, "output_tokens", name);
+  nullableNonnegativeInteger(result, "input_tokens", name);
+  nullableNonnegativeInteger(result, "output_tokens", name);
+  const reasoningTokens = nullableNonnegativeInteger(result, "reasoning_tokens", name);
+  const calibrationState = nullableLiteral(
+    result,
+    "judge_calibration_state",
+    judgeCalibrationStates,
+    name,
+  );
+  const oracleAgreement = nullableBoolean(result, "oracle_agreement", name);
+  const decisionAuthority = nullableLiteral(
+    result,
+    "decision_authority",
+    judgeDecisionAuthorities,
+    name,
+  );
   const p50Duration = nullableNumber(result, "p50_duration_ms", name);
   const p95Duration = nullableNumber(result, "p95_duration_ms", name);
   if (
@@ -880,10 +1193,35 @@ const decodeTrace = (value: unknown): TraceReadModel => {
     accountingStatus === "unavailable" &&
     (result.measured_cost !== 0 ||
       result.input_tokens !== null ||
-      result.output_tokens !== null)
+      result.output_tokens !== null ||
+      reasoningTokens !== null)
   ) {
     invalid(name);
   }
+  if (
+    accountingStatus === "partial"
+    && (result.agent_role === null || physicalAttempts === null)
+  ) {
+    invalid(name);
+  }
+  if (
+    result.agent_role === null
+    && [
+      ...providerIdentity,
+      result.configuration_set_sha256,
+      result.role_configuration_sha256,
+      result.generation_policy_sha256,
+      physicalAttempts,
+      reasoningTokens,
+      result.judge_calibration_id,
+      calibrationState,
+      oracleAgreement,
+      decisionAuthority,
+    ].some((candidate) => candidate !== null)
+  ) {
+    invalid(name);
+  }
+  if (decisionAuthority === "model" && calibrationState !== "enabled") invalid(name);
   if ((result.langfuse_status === "exported") !== (langfuseVerifiedAt !== null)) invalid(name);
   stringArray(result, "inspection_flags", name);
   stringArray(result, "inspection_owasp_mappings", name);
@@ -912,7 +1250,10 @@ const decodeCost = (value: unknown): CostReadModel => {
     "average_cost_per_request",
     "input_tokens",
     "output_tokens",
+    "reasoning_tokens",
     "token_observation_count",
+    "physical_call_count",
+    "provider_budget",
     "p50_duration_ms",
     "p95_duration_ms",
     "budget_usd",
@@ -947,6 +1288,7 @@ const decodeCost = (value: unknown): CostReadModel => {
   number(result, "average_cost_per_request", name, { minimum: 0 });
   const inputTokens = nullableNonnegativeInteger(result, "input_tokens", name);
   const outputTokens = nullableNonnegativeInteger(result, "output_tokens", name);
+  const reasoningTokens = nullableNonnegativeInteger(result, "reasoning_tokens", name);
   const tokenObservationCount = number(
     result,
     "token_observation_count",
@@ -954,6 +1296,16 @@ const decodeCost = (value: unknown): CostReadModel => {
     { integer: true, minimum: 0 },
   );
   validateTokenObservation(inputTokens, outputTokens, tokenObservationCount, name);
+  const physicalCallCount = number(
+    result,
+    "physical_call_count",
+    name,
+    { integer: true, minimum: 0 },
+  );
+  const providerBudget = nullableObject(result, "provider_budget", name);
+  result.provider_budget = providerBudget === null
+    ? null
+    : decodeAgentBudget(providerBudget);
   const p50Duration = nullableNumber(result, "p50_duration_ms", name);
   const p95Duration = nullableNumber(result, "p95_duration_ms", name);
   if (
@@ -978,7 +1330,21 @@ const decodeCost = (value: unknown): CostReadModel => {
   }
   if (
     accountingStatus === "unavailable" &&
-    (result.measured_cost !== 0 || tokenObservationCount !== 0)
+    (
+      result.measured_cost !== 0
+      || tokenObservationCount !== 0
+      || reasoningTokens !== null
+      || physicalCallCount !== 0
+    )
+  ) {
+    invalid(name);
+  }
+  if (
+    (result.record_kind === "agent") !== (result.provider_budget !== null)
+    || (
+      result.record_kind === "campaign"
+      && (reasoningTokens !== null || physicalCallCount !== 0)
+    )
   ) {
     invalid(name);
   }
@@ -1208,7 +1574,11 @@ const decodeAgent = (value: unknown): AgentReadModel => {
     "currency",
     "input_tokens",
     "output_tokens",
+    "reasoning_tokens",
     "token_observation_count",
+    "physical_call_count",
+    "provider_budget",
+    "judge_calibration",
     "average_duration_ms",
     "p50_duration_ms",
     "p95_duration_ms",
@@ -1245,6 +1615,7 @@ const decodeAgent = (value: unknown): AgentReadModel => {
     "failed_count",
     "skipped_count",
     "token_observation_count",
+    "physical_call_count",
     "langfuse_not_attempted_count",
     "langfuse_disabled_count",
     "langfuse_queued_count",
@@ -1264,6 +1635,12 @@ const decodeAgent = (value: unknown): AgentReadModel => {
   );
   const inputTokens = nullableNonnegativeInteger(result, "input_tokens", name);
   const outputTokens = nullableNonnegativeInteger(result, "output_tokens", name);
+  const reasoningTokens = nullableNonnegativeInteger(result, "reasoning_tokens", name);
+  result.provider_budget = decodeAgentBudget(result.provider_budget);
+  const judgeCalibration = nullableObject(result, "judge_calibration", name);
+  result.judge_calibration = judgeCalibration === null
+    ? null
+    : decodeJudgeCalibration(judgeCalibration);
   const averageDuration = nullableNumber(result, "average_duration_ms", name);
   const p50Duration = nullableNumber(result, "p50_duration_ms", name);
   const p95Duration = nullableNumber(result, "p95_duration_ms", name);
@@ -1306,10 +1683,16 @@ const decodeAgent = (value: unknown): AgentReadModel => {
   if ((executionCount === 0) !== (accountingStatus === "not_applicable")) invalid(name);
   if (
     accountingStatus === "unavailable" &&
-    (result.measured_cost !== 0 || counters.token_observation_count !== 0)
+    (
+      result.measured_cost !== 0
+      || counters.token_observation_count !== 0
+      || reasoningTokens !== null
+      || counters.physical_call_count !== 0
+    )
   ) {
     invalid(name);
   }
+  if ((result.role === "judge") !== (result.judge_calibration !== null)) invalid(name);
   validateTokenObservation(
     inputTokens,
     outputTokens,
@@ -1361,12 +1744,20 @@ const decodeAgentActivityRecord = (value: unknown): AgentActivityReadModel => {
     "status",
     "provider",
     "model",
+    "returned_model",
+    "upstream_provider",
+    "provider_request_id",
     "execution_mode",
     "configuration_version",
+    "configuration_set_sha256",
+    "role_configuration_sha256",
+    "generation_policy_sha256",
     "input_sha256",
     "output_sha256",
     "input_tokens",
     "output_tokens",
+    "reasoning_tokens",
+    "physical_attempts",
     "measured_cost",
     "accounting_status",
     "currency",
@@ -1374,6 +1765,10 @@ const decodeAgentActivityRecord = (value: unknown): AgentActivityReadModel => {
     "langfuse_status",
     "langfuse_verified_at",
     "detail",
+    "judge_calibration_id",
+    "judge_calibration_state",
+    "oracle_agreement",
+    "decision_authority",
     "error_code",
     "started_at",
     "finished_at",
@@ -1392,9 +1787,34 @@ const decodeAgentActivityRecord = (value: unknown): AgentActivityReadModel => {
   for (const key of [
     "attempt_id",
     "parent_execution_id",
+    "returned_model",
+    "upstream_provider",
+    "provider_request_id",
+    "configuration_set_sha256",
+    "role_configuration_sha256",
+    "generation_policy_sha256",
     "output_sha256",
+    "judge_calibration_id",
     "error_code",
   ]) nullableString(result, key, name);
+  const providerIdentity = [
+    result.returned_model,
+    result.upstream_provider,
+    result.provider_request_id,
+  ];
+  const hostedAuthority = [
+    result.configuration_set_sha256,
+    result.role_configuration_sha256,
+    result.generation_policy_sha256,
+  ];
+  if (
+    providerIdentity.some((candidate) => candidate === null)
+      !== providerIdentity.every((candidate) => candidate === null)
+    || hostedAuthority.some((candidate) => candidate === null)
+      !== hostedAuthority.every((candidate) => candidate === null)
+  ) {
+    invalid(name);
+  }
   literal(result, "agent_role", agentRoles, name);
   literal(result, "status", ["running", "succeeded", "failed", "skipped"], name);
   literal(result, "execution_mode", ["deterministic", "hosted_advisory"], name);
@@ -1407,26 +1827,52 @@ const decodeAgentActivityRecord = (value: unknown): AgentActivityReadModel => {
   const langfuseVerifiedAt = nullableTimestamp(result, "langfuse_verified_at", name);
   if ((result.langfuse_status === "exported") !== (langfuseVerifiedAt !== null)) invalid(name);
   number(result, "configuration_version", name, { integer: true, minimum: 1 });
-  nullableNonnegativeInteger(result, "input_tokens", name);
-  nullableNonnegativeInteger(result, "output_tokens", name);
+  const inputTokens = nullableNonnegativeInteger(result, "input_tokens", name);
+  const outputTokens = nullableNonnegativeInteger(result, "output_tokens", name);
+  const reasoningTokens = nullableNonnegativeInteger(result, "reasoning_tokens", name);
+  const physicalAttempts = nullableNonnegativeInteger(
+    result,
+    "physical_attempts",
+    name,
+  );
+  if (physicalAttempts === 0) invalid(name);
   number(result, "measured_cost", name, { minimum: 0 });
-  literal(result, "accounting_status", ["measured", "unavailable"], name);
+  literal(result, "accounting_status", ["measured", "partial", "unavailable"], name);
   const providerAccountingComplete =
-    result.input_tokens !== null && result.output_tokens !== null;
+    inputTokens !== null && outputTokens !== null && reasoningTokens !== null;
   const expectedAccountingStatus =
     result.execution_mode === "deterministic" || providerAccountingComplete
       ? "measured"
-      : "unavailable";
+      : physicalAttempts !== null
+        ? "partial"
+        : "unavailable";
   if (result.accounting_status !== expectedAccountingStatus) invalid(name);
   if (
     result.accounting_status === "unavailable" &&
     (result.measured_cost !== 0 ||
-      (result.input_tokens !== null && result.input_tokens !== 0) ||
-      (result.output_tokens !== null && result.output_tokens !== 0))
+      (inputTokens !== null && inputTokens !== 0) ||
+      (outputTokens !== null && outputTokens !== 0) ||
+      (reasoningTokens !== null && reasoningTokens !== 0))
   ) {
     invalid(name);
   }
+  if (result.accounting_status === "partial" && physicalAttempts === null) {
+    invalid(name);
+  }
   object(result, "detail", name);
+  const calibrationState = nullableLiteral(
+    result,
+    "judge_calibration_state",
+    judgeCalibrationStates,
+    name,
+  );
+  const oracleAgreement = nullableBoolean(result, "oracle_agreement", name);
+  const decisionAuthority = nullableLiteral(
+    result,
+    "decision_authority",
+    judgeDecisionAuthorities,
+    name,
+  );
   timestamp(result, "started_at", name);
   const finishedAt = nullableTimestamp(result, "finished_at", name);
   const duration = nullableNumber(result, "duration_ms", name);
@@ -1440,6 +1886,41 @@ const decodeAgentActivityRecord = (value: unknown): AgentActivityReadModel => {
       (outputSha256 !== null || finishedAt !== null || duration !== null)) ||
     (result.status !== "running" &&
       (outputSha256 === null || finishedAt === null || duration === null))
+  ) {
+    invalid(name);
+  }
+  const judgeValues = [
+    result.judge_calibration_id,
+    calibrationState,
+    oracleAgreement,
+    decisionAuthority,
+  ];
+  if (
+    (
+      result.execution_mode === "deterministic"
+      && [
+        ...providerIdentity,
+        ...hostedAuthority,
+        reasoningTokens,
+        physicalAttempts,
+        ...judgeValues,
+      ].some((candidate) => candidate !== null)
+    )
+    || (
+      result.execution_mode === "hosted_advisory"
+      && result.status === "succeeded"
+      && result.configuration_set_sha256 !== null
+      && (
+        providerIdentity.some((candidate) => candidate === null)
+        || !providerAccountingComplete
+        || physicalAttempts === null
+      )
+    )
+    || (
+      result.agent_role !== "judge"
+      && judgeValues.some((candidate) => candidate !== null)
+    )
+    || (decisionAuthority === "model" && calibrationState !== "enabled")
   ) {
     invalid(name);
   }

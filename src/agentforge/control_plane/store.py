@@ -8,7 +8,7 @@ import json
 import re
 import uuid
 from collections.abc import Mapping, Sequence
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from decimal import Decimal
 from types import SimpleNamespace
 from typing import Any
@@ -18,10 +18,13 @@ from sqlalchemy.exc import IntegrityError
 
 from agentforge.agents.hosted import (
     HostedConfigurationSet,
+    HostedRoleConfiguration,
     validate_hosted_configuration_set,
 )
 from agentforge.agents.runtime import (
+    AGENT_ROLES,
     AgentAssignment,
+    AgentRole,
     default_assignment,
     validate_agent_configuration,
 )
@@ -110,6 +113,21 @@ _CASE_CATEGORIES = frozenset({"prompt_injection", "data_exfiltration", "tool_mis
 _ATTACK_CLASSES = frozenset({"boundary", "invariant", "regression"})
 _SEVERITIES = frozenset({"low", "medium", "high", "critical"})
 _EXACT_COUNT_CORPUS_ID = "headshot-live-100-v1"
+_JUDGE_CALIBRATION_STATES = frozenset({"unavailable", "failed", "passed", "invalidated", "enabled"})
+_DECISION_AUTHORITIES = frozenset({"oracle", "model", "none"})
+_JUDGE_CALIBRATION_ID = re.compile(r"\AJC-[0-9a-f]{64}\Z")
+_USD = re.compile(r"\A(?:0|[1-9][0-9]*)(?:\.[0-9]{1,12})?\Z")
+
+
+@dataclass(frozen=True, slots=True)
+class AuthorizedHostedRoleConfiguration:
+    """One role resolved only from an approved run's immutable four-role binding."""
+
+    organization_id: str
+    run_id: str
+    configuration: HostedConfigurationSet
+    role_configuration: HostedRoleConfiguration
+    authorization: HostedRunBinding
 
 
 class ControlPlaneStore:
@@ -1770,6 +1788,152 @@ class ControlPlaneStore:
             )
         return default if row is None else self._agent_assignment_from_row(row)
 
+    def load_hosted_role_for_execution(
+        self,
+        *,
+        run_id: str,
+        agent_role: AgentRole,
+    ) -> AuthorizedHostedRoleConfiguration:
+        """Resolve an exact role only from a still-live, human-approved four-role run binding."""
+
+        with self._engine.connect() as connection:
+            return self._authorized_hosted_role(
+                connection,
+                run_id=run_id,
+                agent_role=agent_role,
+            )
+
+    def start_hosted_agent_execution(
+        self,
+        *,
+        run_id: str,
+        agent_role: AgentRole,
+        input_payload: Mapping[str, Any],
+        provider: str,
+        model: str,
+        upstream_provider: str,
+        configuration_set_sha256: str,
+        role_configuration_sha256: str,
+        generation_policy_sha256: str,
+        judge_calibration_id: str | None = None,
+        judge_calibration_state: str | None = None,
+        attempt_id: str | None = None,
+        parent_execution_id: str | None = None,
+        detail: Mapping[str, Any] | None = None,
+    ) -> str:
+        """Start one hosted call after re-resolving every identity from its approved run.
+
+        The input body is never stored. Only its content hash and a caller-provided bounded,
+        credential-free summary are durable.
+        """
+
+        if agent_role not in AGENT_ROLES:
+            raise InvalidControlPlaneInput("hosted agent role is invalid")
+        self._validate_judge_calibration_lineage(
+            agent_role=agent_role,
+            calibration_id=judge_calibration_id,
+            calibration_state=judge_calibration_state,
+        )
+        input_sha256 = self._agent_payload_sha256(
+            input_payload,
+            label="hosted agent input",
+        )
+        sanitized_detail = self._bounded_agent_payload(
+            detail or {},
+            label="hosted agent detail",
+        )
+        sanitized_detail["telemetry_contract"] = "hosted-agent-execution-v1"
+        with self._engine.begin() as connection:
+            self._aggregate_lock(connection, f"hosted-agent-execution:{run_id}")
+            authority = self._authorized_hosted_role(
+                connection,
+                run_id=run_id,
+                agent_role=agent_role,
+            )
+            role = authority.role_configuration
+            binding = authority.authorization
+            if (
+                provider != role.provider
+                or model != role.model_id
+                or upstream_provider != role.upstream_provider
+                or configuration_set_sha256 != authority.configuration.configuration_sha256
+                or role_configuration_sha256 != role.configuration_sha256
+                or generation_policy_sha256 != binding.generation_policy_sha256
+            ):
+                raise AuthorizationDeniedError(
+                    "hosted execution identity differs from the approved run binding"
+                )
+            self._validate_agent_parent(
+                connection,
+                organization_id=authority.organization_id,
+                run_id=run_id,
+                parent_execution_id=parent_execution_id,
+            )
+            execution_id = uuid.uuid4().hex
+            trace_id = campaign_trace_id(run_id)
+            connection.execute(
+                text(
+                    "INSERT INTO agent_executions "
+                    "(execution_id, organization_id, campaign_run_id, attempt_id, "
+                    "parent_execution_id, agent_role, provider, model, execution_mode, "
+                    "configuration_version, input_sha256, trace_id, detail, "
+                    "configuration_set_sha256, role_configuration_sha256, "
+                    "generation_policy_sha256, judge_calibration_id, "
+                    "judge_calibration_state) VALUES "
+                    "(:execution, :org, :run_id, :attempt_id, :parent, :role, :provider, "
+                    ":model, 'hosted_advisory', :version, :input_hash, :trace_id, "
+                    "CAST(:detail AS jsonb), :configuration, :role_configuration, "
+                    ":generation_policy, :calibration_id, :calibration_state)"
+                ),
+                {
+                    "execution": execution_id,
+                    "org": authority.organization_id,
+                    "run_id": run_id,
+                    "attempt_id": attempt_id,
+                    "parent": parent_execution_id,
+                    "role": role.role,
+                    "provider": role.provider,
+                    "model": role.model_id,
+                    "version": int(authority.configuration.schema_version),
+                    "input_hash": input_sha256,
+                    "trace_id": trace_id,
+                    "detail": canonical_json(sanitized_detail),
+                    "configuration": authority.configuration.configuration_sha256,
+                    "role_configuration": role.configuration_sha256,
+                    "generation_policy": binding.generation_policy_sha256,
+                    "calibration_id": judge_calibration_id,
+                    "calibration_state": judge_calibration_state,
+                },
+            )
+            self._audit(
+                connection,
+                authority.organization_id,
+                "agent.started",
+                "agent_execution",
+                execution_id,
+                None,
+                {
+                    "campaign_run_id": run_id,
+                    "attempt_id": attempt_id,
+                    "parent_execution_id": parent_execution_id,
+                    "agent_role": role.role,
+                    "provider": role.provider,
+                    "requested_model": role.model_id,
+                    "requested_upstream_provider": role.upstream_provider,
+                    "execution_mode": "hosted_advisory",
+                    "configuration_set_sha256": authority.configuration.configuration_sha256,
+                    "role_configuration_sha256": role.configuration_sha256,
+                    "generation_policy_sha256": binding.generation_policy_sha256,
+                    "judge_calibration_id": judge_calibration_id,
+                    "judge_calibration_state": judge_calibration_state,
+                    "input_sha256": input_sha256,
+                    "trace_id": trace_id,
+                },
+                actor_user_id=f"agent:{role.role}",
+                actor_session_id="runner:system",
+            )
+            return execution_id
+
     def start_agent_execution(
         self,
         *,
@@ -1832,6 +1996,10 @@ class ControlPlaneStore:
                 if assignment_row is None
                 else self._agent_assignment_from_row(assignment_row)
             )
+            if assignment.execution_mode != "deterministic":
+                raise AuthorizationDeniedError(
+                    "hosted agent work requires an exact run-bound configuration set"
+                )
             execution_id = uuid.uuid4().hex
             trace_id = campaign_trace_id(run_id)
             input_sha256 = content_hash(sanitized_input)
@@ -1959,6 +2127,286 @@ class ControlPlaneStore:
                 actor_session_id="runner:system",
             )
 
+    def finish_hosted_agent_execution(
+        self,
+        *,
+        execution_id: str,
+        status: str,
+        output_payload: Mapping[str, Any],
+        returned_model: str | None = None,
+        upstream_provider: str | None = None,
+        provider_request_id: str | None = None,
+        input_tokens: int | None = None,
+        output_tokens: int | None = None,
+        reasoning_tokens: int | None = None,
+        measured_cost_usd: str | None = None,
+        configuration_set_sha256: str | None = None,
+        role_configuration_sha256: str | None = None,
+        generation_policy_sha256: str | None = None,
+        physical_attempts: int | None = None,
+        oracle_agreement: bool | None = None,
+        decision_authority: str | None = None,
+        error_code: str | None = None,
+        detail: Mapping[str, Any] | None = None,
+    ) -> None:
+        """Terminally persist provider-observed lineage for one run-bound hosted invocation."""
+
+        if status not in {"succeeded", "failed"}:
+            raise InvalidControlPlaneInput("hosted agent terminal status is invalid")
+        if status == "failed":
+            if (
+                not isinstance(error_code, str)
+                or not error_code
+                or _REASON_CODE.fullmatch(error_code) is None
+            ):
+                raise InvalidControlPlaneInput("failed hosted execution needs a typed error")
+        elif error_code is not None:
+            raise InvalidControlPlaneInput("successful hosted execution cannot carry an error")
+        if oracle_agreement is not None and type(oracle_agreement) is not bool:
+            raise InvalidControlPlaneInput("oracle agreement must be a boolean when observed")
+        if decision_authority is not None and decision_authority not in _DECISION_AUTHORITIES:
+            raise InvalidControlPlaneInput("hosted decision authority is invalid")
+
+        provider_lineage_values = (
+            returned_model,
+            upstream_provider,
+            provider_request_id,
+            input_tokens,
+            output_tokens,
+            reasoning_tokens,
+            measured_cost_usd,
+            configuration_set_sha256,
+            role_configuration_sha256,
+            generation_policy_sha256,
+        )
+        has_provider_lineage = any(value is not None for value in provider_lineage_values)
+        complete_provider_lineage = (
+            all(value is not None for value in provider_lineage_values)
+            and physical_attempts is not None
+        )
+        if status == "succeeded" and not complete_provider_lineage:
+            raise InvalidControlPlaneInput(
+                "successful hosted execution requires complete provider lineage"
+            )
+        if status == "failed" and has_provider_lineage and not complete_provider_lineage:
+            raise InvalidControlPlaneInput(
+                "failed hosted execution requires complete observed provider lineage"
+            )
+
+        # An unobserved cost stays NULL/not_observed. Defaulting it to zero would record a
+        # fabricated measurement that is indistinguishable from a genuinely free call.
+        measured_cost: Decimal | None = None
+        cost_measurement_state = "not_observed"
+        if measured_cost_usd is not None:
+            if not isinstance(measured_cost_usd, str) or _USD.fullmatch(measured_cost_usd) is None:
+                raise InvalidControlPlaneInput("hosted measured cost must be canonical USD text")
+            measured_cost = Decimal(measured_cost_usd)
+            if not measured_cost.is_finite() or measured_cost < 0:
+                raise InvalidControlPlaneInput("hosted measured cost is invalid")
+            cost_measurement_state = "measured"
+        for value in (input_tokens, output_tokens, reasoning_tokens):
+            if value is not None and (
+                isinstance(value, bool) or not isinstance(value, int) or value < 0
+            ):
+                raise InvalidControlPlaneInput("hosted token accounting is invalid")
+        if physical_attempts is not None and (
+            isinstance(physical_attempts, bool)
+            or not isinstance(physical_attempts, int)
+            or physical_attempts <= 0
+        ):
+            raise InvalidControlPlaneInput("hosted physical-attempt accounting is invalid")
+        for label, value, maximum in (
+            ("returned model", returned_model, 160),
+            ("upstream provider", upstream_provider, 64),
+            ("provider request identity", provider_request_id, 256),
+        ):
+            if value is not None and (
+                not isinstance(value, str)
+                or not value
+                or value != value.strip()
+                or len(value) > maximum
+            ):
+                raise InvalidControlPlaneInput(f"hosted {label} is invalid")
+        for label, value in (
+            ("configuration set", configuration_set_sha256),
+            ("role configuration", role_configuration_sha256),
+            ("generation policy", generation_policy_sha256),
+        ):
+            if value is not None and (
+                not isinstance(value, str) or _SHA256.fullmatch(value) is None
+            ):
+                raise InvalidControlPlaneInput(f"hosted {label} hash is invalid")
+
+        output_sha256 = self._agent_payload_sha256(
+            output_payload,
+            label="hosted agent output",
+        )
+        terminal_detail = self._bounded_agent_payload(
+            detail or {},
+            label="hosted agent detail",
+        )
+        terminal_detail["telemetry_contract"] = "hosted-agent-execution-v1"
+        with self._engine.begin() as connection:
+            row = (
+                connection.execute(
+                    text(
+                        "SELECT * FROM agent_executions WHERE execution_id = :execution FOR UPDATE"
+                    ),
+                    {"execution": execution_id},
+                )
+                .mappings()
+                .one_or_none()
+            )
+            if row is None:
+                raise RecordNotFoundError("agent execution does not exist")
+            if (
+                row["execution_mode"] != "hosted_advisory"
+                or row["configuration_set_sha256"] is None
+            ):
+                raise InvalidControlPlaneInput(
+                    "hosted terminalization requires a run-bound hosted execution"
+                )
+            if row["status"] != "running":
+                if (
+                    row["status"] == status
+                    and row["output_sha256"] == output_sha256
+                    and self._hosted_terminal_matches(
+                        row,
+                        returned_model=returned_model,
+                        upstream_provider=upstream_provider,
+                        provider_request_id=provider_request_id,
+                        input_tokens=input_tokens,
+                        output_tokens=output_tokens,
+                        reasoning_tokens=reasoning_tokens,
+                        measured_cost=measured_cost,
+                        physical_attempts=physical_attempts,
+                        oracle_agreement=oracle_agreement,
+                        decision_authority=decision_authority,
+                    )
+                ):
+                    return
+                raise RecordConflictError("agent execution is already terminal")
+
+            if complete_provider_lineage:
+                configuration = self._stored_hosted_configuration(
+                    connection,
+                    organization_id=str(row["organization_id"]),
+                    configuration_sha256=str(row["configuration_set_sha256"]),
+                )
+                role = next(
+                    (item for item in configuration.roles if item.role == row["agent_role"]),
+                    None,
+                )
+                if role is None:
+                    raise AuthorizationDeniedError(
+                        "hosted execution role is absent from its configuration set"
+                    )
+                if (
+                    returned_model != row["model"]
+                    or returned_model != role.model_id
+                    or configuration_set_sha256 != row["configuration_set_sha256"]
+                    or configuration_set_sha256 != configuration.configuration_sha256
+                    or role_configuration_sha256 != row["role_configuration_sha256"]
+                    or role_configuration_sha256 != role.configuration_sha256
+                    or generation_policy_sha256 != row["generation_policy_sha256"]
+                ):
+                    raise AuthorizationDeniedError(
+                        "provider lineage differs from the started hosted authority"
+                    )
+
+            if row["agent_role"] == "judge":
+                if status == "succeeded" and decision_authority is None:
+                    raise InvalidControlPlaneInput(
+                        "successful hosted Judge requires an explicit decision authority"
+                    )
+                if decision_authority == "model" and row["judge_calibration_state"] != "enabled":
+                    raise AuthorizationDeniedError(
+                        "model authority requires enabled Judge calibration"
+                    )
+            elif oracle_agreement is not None or decision_authority is not None:
+                raise InvalidControlPlaneInput(
+                    "Judge reconciliation is invalid for a non-Judge execution"
+                )
+
+            connection.execute(
+                text(
+                    "UPDATE agent_executions SET status = :status, "
+                    "output_sha256 = :output_hash, returned_model = :returned_model, "
+                    "upstream_provider = :upstream_provider, "
+                    "provider_request_id = :provider_request_id, "
+                    "input_tokens = :input_tokens, output_tokens = :output_tokens, "
+                    "reasoning_tokens = :reasoning_tokens, measured_cost = :cost, "
+                    "cost_measurement_state = :cost_state, "
+                    "physical_attempts = :physical_attempts, "
+                    "oracle_agreement = :oracle_agreement, "
+                    "decision_authority = :decision_authority, error_code = :error, "
+                    "detail = detail || CAST(:detail AS jsonb), "
+                    "finished_at = clock_timestamp(), "
+                    "duration_ms = extract(epoch FROM "
+                    "(clock_timestamp() - started_at)) * 1000 "
+                    "WHERE execution_id = :execution"
+                ),
+                {
+                    "status": status,
+                    "output_hash": output_sha256,
+                    "returned_model": returned_model,
+                    "upstream_provider": upstream_provider,
+                    "provider_request_id": provider_request_id,
+                    "input_tokens": input_tokens,
+                    "output_tokens": output_tokens,
+                    "reasoning_tokens": reasoning_tokens,
+                    "cost": measured_cost,
+                    "cost_state": cost_measurement_state,
+                    "physical_attempts": physical_attempts,
+                    "oracle_agreement": oracle_agreement,
+                    "decision_authority": decision_authority,
+                    "error": error_code,
+                    "detail": canonical_json(terminal_detail),
+                    "execution": execution_id,
+                },
+            )
+            self._audit(
+                connection,
+                row["organization_id"],
+                f"agent.{status}",
+                "agent_execution",
+                execution_id,
+                None,
+                {
+                    "campaign_run_id": row["campaign_run_id"],
+                    "attempt_id": row["attempt_id"],
+                    "parent_execution_id": row["parent_execution_id"],
+                    "agent_role": row["agent_role"],
+                    "provider": row["provider"],
+                    "requested_model": row["model"],
+                    "returned_model": returned_model,
+                    "upstream_provider": upstream_provider,
+                    "provider_request_id": provider_request_id,
+                    "execution_mode": row["execution_mode"],
+                    "configuration_set_sha256": row["configuration_set_sha256"],
+                    "role_configuration_sha256": row["role_configuration_sha256"],
+                    "generation_policy_sha256": row["generation_policy_sha256"],
+                    "output_sha256": output_sha256,
+                    "measured_cost": (
+                        format(measured_cost, "f") if measured_cost is not None else None
+                    ),
+                    "cost_measurement_state": cost_measurement_state,
+                    "currency": "USD",
+                    "input_tokens": input_tokens,
+                    "output_tokens": output_tokens,
+                    "reasoning_tokens": reasoning_tokens,
+                    "physical_attempts": physical_attempts,
+                    "judge_calibration_id": row["judge_calibration_id"],
+                    "judge_calibration_state": row["judge_calibration_state"],
+                    "oracle_agreement": oracle_agreement,
+                    "decision_authority": decision_authority,
+                    "error_code": error_code,
+                    "trace_id": row["trace_id"],
+                },
+                actor_user_id=f"agent:{row['agent_role']}",
+                actor_session_id="runner:system",
+            )
+
     def finish_agent_execution(
         self,
         *,
@@ -2010,6 +2458,10 @@ class ControlPlaneStore:
             )
             if row is None:
                 raise RecordNotFoundError("agent execution does not exist")
+            if row["configuration_set_sha256"] is not None:
+                raise InvalidControlPlaneInput(
+                    "run-bound hosted work requires hosted terminalization"
+                )
             if row["status"] != "running":
                 if row["status"] == status and row["output_sha256"] == content_hash(output):
                     return
@@ -3722,6 +4174,226 @@ class ControlPlaneStore:
         if cls._contains_secret(encoded):
             raise InvalidControlPlaneInput(f"{label} contains credential material")
         return normalized
+
+    @classmethod
+    def _agent_payload_sha256(
+        cls,
+        payload: Mapping[str, Any],
+        *,
+        label: str,
+    ) -> str:
+        """Hash a model payload without persisting it or forcing it into the 16 KiB detail bound."""
+
+        if not isinstance(payload, Mapping):
+            raise InvalidControlPlaneInput(f"{label} must be an object")
+        try:
+            encoded = canonical_json(dict(payload))
+        except (TypeError, ValueError) as exc:
+            raise InvalidControlPlaneInput(f"{label} must be canonical JSON") from exc
+        encoded_bytes = encoded.encode("utf-8")
+        if len(encoded_bytes) > 262_144:
+            raise InvalidControlPlaneInput(f"{label} exceeds 256 KiB")
+        if cls._contains_secret(encoded):
+            raise InvalidControlPlaneInput(f"{label} contains credential material")
+        return hashlib.sha256(encoded_bytes).hexdigest()
+
+    @staticmethod
+    def _validate_judge_calibration_lineage(
+        *,
+        agent_role: AgentRole,
+        calibration_id: str | None,
+        calibration_state: str | None,
+    ) -> None:
+        if agent_role != "judge":
+            if calibration_id is not None or calibration_state is not None:
+                raise InvalidControlPlaneInput(
+                    "Judge calibration lineage is invalid for a non-Judge execution"
+                )
+            return
+        if calibration_state not in _JUDGE_CALIBRATION_STATES:
+            raise InvalidControlPlaneInput("hosted Judge requires an explicit calibration state")
+        if calibration_state == "unavailable":
+            if calibration_id is not None:
+                raise InvalidControlPlaneInput(
+                    "unavailable Judge calibration cannot claim an artifact"
+                )
+            return
+        if (
+            not isinstance(calibration_id, str)
+            or _JUDGE_CALIBRATION_ID.fullmatch(calibration_id) is None
+        ):
+            raise InvalidControlPlaneInput("Judge calibration artifact identity is invalid")
+
+    @staticmethod
+    def _validate_agent_parent(
+        connection: Connection,
+        *,
+        organization_id: str,
+        run_id: str,
+        parent_execution_id: str | None,
+    ) -> None:
+        if parent_execution_id is None:
+            return
+        parent = (
+            connection.execute(
+                text(
+                    "SELECT organization_id, campaign_run_id FROM agent_executions "
+                    "WHERE execution_id = :execution_id"
+                ),
+                {"execution_id": parent_execution_id},
+            )
+            .mappings()
+            .one_or_none()
+        )
+        if (
+            parent is None
+            or parent["organization_id"] != organization_id
+            or parent["campaign_run_id"] != run_id
+        ):
+            raise InvalidControlPlaneInput(
+                "parent agent execution must belong to the same campaign"
+            )
+
+    @staticmethod
+    def _hosted_terminal_matches(
+        row: Mapping[str, Any],
+        *,
+        returned_model: str | None,
+        upstream_provider: str | None,
+        provider_request_id: str | None,
+        input_tokens: int | None,
+        output_tokens: int | None,
+        reasoning_tokens: int | None,
+        measured_cost: Decimal | None,
+        physical_attempts: int | None,
+        oracle_agreement: bool | None,
+        decision_authority: str | None,
+    ) -> bool:
+        stored_cost = row["measured_cost"]
+        # An unobserved cost is NULL on both sides; it never compares equal to an observed one.
+        cost_matches = (
+            stored_cost is None
+            if measured_cost is None
+            else stored_cost is not None and Decimal(str(stored_cost)) == measured_cost
+        )
+        return bool(
+            row["returned_model"] == returned_model
+            and row["upstream_provider"] == upstream_provider
+            and row["provider_request_id"] == provider_request_id
+            and row["input_tokens"] == input_tokens
+            and row["output_tokens"] == output_tokens
+            and row["reasoning_tokens"] == reasoning_tokens
+            and cost_matches
+            and row["physical_attempts"] == physical_attempts
+            and row["oracle_agreement"] == oracle_agreement
+            and row["decision_authority"] == decision_authority
+        )
+
+    @staticmethod
+    def _stored_hosted_configuration(
+        connection: Connection,
+        *,
+        organization_id: str,
+        configuration_sha256: str,
+    ) -> HostedConfigurationSet:
+        payload = connection.execute(
+            text(
+                "SELECT payload FROM hosted_configuration_sets "
+                "WHERE organization_id = :org "
+                "AND configuration_sha256 = :configuration"
+            ),
+            {
+                "org": organization_id,
+                "configuration": configuration_sha256,
+            },
+        ).scalar_one_or_none()
+        if payload is None:
+            raise AuthorizationDeniedError("hosted configuration set is not staged")
+        try:
+            configuration = HostedConfigurationSet.from_payload(dict(payload))
+            validate_hosted_configuration_set(configuration)
+        except (TypeError, ValueError) as exc:
+            raise AuthorizationDeniedError(
+                "hosted configuration-set integrity check failed"
+            ) from exc
+        if configuration.configuration_sha256 != configuration_sha256:
+            raise AuthorizationDeniedError(
+                "hosted configuration-set identity differs from stored content"
+            )
+        return configuration
+
+    def _authorized_hosted_role(
+        self,
+        connection: Connection,
+        *,
+        run_id: str,
+        agent_role: AgentRole,
+    ) -> AuthorizedHostedRoleConfiguration:
+        if agent_role not in AGENT_ROLES:
+            raise InvalidControlPlaneInput("hosted agent role is invalid")
+        row = (
+            connection.execute(
+                text(
+                    "SELECT r.organization_id, r.scope_hash, r.launcher_user_id, "
+                    "q.scope_payload, d.decision, d.approver_user_id, "
+                    "d.self_approval_override, "
+                    "(q.expires_at > clock_timestamp()) AS authorization_live, "
+                    "(SELECT state FROM campaign_run_events e "
+                    "WHERE e.organization_id = r.organization_id "
+                    "AND e.run_id = r.run_id ORDER BY e.id DESC LIMIT 1) AS state "
+                    "FROM campaign_runs r "
+                    "JOIN campaign_authorization_requests q "
+                    "ON q.organization_id = r.organization_id "
+                    "AND q.request_id = r.authorization_request_id "
+                    "AND q.scope_hash = r.scope_hash "
+                    "JOIN campaign_authorization_decisions d "
+                    "ON d.organization_id = q.organization_id "
+                    "AND d.request_id = q.request_id "
+                    "AND d.scope_hash = q.scope_hash "
+                    "WHERE r.run_id = :run_id"
+                ),
+                {"run_id": run_id},
+            )
+            .mappings()
+            .one_or_none()
+        )
+        if row is None:
+            raise RecordNotFoundError("campaign run does not exist")
+        if row["decision"] != "approved" or not row["authorization_live"]:
+            raise AuthorizationDeniedError("campaign run authorization is not live")
+        if row["approver_user_id"] == row["launcher_user_id"] or row["self_approval_override"]:
+            raise AuthorizationDeniedError("campaign run violates two-person control")
+        if row["state"] not in {"queued", "running"}:
+            raise AuthorizationDeniedError("campaign run is not executable")
+        try:
+            scope = scope_from_payload(dict(row["scope_payload"]))
+        except (TypeError, ValueError) as exc:
+            raise AuthorizationDeniedError("campaign run scope is invalid") from exc
+        if scope.scope_hash() != row["scope_hash"]:
+            raise AuthorizationDeniedError("campaign run scope hash is invalid")
+        self._validate_scope(connection, row["organization_id"], scope)
+        if scope.hosted_run is None:
+            raise AuthorizationDeniedError("campaign run has no hosted configuration authority")
+        configuration = self._stored_hosted_configuration(
+            connection,
+            organization_id=str(row["organization_id"]),
+            configuration_sha256=scope.hosted_run.configuration_set_sha256,
+        )
+        role = next(
+            (item for item in configuration.roles if item.role == agent_role),
+            None,
+        )
+        if role is None:
+            raise AuthorizationDeniedError(
+                "hosted role is absent from the approved configuration set"
+            )
+        return AuthorizedHostedRoleConfiguration(
+            organization_id=str(row["organization_id"]),
+            run_id=run_id,
+            configuration=configuration,
+            role_configuration=role,
+            authorization=scope.hosted_run,
+        )
 
     @staticmethod
     def _agent_assignment_from_row(row: Mapping[str, Any]) -> AgentAssignment:

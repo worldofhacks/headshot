@@ -13,7 +13,7 @@ import math
 import threading
 import time
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
@@ -38,6 +38,19 @@ class HostedProviderError(RuntimeError):
     """A typed terminal provider refusal with no credential or prompt content."""
 
     code = "hosted-provider-unavailable"
+
+    def __init__(self, message: str, *, physical_attempts: int = 0) -> None:
+        super().__init__(message)
+        if type(physical_attempts) is not int or physical_attempts < 0:
+            raise ValueError("physical attempt count must be a non-negative integer")
+        self.physical_attempts = physical_attempts
+
+    def account_physical_attempts(self, physical_attempts: int) -> None:
+        """Attach a conservative consumed-call count without changing the safe error text."""
+
+        if type(physical_attempts) is not int or physical_attempts < self.physical_attempts:
+            raise ValueError("physical attempt count cannot move backwards")
+        self.physical_attempts = physical_attempts
 
 
 class HostedBudgetExceeded(HostedProviderError):
@@ -87,6 +100,73 @@ class HostedUsageLedger:
                 measured_usd=self._measured_usd,
                 unresolved_exposure_usd=self._unresolved_usd,
             )
+
+    def restore(
+        self,
+        role: AgentRole,
+        *,
+        physical_calls: int,
+        measured_usd: Decimal,
+        input_tokens: int,
+        output_tokens: int,
+        reasoning_tokens: int,
+    ) -> None:
+        """Hydrate terminal durable usage before any new provider reservation."""
+
+        configuration = self._roles.get(role)
+        if configuration is None:
+            raise HostedProviderError("hosted role is not configured")
+        if (
+            type(physical_calls) is not int
+            or physical_calls < 0
+            or not isinstance(measured_usd, Decimal)
+            or not measured_usd.is_finite()
+            or measured_usd < 0
+            or any(
+                type(value) is not int or value < 0
+                for value in (input_tokens, output_tokens, reasoning_tokens)
+            )
+        ):
+            raise HostedProviderError("persisted hosted usage is invalid")
+        with self._lock:
+            if (
+                self._role_calls[role] != 0
+                or self._role_measured_usd[role] != 0
+                or any(self._tokens[role].values())
+            ):
+                raise HostedProviderError("persisted hosted usage was restored more than once")
+            proposed_global_calls = self._physical_calls + physical_calls
+            proposed_global_usd = self._measured_usd + measured_usd
+            proposed_global_tokens = {
+                "input": self._global_tokens["input"] + input_tokens,
+                "output": self._global_tokens["output"] + output_tokens,
+                "reasoning": self._global_tokens["reasoning"] + reasoning_tokens,
+            }
+            role_limits = configuration.limits
+            global_limits = self._configuration.global_limits
+            if (
+                physical_calls > role_limits.max_calls
+                or measured_usd > role_limits.max_usd
+                or input_tokens > role_limits.max_input_tokens
+                or output_tokens > role_limits.max_output_tokens
+                or reasoning_tokens > role_limits.max_reasoning_tokens
+                or proposed_global_calls > global_limits.max_calls
+                or proposed_global_usd > global_limits.max_usd
+                or proposed_global_tokens["input"] > global_limits.max_input_tokens
+                or proposed_global_tokens["output"] > global_limits.max_output_tokens
+                or proposed_global_tokens["reasoning"] > global_limits.max_reasoning_tokens
+            ):
+                raise HostedBudgetExceeded("persisted hosted usage exceeds its authorized cap")
+            self._role_calls[role] = physical_calls
+            self._role_measured_usd[role] = measured_usd
+            self._tokens[role] = {
+                "input": input_tokens,
+                "output": output_tokens,
+                "reasoning": reasoning_tokens,
+            }
+            self._physical_calls = proposed_global_calls
+            self._measured_usd = proposed_global_usd
+            self._global_tokens = proposed_global_tokens
 
     def reserve(
         self,
@@ -229,6 +309,28 @@ class OpenRouterResult:
     physical_attempts: int
 
 
+class HostedProviderResponseError(HostedProviderError):
+    """A charged provider response whose exact measurements survived terminal rejection."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        observed_result: OpenRouterResult,
+        code: str,
+    ) -> None:
+        super().__init__(
+            message,
+            physical_attempts=observed_result.physical_attempts,
+        )
+        if not isinstance(observed_result, OpenRouterResult):
+            raise TypeError("observed provider result is invalid")
+        if not isinstance(code, str) or not code:
+            raise ValueError("observed provider failure code is invalid")
+        self.observed_result = observed_result
+        self.code = code
+
+
 class OpenRouterTransport:
     """Synchronous concurrency-one transport intended for the private Runner only."""
 
@@ -291,19 +393,25 @@ class OpenRouterTransport:
             self._configuration.global_limits.max_retries,
         )
         last_error: Exception | None = None
+        physical_attempts = 0
         conservative_input_bound = self._conservative_input_token_bound(messages)
         with self._concurrency:
             for attempt in range(1, attempts + 1):
                 self._pace(configuration)
-                reservation = self._ledger.reserve(
-                    role,
-                    input_tokens=max(
-                        input_tokens_upper_bound,
-                        conservative_input_bound,
-                    ),
-                    output_tokens=max_output_tokens,
-                    reasoning_tokens=max_reasoning_tokens,
-                )
+                try:
+                    reservation = self._ledger.reserve(
+                        role,
+                        input_tokens=max(
+                            input_tokens_upper_bound,
+                            conservative_input_bound,
+                        ),
+                        output_tokens=max_output_tokens,
+                        reasoning_tokens=max_reasoning_tokens,
+                    )
+                except HostedProviderError as exc:
+                    exc.account_physical_attempts(physical_attempts)
+                    raise
+                physical_attempts = attempt
                 try:
                     result = self._send(
                         configuration=configuration,
@@ -327,11 +435,13 @@ class OpenRouterTransport:
                         break
                     if exc.retry_after_seconds > 0:
                         self._sleeper(min(exc.retry_after_seconds, 5.0))
-                except HostedProviderError:
+                except HostedProviderError as exc:
+                    exc.account_physical_attempts(physical_attempts)
                     raise
-        raise HostedProviderError("OpenRouter request failed after the authorized retry") from (
-            last_error
-        )
+        raise HostedProviderError(
+            "OpenRouter request failed after the authorized retry",
+            physical_attempts=physical_attempts,
+        ) from last_error
 
     def _pace(self, configuration: HostedRoleConfiguration) -> None:
         rate = min(
@@ -371,11 +481,14 @@ class OpenRouterTransport:
             headers={
                 "Authorization": f"Bearer {credential.reveal()}",
                 "Content-Type": "application/json",
+                "X-OpenRouter-Metadata": "enabled",
             },
             json={
                 "model": configuration.model_id,
                 "messages": [dict(message) for message in messages],
-                "max_tokens": max_output_tokens,
+                # OpenRouter's completion count includes reasoning tokens. The
+                # configured output bound is only the final-answer allowance.
+                "max_completion_tokens": max_output_tokens + reservation.reasoning_tokens,
                 "stream": False,
                 "provider": {
                     "only": [configuration.upstream_provider],
@@ -415,19 +528,20 @@ class OpenRouterTransport:
             raise HostedProviderError("OpenRouter response has an invalid shape")
         requested_model = configuration.model_id
         returned_model = payload.get("model")
-        upstream_provider = payload.get("provider")
+        upstream_provider, selected_model = self._selected_endpoint(
+            payload,
+            requested_model=requested_model,
+        )
         request_id = payload.get("id")
         if returned_model != requested_model:
             raise HostedProviderError("OpenRouter returned a different model")
-        if upstream_provider != configuration.upstream_provider:
-            raise HostedProviderError("OpenRouter returned a different upstream provider")
+        if selected_model != returned_model:
+            raise HostedProviderError("OpenRouter selected a different endpoint model")
         if not isinstance(request_id, str) or not request_id:
             raise HostedProviderError("OpenRouter response has no provider request id")
         usage = self._usage(payload)
-        self._ledger.settle(reservation, **usage)
-        output = self._structured_output(payload, output_schema)
-        return OpenRouterResult(
-            output=output,
+        observed_result = OpenRouterResult(
+            output={},
             requested_model=requested_model,
             returned_model=returned_model,
             upstream_provider=upstream_provider,
@@ -441,6 +555,49 @@ class OpenRouterTransport:
             generation_policy_sha256=generation_policy_sha256,
             physical_attempts=physical_attempts,
         )
+        try:
+            self._ledger.settle(reservation, **usage)
+            output = self._structured_output(payload, output_schema)
+        except HostedProviderError as exc:
+            raise HostedProviderResponseError(
+                "OpenRouter response failed after measured usage was observed",
+                observed_result=observed_result,
+                code=exc.code,
+            ) from exc
+        return replace(observed_result, output=output)
+
+    @staticmethod
+    def _selected_endpoint(
+        payload: Mapping[str, Any],
+        *,
+        requested_model: str,
+    ) -> tuple[str, str]:
+        metadata = payload.get("openrouter_metadata")
+        if not isinstance(metadata, Mapping):
+            raise HostedProviderError("OpenRouter response has no router metadata")
+        if metadata.get("requested") != requested_model:
+            raise HostedProviderError("OpenRouter router metadata has a different requested model")
+        endpoints = metadata.get("endpoints")
+        available = endpoints.get("available") if isinstance(endpoints, Mapping) else None
+        if not isinstance(available, list):
+            raise HostedProviderError("OpenRouter router metadata has an invalid endpoint list")
+        selected = [
+            endpoint
+            for endpoint in available
+            if isinstance(endpoint, Mapping) and endpoint.get("selected") is True
+        ]
+        if len(selected) != 1:
+            raise HostedProviderError("OpenRouter router metadata has no unique selected endpoint")
+        upstream_provider = selected[0].get("provider")
+        selected_model = selected[0].get("model")
+        if (
+            not isinstance(upstream_provider, str)
+            or not upstream_provider
+            or not isinstance(selected_model, str)
+            or not selected_model
+        ):
+            raise HostedProviderError("OpenRouter selected endpoint identity is invalid")
+        return upstream_provider, selected_model
 
     @staticmethod
     def _conservative_input_token_bound(
@@ -464,14 +621,19 @@ class OpenRouterTransport:
         if not isinstance(usage, Mapping):
             raise HostedProviderError("OpenRouter response has no measured usage")
         input_tokens = usage.get("prompt_tokens")
-        output_tokens = usage.get("completion_tokens")
+        completion_tokens = usage.get("completion_tokens")
         details = usage.get("completion_tokens_details", {})
         reasoning_tokens = details.get("reasoning_tokens", 0) if isinstance(details, Mapping) else 0
         if any(
             type(value) is not int or value < 0
-            for value in (input_tokens, output_tokens, reasoning_tokens)
+            for value in (input_tokens, completion_tokens, reasoning_tokens)
         ):
             raise HostedProviderError("OpenRouter token accounting is invalid")
+        if reasoning_tokens > completion_tokens:
+            raise HostedProviderError("OpenRouter reasoning token accounting is invalid")
+        # OpenRouter completion_tokens includes reasoning. Persist the disjoint
+        # final-answer and reasoning counts so totals and caps never double-count.
+        output_tokens = completion_tokens - reasoning_tokens
         try:
             measured_cost = Decimal(str(usage["cost"]))
         except (InvalidOperation, KeyError, TypeError, ValueError) as exc:
@@ -558,6 +720,7 @@ __all__ = [
     "HostedBudgetExceeded",
     "HostedLedgerSnapshot",
     "HostedProviderError",
+    "HostedProviderResponseError",
     "HostedUsageLedger",
     "OPENROUTER_CHAT_COMPLETIONS_URL",
     "OpenRouterResult",

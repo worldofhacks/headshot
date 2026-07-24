@@ -13,6 +13,8 @@ from typing import NamedTuple
 import pytest
 from sqlalchemy import Engine, text
 
+from agentforge.agents.hosted_policy import DEFAULT_HOSTED_GENERATION_POLICY
+from agentforge.agents.judge.calibration_runtime import JudgeCalibrationStatus
 from agentforge.api.postgres import PostgresApiBackend
 from agentforge.auth.permissions import CAMPAIGN_AUTHORIZE, CAMPAIGN_LAUNCH
 from agentforge.auth.principal import Principal
@@ -35,7 +37,12 @@ from agentforge.runner import (
     DurableCampaignRunner,
     PreflightReport,
     _campaign_session_required_until,
+    _DurableHostedExecutionLifecycle,
+    _reconcile_runner_evaluator,
+    _require_hosted_workload_capacity,
+    _sanitize_hosted_transcript,
 )
+from agentforge.secrets import Secret
 from agentforge.storage.queue import JobRecord, LogicalQueue, PostgresJobQueue
 from agentforge.target.catalog import TrustedTargetCatalog
 from agentforge.target.spec import AuthMode, ExecutionProfile, SafetyCaps
@@ -79,6 +86,26 @@ class _RecordingAgentTelemetry:
 
     def release_campaign(self, campaign_run_id: str) -> None:
         self.released_campaigns.append(campaign_run_id)
+
+
+def test_hosted_evaluator_transcript_exactly_redacts_the_sealed_target_session() -> None:
+    raw_session = "opaque-session-value-7f6c2b"
+    transcript = f'{{"answer":"safe","echo":"{raw_session}"}}'
+
+    sanitized = _sanitize_hosted_transcript(
+        transcript,
+        target_credential=Secret(raw_session),
+    )
+
+    assert raw_session not in sanitized
+    assert "[REDACTED_TARGET_SESSION]" in sanitized
+    assert (
+        _sanitize_hosted_transcript(
+            "synthetic no-auth response",
+            target_credential=None,
+        )
+        == "synthetic no-auth response"
+    )
 
 
 def _principal(user_id: str, permission: str) -> Principal:
@@ -680,6 +707,214 @@ def test_agent_terminalization_failure_does_not_replace_primary_error() -> None:
     assert primary_error.__notes__ == [
         "agent execution terminal finalization also failed (OSError)"
     ]
+
+
+def test_runner_keeps_persisted_ground_truth_exact_even_when_calibration_is_enabled() -> None:
+    """Post-coordinator model output cannot diverge the database from immutable manifests."""
+
+    ground_truth = {
+        "schema_version": "1",
+        "campaign_run_id": "run-hosted-authority-guard",
+        "attempt_id": "attempt-hosted-authority-guard",
+        "state": "NO_EXPLOIT_OBSERVED",
+        "confidence": 1.0,
+        "reason_codes": ["calibrated_negative"],
+    }
+    calibration = JudgeCalibrationStatus(
+        state="enabled",
+        calibration_id="JC-" + ("a" * 64),
+        metrics={"agreement_rate": 1.0, "false_negative_rate": 0.0},
+        reason_codes=(),
+        model_authoritative=True,
+        source="configured_file",
+    )
+
+    reconciliation = _reconcile_runner_evaluator(
+        assessment={
+            "state": "EXPLOIT_LIKELY",
+            "confidence": 0.99,
+            "rationale": "The live evaluator disagrees with deterministic ground truth.",
+            "criteria_hits": ["policy_boundary"],
+            "error_code": None,
+        },
+        deterministic_verdict=ground_truth,
+        calibration=calibration,
+    )
+
+    assert reconciliation.effective_verdict == ground_truth
+    assert reconciliation.model_decisive is False
+    assert reconciliation.ground_truth_agreement is False
+    assert reconciliation.calibration_state == "enabled"
+
+
+def test_hosted_call_refuses_before_provider_when_langfuse_observation_does_not_open() -> None:
+    class RecordingStore:
+        def __init__(self) -> None:
+            self.starts: list[dict[str, object]] = []
+            self.finishes: list[dict[str, object]] = []
+
+        def start_hosted_agent_execution(self, **values: object) -> str:
+            self.starts.append(dict(values))
+            return "execution-hosted-langfuse-gate"
+
+        def finish_hosted_agent_execution(self, **values: object) -> None:
+            self.finishes.append(dict(values))
+
+    class UnavailableLangfuseTelemetry:
+        def begin_agent(self, **_values: object) -> bool:
+            return False
+
+    store = RecordingStore()
+    lifecycle = _DurableHostedExecutionLifecycle(
+        store=store,  # type: ignore[arg-type]
+        telemetry=UnavailableLangfuseTelemetry(),  # type: ignore[arg-type]
+        run_id="run-hosted-langfuse-gate",
+        calibration=JudgeCalibrationStatus(
+            state="unavailable",
+            calibration_id=None,
+            metrics=None,
+            reason_codes=("calibration_artifact_unavailable",),
+            model_authoritative=False,
+            source="none",
+        ),
+    )
+    provider_calls: list[bool] = []
+
+    with (
+        lifecycle.invocation(role="orchestrator", detail={"phase": "live_planning"}),
+        pytest.raises(
+            DispatchUnavailable,
+            match="hosted_langfuse_observation_unavailable",
+        ),
+    ):
+        lifecycle.start(
+            role="orchestrator",
+            parent_execution_id=None,
+            input_payload={"coverage": []},
+            provider="openrouter",
+            model="anthropic/claude-opus-4.8",
+            upstream_provider="anthropic",
+            configuration_sha256="a" * 64,
+            role_configuration_sha256="b" * 64,
+            generation_policy_sha256="c" * 64,
+            judge_calibration_id=None,
+        )
+        provider_calls.append(True)
+
+    assert provider_calls == []
+    assert len(store.starts) == 1
+    assert store.finishes == [
+        {
+            "execution_id": "execution-hosted-langfuse-gate",
+            "status": "failed",
+            "output_payload": {"status": "failed"},
+            "error_code": "hosted-langfuse-start-failed",
+            "detail": {
+                "phase": "hosted_observability_gate",
+            },
+        }
+    ]
+
+
+def _hosted_capacity_fixture(
+    *,
+    case_count: int = 2,
+    max_retries: int = 0,
+) -> SimpleNamespace:
+    policy = DEFAULT_HOSTED_GENERATION_POLICY
+    required_calls = policy.required_logical_calls(case_count=case_count)
+    roles = []
+    global_tokens = {"input": 0, "output": 0, "reasoning": 0}
+    for role, required in required_calls.items():
+        bounds = policy.call_bounds[role]
+        required_physical_calls = required * (1 + max_retries)
+        totals = {
+            "input": bounds.input_tokens * required_physical_calls,
+            "output": bounds.output_tokens * required_physical_calls,
+            "reasoning": bounds.reasoning_tokens * required_physical_calls,
+        }
+        for token_kind, token_count in totals.items():
+            global_tokens[token_kind] += token_count
+        roles.append(
+            SimpleNamespace(
+                role=role,
+                limits=SimpleNamespace(
+                    max_calls=required_physical_calls,
+                    max_input_tokens=totals["input"],
+                    max_output_tokens=totals["output"],
+                    max_reasoning_tokens=totals["reasoning"],
+                    max_retries=max_retries,
+                ),
+            )
+        )
+    return SimpleNamespace(
+        roles=tuple(roles),
+        global_limits=SimpleNamespace(
+            max_calls=sum(required_calls.values()) * (1 + max_retries),
+            max_input_tokens=global_tokens["input"],
+            max_output_tokens=global_tokens["output"],
+            max_reasoning_tokens=global_tokens["reasoning"],
+            max_retries=max_retries,
+        ),
+    )
+
+
+def test_hosted_preflight_requires_cumulative_role_token_capacity() -> None:
+    configuration = _hosted_capacity_fixture()
+    configuration.roles[0].limits.max_input_tokens -= 1
+
+    with pytest.raises(DispatchUnavailable, match="hosted_role_cap_incompatible"):
+        _require_hosted_workload_capacity(
+            configuration=configuration,  # type: ignore[arg-type]
+            generation_policy=DEFAULT_HOSTED_GENERATION_POLICY,
+            case_count=2,
+        )
+
+
+def test_hosted_preflight_requires_cumulative_global_token_capacity() -> None:
+    configuration = _hosted_capacity_fixture()
+    _require_hosted_workload_capacity(
+        configuration=configuration,  # type: ignore[arg-type]
+        generation_policy=DEFAULT_HOSTED_GENERATION_POLICY,
+        case_count=2,
+    )
+    configuration.global_limits.max_reasoning_tokens -= 1
+
+    with pytest.raises(DispatchUnavailable, match="hosted_global_token_cap_incompatible"):
+        _require_hosted_workload_capacity(
+            configuration=configuration,  # type: ignore[arg-type]
+            generation_policy=DEFAULT_HOSTED_GENERATION_POLICY,
+            case_count=2,
+        )
+
+
+def test_canonical_nine_case_zero_retry_workload_fits_and_one_less_call_fails() -> None:
+    configuration = _hosted_capacity_fixture(case_count=9, max_retries=0)
+    _require_hosted_workload_capacity(
+        configuration=configuration,  # type: ignore[arg-type]
+        generation_policy=DEFAULT_HOSTED_GENERATION_POLICY,
+        case_count=9,
+    )
+    configuration.roles[0].limits.max_calls -= 1
+
+    with pytest.raises(DispatchUnavailable, match="hosted_role_cap_incompatible"):
+        _require_hosted_workload_capacity(
+            configuration=configuration,  # type: ignore[arg-type]
+            generation_policy=DEFAULT_HOSTED_GENERATION_POLICY,
+            case_count=9,
+        )
+
+
+def test_global_fifty_six_call_cap_requires_zero_retry_nine_case_floor() -> None:
+    configuration = _hosted_capacity_fixture(case_count=9, max_retries=1)
+    configuration.global_limits.max_calls = 56
+
+    with pytest.raises(DispatchUnavailable, match="hosted_global_call_cap_incompatible"):
+        _require_hosted_workload_capacity(
+            configuration=configuration,  # type: ignore[arg-type]
+            generation_policy=DEFAULT_HOSTED_GENERATION_POLICY,
+            case_count=9,
+        )
 
 
 def test_corpus_hash_drift_refuses_before_adapter_construction(

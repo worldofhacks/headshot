@@ -81,6 +81,41 @@ class Orchestrator:
         self.no_signal_spend_ratio = float(no_signal_spend_ratio)
 
     def decide(self, snapshot: Mapping[str, Any]) -> OrchestrationDecision:
+        candidate = self.guard(snapshot)
+        coverage = [dict(row) for row in candidate["coverage"]]
+
+        category, reason, mutation_policy, regression_triggers = self._priority(candidate, coverage)
+        caps = dict(candidate["authorized_caps"])
+        directive: dict[str, Any] = {
+            "schema_version": "1",
+            "campaign_id": candidate["campaign_run_id"],
+            "target_ref": candidate["target_ref"],
+            "category": category,
+            "coverage_goal": self._coverage_goal(category, coverage, reason),
+            "mutation_policy": mutation_policy,
+            "caps": caps,
+        }
+        try:
+            validate("campaign_directive", directive)
+        except Exception as exc:
+            raise OrchestrationInputError(
+                f"Orchestrator produced an invalid CampaignDirective: {exc}"
+            ) from exc
+        return OrchestrationDecision(
+            directive=directive,
+            priority_reason=reason,
+            signal_sha256=self.signal_sha256(candidate),
+            regression_triggers=regression_triggers,
+        )
+
+    def guard(self, snapshot: Mapping[str, Any]) -> dict[str, Any]:
+        """Validate trusted inputs and enforce safety breakers without selecting work.
+
+        The live Planner uses this method before a model call. It keeps budget, queue,
+        no-signal, saturation, and cap-consistency authority in deterministic code while leaving
+        the bounded category recommendation to the hosted model.
+        """
+
         candidate = dict(snapshot)
         try:
             validate("orchestration_snapshot", candidate)
@@ -106,31 +141,16 @@ class Orchestrator:
         if self._coverage_saturated(candidate, coverage):
             raise OrchestratorHalt("coverage_saturated")
 
-        category, reason, mutation_policy, regression_triggers = self._priority(candidate, coverage)
         caps = dict(candidate["authorized_caps"])
         if caps["budget_usd"] != budget["cap_usd"]:
             raise OrchestrationInputError("authorized budget and budget circuit-breaker cap differ")
-        directive: dict[str, Any] = {
-            "schema_version": "1",
-            "campaign_id": candidate["campaign_run_id"],
-            "target_ref": candidate["target_ref"],
-            "category": category,
-            "coverage_goal": self._coverage_goal(category, coverage, reason),
-            "mutation_policy": mutation_policy,
-            "caps": caps,
-        }
-        try:
-            validate("campaign_directive", directive)
-        except Exception as exc:
-            raise OrchestrationInputError(
-                f"Orchestrator produced an invalid CampaignDirective: {exc}"
-            ) from exc
-        return OrchestrationDecision(
-            directive=directive,
-            priority_reason=reason,
-            signal_sha256=self._signal_hash(candidate),
-            regression_triggers=regression_triggers,
-        )
+        return candidate
+
+    @staticmethod
+    def signal_sha256(snapshot: Mapping[str, Any]) -> str:
+        """Content-address the verified signal set used for one recommendation."""
+
+        return Orchestrator._signal_hash(snapshot)
 
     def _priority(
         self,

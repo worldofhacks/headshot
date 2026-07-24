@@ -19,6 +19,30 @@ from agentforge.api.read_models import (
 _NOW = datetime.datetime(2026, 7, 24, tzinfo=datetime.UTC)
 
 
+def _unavailable_provider_budget() -> dict[str, object]:
+    return {
+        "status": "unavailable",
+        "campaign_run_id": None,
+        "configuration_set_sha256": None,
+        "role_usd_cap": None,
+        "role_usd_spent": 0,
+        "role_usd_remaining": None,
+        "role_usd_overrun": 0,
+        "role_call_cap": None,
+        "role_physical_calls": 0,
+        "role_calls_remaining": None,
+        "role_call_overrun": 0,
+        "global_usd_cap": None,
+        "global_usd_spent": 0,
+        "global_usd_remaining": None,
+        "global_usd_overrun": 0,
+        "global_call_cap": None,
+        "global_physical_calls": 0,
+        "global_calls_remaining": None,
+        "global_call_overrun": 0,
+    }
+
+
 def test_agent_summary_requires_latency_and_delivery_for_completed_work() -> None:
     with pytest.raises(ValidationError):
         AgentReadModel(
@@ -49,7 +73,19 @@ def test_agent_summary_requires_latency_and_delivery_for_completed_work() -> Non
             currency="USD",
             input_tokens=None,
             output_tokens=None,
+            reasoning_tokens=None,
             token_observation_count=0,
+            physical_call_count=0,
+            provider_budget=_unavailable_provider_budget(),
+            judge_calibration={
+                "state": "unavailable",
+                "calibration_id": None,
+                "decision_authority": "none",
+                "oracle_comparison_count": 0,
+                "oracle_agreement_count": 0,
+                "oracle_agreement_rate": None,
+                "status_label": "not yet measured",
+            },
             average_duration_ms=None,
             p50_duration_ms=None,
             p95_duration_ms=None,
@@ -106,7 +142,10 @@ def test_cost_token_totals_require_an_observation() -> None:
             average_cost_per_request=0,
             input_tokens=12,
             output_tokens=None,
+            reasoning_tokens=None,
             token_observation_count=0,
+            physical_call_count=0,
+            provider_budget=None,
             duration_ms=10,
             execution_profile="live",
             started_at=_NOW,
@@ -132,7 +171,10 @@ def _agent_cost_record(**overrides: object) -> dict[str, object]:
         "average_cost_per_request": 0,
         "input_tokens": None,
         "output_tokens": None,
+        "reasoning_tokens": None,
         "token_observation_count": 0,
+        "physical_call_count": 0,
+        "provider_budget": _unavailable_provider_budget(),
         "p50_duration_ms": None,
         "p95_duration_ms": None,
         "duration_ms": 0,
