@@ -143,8 +143,7 @@ def test_spec_lint_accepts_a_spec_tag_in_a_test_comment(tmp_path: Path) -> None:
     test_file = _write_test(tmp_path, "")
     base = _commit_fixture(tmp_path)
     test_file.write_text(
-        "# spec(T-F00:AC-1)\n"
-        "def test_comment_mapped():\n    assert True\n",
+        "# spec(T-F00:AC-1)\ndef test_comment_mapped():\n    assert True\n",
         encoding="utf-8",
     )
 
@@ -301,9 +300,7 @@ def test_spec_lint_rejects_a_nested_function_as_an_acceptance_mapping(tmp_path: 
     test_file = _write_test(tmp_path, "")
     base = _commit_fixture(tmp_path)
     test_file.write_text(
-        "def helper():\n"
-        "    def test_nested_mapping():\n"
-        '        """spec(T-F00:AC-1)"""\n',
+        'def helper():\n    def test_nested_mapping():\n        """spec(T-F00:AC-1)"""\n',
         encoding="utf-8",
     )
 
