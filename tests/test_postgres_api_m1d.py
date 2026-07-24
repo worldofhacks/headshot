@@ -2145,6 +2145,8 @@ def test_agent_observability_reconciles_agents_costs_and_traces(
     agent_traces = [row for row in traces["data"] if row["agent_role"] is not None]
     assert len(agent_traces) == 4
     red_team_trace = next(row for row in agent_traces if row["agent_role"] == "red_team")
+    assert red_team_trace["provider"] == "headshot"
+    assert red_team_trace["model"] == "red_team-engine-v1"
     assert red_team_trace["parent_execution_id"] == "agent-observation-orchestrator"
     assert red_team_trace["duration_ms"] == 50.0
     assert red_team_trace["measured_cost"] == 0.02
@@ -2410,6 +2412,7 @@ def test_traces_projection_is_ready_from_persisted_attempt_and_verdict(
         "attempt_id",
         "operation",
         "provider",
+        "model",
         "agent_role",
         "execution_mode",
         "returned_model",
@@ -2453,6 +2456,7 @@ def test_traces_projection_is_ready_from_persisted_attempt_and_verdict(
     }
     assert row["trace_id"] == "trace-projection-0001"
     assert row["operation"] == "attempt:copilot-api@1.0.0"
+    assert row["model"] is None
     assert row["agent_role"] is None
     assert row["execution_mode"] is None
     assert row["status"] == "NO_EXPLOIT_OBSERVED"
