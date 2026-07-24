@@ -158,6 +158,11 @@ def _assert_report_row(report: str, gate: str, command: str, exit_code: int, out
     assert expected in report
 
 
+def _assert_base_sha_diagnostic(output: str) -> None:
+    normalized = output.lower().replace("_", "-").replace(" ", "-")
+    assert "base-sha" in normalized
+
+
 def test_wrapper_rejects_a_truly_absent_coverage_policy(tmp_path: Path) -> None:
     """spec(T-F00:AC-3) — an absent coverage policy fails closed with exit 1."""
     base = _prepare_fixture(tmp_path)
@@ -214,6 +219,41 @@ def test_wrapper_accepts_executable_coverage_at_its_base_sha_baseline(tmp_path: 
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "coverage=97.25" in result.stdout + result.stderr
+
+
+def test_wrapper_rejects_executable_coverage_without_a_baseline_base_sha(tmp_path: Path) -> None:
+    """spec(T-F00:AC-3) — executable coverage fails closed without its base-SHA binding."""
+    base = _prepare_fixture(tmp_path)
+    complete = _executable_policy(base=base, observed=97.25, baseline=97.25)
+    missing_binding = "\n".join(
+        line for line in complete.splitlines() if not line.startswith("baseline-base-sha:")
+    )
+    _write_policy(tmp_path, missing_binding + "\n")
+
+    result = _run_wrapper(tmp_path, base)
+
+    assert result.returncode == 1
+    _assert_base_sha_diagnostic(result.stdout + result.stderr)
+
+
+def test_wrapper_rejects_a_coverage_baseline_bound_to_a_different_commit(
+    tmp_path: Path,
+) -> None:
+    """spec(T-F00:AC-3) — policy base SHA must equal the wrapper's diff-base commit."""
+    base = _prepare_fixture(tmp_path)
+    different_commit = _commit_head_change(tmp_path)
+    assert different_commit != base
+    _write_policy(
+        tmp_path,
+        _executable_policy(base=different_commit, observed=97.25, baseline=97.25),
+    )
+
+    result = _run_wrapper(tmp_path, base)
+
+    assert result.returncode == 1
+    output = result.stdout + result.stderr
+    _assert_base_sha_diagnostic(output)
+    assert "match" in output.lower()
 
 
 def test_wrapper_rejects_executable_coverage_regression(tmp_path: Path) -> None:
