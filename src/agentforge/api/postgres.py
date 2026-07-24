@@ -3198,6 +3198,7 @@ class PostgresApiBackend(ApiBackend):
                     finding_id=identifiers.get("finding_id", ""),
                     decision=decision,
                     rationale=str(payload["rationale"]),
+                    reason_code=payload.get("reason_code"),
                     idempotency_key=idempotency_key,
                 )
                 return CommandResult.completed(record.decision_id, resource_id=record.finding_id)
