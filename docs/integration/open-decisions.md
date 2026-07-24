@@ -123,15 +123,43 @@ class reach a fourth review round. `_selected_endpoint` has been replaced by a t
 `_observed_endpoint` that never raises; all nine of those cases now record the substitution with
 its billed charge.
 
-**Residual: a response whose `usage` block cannot be read still cannot be recorded.** `_usage`
-raises before an observation exists, so a substitution accompanied by malformed usage lands as a
-bare `hosted-provider-unavailable` with no lineage. This one genuinely *is* the schema: without
-readable usage the seven observation columns cannot be completed, and
-`agent_execution_hosted_measurement_tuple` requires them all-NULL or all-NOT-NULL, so "identity
-observed, usage not observed" is unrepresentable. Closing it needs either a schema change or the
-physical `provider_call_events` path, which already models exactly that with nullable tokens and
-`cost_measurement_state`. That is T-F17c. Scope verified rather than assumed this time: the claim
-covers malformed `usage` only, and nothing else.
+**Second correction — cost was never covered by that residual.** The residual was then narrowed to
+"malformed `usage`", which was *still* an over-claim, and for a precise reason worth recording:
+**`measured_cost` is not one of the seven columns** `agent_execution_hosted_measurement_tuple`
+binds. Those are `returned_model`, `upstream_provider`, `provider_request_id`, the three token
+counts and `physical_attempts`. The schema already models an unusable amount as
+`cost_measurement_state='invalid'` with a NULL value — a branch built for exactly this. So a
+response whose cost was absent, `NaN`, infinite, negative, wrongly typed, or beyond the column's
+magnitude had **all seven columns available** and was being discarded for no schema reason at all.
+
+That is now fixed the same way the strings were: `normalize_measured_cost` is total and returns a
+storable `Decimal` or `None`, the store treats cost as separable from the identity tuple, and an
+observed call whose amount we could not use records `invalid` rather than collapsing into
+`not_observed` — which preserves the difference between "no call was made" and "a call was billed
+and the provider would not price it". A charge finer than the column's quantum is reported unknown
+rather than rounded down, because a rounded zero is the fabricated zero the invariant forbids. The
+ledger settles such a call at the reservation's maximum, which can only over-count exposure.
+
+This also fixed a defect on **honest** responses: a cost with thirteen decimal places was rejected
+by the store, swallowed into a generic composition error, and left the execution row `running`
+forever with no terminal record at all.
+
+**Residual, scoped narrowly and verified: a response whose token counts cannot be read.** If the
+`usage` block itself is absent or the wrong type, `prompt_tokens`/`completion_tokens` are
+unreadable and only four of the seven columns are available, so the all-or-nothing tuple genuinely
+cannot be satisfied and the row cannot be written. That is the schema, not an ordering bug. The
+physical `provider_call_events` path models it correctly with nullable tokens; closing it is
+T-F17c. **This claim has been wrong twice — check it against the seven columns before extending it
+to anything else.**
+
+**Residual: an upstream-provider substitution is recorded but not refused.** The request pins
+`provider.only` with `allow_fallbacks: False`, but the substitution check compares model identities
+only — the served endpoint provider is never compared to the role's configured
+`upstream_provider`, so a routing-pin breach with the correct model terminalizes as `succeeded`.
+The observed provider *is* recorded honestly, so this is not evidence loss. Equality is not the fix:
+the namespaces genuinely differ (the repo's own fixture pairs the served `"Google"` with the
+configured `google-vertex`), so it needs a provider-identity mapping. Recorded here rather than
+guessed at.
 
 **Residual (pre-existing): a reservation is never released on a pre-settle terminal error.**
 `HostedUsageLedger` has no release path, so those paths leave `unresolved_exposure_usd` inflated for

@@ -699,3 +699,93 @@ def test_a_hostile_upstream_provider_name_cannot_erase_the_record() -> None:
     observed = raised.value.observed_result
     assert len(observed.upstream_provider) <= 64
     assert observed.returned_model == "google/gemini-flash"
+
+
+@pytest.mark.parametrize(
+    ("cost", "label"),
+    (
+        ("NaN", "not a number"),
+        ("Infinity", "infinite"),
+        (-1, "negative"),
+        (None, "null"),
+        ("abc", "not numeric"),
+        ({"amount": 1}, "wrong type"),
+        ("1E+400", "beyond the column's magnitude"),
+        ("0.0000000000001", "finer than the column's quantum"),
+    ),
+)
+def test_an_unusable_cost_never_erases_the_observation(cost: object, label: str) -> None:
+    """Cost is provider-chosen, so it must not be able to refuse the whole record either.
+
+    It is not one of the seven columns agent_execution_hosted_measurement_tuple binds together,
+    and the schema models an unusable amount as cost_measurement_state='invalid' with a NULL
+    value — so the identity and usage that WERE observed must survive it.
+    """
+
+    payload = _success().json()
+    payload["model"] = "google/gemini-flash"
+    payload["openrouter_metadata"]["endpoints"]["available"][0]["model"] = "google/gemini-flash"
+    payload["usage"]["cost"] = cost
+    client = httpx.Client(
+        transport=httpx.MockTransport(lambda _request: httpx.Response(200, json=payload))
+    )
+    transport = OpenRouterTransport(
+        configuration=_configuration(),
+        credential_resolver=lambda _reference: Secret("test-provider-value"),
+        client=client,
+    )
+
+    with pytest.raises(HostedProviderResponseError) as raised:
+        transport.invoke(
+            role="judge",
+            messages=({"role": "user", "content": "Judge."},),
+            output_schema={"type": "object"},
+            schema_name="judge_verdict",
+            generation_policy_sha256=_digest("generation-policy"),
+            input_tokens_upper_bound=100,
+            max_output_tokens=50,
+            max_reasoning_tokens=20,
+            timeout_seconds=5,
+        )
+
+    observed = raised.value.observed_result
+    assert raised.value.code == "provider-model-substituted", label
+    assert observed.returned_model == "google/gemini-flash", label
+    assert observed.input_tokens == 30 and observed.output_tokens == 5
+    # Unknown, never a fabricated zero.
+    assert observed.measured_cost_usd is None, label
+
+
+def test_a_sub_quantum_cost_is_unknown_rather_than_rounded_to_zero() -> None:
+    """A charge finer than NUMERIC(20, 12) is a real amount, not a free call.
+
+    Rounding it down would record the fabricated zero the unknown-cost invariant exists to
+    forbid, and an honest response must not strand its execution either.
+    """
+
+    payload = _success().json()
+    payload["usage"]["cost"] = "0.0000000000001"
+    client = httpx.Client(
+        transport=httpx.MockTransport(lambda _request: httpx.Response(200, json=payload))
+    )
+    transport = OpenRouterTransport(
+        configuration=_configuration(),
+        credential_resolver=lambda _reference: Secret("test-provider-value"),
+        client=client,
+    )
+
+    result = transport.invoke(
+        role="judge",
+        messages=({"role": "user", "content": "Judge."},),
+        output_schema={"type": "object"},
+        schema_name="judge_verdict",
+        generation_policy_sha256=_digest("generation-policy"),
+        input_tokens_upper_bound=100,
+        max_output_tokens=50,
+        max_reasoning_tokens=20,
+        timeout_seconds=5,
+    )
+
+    # The honest call still succeeds, and its cost is unknown rather than zero.
+    assert result.returned_model == "google/gemini-2.5-pro"
+    assert result.measured_cost_usd is None

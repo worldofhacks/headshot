@@ -304,7 +304,7 @@ class OpenRouterResult:
     input_tokens: int
     output_tokens: int
     reasoning_tokens: int
-    measured_cost_usd: Decimal
+    measured_cost_usd: Decimal | None
     configuration_sha256: str
     role_configuration_sha256: str
     generation_policy_sha256: str
@@ -319,6 +319,36 @@ class OpenRouterResult:
 # disappears. Normalizing at ingress means no later layer can be made to drop the evidence.
 _SAFE_PROVIDER_TEXT = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9._:/@+-]*\Z")
 _UNSAFE_TEXT_PREFIX = "unsafe-provider-text-"
+# agent_executions.measured_cost is NUMERIC(20, 12): eight integer digits, twelve decimal places.
+_COST_QUANTUM = Decimal("0.000000000001")
+_MAX_MEASURED_COST = Decimal("99999999.999999999999")
+
+
+def normalize_measured_cost(value: object) -> Decimal | None:
+    """Return a storable measured cost, or ``None`` when the provider did not give a usable one.
+
+    Cost is provider-chosen, so it must not be able to refuse the whole record. NaN, infinity, a
+    negative, more precision than the column holds, or a magnitude beyond it are all "we do not
+    know what this cost", which the schema already models as ``cost_measurement_state='invalid'``
+    with a NULL amount — not as a reason to discard the identity and usage we did observe.
+    """
+
+    try:
+        candidate = Decimal(str(value))
+    except (InvalidOperation, TypeError, ValueError):
+        return None
+    if not candidate.is_finite() or candidate < 0 or candidate > _MAX_MEASURED_COST:
+        return None
+    try:
+        quantized = candidate.quantize(_COST_QUANTUM)
+    except InvalidOperation:
+        return None
+    # A charge smaller than the column's quantum is not zero — it is a real amount this schema
+    # cannot represent. Storing the rounded zero would be the fabricated-zero the unknown-cost
+    # invariant forbids, so report it as unknown instead.
+    if quantized == 0 and candidate != 0:
+        return None
+    return quantized
 
 
 def normalize_provider_text(value: object, *, maximum: int) -> str:
@@ -613,7 +643,21 @@ class OpenRouterTransport:
         )
         try:
             try:
-                self._ledger.settle(reservation, **usage)
+                # An unusable cost still consumed budget. Charging the reservation's maximum is
+                # the conservative reading — it can only over-count exposure, never let a call
+                # the provider declined to price slip past the spend cap — while the durable
+                # record separately says the amount is unknown.
+                self._ledger.settle(
+                    reservation,
+                    measured_cost=(
+                        usage["measured_cost"]
+                        if usage["measured_cost"] is not None
+                        else reservation.maximum_cost
+                    ),
+                    input_tokens=usage["input_tokens"],
+                    output_tokens=usage["output_tokens"],
+                    reasoning_tokens=usage["reasoning_tokens"],
+                )
             except HostedProviderError as settle_exc:
                 # settle() raises HostedBudgetExceeded when the served usage overruns the
                 # reservation or the role cap — and because the request pins max_price to the
@@ -715,10 +759,7 @@ class OpenRouterTransport:
         # OpenRouter completion_tokens includes reasoning. Persist the disjoint
         # final-answer and reasoning counts so totals and caps never double-count.
         output_tokens = completion_tokens - reasoning_tokens
-        try:
-            measured_cost = Decimal(str(usage["cost"]))
-        except (InvalidOperation, KeyError, TypeError, ValueError) as exc:
-            raise HostedProviderError("OpenRouter measured cost is unavailable") from exc
+        measured_cost = normalize_measured_cost(usage.get("cost"))
         return {
             "measured_cost": measured_cost,
             "input_tokens": input_tokens,

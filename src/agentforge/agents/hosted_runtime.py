@@ -12,7 +12,7 @@ import json
 import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal
 from typing import Any, Literal, Protocol
 
 from agentforge.agents.hosted import (
@@ -116,7 +116,7 @@ class HostedExecutionLineage:
     input_tokens: int
     output_tokens: int
     reasoning_tokens: int
-    measured_cost_usd: str
+    measured_cost_usd: str | None
     configuration_sha256: str
     role_configuration_sha256: str
     generation_policy_sha256: str
@@ -390,7 +390,11 @@ class HostedRoleRuntime:
             input_tokens=result.input_tokens,
             output_tokens=result.output_tokens,
             reasoning_tokens=result.reasoning_tokens,
-            measured_cost_usd=format(result.measured_cost_usd, "f"),
+            measured_cost_usd=(
+                format(result.measured_cost_usd, "f")
+                if result.measured_cost_usd is not None
+                else None
+            ),
             configuration_sha256=result.configuration_sha256,
             role_configuration_sha256=result.role_configuration_sha256,
             generation_policy_sha256=result.generation_policy_sha256,
@@ -460,11 +464,11 @@ class HostedRoleRuntime:
             or result.reasoning_tokens > bounds.reasoning_tokens
         ):
             raise HostedCompositionError("provider result usage exceeds the authorized call bounds")
-        try:
-            measured_cost = Decimal(result.measured_cost_usd)
-        except (InvalidOperation, TypeError, ValueError) as exc:
-            raise HostedCompositionError("provider result measured cost is invalid") from exc
-        if not measured_cost.is_finite() or measured_cost < 0:
+        if result.measured_cost_usd is not None and (
+            not isinstance(result.measured_cost_usd, Decimal)
+            or not result.measured_cost_usd.is_finite()
+            or result.measured_cost_usd < 0
+        ):
             raise HostedCompositionError("provider result measured cost is invalid")
         max_attempts = 1 + min(
             configuration.limits.max_retries,
@@ -515,21 +519,26 @@ class HostedRoleRuntime:
             )
         ):
             return None
-        try:
-            measured_cost = Decimal(result.measured_cost_usd)
-        except (InvalidOperation, TypeError, ValueError):
-            return None
         max_attempts = 1 + min(
             configuration.limits.max_retries,
             self._configuration.global_limits.max_retries,
         )
         if (
-            not measured_cost.is_finite()
-            or measured_cost < 0
-            or type(result.physical_attempts) is not int
+            type(result.physical_attempts) is not int
             or not 1 <= result.physical_attempts <= max_attempts
         ):
             return None
+        # The cost is separable from the identity and usage we observed — it is not one of the
+        # seven columns agent_execution_hosted_measurement_tuple binds together, and the schema
+        # models an unusable amount as cost_measurement_state='invalid' with a NULL value. So an
+        # amount we cannot store must not take the rest of the evidence down with it.
+        measured_cost = (
+            result.measured_cost_usd
+            if isinstance(result.measured_cost_usd, Decimal)
+            and result.measured_cost_usd.is_finite()
+            and result.measured_cost_usd >= 0
+            else None
+        )
         return HostedExecutionLineage(
             execution_id=execution_id,
             parent_execution_id=parent_execution_id,
@@ -542,7 +551,7 @@ class HostedRoleRuntime:
             input_tokens=result.input_tokens,
             output_tokens=result.output_tokens,
             reasoning_tokens=result.reasoning_tokens,
-            measured_cost_usd=format(measured_cost, "f"),
+            measured_cost_usd=(format(measured_cost, "f") if measured_cost is not None else None),
             configuration_sha256=result.configuration_sha256,
             role_configuration_sha256=result.role_configuration_sha256,
             generation_policy_sha256=result.generation_policy_sha256,

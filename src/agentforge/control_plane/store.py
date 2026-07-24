@@ -2167,6 +2167,11 @@ class ControlPlaneStore:
         if decision_authority is not None and decision_authority not in _DECISION_AUTHORITIES:
             raise InvalidControlPlaneInput("hosted decision authority is invalid")
 
+        # measured_cost is deliberately absent: it is not one of the seven columns
+        # agent_execution_hosted_measurement_tuple binds together, and the schema models an
+        # unusable amount as cost_measurement_state='invalid' with a NULL value. Requiring it here
+        # would make a cost the provider declined to price destroy the identity and usage that
+        # were observed perfectly well.
         provider_lineage_values = (
             returned_model,
             upstream_provider,
@@ -2174,7 +2179,6 @@ class ControlPlaneStore:
             input_tokens,
             output_tokens,
             reasoning_tokens,
-            measured_cost_usd,
             configuration_set_sha256,
             role_configuration_sha256,
             generation_policy_sha256,
@@ -2196,7 +2200,10 @@ class ControlPlaneStore:
         # An unobserved cost stays NULL/not_observed. Defaulting it to zero would record a
         # fabricated measurement that is indistinguishable from a genuinely free call.
         measured_cost: Decimal | None = None
-        cost_measurement_state = "not_observed"
+        # No observation at all is "not_observed"; an observed call whose amount we could not use
+        # is "invalid". Collapsing the two would lose the difference between "no call was made"
+        # and "a call was billed and the provider would not tell us what it cost".
+        cost_measurement_state = "invalid" if has_provider_lineage else "not_observed"
         if measured_cost_usd is not None:
             if not isinstance(measured_cost_usd, str) or _USD.fullmatch(measured_cost_usd) is None:
                 raise InvalidControlPlaneInput("hosted measured cost must be canonical USD text")
