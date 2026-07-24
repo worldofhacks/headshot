@@ -96,6 +96,23 @@ wire.** One residual `deepseek/deepseek-chat` remains as an arbitrary pass-throu
 > `python -c "import agentforge"` silently loads the **shared** source. Never run
 > `pip install -e` from this lane — it would repoint the shared venv and break every other lane.
 
+## Anti-duplication map for T-F18 (snapshot — re-verify before acting)
+
+Several T-F18 tickets describe work that **already exists**, either committed on the shared branch
+(and therefore now merged into this lane) or uncommitted in the shared worktree and owned by another
+lane. Rebuilding any of it would be waste and would collide. This was taken at one moment; the
+shared worktree changed on every inspection, so **re-snapshot before starting any of these**.
+
+| Ticket | Verdict | Note |
+|---|---|---|
+| T-F18f complete schema-validated vuln reports | **ALREADY BUILT — do not rebuild** | `api/postgres.py` emits the validated, redacted `contract_payload` with `report_integrity: "verified"`; `ConsoleScreens.tsx` renders register, detail, verification chain and publication gate. Committed on both branches. |
+| T-F18j unknown/partial provider accounting | **ALREADY BUILT / IN FLIGHT — highest duplication risk** | Backend landed in `12eb13e` (`_unavailable_provider_budget`, `_provider_budget_projection`); console side is being written right now by another lane. Coordinate, do not re-implement. |
+| T-F18c merged coverage + versioned regression | **PARTIALLY BUILT — biggest overlap** | The whole frontend exists uncommitted in the shared worktree (`CoverageRegressionScreen.tsx`, decoders, route, tests). The **backend truth is not built**: the `coverage` and `resilience` resources are unchanged from merge-base, with no deterministic disposition, right-reason validation, or version comparison. Build the backend; converge with their frontend. |
+| T-F18g preflight + preserved reasons | **PARTIALLY BUILT** | Backend complete on both branches. Every console criterion is unbuilt — no `preflight` references in `console/src`, `CommandButton` drops server reason codes and has no confirmation step. |
+| T-F18a navigation canonicalization | **PARTIALLY BUILT** | Nav item and `coverage` route exist uncommitted; there is no Resilience nav item, so AC-1 effectively holds. Unbuilt: `/resilience` is still a dead route and malformed paths are not replace-normalized. |
+| T-F18i unified trace lineage | **PARTIALLY BUILT** | Uncommitted `telemetry/outbound.py` enforces parent-lineage integrity; the `traces` read model and the observability view are untouched. |
+| T-F18b, T-F18d, T-F18e, T-F18h | **NOT BUILT** | No cursor/filter primitives; no `ScanPlan` anywhere; Birdseye and canonical target identity untouched. |
+
 ## High-level state
 
 | Area | State | Evidence / next gate |
