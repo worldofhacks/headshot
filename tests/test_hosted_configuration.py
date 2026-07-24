@@ -198,9 +198,9 @@ def test_prompt_registry_is_exact_content_addressed_and_versioned() -> None:
         prompt = hosted_prompt(role)
         assert prompt.role == role
         assert prompt.version == _role(role).prompt_version
-        assert prompt.prompt_sha256 == hashlib.sha256(
-            prompt.system_prompt.encode("utf-8")
-        ).hexdigest()
+        assert (
+            prompt.prompt_sha256 == hashlib.sha256(prompt.system_prompt.encode("utf-8")).hexdigest()
+        )
         assert prompt.system_prompt == prompt.system_prompt.strip()
 
     with pytest.raises(ValueError, match="four-role catalog"):

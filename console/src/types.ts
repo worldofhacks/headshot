@@ -364,8 +364,8 @@ export interface AgentAssignmentReadModel extends JsonRecord {
   model: string;
   resolved_model: string;
   upstream_provider: string | null;
-  prompt_sha256: string;
-  prompt_version: string;
+  prompt_sha256: string | null;
+  prompt_version: string | null;
   execution_mode: "deterministic" | "hosted_advisory";
   activation_state: "active" | "staged_pending_authorization";
   version: number;

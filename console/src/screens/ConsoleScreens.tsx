@@ -9,17 +9,17 @@ import {
 import { COMMAND_PATHS, RESOURCE_PATHS } from "../api/paths";
 import {
   decodeApprovals,
+  decodeApprovalDetail,
   decodeAttempts,
   decodeAuditHistory,
   decodeBirdseye,
   decodeCampaigns,
   decodeComponents,
   decodeConfiguration,
-  decodeCoverage,
   decodeEvidence,
   decodeFinding,
   decodeFindings,
-  decodeResilience,
+  decodeReports,
   decodeTargets,
 } from "../api/read-models";
 import { AdversarialText } from "../components/AdversarialText";
@@ -50,6 +50,7 @@ import { navigateTo } from "../router";
 import {
   PERMISSIONS,
   type ApprovalReadModel,
+  type ApprovalDetailReadModel,
   type AttemptReadModel,
   type AuditReadModel,
   type BirdseyeAttentionReadModel,
@@ -57,11 +58,11 @@ import {
   type CampaignReadModel,
   type ComponentReadModel,
   type ConfigurationReadModel,
-  type CoverageReadModel,
   type EvidenceReadModel,
   type FindingDetailReadModel,
   type FindingReadModel,
-  type ResilienceReadModel,
+  type FindingVerificationReadModel,
+  type ReportReadModel,
   type TargetReadModel,
 } from "../types";
 import { CostsScreen, TracesScreen } from "./ObservabilityScreens";
@@ -107,23 +108,6 @@ const distribution = (values: string[]) => frequency(values).map((row) => ({
 const timelineTone = (value: string): "success" | "queued" | "failure" | undefined => {
   const tone = toneFor(value);
   return tone === "brand" ? undefined : tone;
-};
-
-const resilienceTone = (value: string): "success" | "queued" | "failure" => {
-  const normalized = value.toUpperCase();
-  if (normalized === "NO_EXPLOIT_OBSERVED" || normalized === "PASS" || normalized === "PASSED") {
-    return "success";
-  }
-  if (
-    normalized === "EXPLOIT_CONFIRMED"
-    || normalized === "EXPLOIT_LIKELY"
-    || normalized === "FAIL"
-    || normalized === "FAILED"
-    || normalized === "REGRESSED"
-  ) {
-    return "failure";
-  }
-  return "queued";
 };
 
 const isPublished = (value: string) => {
@@ -206,10 +190,6 @@ function AttemptEvidence({ client, attemptId }: { client: ApiClient; attemptId: 
         {(data) => {
           const record = data;
           const textFields = [
-            "content",
-            "request_text",
-            "response_text",
-            "raw_content",
             "attack_attempt",
             "request_transcript",
             "response_transcript",
@@ -523,6 +503,140 @@ export function LiveScreen({ client, principal, entityId, getToken }: ScreenProp
   );
 }
 
+function VerificationChain({
+  verification,
+}: {
+  verification: FindingVerificationReadModel;
+}) {
+  if (verification.availability === "unavailable") {
+    return (
+      <StateNotice
+        state="unavailable"
+        reason={verification.reason_code ?? "verification_unavailable"}
+        detail="This source has no campaign transcript chain. No evidence has been inferred."
+      />
+    );
+  }
+  const judge = verification.judge;
+  const attackCase = verification.attack_case;
+  const integrity = verification.integrity;
+  const dispositionTone = judge ? toneFor(judge.state) : "queued";
+  return (
+    <div className="evidence-stack" aria-label="Full verification chain">
+      <p className="field-label">Attack case and deterministic basis</p>
+      <EvidenceGrid values={[
+        { label: "Case", value: attackCase?.case_id ?? "Unavailable" },
+        { label: "Classification", value: attackCase?.attack_class ?? "Unavailable" },
+        {
+          label: "Judge disposition",
+          value: judge?.state ?? "Unavailable",
+          tone: dispositionTone === "brand" ? undefined : dispositionTone,
+        },
+        { label: "Basis source", value: judge?.confirmation_source ?? "Unavailable" },
+      ]} />
+      {attackCase && (
+        <RecordDetails
+          data={attackCase}
+          preferredKeys={[
+            "case_id",
+            "category",
+            "attack_class",
+            "owasp_mappings",
+            "oracle_expectation",
+            "case_content_sha256",
+            "corpus_reconciliation",
+          ]}
+        />
+      )}
+      {verification.input_sequence.length > 0 && (
+        <div>
+          <p className="field-label">Input sequence · identifiers redacted</p>
+          {verification.input_sequence.map((turn, index) => (
+            <AdversarialText key={`${index}:${turn}`}>{`${index + 1}. ${turn}`}</AdversarialText>
+          ))}
+        </div>
+      )}
+      {verification.attack_attempt && (
+        <div>
+          <p className="field-label">Attack attempt · identifiers redacted</p>
+          <AdversarialText>{JSON.stringify(verification.attack_attempt, null, 2)}</AdversarialText>
+        </div>
+      )}
+      {verification.request_transcript && (
+        <div>
+          <p className="field-label">Request transcript · identifiers redacted</p>
+          <AdversarialText>{JSON.stringify(verification.request_transcript, null, 2)}</AdversarialText>
+        </div>
+      )}
+      {verification.response_transcript && (
+        <div>
+          <p className="field-label">Response transcript · identifiers redacted</p>
+          <AdversarialText>{verification.response_transcript}</AdversarialText>
+        </div>
+      )}
+      {judge && (
+        <div>
+          <p className="field-label">Independent Judge rationale</p>
+          <RecordDetails
+            data={judge}
+            preferredKeys={[
+              "state",
+              "confidence",
+              "confirmation_source",
+              "reason_codes",
+              "error_code",
+            ]}
+          />
+        </div>
+      )}
+      {verification.minimal_reproduction.length > 0 && (
+        <div>
+          <p className="field-label">Minimal reproduction · draft only</p>
+          <ol>
+            {verification.minimal_reproduction.map((step, index) => (
+              <li key={`${index}:${step}`}><AdversarialText>{step}</AdversarialText></li>
+            ))}
+          </ol>
+        </div>
+      )}
+      {verification.regression && (
+        <div>
+          <p className="field-label">Regression admission</p>
+          <RecordDetails
+            data={verification.regression}
+            preferredKeys={[
+              "state",
+              "reason_codes",
+              "reproduction_attempted",
+              "deterministic_reproduction",
+              "passes_for_right_reason",
+              "human_approved",
+              "admitted",
+            ]}
+          />
+        </div>
+      )}
+      {integrity && (
+        <div>
+          <p className="field-label">Integrity and reconciliation</p>
+          <RecordDetails
+            data={integrity}
+            preferredKeys={[
+              "evidence_record",
+              "finding_link",
+              "stored_content_sha256",
+              "finding_link_sha256",
+              "recomputed_content_sha256",
+              "observability_reconciliation",
+              "observability_detail",
+            ]}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
 function FindingDetail({
   client,
   principal,
@@ -561,6 +675,7 @@ function FindingDetail({
                 "evidence_integrity",
               ]}
             />
+            <VerificationChain verification={data.verification} />
             {data.history.length > 0 ? (
               <div className="evidence-stack">
                 <Timeline rows={[...data.history].reverse().map((entry, index) => ({
@@ -645,7 +760,9 @@ export function FindingsScreen({ client, principal, entityId }: ScreenProps) {
         {(data) => {
           const elevated = data.filter((finding) => ["critical", "high"].includes(finding.severity.toLowerCase())).length;
           const published = data.filter((finding) => isPublished(finding.publication_status)).length;
-          const integrityVerified = data.filter((finding) => ["verified", "valid", "bound"].some((value) => finding.evidence_integrity.toLowerCase().includes(value))).length;
+          const integrityVerified = data.filter(
+            (finding) => finding.evidence_integrity === "verified",
+          ).length;
           return (
             <>
               <MetricStrip label="Finding summary" values={[
@@ -703,6 +820,51 @@ export function FindingsScreen({ client, principal, entityId }: ScreenProps) {
           refreshList={findings.refresh}
         />
       )}
+    </div>
+  );
+}
+
+function ApprovalVerificationDetail({
+  client,
+  requestId,
+}: {
+  client: ApiClient;
+  requestId: string;
+}) {
+  const detail = useResource<ApprovalDetailReadModel>(
+    client,
+    RESOURCE_PATHS.approval(requestId),
+    decodeApprovalDetail,
+  );
+  return (
+    <div className="evidence-stack">
+      <p className="field-label">Post-run verification chain</p>
+      <ResourceView
+        result={detail.result}
+        emptyLabel="No organization-scoped approval detail was returned."
+      >
+        {(data) => data.verification_chain.length > 0 ? (
+          <>
+            <EvidenceGrid values={[
+              { label: "Campaign", value: data.campaign_run_id ?? "Not consumed" },
+              { label: "Verified findings", value: count(data.verification_chain.length) },
+              { label: "Authorization", value: data.status },
+              { label: "Scope hash", value: shortId(data.scope_hash) },
+            ]} />
+            {data.verification_chain.map((verification) => (
+              <VerificationChain
+                key={`${verification.finding_id}:${verification.attempt_id ?? "unavailable"}`}
+                verification={verification}
+              />
+            ))}
+          </>
+        ) : (
+          <StateNotice
+            state="empty"
+            detail="This authorization has no confirmed finding evidence. Pending approvals are intentionally pre-evidence."
+          />
+        )}
+      </ResourceView>
     </div>
   );
 }
@@ -820,6 +982,7 @@ export function ApprovalsScreen({ client, principal, entityId }: ScreenProps) {
               "consumed",
             ]}
           />
+          <ApprovalVerificationDetail client={client} requestId={requestId} />
           {selected.expired && (
             <StateNotice
               state="unavailable"
@@ -890,146 +1053,104 @@ export function ApprovalsScreen({ client, principal, entityId }: ScreenProps) {
   );
 }
 
-type SimpleResourceName = "coverage" | "resilience";
-type ResourceScreenName = SimpleResourceName | "traces" | "costs";
-
-function CoverageScreen({ client }: { client: ApiClient }) {
-  const controller = useResource<CoverageReadModel[]>(client, RESOURCE_PATHS.coverage, decodeCoverage);
-  return (
-    <div className="screen-stack">
-      <ScreenHeading title="Coverage" detail="Only server-derived, hash-verified and nonce-deduplicated coverage is shown." />
-      <ResourceView result={controller.result} emptyLabel="No verified coverage records are available.">
-        {(data) => {
-          const verifiedAttempts = data.reduce((total, record) => total + record.verified_attempt_count, 0);
-          const verifiedCases = data.reduce(
-            (total, record) => total + Math.min(record.verified_attempt_count, record.total_case_count),
-            0,
-          );
-          const cases = data.reduce((total, record) => total + record.total_case_count, 0);
-          const covered = data.filter((record) => record.covered).length;
-          const verdicts = new Map<string, number>();
-          for (const record of data) {
-            for (const [verdict, rawCount] of Object.entries(record.verdict_counts)) {
-              if (typeof rawCount === "number") verdicts.set(verdict, (verdicts.get(verdict) ?? 0) + rawCount);
-            }
-          }
-          return (
-            <>
-              <MetricStrip label="Coverage summary" values={[
-                { label: "Verified attempts", value: count(verifiedAttempts), note: `${count(cases)} authorized cases` },
-                { label: "Case execution ceiling", value: cases ? percent(verifiedCases / cases) : "—", note: "deduplicated case count cannot exceed denominator" },
-                { label: "Covered versions", value: `${covered}/${data.length}`, note: "server coverage decision" },
-                { label: "Mapped controls", value: count(unique(data.flatMap((record) => [...record.owasp_web, ...record.owasp_llm])).length), note: "OWASP Web + LLM" },
-              ]} />
-              <div className="panel-grid analytical-grid">
-                <Panel title="Execution by target version" meta="verified / total" eyebrow="COVERAGE POSTURE">
-                  <DistributionBars rows={data.map((record) => ({
-                    label: record.target_version,
-                    value: record.verified_attempt_count,
-                    display: `${record.verified_attempt_count} / ${record.total_case_count}`,
-                    tone: record.covered ? "success" as const : "queued" as const,
-                  }))} />
-                </Panel>
-                <Panel title="Verdict distribution" meta="verified attempts" eyebrow="COVERAGE POSTURE">
-                  {verdicts.size > 0
-                    ? <DistributionBars rows={[...verdicts.entries()].map(([label, value]) => ({ label, value, tone: toneFor(label) }))} />
-                    : <StateNotice state="empty" detail="No verdict counts are present in the coverage projection." />}
-                </Panel>
-              </div>
-              <Panel title="Taxonomy coverage" meta="deduplicated mappings" eyebrow="COVERAGE POSTURE">
-                <TagMatrix groups={[
-                  { label: "Classifications", values: unique(data.flatMap((record) => record.classifications)) },
-                  { label: "OWASP Web Top 10", values: unique(data.flatMap((record) => record.owasp_web)) },
-                  { label: "OWASP LLM Top 10", values: unique(data.flatMap((record) => record.owasp_llm)) },
-                  { label: "Evidence provenance", values: unique(data.map((record) => record.evidence_provenance)) },
-                ]} />
-              </Panel>
-              <Panel title="Coverage ledger" meta="authoritative snapshots">
-                <RecordTable
-                  data={data}
-                  identityKeys={["target_version"]}
-                  columns={[
-                    { key: "target_version", label: "Target version", mono: true },
-                    { key: "verified_attempt_count", label: "Verified", mono: true },
-                    { key: "total_case_count", label: "Cases", mono: true },
-                    { key: "category_count", label: "Categories", mono: true },
-                    { key: "execution_profile", label: "Profile" },
-                    { key: "covered", label: "Coverage decision" },
-                    { key: "as_of", label: "As of", mono: true },
-                  ]}
-                />
-              </Panel>
-            </>
-          );
-        }}
-      </ResourceView>
-    </div>
+export function ReportsScreen({ client, entityId }: ScreenProps) {
+  const reports = useResource<ReportReadModel[]>(
+    client,
+    RESOURCE_PATHS.reports,
+    decodeReports,
   );
-}
-
-function ResilienceScreen({ client }: { client: ApiClient }) {
-  const controller = useResource<ResilienceReadModel[]>(client, RESOURCE_PATHS.resilience, decodeResilience);
+  const selected = entityId
+    ? reports.result.data?.find((report) => report.report_id === entityId) ?? null
+    : null;
   return (
     <div className="screen-stack">
-      <ScreenHeading title="Resilience" detail="Version and regression history is read from the authoritative projection." />
-      <ResourceView result={controller.result} emptyLabel="No resilience or regression history is recorded.">
+      <ScreenHeading
+        title="Reports"
+        eyebrow="DOCUMENTATION AGENT DRAFTS"
+        detail="Schema-validated vulnerability reports remain unpublished until a separate human decision. Every report below is reconciled to immutable evidence before display."
+      />
+      <ResourceView result={reports.result} emptyLabel="No vulnerability reports have been drafted.">
         {(data) => {
-          const passing = data.filter((record) => resilienceTone(record.status) === "success").length;
-          const failing = data.filter((record) => resilienceTone(record.status) === "failure").length;
-          const latest = [...data].sort((left, right) => Date.parse(right.recorded_at) - Date.parse(left.recorded_at))[0];
+          const gated = data.filter(
+            (report) => report.publication_state === "blocked_pending_human_approval",
+          ).length;
+          const admitted = data.filter((report) => report.regression?.admitted === true).length;
           return (
             <>
-              <MetricStrip label="Resilience summary" values={[
-                { label: "Regression checks", value: count(data.length), note: `${unique(data.map((record) => record.version)).length} target versions` },
-                { label: "Passing", value: count(passing), note: `${percent(data.length ? passing / data.length : 0)} of history` },
-                { label: "Regressions", value: count(failing), note: "failed or degraded states" },
-                { label: "Latest version", value: latest?.version ?? "—", note: latest?.status ?? "No status" },
+              <MetricStrip label="Report summary" values={[
+                { label: "Validated drafts", value: count(data.length), note: "Documentation output, never publication authority" },
+                { label: "Human-gated", value: count(gated), note: `${data.length - gated} draft unpublished` },
+                { label: "Regression admitted", value: count(admitted), note: "Requires deterministic replay and human approval" },
+                { label: "Integrity verified", value: `${data.filter((report) => report.report_integrity === "verified").length}/${data.length}`, note: "Report, lineage and reproduction hash" },
               ]} />
-              <div className="panel-grid analytical-grid">
-                <Panel title="Regression posture" meta="all recorded checks" eyebrow="RESILIENCE POSTURE">
-                  <DistributionBars rows={distribution(data.map((record) => record.status))} />
-                </Panel>
-                <Panel title="Version activity" meta="checks per version" eyebrow="RESILIENCE POSTURE">
-                  <DistributionBars rows={distribution(data.map((record) => record.version))} />
-                </Panel>
-              </div>
-              <Panel title="Regression timeline" meta="newest first" eyebrow="RESILIENCE POSTURE">
-                <Timeline rows={[...data]
-                  .sort((left, right) => Date.parse(right.recorded_at) - Date.parse(left.recorded_at))
-                  .map((record) => ({
-                    id: `${record.regression_id}:${record.version}:${record.recorded_at}`,
-                    title: `${record.version} · ${record.status}`,
-                    detail: record.regression_id,
-                    at: record.recorded_at,
-                    tone: resilienceTone(record.status),
-                  }))} />
-              </Panel>
-              <Panel title="Resilience ledger" meta="authoritative history">
+              <Panel title="Report register" meta="select a report for the full chain">
                 <RecordTable
                   data={data}
-                  identityKeys={["regression_id", "version"]}
+                  identityKeys={["report_id"]}
                   columns={[
-                    { key: "version", label: "Version", mono: true },
-                    { key: "regression_id", label: "Regression", mono: true },
+                    { key: "report_id", label: "Report", mono: true },
+                    { key: "finding_id", label: "Finding", mono: true },
+                    { key: "severity", label: "Severity" },
+                    { key: "category", label: "Category" },
                     { key: "status", label: "Status" },
-                    { key: "recorded_at", label: "Recorded", mono: true },
+                    { key: "publication_state", label: "Publication gate" },
+                    { key: "report_integrity", label: "Integrity" },
                   ]}
+                  onSelect={(record) => {
+                    const reportId = identity(record, ["report_id"]);
+                    if (reportId) navigateTo({ screen: "reports", entityId: reportId });
+                  }}
                 />
               </Panel>
             </>
           );
         }}
       </ResourceView>
+      {entityId && selected && (
+        <Panel title="Vulnerability report" meta={selected.report_id} eyebrow="DRAFT · HUMAN GATED">
+          <RecordDetails
+            data={selected}
+            preferredKeys={[
+              "report_id",
+              "finding_id",
+              "source_case_id",
+              "severity",
+              "category",
+              "status",
+              "publication_state",
+              "report_integrity",
+              "reproduction_sha256",
+              "created_at",
+            ]}
+          />
+          {[
+            ["Description", selected.description],
+            ["Clinical impact", selected.clinical_impact],
+            ["Observed behavior", selected.observed_behavior],
+            ["Expected behavior", selected.expected_behavior],
+            ["Recommended remediation", selected.recommended_remediation],
+          ].map(([label, value]) => (
+            <div key={label}>
+              <p className="field-label">{label}</p>
+              <AdversarialText>{value}</AdversarialText>
+            </div>
+          ))}
+          <VerificationChain verification={selected.verification} />
+        </Panel>
+      )}
+      {entityId && !selected && reports.result.state !== "loading" && (
+        <Panel title="Vulnerability report">
+          <StateNotice state="empty" detail="That report is not in the organization-scoped response." />
+        </Panel>
+      )}
     </div>
   );
 }
+
+type ResourceScreenName = "traces" | "costs";
 
 export function SimpleResourceScreen({ client, resource }: { client: ApiClient; resource: ResourceScreenName }) {
   switch (resource) {
-    case "coverage":
-      return <CoverageScreen client={client} />;
-    case "resilience":
-      return <ResilienceScreen client={client} />;
     case "traces":
       return <TracesScreen client={client} />;
     case "costs":
@@ -1134,8 +1255,8 @@ function TargetManagement({
           <p className="field-label">Exact campaign authorization request</p>
           <MetricStrip label="Full scan profile" values={[
             { label: "Planned attacks", value: count(template.case_count), note: "Exact corpus bound into authorization" },
-            { label: "Authored core", value: count(9), note: "Injection · exfiltration · tool misuse" },
-            { label: "Tool-generated", value: count(Math.max(0, template.case_count - 9)), note: template.tool_sources.join(" · ") || "No reviewed tool candidates" },
+            { label: "Corpus", value: template.corpus_id, note: shortId(template.corpus_hash) },
+            { label: "Reviewed tool sources", value: count(template.tool_sources.length), note: template.tool_sources.join(" · ") || "No reviewed tool sources" },
             { label: "Execution", value: template.execution_profile, note: "Every request passes the policy gateway" },
           ]} />
           <RecordDetails

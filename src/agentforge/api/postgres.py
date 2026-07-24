@@ -535,6 +535,13 @@ class PostgresApiBackend(ApiBackend):
                             else source["role"],
                             "provider": source["provider"],
                             "model": source["model"],
+                            "resolved_model": source.get("resolved_model") or source["model"],
+                            "upstream_provider": source.get("upstream_provider"),
+                            # Deterministic engines have no system prompt, and a per-role staged
+                            # assignment is not an activated hosted configuration set. Keep prompt
+                            # lineage explicitly unavailable instead of inventing it.
+                            "prompt_sha256": source.get("prompt_sha256"),
+                            "prompt_version": source.get("prompt_version"),
                             "execution_mode": source["execution_mode"],
                             "activation_state": source["activation_state"],
                             "version": source["version"],
@@ -571,7 +578,9 @@ class PostgresApiBackend(ApiBackend):
                         active_assignment = (
                             assignment_record(active)
                             if active is not None
-                            else default_assignment(definition.role).public_record()
+                            else assignment_record(
+                                default_assignment(definition.role).public_record()
+                            )
                         )
                         stats = execution_by_role.get(definition.role, {})
                         rows.append(

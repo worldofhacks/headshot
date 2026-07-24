@@ -441,8 +441,8 @@ class AgentAssignmentReadModel(_ReadModel):
     model: str
     resolved_model: str
     upstream_provider: str | None = None
-    prompt_sha256: str
-    prompt_version: str
+    prompt_sha256: str | None = None
+    prompt_version: str | None = None
     execution_mode: Literal["deterministic", "hosted_advisory"]
     activation_state: Literal["active", "staged_pending_authorization"]
     version: int = Field(ge=1)

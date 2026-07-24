@@ -9,6 +9,7 @@ from typing import Any
 from fastapi.testclient import TestClient
 from sqlalchemy import Engine, text
 
+from agentforge.agents.hosted_prompts import hosted_prompt
 from agentforge.api.postgres import PostgresApiBackend, _safe
 from agentforge.auth.config import ClerkAuthConfig
 from agentforge.auth.dependencies import get_clerk_auth_config, require_authenticated
@@ -145,7 +146,7 @@ def _hosted_configuration_payload() -> dict[str, Any]:
                 "credential_reference": (
                     f"secretref://staging/openrouter/{role}/generation-20260724"
                 ),
-                "prompt_sha256": hashlib.sha256(f"{role}:prompt".encode()).hexdigest(),
+                "prompt_sha256": hosted_prompt(role).prompt_sha256,
                 "policy_sha256": hashlib.sha256(f"{role}:policy".encode()).hexdigest(),
                 "prices": {
                     "input_usd_per_million_tokens": "1",
@@ -269,6 +270,12 @@ def test_agent_models_and_tool_scope_are_real_configurable_projections(
         "judge",
         "documentation",
     }
+    for row in agents.json()["data"]:
+        assignment = row["active_assignment"]
+        assert assignment["resolved_model"] == assignment["model"]
+        assert assignment["upstream_provider"] is None
+        assert assignment["prompt_sha256"] is None
+        assert assignment["prompt_version"] is None
     tool_rows = {row["tool_id"]: row for row in tooling.json()["data"]}
     assert tool_rows["garak"]["applicability"] == "in_campaign"
     assert tool_rows["garak"]["reviewed_candidate_count"] == 1

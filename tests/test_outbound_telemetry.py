@@ -69,20 +69,25 @@ class _Langfuse:
         return None
 
 
-def _seed_campaign(engine: Engine) -> tuple[str, str]:
+def _seed_campaign(engine: Engine, *, suffix: str) -> tuple[str, str]:
     organization_id = "org_OutboundTelemetry"
-    run_id = "run-outbound-telemetry-0001"
+    run_id = f"run-outbound-telemetry-{suffix}"
     with engine.begin() as connection:
         connection.execute(text("SET LOCAL session_replication_role = replica"))
         connection.execute(
             text(
                 "INSERT INTO campaign_runs (run_id, organization_id, authorization_request_id, "
                 "scope_hash, launcher_user_id, launcher_session_id) VALUES "
-                "(:run_id, :org, 'request-outbound-telemetry', :hash, "
+                "(:run_id, :org, :request_id, :hash, "
                 "'user_OutboundTelemetry', 'sess_OutboundTelemetry') "
                 "ON CONFLICT DO NOTHING"
             ),
-            {"run_id": run_id, "org": organization_id, "hash": "d" * 64},
+            {
+                "run_id": run_id,
+                "org": organization_id,
+                "request_id": f"request-outbound-{suffix}",
+                "hash": "d" * 64,
+            },
         )
     return organization_id, run_id
 
@@ -90,7 +95,7 @@ def _seed_campaign(engine: Engine) -> tuple[str, str]:
 def test_physical_target_request_is_persisted_and_exported_without_credential(
     migrated_db: Engine,
 ) -> None:
-    organization_id, run_id = _seed_campaign(migrated_db)
+    organization_id, run_id = _seed_campaign(migrated_db, suffix="physical-request")
     ticks = iter((10.0, 10.125))
     telemetry = OutboundHttpTelemetry(
         migrated_db,
@@ -160,7 +165,7 @@ def test_physical_target_request_is_persisted_and_exported_without_credential(
 def test_many_requests_share_one_campaign_trace_and_reconcile_individually(
     migrated_db: Engine,
 ) -> None:
-    organization_id, run_id = _seed_campaign(migrated_db)
+    organization_id, run_id = _seed_campaign(migrated_db, suffix="shared-trace")
     ticks = iter((10.0, 10.010, 11.0, 11.020))
     telemetry = OutboundHttpTelemetry(
         migrated_db,
@@ -275,7 +280,7 @@ def test_runner_and_langfuse_connection_heartbeat_is_persisted(migrated_db: Engi
 def test_all_agent_roles_are_exported_with_observed_latency_and_spend(
     migrated_db: Engine,
 ) -> None:
-    organization_id, run_id = _seed_campaign(migrated_db)
+    organization_id, run_id = _seed_campaign(migrated_db, suffix="all-agent-roles")
     telemetry = OutboundHttpTelemetry(migrated_db, environment="staging")
     langfuse = _Langfuse()
     telemetry.langfuse = langfuse  # type: ignore[assignment]
@@ -376,7 +381,7 @@ def test_all_agent_roles_are_exported_with_observed_latency_and_spend(
 def test_repeated_children_keep_native_parentage_until_campaign_release(
     migrated_db: Engine,
 ) -> None:
-    _organization_id, run_id = _seed_campaign(migrated_db)
+    _organization_id, run_id = _seed_campaign(migrated_db, suffix="repeated-parent")
     telemetry = OutboundHttpTelemetry(migrated_db, environment="staging")
     langfuse = _Langfuse()
     telemetry.langfuse = langfuse  # type: ignore[assignment]

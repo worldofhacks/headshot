@@ -1001,11 +1001,13 @@ const decodeAgentAssignment = (value: unknown): AgentAssignmentReadModel => {
     "provider",
     "model",
     "resolved_model",
-    "prompt_sha256",
-    "prompt_version",
     "configuration_sha256",
   ]) string(result, key, name);
-  nullableString(result, "upstream_provider", name);
+  for (const key of [
+    "upstream_provider",
+    "prompt_sha256",
+    "prompt_version",
+  ]) nullableString(result, key, name);
   literal(result, "execution_mode", ["deterministic", "hosted_advisory"], name);
   literal(result, "activation_state", ["active", "staged_pending_authorization"], name);
   number(result, "version", name, { integer: true, minimum: 1 });
