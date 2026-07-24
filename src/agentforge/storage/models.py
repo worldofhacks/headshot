@@ -1493,7 +1493,13 @@ class AgentExecution(Base):
     output_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
     input_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     output_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    measured_cost: Mapped[float] = mapped_column(Numeric(14, 6), nullable=False, server_default="0")
+    measured_cost: Mapped[float | None] = mapped_column(Numeric(14, 6), nullable=True)
+    cost_measurement_state: Mapped[str] = mapped_column(
+        String(16), nullable=False, server_default="not_observed"
+    )
+    provider_event_ids: Mapped[list] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[]'::jsonb")
+    )
     currency: Mapped[str] = mapped_column(String(3), nullable=False, server_default="USD")
     trace_id: Mapped[str] = mapped_column(String(32), nullable=False)
     langfuse_status: Mapped[str] = mapped_column(
@@ -1543,7 +1549,23 @@ class AgentExecution(Base):
             "output_tokens IS NULL OR output_tokens >= 0",
             name="agent_execution_output_tokens",
         ),
-        CheckConstraint("measured_cost >= 0", name="agent_execution_cost"),
+        CheckConstraint(
+            "cost_measurement_state IN ('measured','partial','not_observed','invalid') AND "
+            "((cost_measurement_state IN ('measured','partial') AND measured_cost IS NOT NULL "
+            "AND measured_cost >= 0 AND measured_cost < 'Infinity'::numeric) OR "
+            "(cost_measurement_state IN ('not_observed','invalid') AND measured_cost IS NULL) OR "
+            "(cost_measurement_state = 'not_observed' AND measured_cost = 0 "
+            "AND provider_event_ids = '[]'::jsonb))",
+            name="agent_execution_cost_measurement",
+        ),
+        CheckConstraint(
+            "measured_cost IS NULL OR (measured_cost >= 0 AND measured_cost < 'Infinity'::numeric)",
+            name="agent_execution_cost",
+        ),
+        CheckConstraint(
+            "jsonb_typeof(provider_event_ids) = 'array'",
+            name="agent_execution_provider_event_ids",
+        ),
         CheckConstraint(
             "langfuse_status IN ('not_attempted','disabled','queued','exported','error')",
             name="agent_execution_langfuse_status",
@@ -1560,9 +1582,18 @@ class AgentExecution(Base):
         CheckConstraint(
             "(status = 'running' AND finished_at IS NULL AND duration_ms IS NULL "
             "AND output_sha256 IS NULL AND error_code IS NULL) OR "
-            "(status <> 'running' AND finished_at IS NOT NULL AND duration_ms IS NOT NULL "
+            "(status = 'succeeded' AND finished_at IS NOT NULL AND duration_ms IS NOT NULL "
+            "AND output_sha256 IS NOT NULL AND error_code IS NULL) OR "
+            "(status = 'failed' AND finished_at IS NOT NULL AND duration_ms IS NOT NULL "
+            "AND error_code IS NOT NULL) OR "
+            "(status = 'skipped' AND finished_at IS NOT NULL AND duration_ms IS NOT NULL "
             "AND output_sha256 IS NOT NULL)",
             name="agent_execution_terminal_shape",
+        ),
+        UniqueConstraint(
+            "organization_id",
+            "execution_id",
+            name="uq_agent_execution_org_execution",
         ),
         Index(
             "ix_agent_execution_campaign_order",
@@ -1581,6 +1612,221 @@ class AgentExecution(Base):
             "organization_id",
             "langfuse_status",
             "started_at",
+        ),
+    )
+
+
+class ProviderCallInvocation(Base):
+    """Immutable pre-call physical provider-attempt reservation."""
+
+    __tablename__ = "provider_call_invocations"
+
+    organization_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    invocation_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    campaign_run_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    campaign_attempt_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    logical_execution_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    parent_execution_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    agent_role: Mapped[str] = mapped_column(String(32), nullable=False)
+    physical_sequence: Mapped[int] = mapped_column(Integer, nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    requested_model: Mapped[str] = mapped_column(String(192), nullable=False)
+    configured_upstream: Mapped[str] = mapped_column(String(128), nullable=False)
+    prompt_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    prompt_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    configuration_set_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    role_configuration_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    generation_policy_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    started_at: Mapped[datetime.datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["organization_id", "logical_execution_id"],
+            ["agent_executions.organization_id", "agent_executions.execution_id"],
+            name="fk_provider_invocation_logical_execution",
+        ),
+        ForeignKeyConstraint(
+            ["organization_id", "parent_execution_id"],
+            ["agent_executions.organization_id", "agent_executions.execution_id"],
+            name="fk_provider_invocation_parent_execution",
+        ),
+        ForeignKeyConstraint(
+            ["organization_id", "campaign_run_id", "campaign_attempt_id"],
+            [
+                "campaign_attempts.organization_id",
+                "campaign_attempts.run_id",
+                "campaign_attempts.attempt_id",
+            ],
+            name="fk_provider_invocation_campaign_attempt",
+        ),
+        UniqueConstraint(
+            "organization_id",
+            "logical_execution_id",
+            "physical_sequence",
+            name="uq_provider_invocation_sequence",
+        ),
+        UniqueConstraint("idempotency_key", name="uq_provider_invocation_idempotency"),
+        UniqueConstraint(
+            "organization_id",
+            "invocation_id",
+            "campaign_run_id",
+            "campaign_attempt_id",
+            "logical_execution_id",
+            "agent_role",
+            "physical_sequence",
+            name="uq_provider_invocation_full_identity",
+        ),
+        CheckConstraint(
+            "agent_role IN ('orchestrator','red_team','judge','documentation')",
+            name="provider_invocation_role",
+        ),
+        CheckConstraint("physical_sequence > 0", name="provider_invocation_positive_sequence"),
+        CheckConstraint(
+            "prompt_sha256 ~ '^[0-9a-f]{64}$' AND "
+            "configuration_set_sha256 ~ '^[0-9a-f]{64}$' AND "
+            "role_configuration_sha256 ~ '^[0-9a-f]{64}$' AND "
+            "generation_policy_sha256 ~ '^[0-9a-f]{64}$'",
+            name="provider_invocation_hashes",
+        ),
+    )
+
+
+class ProviderCallEvent(Base):
+    """Append-only terminal facts for one provider-call invocation."""
+
+    __tablename__ = "provider_call_events"
+
+    organization_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    event_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    invocation_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    campaign_run_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    campaign_attempt_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    logical_execution_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    agent_role: Mapped[str] = mapped_column(String(32), nullable=False)
+    physical_sequence: Mapped[int] = mapped_column(Integer, nullable=False)
+    is_final: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    returned_model: Mapped[str | None] = mapped_column(String(192), nullable=True)
+    upstream_provider: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    provider_request_id: Mapped[str | None] = mapped_column(String(192), nullable=True)
+    input_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    output_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    reasoning_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    cost_measurement_state: Mapped[str] = mapped_column(String(16), nullable=False)
+    measured_cost_usd: Mapped[float | None] = mapped_column(Numeric(14, 6), nullable=True)
+    error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    finished_at: Mapped[datetime.datetime] = mapped_column(TIMESTAMP(timezone=True), nullable=False)
+    duration_ms: Mapped[float] = mapped_column(Numeric(14, 3), nullable=False)
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["organization_id", "invocation_id"],
+            [
+                "provider_call_invocations.organization_id",
+                "provider_call_invocations.invocation_id",
+            ],
+            name="fk_provider_event_invocation",
+        ),
+        ForeignKeyConstraint(
+            [
+                "organization_id",
+                "invocation_id",
+                "campaign_run_id",
+                "campaign_attempt_id",
+                "logical_execution_id",
+                "agent_role",
+                "physical_sequence",
+            ],
+            [
+                "provider_call_invocations.organization_id",
+                "provider_call_invocations.invocation_id",
+                "provider_call_invocations.campaign_run_id",
+                "provider_call_invocations.campaign_attempt_id",
+                "provider_call_invocations.logical_execution_id",
+                "provider_call_invocations.agent_role",
+                "provider_call_invocations.physical_sequence",
+            ],
+            name="fk_provider_event_full_identity",
+        ),
+        UniqueConstraint("organization_id", "invocation_id", name="uq_provider_event_invocation"),
+        CheckConstraint(
+            "agent_role IN ('orchestrator','red_team','judge','documentation')",
+            name="provider_event_role",
+        ),
+        CheckConstraint("physical_sequence > 0", name="provider_event_positive_sequence"),
+        CheckConstraint(
+            "duration_ms >= 0 AND duration_ms < 'Infinity'::numeric",
+            name="provider_event_nonnegative_duration",
+        ),
+        CheckConstraint(
+            "status IN ('succeeded','timeout','retryable_failure','terminal_failure',"
+            "'model_mismatch','invalid_usage','invalid_output','outcome_unknown')",
+            name="provider_event_status",
+        ),
+        CheckConstraint(
+            "(status = 'succeeded' AND error_code IS NULL) OR "
+            "(status = 'timeout' AND error_code = 'provider_timeout') OR "
+            "(status = 'retryable_failure' AND error_code = 'provider_retryable') OR "
+            "(status = 'terminal_failure' AND error_code = 'provider_terminal') OR "
+            "(status = 'model_mismatch' AND error_code = 'returned_model_mismatch') OR "
+            "(status = 'invalid_usage' AND error_code = 'invalid_provider_usage') OR "
+            "(status = 'invalid_output' AND error_code = 'invalid_structured_output') OR "
+            "(status = 'outcome_unknown' AND error_code = 'provider_outcome_unknown')",
+            name="provider_event_error_shape",
+        ),
+        CheckConstraint(
+            "(input_tokens IS NULL OR input_tokens >= 0) AND "
+            "(output_tokens IS NULL OR output_tokens >= 0) AND "
+            "(reasoning_tokens IS NULL OR reasoning_tokens >= 0)",
+            name="provider_event_usage",
+        ),
+        CheckConstraint(
+            "cost_measurement_state IN ('measured','partial','not_observed','invalid') AND "
+            "((cost_measurement_state IN ('measured','partial') "
+            "AND measured_cost_usd IS NOT NULL AND measured_cost_usd >= 0 "
+            "AND measured_cost_usd < 'Infinity'::numeric) OR "
+            "(cost_measurement_state IN ('not_observed','invalid') "
+            "AND measured_cost_usd IS NULL))",
+            name="provider_event_cost_measurement",
+        ),
+        CheckConstraint(
+            "status <> 'succeeded' OR "
+            "(returned_model IS NOT NULL AND upstream_provider IS NOT NULL "
+            "AND provider_request_id IS NOT NULL AND input_tokens IS NOT NULL "
+            "AND output_tokens IS NOT NULL AND reasoning_tokens IS NOT NULL "
+            "AND cost_measurement_state = 'measured')",
+            name="provider_event_success_observations",
+        ),
+        Index(
+            "ix_provider_events_org_role_time",
+            "organization_id",
+            "agent_role",
+            "finished_at",
+        ),
+        Index(
+            "ix_provider_events_campaign_order",
+            "organization_id",
+            "campaign_run_id",
+            "physical_sequence",
+        ),
+        Index(
+            "ix_provider_events_provider_request",
+            "organization_id",
+            "provider_request_id",
+        ),
+        Index(
+            "ix_provider_events_logical_execution",
+            "organization_id",
+            "logical_execution_id",
+        ),
+        Index(
+            "uq_provider_events_logical_final",
+            "organization_id",
+            "logical_execution_id",
+            unique=True,
+            postgresql_where=text("is_final"),
         ),
     )
 
