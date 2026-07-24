@@ -33,6 +33,7 @@ def _finding(**overrides: Any) -> FindingReadModel:
                 "decision": "confirmed",
                 "actor_user_id": "judge-1",
                 "rationale": "Bound evidence satisfied the deterministic oracle.",
+                "reason_code": None,
                 "created_at": _NOW,
             },
         ),
@@ -53,6 +54,78 @@ def test_unavailable_finding_requires_null_hash() -> None:
 
     assert finding.evidence_content_hash is None
     assert finding.evidence_integrity == "unavailable"
+
+
+def test_finding_history_accepts_only_the_closed_reason_code_vocabulary() -> None:
+    finding = _finding(
+        history=(
+            {
+                "decision": "rejected",
+                "actor_user_id": "user-approver",
+                "rationale": "The reviewed behavior does not establish an exploit.",
+                "reason_code": "not_a_real_exploit",
+                "created_at": _NOW,
+            },
+        )
+    )
+
+    assert finding.history[0].reason_code == "not_a_real_exploit"
+    with pytest.raises(ValidationError):
+        _finding(
+            history=(
+                {
+                    "decision": "rejected",
+                    "actor_user_id": "user-approver",
+                    "rationale": "Unknown structured code.",
+                    "reason_code": "open_ended_code",
+                    "created_at": _NOW,
+                },
+            )
+        )
+
+
+@pytest.mark.parametrize(
+    ("decision", "reason_code"),
+    (
+        ("approved", "not_a_real_exploit"),
+        ("rejected", "human_confirmed"),
+        ("resolved", "human_confirmed"),
+        ("resolved", "duplicate_finding"),
+    ),
+)
+def test_finding_history_rejects_decision_reason_mismatch(
+    decision: str,
+    reason_code: str,
+) -> None:
+    with pytest.raises(ValidationError):
+        _finding(
+            history=(
+                {
+                    "decision": decision,
+                    "actor_user_id": "user-approver",
+                    "rationale": "The code must match the recorded decision.",
+                    "reason_code": reason_code,
+                    "created_at": _NOW,
+                },
+            )
+        )
+
+
+@pytest.mark.parametrize("decision", ("approved", "rejected", "resolved", "confirmed"))
+def test_finding_history_keeps_legacy_null_reason_readable(decision: str) -> None:
+    finding = _finding(
+        history=(
+            {
+                "decision": decision,
+                "actor_user_id": "user-approver",
+                "rationale": "Legacy row created before structured review codes were required.",
+                "reason_code": None,
+                "created_at": _NOW,
+            },
+        )
+    )
+
+    assert finding.history[0].reason_code is None
 
 
 @pytest.mark.parametrize(

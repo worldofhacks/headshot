@@ -93,7 +93,13 @@ const finding = {
   campaign_run_id: "run-1",
   attempt_id: "attempt-1",
   evidence_content_hash: "c".repeat(64),
-  history: [{ decision: "confirmed", actor_user_id: "user-1", rationale: "evidence", created_at: at }],
+  history: [{
+    decision: "confirmed",
+    actor_user_id: "user-1",
+    rationale: "evidence",
+    reason_code: null,
+    created_at: at,
+  }],
 };
 const verification = {
   availability: "ready",
@@ -551,6 +557,54 @@ describe("v1 read-model decoders", () => {
   ])("rejects a finding that is %s", (_label, binding) => {
     expect(() => decodeFindings([{ ...finding, ...binding }])).toThrow("Invalid finding read model");
   });
+
+  it("echoes a closed finding decision reason and rejects an unknown one", () => {
+    const reviewed = {
+      ...finding,
+      history: [{
+        ...finding.history[0],
+        decision: "rejected",
+        reason_code: "not_a_real_exploit",
+      }],
+    };
+
+    expect(decodeFindings([reviewed])).toEqual([reviewed]);
+    expect(() => decodeFindings([{
+      ...reviewed,
+      history: [{ ...reviewed.history[0], reason_code: "open_ended_reason" }],
+    }])).toThrow("Invalid finding history read model");
+  });
+
+  it.each([
+    ["approved", "not_a_real_exploit"],
+    ["rejected", "human_confirmed"],
+    ["resolved", "duplicate_finding"],
+  ])("rejects a %s history row carrying %s", (decision, reasonCode) => {
+    expect(() => decodeFindings([{
+      ...finding,
+      history: [{
+        ...finding.history[0],
+        decision,
+        reason_code: reasonCode,
+      }],
+    }])).toThrow("Invalid finding history read model");
+  });
+
+  it.each(["approved", "rejected", "resolved", "confirmed"])(
+    "keeps a legacy %s history row with a null reason readable",
+    (decision) => {
+      const legacy = {
+        ...finding,
+        history: [{
+          ...finding.history[0],
+          decision,
+          reason_code: null,
+        }],
+      };
+
+      expect(decodeFindings([legacy])).toEqual([legacy]);
+    },
+  );
 
   it("decodes a non-null hosted campaign binding without weakening exact keys", () => {
     const hostedRun = {

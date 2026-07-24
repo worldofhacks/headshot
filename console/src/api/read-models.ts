@@ -40,6 +40,11 @@ import type {
   ToolScopeReadModel,
   TraceReadModel,
 } from "../types";
+import {
+  FINDING_DECISION_REASON_CODES,
+  type FindingDecisionReasonCode,
+  reasonCodeMatchesDecision,
+} from "../finding-decisions";
 
 export type ReadModelDecoder<T> = (value: unknown) => T;
 
@@ -448,8 +453,20 @@ export const decodeEvidence: ReadModelDecoder<EvidenceReadModel> = (value) => {
 const decodeFindingHistory = (value: unknown): FindingHistoryReadModel => {
   const name = "finding history";
   const result = record(value, name);
-  exactKeys(result, ["decision", "actor_user_id", "rationale", "created_at"], name);
-  for (const key of ["decision", "actor_user_id", "rationale"]) string(result, key, name);
+  exactKeys(
+    result,
+    ["decision", "actor_user_id", "rationale", "reason_code", "created_at"],
+    name,
+  );
+  const decision = string(result, "decision", name);
+  for (const key of ["actor_user_id", "rationale"]) string(result, key, name);
+  const reasonCode = nullableLiteral(
+    result,
+    "reason_code",
+    FINDING_DECISION_REASON_CODES as FindingDecisionReasonCode[],
+    name,
+  );
+  if (reasonCode !== null && !reasonCodeMatchesDecision(reasonCode, decision)) invalid(name);
   timestamp(result, "created_at", name);
   return result as FindingHistoryReadModel;
 };

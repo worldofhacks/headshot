@@ -12,7 +12,7 @@ from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, Header, Request
 from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from agentforge.api.backend import ApiBackend, ApiBackendUnavailable, ApiConflict
 from agentforge.api.schemas import CommandResult, EventBatch, ResourceResult
@@ -32,6 +32,10 @@ from agentforge.auth.permissions import (
     TARGETS_MANAGE,
 )
 from agentforge.auth.principal import Principal
+from agentforge.control_plane.finding_decisions import (
+    FindingDecisionReasonCode,
+    validate_finding_decision_reason_code,
+)
 
 router = APIRouter(prefix="/api/v1")
 
@@ -109,7 +113,15 @@ class AbortInput(_StrictModel):
 class FindingDecisionInput(_StrictModel):
     decision: Literal["approved", "rejected"]
     rationale: str = Field(min_length=1, max_length=2000)
-    reason_code: str | None = Field(default=None, pattern=r"^[a-z][a-z0-9_-]{0,63}$")
+    reason_code: FindingDecisionReasonCode
+
+    @model_validator(mode="after")
+    def validate_reason_code_matches_decision(self) -> FindingDecisionInput:
+        validate_finding_decision_reason_code(
+            decision=self.decision,
+            reason_code=self.reason_code,
+        )
+        return self
 
 
 class FindingResolveInput(_StrictModel):
