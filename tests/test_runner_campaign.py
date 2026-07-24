@@ -189,6 +189,15 @@ def test_live_runner_refuses_catalog_profile_that_differs_from_approved_scope() 
         runner._adapter(_live_chat_prepared(payload_profile="openemr_turns"))
 
 
+def test_live_runner_refuses_v2_policy_until_physical_operation_gateway_is_integrated() -> None:
+    runner = object.__new__(DurableCampaignRunner)
+    prepared = _live_chat_prepared()
+    prepared.entry.transport_policy = None
+
+    with pytest.raises(DispatchUnavailable, match="surface_policy_dispatch_not_integrated"):
+        runner._adapter(prepared)
+
+
 def test_synthetic_catalog_versions_the_fourteen_case_safety_contract() -> None:
     catalog = TrustedTargetCatalog.from_environment("staging")
 
