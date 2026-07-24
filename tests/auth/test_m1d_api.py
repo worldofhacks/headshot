@@ -84,6 +84,8 @@ def test_meaningful_api_is_default_deny(monkeypatch, auth_environ) -> None:
         "/api/v1/approvals/request-1",
         "/api/v1/reports",
         "/api/v1/reports/report-1",
+        "/api/v1/coverage",
+        "/api/v1/resilience",
         "/api/v1/targets",
         "/api/v1/configuration",
         "/api/v1/components",
@@ -145,6 +147,18 @@ def test_wrong_org_and_missing_permission_are_forbidden(
     assert (
         client.get(
             "/api/v1/findings", headers={"Authorization": f"Bearer {no_findings}"}
+        ).status_code
+        == 403
+    )
+    assert (
+        client.get(
+            "/api/v1/coverage", headers={"Authorization": f"Bearer {no_findings}"}
+        ).status_code
+        == 403
+    )
+    assert (
+        client.get(
+            "/api/v1/resilience", headers={"Authorization": f"Bearer {no_findings}"}
         ).status_code
         == 403
     )

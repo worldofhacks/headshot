@@ -382,6 +382,15 @@ def test_birdseye_projects_security_outcomes_and_recorded_agent_causality(
         )
         connection.execute(
             text(
+                "UPDATE agent_executions SET provider = 'openrouter', "
+                "model = 'openai/gpt-5.4', execution_mode = 'hosted_advisory', "
+                "returned_model = 'openai/gpt-5.4', upstream_provider = 'OpenAI', "
+                "provider_request_id = 'birdseye-provider-request-documentation' "
+                "WHERE execution_id = 'birdseye-exec-documentation'"
+            )
+        )
+        connection.execute(
+            text(
                 "INSERT INTO runtime_component_status "
                 "(environment, component_id, name, kind, availability, detail, heartbeat_at) "
                 "VALUES ('local', 'runner', 'Campaign runner', 'worker', "
@@ -426,6 +435,7 @@ def test_birdseye_projects_security_outcomes_and_recorded_agent_causality(
     assert nodes["agent:judge"]["accounting_status"] == "unavailable"
     assert nodes["agent:documentation"]["measured_cost_usd"] == 0.01
     assert nodes["agent:documentation"]["accounting_status"] == "measured"
+    assert nodes["agent:documentation"]["detail"] == "OpenAI/openai/gpt-5.4 · hosted_advisory"
     assert nodes["agent:documentation"]["execution_count"] == 1
     assert nodes["agent:documentation"]["input_tokens"] == 40
     assert nodes["agent:documentation"]["output_tokens"] == 8

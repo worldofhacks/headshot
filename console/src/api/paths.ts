@@ -12,6 +12,8 @@ export const RESOURCE_PATHS = {
   approval: (requestId: string) => `approvals/${segment(requestId)}`,
   reports: "reports",
   report: (reportId: string) => `reports/${segment(reportId)}`,
+  coverage: "coverage",
+  resilience: "resilience",
   traces: "traces",
   costs: "costs",
   targets: "targets",

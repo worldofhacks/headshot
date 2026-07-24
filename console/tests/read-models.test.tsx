@@ -15,11 +15,13 @@ import {
   decodeComponents,
   decodeConfiguration,
   decodeCosts,
+  decodeCoverage,
   decodeEvidence,
   decodeFinding,
   decodeFindings,
   decodePrincipal,
   decodeReports,
+  decodeResilience,
   decodeTargets,
   decodeTooling,
   decodeTraces,
@@ -64,18 +66,22 @@ const unavailableProviderBudget = {
   configuration_set_sha256: null,
   role_usd_cap: null,
   role_usd_spent: 0,
+  role_unresolved_usd_exposure: 0,
   role_usd_remaining: null,
   role_usd_overrun: 0,
   role_call_cap: null,
   role_physical_calls: 0,
+  role_unresolved_physical_calls: 0,
   role_calls_remaining: null,
   role_call_overrun: 0,
   global_usd_cap: null,
   global_usd_spent: 0,
+  global_unresolved_usd_exposure: 0,
   global_usd_remaining: null,
   global_usd_overrun: 0,
   global_call_cap: null,
   global_physical_calls: 0,
+  global_unresolved_physical_calls: 0,
   global_calls_remaining: null,
   global_call_overrun: 0,
 };
@@ -194,6 +200,34 @@ const validResources: Array<[string, (value: unknown) => unknown, unknown]> = [
     "approval detail",
     decodeApprovalDetail,
     { ...scope, request_id: "request-1", status: "approved", decision: "approved", scope_hash: "scope-1", launcher_user_id: "user-1", approver_user_id: "user-2", self_approval_override: false, decided_at: at, expired: false, consumed: true, created_at: at, expires_at: "2026-07-21T00:15:00Z", campaign_run_id: "run-1", verification_chain: [verification] },
+  ],
+  [
+    "coverage",
+    decodeCoverage,
+    [{
+      target_version: "target-1@1.0.0",
+      verified_attempt_count: 9,
+      total_case_count: 9,
+      category_count: 3,
+      execution_profile: "synthetic",
+      evidence_provenance: "synthetic_offline",
+      classifications: ["boundary", "invariant", "regression"],
+      owasp_web: ["A01:2021"],
+      owasp_llm: ["LLM01:2025"],
+      verdict_counts: { NO_EXPLOIT_OBSERVED: 8, EXPLOIT_CONFIRMED: 1 },
+      covered: true,
+      as_of: at,
+    }],
+  ],
+  [
+    "resilience",
+    decodeResilience,
+    [{
+      regression_id: "regression-1",
+      version: "1.0.0",
+      status: "NO_EXPLOIT_OBSERVED",
+      recorded_at: at,
+    }],
   ],
   [
     "reports",
@@ -543,6 +577,22 @@ describe("v1 read-model decoders", () => {
     expect(decodeFindings([unverifiedToolFinding])).toEqual([unverifiedToolFinding]);
   });
 
+  it("keeps coverage and regression projections exact-keyed", () => {
+    const coverage = arrayFixtureRecord("coverage");
+    const resilience = arrayFixtureRecord("resilience");
+
+    expect(decodeCoverage([coverage])).toEqual([coverage]);
+    expect(decodeResilience([resilience])).toEqual([resilience]);
+    expect(() => decodeCoverage([{ ...coverage, unexpected: true }]))
+      .toThrow("Invalid coverage read model");
+    expect(() => decodeCoverage([{
+      ...coverage,
+      verdict_counts: { NO_EXPLOIT_OBSERVED: -1 },
+    }])).toThrow("Invalid coverage read model");
+    expect(() => decodeResilience([{ ...resilience, unexpected: true }]))
+      .toThrow("Invalid resilience read model");
+  });
+
   it.each([
     ["verified without a hash", { evidence_integrity: "verified", evidence_content_hash: null }],
     ["verified with a short hash", { evidence_integrity: "verified", evidence_content_hash: "abc" }],
@@ -825,19 +875,23 @@ describe("v1 read-model decoders", () => {
       configuration_set_sha256: "c".repeat(64),
       role_usd_cap: 4,
       role_usd_spent: 0.25,
-      role_usd_remaining: 3.75,
+      role_unresolved_usd_exposure: 0.5,
+      role_usd_remaining: 3.25,
       role_usd_overrun: 0,
       role_call_cap: 10,
       role_physical_calls: 1,
-      role_calls_remaining: 9,
+      role_unresolved_physical_calls: 2,
+      role_calls_remaining: 7,
       role_call_overrun: 0,
       global_usd_cap: 10,
       global_usd_spent: 0.25,
-      global_usd_remaining: 9.75,
+      global_unresolved_usd_exposure: 0.5,
+      global_usd_remaining: 9.25,
       global_usd_overrun: 0,
       global_call_cap: 56,
       global_physical_calls: 1,
-      global_calls_remaining: 55,
+      global_unresolved_physical_calls: 2,
+      global_calls_remaining: 53,
       global_call_overrun: 0,
     };
     const calibration = {
@@ -874,6 +928,13 @@ describe("v1 read-model decoders", () => {
     };
 
     expect(decodeAgents([judge])).toEqual([judge]);
+    expect(decodeAgents([{
+      ...judge,
+      provider_budget: { ...budget, status: "historical" },
+    }])).toEqual([{
+      ...judge,
+      provider_budget: { ...budget, status: "historical" },
+    }]);
     expect(() => decodeAgents([{
       ...judge,
       judge_calibration: {
@@ -887,6 +948,19 @@ describe("v1 read-model decoders", () => {
         ...budget,
         role_usd_remaining: 3.5,
       },
+    }])).toThrow("Invalid agent budget read model");
+    expect(() => decodeAgents([{
+      ...judge,
+      provider_budget: {
+        ...budget,
+        role_unresolved_physical_calls: 1,
+      },
+    }])).toThrow("Invalid agent budget read model");
+    const missingExposure: Record<string, unknown> = { ...budget };
+    delete missingExposure.global_unresolved_usd_exposure;
+    expect(() => decodeAgents([{
+      ...judge,
+      provider_budget: missingExposure,
     }])).toThrow("Invalid agent budget read model");
   });
 

@@ -656,6 +656,21 @@ class OutboundHttpTelemetry:
                     .one()
                 )
                 configured = self.langfuse.configured()
+                parent_execution_id = (
+                    str(row["parent_execution_id"])
+                    if row["parent_execution_id"] is not None
+                    else None
+                )
+                parent_observation_id = (
+                    self._agent_observation_ids.get(parent_execution_id)
+                    if parent_execution_id is not None
+                    and self._agent_campaign_ids.get(parent_execution_id)
+                    == str(row["campaign_run_id"])
+                    else None
+                )
+                parent_projection_missing = (
+                    configured and parent_execution_id is not None and parent_observation_id is None
+                )
                 connection.execute(
                     text(
                         "UPDATE agent_executions SET langfuse_status = :status "
@@ -663,11 +678,22 @@ class OutboundHttpTelemetry:
                     ),
                     {
                         "execution_id": execution_id,
-                        "status": "queued" if configured else "disabled",
+                        "status": (
+                            "error"
+                            if parent_projection_missing
+                            else ("queued" if configured else "disabled")
+                        ),
                     },
                 )
         except Exception:
             _logger.warning("agent telemetry start persistence failed")
+            return False
+
+        if parent_projection_missing:
+            # A durable parent link must not become an unrelated Langfuse root. Hosted callers
+            # treat ``False`` as a pre-provider gate; deterministic callers remain fail-soft while
+            # the durable row exposes the projection error for reconciliation.
+            _logger.warning("agent telemetry parent observation is unavailable")
             return False
 
         metadata = _sanitize(
@@ -718,11 +744,6 @@ class OutboundHttpTelemetry:
         langfuse_state = None
         if configured:
             try:
-                parent_execution_id = (
-                    str(row["parent_execution_id"])
-                    if row["parent_execution_id"] is not None
-                    else None
-                )
                 langfuse_state = self.langfuse.start_agent(
                     trace_id=str(row["trace_id"]),
                     role=str(row["agent_role"]),
@@ -732,11 +753,7 @@ class OutboundHttpTelemetry:
                     version=str(row["configuration_version"]),
                     input_payload={"sha256": str(row["input_sha256"])},
                     metadata=metadata,
-                    parent_observation_id=(
-                        self._agent_observation_ids.get(parent_execution_id)
-                        if parent_execution_id is not None
-                        else None
-                    ),
+                    parent_observation_id=parent_observation_id,
                 )
             except Exception:
                 _logger.warning("Langfuse agent observation start failed")
