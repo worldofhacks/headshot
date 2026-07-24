@@ -255,6 +255,26 @@ def test_require_red_team_subcap_rejects_a_cap_above_one_dollar() -> None:
         require_red_team_subcap(_StubConfig(Decimal("1.5")))
 
 
+def test_generate_traced_returns_cost_and_token_metadata_for_the_recorder() -> None:
+    # The composition root (runner) records via the store seam and needs measured_cost + tokens.
+    transport = _FakeTransport(result=_result(["cont-a", "cont-b"]))
+    result = _provider(transport, _FakeLifecycle()).generate_traced(
+        SEED, count=2, category="prompt_injection"
+    )
+    assert result.variants == [
+        {"input_sequence": ["seed turn one", "cont-a"]},
+        {"input_sequence": ["seed turn one", "cont-b"]},
+    ]
+    assert result.returned_model == "qwen/qwen3.5-397b-a17b"
+    assert result.provider_request_id == "or-req-123"
+    assert result.input_tokens == 120 and result.output_tokens == 64
+    assert result.reasoning_tokens == 8
+    assert result.measured_cost_usd == "0.0031"
+    assert result.upstream_provider == "deepinfra"
+    # It routed through the transport as the red_team role (ledger-capped), no self-recording here.
+    assert transport.calls[0]["role"] == "red_team"
+
+
 def test_provider_opens_no_socket(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         socket, "socket", lambda *a, **k: (_ for _ in ()).throw(AssertionError("network"))

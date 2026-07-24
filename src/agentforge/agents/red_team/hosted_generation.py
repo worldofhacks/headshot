@@ -65,6 +65,27 @@ class RedTeamRoleIdentity:
     role_configuration_sha256: str
 
 
+@dataclass(frozen=True, slots=True)
+class RedTeamGenerationResult:
+    """One traced generation's variants + the measured cost/token/model/trace the recorder needs.
+
+    Returned by :meth:`TracedHostedRedTeamProvider.generate_traced` so a composition root that owns
+    its own ``start/finish_agent_execution`` (the runner) can record the Red Team execution with the
+    same measured ``measured_cost`` / ``input_tokens`` / ``output_tokens`` and ``returned_model`` /
+    ``provider_request_id`` fields the other three roles carry.
+    """
+
+    variants: list[dict[str, Any]]
+    returned_model: str
+    provider_request_id: str
+    upstream_provider: str
+    input_tokens: int
+    output_tokens: int
+    reasoning_tokens: int
+    measured_cost_usd: str
+    physical_attempts: int
+
+
 def require_red_team_subcap(
     configuration: Any, *, ceiling_usd: Decimal = RED_TEAM_SUBCAP_CEILING_USD
 ) -> Decimal:
@@ -171,20 +192,58 @@ class TracedHostedRedTeamProvider:
         self._call_bounds = call_bounds
         self._parent_execution_id = parent_execution_id
 
+    def _invoke_transport(self, seed: dict[str, Any], count: int, category: str) -> Any:
+        """The raw traced qwen call through the shared transport as the red_team role (unrecorded)."""
+        return self._transport.invoke(
+            role="red_team",
+            messages=build_generation_messages(seed, count, category),
+            output_schema=variants_output_schema(count),
+            schema_name=_GENERATION_SCHEMA_NAME,
+            generation_policy_sha256=self._generation_policy_sha256,
+            input_tokens_upper_bound=self._call_bounds.input_tokens,
+            max_output_tokens=self._call_bounds.output_tokens,
+            max_reasoning_tokens=self._call_bounds.reasoning_tokens,
+            timeout_seconds=self._call_bounds.timeout_seconds,
+        )
+
+    def generate_traced(
+        self, seed: dict[str, Any], *, count: int, category: str
+    ) -> RedTeamGenerationResult:
+        """Run the traced qwen generation and return variants + measured cost/token/trace metadata.
+
+        The caller owns recording (used by a composition root that already starts/finishes the
+        red_team agent execution). The shared ledger still enforces the red_team subcap here.
+        """
+        result = self._invoke_transport(seed, count, category)
+        variants = _collect_usable(seed, list(result.output.get("variants", [])), count)
+        return RedTeamGenerationResult(
+            variants=variants,
+            returned_model=result.returned_model,
+            provider_request_id=result.request_id,
+            upstream_provider=result.upstream_provider,
+            input_tokens=result.input_tokens,
+            output_tokens=result.output_tokens,
+            reasoning_tokens=result.reasoning_tokens,
+            measured_cost_usd=format(result.measured_cost_usd, "f"),
+            physical_attempts=result.physical_attempts,
+        )
+
     def generate(self, seed: dict[str, Any], *, count: int, category: str) -> list[dict[str, Any]]:
-        """Generate ``count`` variant continuations as one traced red_team execution."""
-        output_schema = variants_output_schema(count)
-        input_payload = {
-            "generation": {
-                "category": category,
-                "count": count,
-                "seed_case_ref": seed.get("case_ref"),
-            }
-        }
+        """Generate ``count`` variant continuations as one SELF-RECORDED traced red_team execution.
+
+        Drop-in for ``mutation.mutate(..., provider=...)``: it owns the start/invoke/finish steps and
+        emits the identical :class:`HostedExecutionLineage`.
+        """
         execution_id = self._lifecycle.start(
             role="red_team",
             parent_execution_id=self._parent_execution_id,
-            input_payload=input_payload,
+            input_payload={
+                "generation": {
+                    "category": category,
+                    "count": count,
+                    "seed_case_ref": seed.get("case_ref"),
+                }
+            },
             provider=self._role.provider,
             model=self._role.model,
             upstream_provider=self._role.upstream_provider,
@@ -197,17 +256,7 @@ class TracedHostedRedTeamProvider:
             raise TracedRedTeamGenerationError("execution lifecycle returned no identity")
 
         try:
-            result = self._transport.invoke(
-                role="red_team",
-                messages=build_generation_messages(seed, count, category),
-                output_schema=output_schema,
-                schema_name=_GENERATION_SCHEMA_NAME,
-                generation_policy_sha256=self._generation_policy_sha256,
-                input_tokens_upper_bound=self._call_bounds.input_tokens,
-                max_output_tokens=self._call_bounds.output_tokens,
-                max_reasoning_tokens=self._call_bounds.reasoning_tokens,
-                timeout_seconds=self._call_bounds.timeout_seconds,
-            )
+            result = self._invoke_transport(seed, count, category)
         except Exception as exc:
             error_code = getattr(exc, "code", None)
             if not isinstance(error_code, str) or not error_code:
@@ -221,8 +270,7 @@ class TracedHostedRedTeamProvider:
             )
             raise
 
-        continuations = list(result.output.get("variants", []))
-        variants = _collect_usable(seed, continuations, count)
+        variants = _collect_usable(seed, list(result.output.get("variants", [])), count)
         record = HostedExecutionLineage(
             execution_id=execution_id,
             parent_execution_id=self._parent_execution_id,
@@ -253,6 +301,7 @@ class TracedHostedRedTeamProvider:
 
 __all__ = [
     "RED_TEAM_SUBCAP_CEILING_USD",
+    "RedTeamGenerationResult",
     "RedTeamRoleIdentity",
     "TracedHostedRedTeamProvider",
     "TracedRedTeamGenerationError",
