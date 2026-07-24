@@ -31,6 +31,9 @@ export interface AuthorizationScopeReadModel extends JsonRecord {
   adapter_kind: string;
   environment: string;
   exact_host: string;
+  allowlisted_hosts: string[];
+  synthetic_data_only: true;
+  synthetic_data_attestation_ref: string;
   auth_mode: string;
   explicit_no_auth: boolean;
   auth_posture: string;

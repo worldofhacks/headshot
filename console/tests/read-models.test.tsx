@@ -47,6 +47,9 @@ const scope = {
   adapter_kind: "openemr",
   environment: "staging",
   exact_host: "target.invalid",
+  allowlisted_hosts: ["target.invalid"],
+  synthetic_data_only: true,
+  synthetic_data_attestation_ref: "attestation://fixtures/target-v1",
   auth_mode: "bearer",
   explicit_no_auth: false,
   auth_posture: "bearer",
@@ -694,6 +697,32 @@ describe("v1 read-model decoders", () => {
     };
 
     expect(decodeCampaigns([campaign])).toEqual([campaign]);
+  });
+
+  it("rejects incomplete or mismatched target-policy scope bindings", () => {
+    const campaign = {
+      ...scope,
+      run_id: "run-policy-binding-1",
+      authorization_request_id: "request-policy-binding-1",
+      state: "queued",
+      scope_hash: "scope-policy-binding-1",
+      launcher_user_id: "user-1",
+      attempt_count: 0,
+      created_at: at,
+    };
+    const missingAttestation: Record<string, unknown> = { ...campaign };
+    delete missingAttestation.synthetic_data_attestation_ref;
+
+    expect(() => decodeCampaigns([missingAttestation]))
+      .toThrow("Invalid campaign read model");
+    expect(() => decodeCampaigns([{
+      ...campaign,
+      allowlisted_hosts: ["other.invalid"],
+    }])).toThrow("Invalid campaign read model");
+    expect(() => decodeCampaigns([{
+      ...campaign,
+      synthetic_data_only: false,
+    }])).toThrow("Invalid campaign read model");
   });
 
   it("decodes only a secret-free server-derived hosted target template", () => {

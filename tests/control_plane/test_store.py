@@ -184,7 +184,41 @@ def test_target_surface_history_builds_pr7_canonical_scope(store: ControlPlaneSt
     assert scope.target_id == "copilot"
     assert scope.surface_id == "chat"
     assert scope.relative_path == "apis/default/api/copilot/message"
+    assert scope.allowlisted_hosts == ("target.example.test",)
+    assert scope.synthetic_data_only is True
+    assert scope.synthetic_data_attestation_ref == "attestation://synthetic/fixture"
     assert len(scope.scope_hash()) == 64
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        (
+            "allowlisted_hosts",
+            ("target.example.test", "unapproved.example.test"),
+        ),
+        (
+            "synthetic_data_attestation_ref",
+            "attestation://synthetic/unapproved-fixture",
+        ),
+    ),
+)
+def test_authorization_request_revalidates_trusted_target_policy_bindings(
+    store: ControlPlaneStore,
+    field: str,
+    value: object,
+) -> None:
+    launcher = _principal(LAUNCHER_ID, permissions=(TARGETS_MANAGE, CAMPAIGN_LAUNCH))
+    scope = _ready_scope(store, launcher)
+    altered_scope = replace(scope, **{field: value})
+
+    with pytest.raises(AuthorizationDeniedError, match="differs from registry state"):
+        store.request_campaign_authorization(
+            principal=launcher,
+            scope=altered_scope,
+            expires_at=datetime.datetime.now(datetime.UTC) + datetime.timedelta(minutes=15),
+            idempotency_key=f"request-target-policy-mismatch-{field}",
+        )
 
 
 def test_fake_target_is_rejected_outside_local_test_environment(

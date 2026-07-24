@@ -211,6 +211,9 @@ const scopeKeys = [
   "adapter_kind",
   "environment",
   "exact_host",
+  "allowlisted_hosts",
+  "synthetic_data_only",
+  "synthetic_data_attestation_ref",
   "auth_mode",
   "explicit_no_auth",
   "auth_posture",
@@ -302,6 +305,7 @@ const validateScope = (result: JsonRecord, name: string, extraKeys: readonly str
     "adapter_kind",
     "environment",
     "exact_host",
+    "synthetic_data_attestation_ref",
     "auth_mode",
     "auth_posture",
     "protocol",
@@ -314,6 +318,15 @@ const validateScope = (result: JsonRecord, name: string, extraKeys: readonly str
   ]) {
     string(result, key, name);
   }
+  const allowlistedHosts = stringArray(result, "allowlisted_hosts", name);
+  if (
+    allowlistedHosts.length === 0
+    || new Set(allowlistedHosts).size !== allowlistedHosts.length
+    || !allowlistedHosts.includes(result.exact_host as string)
+  ) {
+    invalid(name);
+  }
+  if (boolean(result, "synthetic_data_only", name) !== true) invalid(name);
   boolean(result, "explicit_no_auth", name);
   literal(result, "execution_profile", ["synthetic", "live"], name);
   result.caps = decodeCaps(result.caps);

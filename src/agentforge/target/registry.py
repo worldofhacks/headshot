@@ -219,6 +219,13 @@ class TargetRegistry:
                 ("adapter_kind", scope.adapter_kind, target.adapter_kind),
                 ("environment", scope.environment, target.environment),
                 ("exact_host", scope.exact_host, target.exact_host),
+                ("allowlisted_hosts", scope.allowlisted_hosts, target.allowlisted_hosts),
+                ("synthetic_data_only", scope.synthetic_data_only, target.synthetic_data_only),
+                (
+                    "synthetic_data_attestation_ref",
+                    scope.synthetic_data_attestation_ref,
+                    target.synthetic_data_attestation_ref,
+                ),
                 ("auth_mode", scope.auth_mode, target.auth_mode),
                 ("credential_ref", scope.credential_ref, target.credential_ref),
                 ("explicit_no_auth", scope.explicit_no_auth, target.explicit_no_auth),

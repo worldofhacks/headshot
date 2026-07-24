@@ -332,6 +332,9 @@ def test_authorization_scope_is_canonical_and_credential_free_for_no_auth() -> N
         "adapter_kind": "shared-json",
         "environment": "staging",
         "exact_host": "alpha.example.test",
+        "allowlisted_hosts": ["alpha.example.test"],
+        "synthetic_data_only": True,
+        "synthetic_data_attestation_ref": "attestation://fixtures/alpha-v1",
         "auth_mode": "none",
         "credential_ref": None,
         "explicit_no_auth": True,
@@ -351,7 +354,7 @@ def test_authorization_scope_is_canonical_and_credential_free_for_no_auth() -> N
     }
 
 
-def test_scope_hash_binds_corpus_caps_and_run_nonce() -> None:
+def test_scope_hash_binds_target_policy_corpus_caps_and_run_nonce() -> None:
     target = _target()
     surface = _surface()
     scope = AuthorizationScope.for_definitions(
@@ -363,11 +366,36 @@ def test_scope_hash_binds_corpus_caps_and_run_nonce() -> None:
     )
 
     variants = (
+        replace(
+            scope,
+            allowlisted_hosts=("alpha.example.test", "secondary.example.test"),
+        ),
+        replace(
+            scope,
+            synthetic_data_attestation_ref="attestation://fixtures/alpha-v2",
+        ),
         replace(scope, corpus_hash="d" * 64),
         replace(scope, caps=replace(_caps(), budget_usd=9.0)),
         replace(scope, run_nonce="run-nonce-000009"),
     )
     assert all(variant.scope_hash() != scope.scope_hash() for variant in variants)
+
+
+def test_authorization_scope_requires_a_synthetic_assertion_and_exact_allowlist() -> None:
+    scope = AuthorizationScope.for_definitions(
+        target=_target(),
+        surface=_surface(),
+        corpus_hash="a" * 64,
+        caps=_caps(),
+        run_nonce="run-nonce-000001",
+    )
+
+    with pytest.raises(DefinitionError, match="synthetic data only"):
+        replace(scope, synthetic_data_only=False)
+    with pytest.raises(DefinitionError, match="exact host"):
+        replace(scope, allowlisted_hosts=("secondary.example.test",))
+    with pytest.raises(DefinitionError, match="attestation"):
+        replace(scope, synthetic_data_attestation_ref="")
 
 
 def test_scope_hash_binds_complete_non_secret_hosted_run_authority() -> None:

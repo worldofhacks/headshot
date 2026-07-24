@@ -9,6 +9,7 @@ from typing import Any
 from agentforge.target.spec import (
     AttackSurfaceDefinition,
     AuthorizationScope,
+    DefinitionError,
     HostedRunBinding,
     OwaspMapping,
     SafetyCaps,
@@ -99,6 +100,22 @@ def scope_from_payload(payload: dict[str, Any]) -> AuthorizationScope:
     # canonical hash includes the new fields and therefore cannot pass an old stored hash.
     values.setdefault("corpus_id", "m11-seed-corpus-v1")
     values.setdefault("execution_profile", "live")
+    # Never infer these target-policy facts from current registry state for an older request.
+    # They are authorization inputs, so a persisted scope that predates them must be denied
+    # and re-authorized rather than silently widened during deserialization.
+    required_target_policy_fields = {
+        "allowlisted_hosts",
+        "synthetic_data_only",
+        "synthetic_data_attestation_ref",
+    }
+    missing = required_target_policy_fields.difference(values)
+    if missing:
+        raise DefinitionError(
+            "authorization scope payload is missing trusted target-policy bindings"
+        )
+    if not isinstance(values["allowlisted_hosts"], list):
+        raise DefinitionError("authorization scope allowlisted_hosts must be a canonical list")
+    values["allowlisted_hosts"] = tuple(values["allowlisted_hosts"])
     values["caps"] = SafetyCaps(**values["caps"])
     if values.get("hosted_run") is not None:
         values["hosted_run"] = HostedRunBinding(**values["hosted_run"])
