@@ -51,20 +51,10 @@ def _schema_for(queue: LogicalQueue) -> str:
 def _empty_jobs(migrated_db: Engine):
     """Keep the session-scoped database deterministic across queue tests."""
     with migrated_db.begin() as conn:
-        conn.execute(
-            text(
-                "TRUNCATE TABLE campaign_work_unit_reservations, jobs "
-                "RESTART IDENTITY"
-            )
-        )
+        conn.execute(text("TRUNCATE TABLE campaign_work_unit_reservations, jobs RESTART IDENTITY"))
     yield
     with migrated_db.begin() as conn:
-        conn.execute(
-            text(
-                "TRUNCATE TABLE campaign_work_unit_reservations, jobs "
-                "RESTART IDENTITY"
-            )
-        )
+        conn.execute(text("TRUNCATE TABLE campaign_work_unit_reservations, jobs RESTART IDENTITY"))
 
 
 @pytest.fixture

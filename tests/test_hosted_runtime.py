@@ -150,13 +150,11 @@ def _runtime(
         configuration=configuration,
         transport=transport,
         authorization=authorization,
-        call_bounds={
-            role.role: HostedCallBounds(100, 50, 25, 10)
-            for role in configuration.roles
-        },
+        call_bounds={role.role: HostedCallBounds(100, 50, 25, 10) for role in configuration.roles},
         policy_gateway_dispatch=target,
-        deterministic_judge=lambda _attempt, _evidence: deterministic_verdict
-        or {"state": "NO_EXPLOIT_OBSERVED"},
+        deterministic_judge=lambda _attempt, _evidence: (
+            deterministic_verdict or {"state": "NO_EXPLOIT_OBSERVED"}
+        ),
         lineage_recorder=recorded.append,
     )
     return runtime, transport
@@ -182,13 +180,10 @@ def test_runtime_refuses_configuration_not_bound_by_campaign_authorization() -> 
             transport=transport,
             authorization=authorization,
             call_bounds={
-                role.role: HostedCallBounds(100, 50, 25, 10)
-                for role in configuration.roles
+                role.role: HostedCallBounds(100, 50, 25, 10) for role in configuration.roles
             },
             policy_gateway_dispatch=lambda _attempt: {},
-            deterministic_judge=lambda _attempt, _evidence: {
-                "state": "NO_EXPLOIT_OBSERVED"
-            },
+            deterministic_judge=lambda _attempt, _evidence: {"state": "NO_EXPLOIT_OBSERVED"},
         )
 
 
@@ -197,8 +192,9 @@ def test_confirmed_deterministic_exploit_cannot_be_laundered_safe_and_docs_stay_
     recorded: list[Any] = []
     runtime, transport = _runtime(
         outputs=_outputs(judge_state="NO_EXPLOIT_OBSERVED"),
-        target=lambda attempt: target_calls.append(dict(attempt))
-        or {"status_code": 200, "canary_observed": True},
+        target=lambda attempt: (
+            target_calls.append(dict(attempt)) or {"status_code": 200, "canary_observed": True}
+        ),
         recorded=recorded,
         deterministic_verdict={
             "state": "EXPLOIT_CONFIRMED",
@@ -215,10 +211,7 @@ def test_confirmed_deterministic_exploit_cannot_be_laundered_safe_and_docs_stay_
     assert outcome.verdict["deterministic_precedence"] is True
     assert outcome.documentation_draft is not None
     assert outcome.documentation_draft["draft_unpublished"] is True
-    assert (
-        outcome.documentation_draft["publication_status"]
-        == "blocked_pending_human_approval"
-    )
+    assert outcome.documentation_draft["publication_status"] == "blocked_pending_human_approval"
     assert len(outcome.lineage) == len(recorded) == 4
     assert outcome.lineage[1].parent_request_id == "provider-request-orchestrator"
     assert outcome.lineage[2].parent_request_id == "provider-request-red_team"

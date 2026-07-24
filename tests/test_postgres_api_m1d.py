@@ -300,9 +300,7 @@ def test_agent_models_and_tool_scope_are_real_configurable_projections(
     )
     assert staged.status_code == 200, staged.text
     configuration_sha256 = staged.json()["resource_id"]
-    projection = client.get(
-        f"/api/v1/hosted-configuration-sets/{configuration_sha256}"
-    )
+    projection = client.get(f"/api/v1/hosted-configuration-sets/{configuration_sha256}")
     assert projection.status_code == 200
     assert projection.json()["state"] == "ready"
     assert projection.json()["data"]["activation_state"] == "staged_pending_authorization"
@@ -310,12 +308,9 @@ def test_agent_models_and_tool_scope_are_real_configurable_projections(
     assert len(projection.json()["data"]["roles"]) == 4
     assert "secretref://" not in projection.text
     assert all(
-        role["provider_reference_bound"] is True
-        for role in projection.json()["data"]["roles"]
+        role["provider_reference_bound"] is True for role in projection.json()["data"]["roles"]
     )
-    preflight = client.get(
-        f"/api/v1/hosted-configuration-sets/{configuration_sha256}/preflight"
-    )
+    preflight = client.get(f"/api/v1/hosted-configuration-sets/{configuration_sha256}/preflight")
     assert preflight.status_code == 200
     assert preflight.json()["state"] == "degraded"
     assert preflight.json()["reason_code"] == "hosted_runtime_not_composed"
@@ -622,9 +617,7 @@ def test_hosted_authorization_is_bound_but_launch_stays_unavailable_until_compos
         "provider_timeout_seconds": 30.0,
     }
     assert "credential_ref" not in json.dumps(approval_scope)
-    preflight = client.get(
-        f"/api/v1/campaign-authorization-requests/{request_id}/preflight"
-    )
+    preflight = client.get(f"/api/v1/campaign-authorization-requests/{request_id}/preflight")
     assert preflight.status_code == 200
     assert preflight.json()["state"] == "degraded"
     assert preflight.json()["reason_code"] == "hosted_runtime_not_composed"
@@ -683,10 +676,7 @@ def test_hosted_authorization_is_bound_but_launch_stays_unavailable_until_compos
         headers=_headers("hosted-launch-unverified-bindings-0001"),
     )
     assert unverified.status_code == 503
-    assert (
-        unverified.json()["reason_code"]
-        == "provider_credentials_runner_unverified"
-    )
+    assert unverified.json()["reason_code"] == "provider_credentials_runner_unverified"
     with migrated_db.connect() as connection:
         assert connection.execute(text("SELECT count(*) FROM campaign_runs")).scalar_one() == 0
         assert connection.execute(text("SELECT count(*) FROM jobs")).scalar_one() == 0

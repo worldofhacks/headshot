@@ -154,17 +154,19 @@ class TokenPriceVector:
     output_usd_per_token: Decimal
     reasoning_usd_per_token: Decimal
 
+
 @dataclass(frozen=True, slots=True)
 class HostedLimits:
     max_calls: int
     max_retries: int
     max_input_tokens: int
-    max_output_tokens: int       # visible completion, excluding reasoning
+    max_output_tokens: int  # visible completion, excluding reasoning
     max_reasoning_tokens: int
     max_usd: Decimal
     max_wall_clock_seconds: int
     max_requests_per_second: Decimal
     max_concurrency: int
+
 
 @dataclass(frozen=True, slots=True)
 class HostedRoleConfiguration:
@@ -188,6 +190,7 @@ class HostedRoleConfiguration:
     role_limits: HostedLimits
     global_limits: HostedLimits
     role_configuration_sha256: str
+
 
 @dataclass(frozen=True, slots=True)
 class HostedConfigurationSet:
@@ -284,15 +287,19 @@ Use existing `httpx` through an injected narrow transport rather than adding an 
 class ProviderCredentialResolver(Protocol):
     def resolve_for_role(self, role: AgentRole, reference_id: str) -> Secret: ...
 
+
 class OpenRouterWireTransport(Protocol):
-    def post(self, *, url: str, headers: Mapping[str, str], json: Mapping[str, Any],
-             timeout_seconds: int) -> Mapping[str, Any]: ...
+    def post(
+        self, *, url: str, headers: Mapping[str, str], json: Mapping[str, Any], timeout_seconds: int
+    ) -> Mapping[str, Any]: ...
+
 
 class ReservationLedger(Protocol):
     def reserve(self, estimate: AttemptEstimate) -> Reservation: ...
     def reconcile(self, reservation: Reservation, usage: ActualUsage) -> Reconciliation: ...
     def retain_unknown(self, reservation: Reservation, reason: str) -> None: ...
     def abort(self, reason: str) -> None: ...
+
 
 class OpenRouterRoleClient:
     def complete(self, request: RoleRequest) -> OpenRouterResult: ...

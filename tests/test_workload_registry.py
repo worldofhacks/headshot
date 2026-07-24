@@ -339,9 +339,7 @@ def test_live_100_rejects_generation_record_not_bound_to_case(tmp_path: Path) ->
     generation_record = json.loads(generation_path.read_text(encoding="utf-8"))
     generation_record["case_sha256"] = "0" * 64
     generation_path.write_text(json.dumps(generation_record, sort_keys=True), encoding="utf-8")
-    review["source_generation_sha256"] = hashlib.sha256(
-        generation_path.read_bytes()
-    ).hexdigest()
+    review["source_generation_sha256"] = hashlib.sha256(generation_path.read_bytes()).hexdigest()
     review_path = eval_root / review["review_record_path"]
     review_record = json.loads(review_path.read_text(encoding="utf-8"))
     review_record["source_generation_sha256"] = review["source_generation_sha256"]
@@ -364,9 +362,7 @@ def test_live_100_rejects_baseline_source_misclassification(tmp_path: Path) -> N
     generation_record = json.loads(generation_path.read_text(encoding="utf-8"))
     generation_record["source_kind"] = review["source_kind"]
     generation_path.write_text(json.dumps(generation_record, sort_keys=True), encoding="utf-8")
-    review["source_generation_sha256"] = hashlib.sha256(
-        generation_path.read_bytes()
-    ).hexdigest()
+    review["source_generation_sha256"] = hashlib.sha256(generation_path.read_bytes()).hexdigest()
 
     review_path = eval_root / review["review_record_path"]
     review_record = json.loads(review_path.read_text(encoding="utf-8"))

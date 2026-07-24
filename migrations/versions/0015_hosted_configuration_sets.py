@@ -77,9 +77,7 @@ def upgrade() -> None:
         "REVOKE ALL PRIVILEGES ON TABLE hosted_configuration_sets "
         "FROM PUBLIC, headshot_redteam, headshot_recorder, headshot_judge, headshot_scheduler"
     )
-    op.execute(
-        "GRANT SELECT ON TABLE hosted_configuration_sets TO headshot_web, headshot_runner"
-    )
+    op.execute("GRANT SELECT ON TABLE hosted_configuration_sets TO headshot_web, headshot_runner")
     op.execute("GRANT INSERT ON TABLE hosted_configuration_sets TO headshot_web")
 
 

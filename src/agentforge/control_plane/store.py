@@ -608,10 +608,7 @@ class ControlPlaneStore:
                     connection, principal.organization_id, existing["request_id"]
                 )
             database_now = connection.execute(text("SELECT clock_timestamp()")).scalar_one()
-            if (
-                expiry <= database_now
-                or expiry - database_now > _MAX_AUTHORIZATION_LIFETIME
-            ):
+            if expiry <= database_now or expiry - database_now > _MAX_AUTHORIZATION_LIFETIME:
                 raise InvalidControlPlaneInput(
                     "authorization expiry must be future and within 24 hours"
                 )

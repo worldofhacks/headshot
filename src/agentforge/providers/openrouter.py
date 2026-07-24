@@ -75,9 +75,7 @@ class HostedUsageLedger:
         self._role_calls = {role: 0 for role in self._roles}
         self._role_measured_usd = {role: Decimal(0) for role in self._roles}
         self._role_unresolved_usd = {role: Decimal(0) for role in self._roles}
-        self._tokens = {
-            role: {"input": 0, "output": 0, "reasoning": 0} for role in self._roles
-        }
+        self._tokens = {role: {"input": 0, "output": 0, "reasoning": 0} for role in self._roles}
         self._global_tokens = {"input": 0, "output": 0, "reasoning": 0}
         self._lock = threading.Lock()
 
@@ -127,9 +125,7 @@ class HostedUsageLedger:
                 raise HostedBudgetExceeded("role physical model-call cap is exhausted")
             projected_global = self._measured_usd + self._unresolved_usd + maximum_cost
             projected_role = (
-                self._role_measured_usd[role]
-                + self._role_unresolved_usd[role]
-                + maximum_cost
+                self._role_measured_usd[role] + self._role_unresolved_usd[role] + maximum_cost
             )
             if projected_global > global_limits.max_usd:
                 raise HostedBudgetExceeded("shared measured-spend exposure cap would be exceeded")
@@ -256,9 +252,7 @@ class OpenRouterTransport:
         self._sleeper = sleeper
         self._monotonic = monotonic
         self._last_request_at: float | None = None
-        self._concurrency = threading.BoundedSemaphore(
-            configuration.global_limits.max_concurrency
-        )
+        self._concurrency = threading.BoundedSemaphore(configuration.global_limits.max_concurrency)
 
     @property
     def ledger(self) -> HostedUsageLedger:
@@ -392,12 +386,8 @@ class OpenRouterTransport:
                     # million tokens and refuses the request if no endpoint satisfies
                     # them. Per-request pricing is disallowed.
                     "max_price": {
-                        "prompt": float(
-                            configuration.prices.input_usd_per_million_tokens
-                        ),
-                        "completion": float(
-                            configuration.prices.output_usd_per_million_tokens
-                        ),
+                        "prompt": float(configuration.prices.input_usd_per_million_tokens),
+                        "completion": float(configuration.prices.output_usd_per_million_tokens),
                         "request": 0,
                     },
                 },
@@ -463,8 +453,7 @@ class OpenRouterTransport:
         """
 
         content_bytes = sum(
-            len(message["role"].encode("utf-8"))
-            + len(message["content"].encode("utf-8"))
+            len(message["role"].encode("utf-8")) + len(message["content"].encode("utf-8"))
             for message in messages
         )
         return content_bytes + (64 * len(messages)) + 4096
@@ -518,15 +507,12 @@ class OpenRouterTransport:
         generation_policy_sha256: str,
         timeout_seconds: float,
     ) -> None:
-        if (
-            not messages
-            or any(
-                set(message) != {"role", "content"}
-                or message["role"] not in {"system", "user", "assistant"}
-                or not isinstance(message["content"], str)
-                or not message["content"]
-                for message in messages
-            )
+        if not messages or any(
+            set(message) != {"role", "content"}
+            or message["role"] not in {"system", "user", "assistant"}
+            or not isinstance(message["content"], str)
+            or not message["content"]
+            for message in messages
         ):
             raise HostedProviderError("hosted messages have an invalid shape")
         if (
@@ -538,9 +524,7 @@ class OpenRouterTransport:
         try:
             Draft202012Validator.check_schema(dict(output_schema))
         except Exception as exc:
-            raise HostedProviderError(
-                "hosted structured-output schema is invalid"
-            ) from exc
+            raise HostedProviderError("hosted structured-output schema is invalid") from exc
         if (
             not isinstance(generation_policy_sha256, str)
             or len(generation_policy_sha256) != 64
