@@ -257,6 +257,12 @@ class TracedHostedRedTeamProvider:
 
         try:
             result = self._invoke_transport(seed, count, category)
+            # _collect_usable stays INSIDE the try: a short/exhausted generation raises
+            # ProviderExhaustedError AFTER the (cost-incurring) transport call has already STARTED
+            # the execution, so it must be recorded as a failed finish here — never left dangling as
+            # a perpetually-"running" red_team execution that would break the uniform four-agent
+            # lineage.
+            variants = _collect_usable(seed, list(result.output.get("variants", [])), count)
         except Exception as exc:
             error_code = getattr(exc, "code", None)
             if not isinstance(error_code, str) or not error_code:
@@ -270,7 +276,6 @@ class TracedHostedRedTeamProvider:
             )
             raise
 
-        variants = _collect_usable(seed, list(result.output.get("variants", [])), count)
         record = HostedExecutionLineage(
             execution_id=execution_id,
             parent_execution_id=self._parent_execution_id,
