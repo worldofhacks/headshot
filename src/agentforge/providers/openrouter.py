@@ -26,9 +26,9 @@ from agentforge.agents.hosted import (
     HOSTED_MAX_LOGICAL_RETRIES,
     HostedConfigurationSet,
     HostedRoleConfiguration,
+    resolve_hosted_prompt,
     validate_hosted_configuration_set,
 )
-from agentforge.agents.hosted_prompts import hosted_prompt
 from agentforge.agents.runtime import AgentRole
 from agentforge.providers.lineage import (
     ProviderInvocationContextV1,
@@ -468,7 +468,8 @@ class OpenRouterTransport:
             or provider_context.role_configuration_sha256 != configuration.configuration_sha256
             or provider_context.generation_policy_sha256 != generation_policy_sha256
             or provider_context.prompt_sha256 != configuration.prompt_sha256
-            or provider_context.prompt_version != hosted_prompt(role).version
+            or provider_context.prompt_version
+            != resolve_hosted_prompt(role, configuration.prompt_sha256).version
         ):
             raise HostedProviderError("provider lineage context differs from authorization")
         attempts = 1 + min(
@@ -793,8 +794,12 @@ class OpenRouterTransport:
                 "model": configuration.model_id,
                 "messages": [dict(message) for message in messages],
                 # OpenRouter's completion count includes reasoning tokens. The
-                # configured output bound is only the final-answer allowance.
-                "max_completion_tokens": max_output_tokens + reservation.reasoning_tokens,
+                # configured output bound is only the final-answer allowance. The
+                # endpoint-catalog-verified parameter name is part of the immutable
+                # role configuration and must not fall back to its sibling spelling.
+                configuration.completion_token_parameter: (
+                    max_output_tokens + reservation.reasoning_tokens
+                ),
                 "stream": False,
                 "provider": {
                     "only": [configuration.upstream_provider],

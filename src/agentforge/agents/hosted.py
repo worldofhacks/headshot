@@ -15,14 +15,14 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from decimal import Decimal
 from types import MappingProxyType
-from typing import Any
+from typing import Any, Literal, cast
 from urllib.parse import urlsplit
 
 from agentforge.agents.prompts import PromptRecord, PromptRegistryError, load_prompt_registry
 from agentforge.agents.runtime import AGENT_ROLES, AgentRole
 from agentforge.secrets import looks_like_provider_key
 
-HOSTED_CONFIGURATION_SCHEMA_VERSION = "1"
+HOSTED_CONFIGURATION_SCHEMA_VERSION = "2"
 HOSTED_PROVIDER = "openrouter"
 HOSTED_MAX_PHYSICAL_CALLS = 56
 HOSTED_MAX_MEASURED_USD = Decimal("10")
@@ -47,7 +47,7 @@ HOSTED_ROLE_MAX_MEASURED_USD: Mapping[AgentRole, Decimal] = MappingProxyType(
 
 _HEX64 = re.compile(r"\A[0-9a-f]{64}\Z")
 _MODEL_ID = re.compile(r"\A[a-z0-9][a-z0-9._-]{0,63}/[a-z0-9][a-z0-9._-]{0,127}\Z")
-_UPSTREAM_PROVIDER = re.compile(r"\A[a-z0-9][a-z0-9-]{0,63}\Z")
+_UPSTREAM_PROVIDER = re.compile(r"\A[a-z0-9][a-z0-9-]{0,63}(?:/[a-z0-9][a-z0-9-]{0,63})*\Z")
 _REFERENCE_AUTHORITY = re.compile(r"\A[a-z0-9][a-z0-9._-]{0,63}\Z")
 _REFERENCE_SEGMENT = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9._~-]{0,127}\Z")
 _ALIAS_MODEL_NAMES = frozenset({"auto", "default", "latest"})
@@ -61,6 +61,8 @@ _MAX_REQUESTS_PER_SECOND = Decimal("0.5")
 _MAX_CONCURRENCY = HOSTED_MAX_CONCURRENCY
 
 _ROLE_ORDER = {role: index for index, role in enumerate(AGENT_ROLES)}
+CompletionTokenParameter = Literal["max_tokens", "max_completion_tokens"]
+_COMPLETION_TOKEN_PARAMETERS = frozenset({"max_tokens", "max_completion_tokens"})
 
 
 def _sha256(value: bytes) -> str:
@@ -165,11 +167,18 @@ def _validate_model_id(value: object) -> str:
 def _validate_upstream_provider(value: object) -> str:
     if (
         not isinstance(value, str)
+        or len(value) > 128
         or _UPSTREAM_PROVIDER.fullmatch(value) is None
         or value in {"auto", "default", "any"}
     ):
         raise ValueError("upstream provider must be one exact OpenRouter provider slug")
     return value
+
+
+def _validate_completion_token_parameter(value: object) -> CompletionTokenParameter:
+    if not isinstance(value, str) or value not in _COMPLETION_TOKEN_PARAMETERS:
+        raise ValueError("completion token parameter must be max_tokens or max_completion_tokens")
+    return cast(CompletionTokenParameter, value)
 
 
 def _validate_credential_reference(value: object) -> str:
@@ -336,6 +345,7 @@ class HostedRoleConfiguration:
     provider: str
     model_id: str
     upstream_provider: str
+    completion_token_parameter: CompletionTokenParameter
     credential_reference: str = field(repr=False)
     prompt_sha256: str
     policy_sha256: str
@@ -352,6 +362,7 @@ class HostedRoleConfiguration:
         if self.model_id != HOSTED_ROLE_MODELS[self.role]:
             raise ValueError("hosted role model differs from the frozen recovery assignment")
         _validate_upstream_provider(self.upstream_provider)
+        _validate_completion_token_parameter(self.completion_token_parameter)
         _validate_credential_reference(self.credential_reference)
         resolve_hosted_prompt(self.role, self.prompt_sha256)
         _require_sha256("policy identity", self.policy_sha256)
@@ -384,6 +395,7 @@ class HostedRoleConfiguration:
             "provider": self.provider,
             "model_id": self.model_id,
             "upstream_provider": self.upstream_provider,
+            "completion_token_parameter": self.completion_token_parameter,
             "credential_reference": self.credential_reference,
             "prompt_sha256": self.prompt_sha256,
             "policy_sha256": self.policy_sha256,
@@ -398,6 +410,7 @@ class HostedRoleConfiguration:
             "provider",
             "model_id",
             "upstream_provider",
+            "completion_token_parameter",
             "credential_reference",
             "prompt_sha256",
             "policy_sha256",
@@ -425,6 +438,7 @@ class HostedRoleConfiguration:
                 provider=payload["provider"],
                 model_id=payload["model_id"],
                 upstream_provider=payload["upstream_provider"],
+                completion_token_parameter=payload["completion_token_parameter"],
                 credential_reference=payload["credential_reference"],
                 prompt_sha256=payload["prompt_sha256"],
                 policy_sha256=payload["policy_sha256"],
@@ -518,6 +532,7 @@ class HostedRolePreflight:
     provider: str
     model_id: str
     upstream_provider: str
+    completion_token_parameter: CompletionTokenParameter
     role_configuration_sha256: str
     credential_reference_sha256: str
 
@@ -561,6 +576,7 @@ def preflight_hosted_configuration_set(
             provider=role.provider,
             model_id=role.model_id,
             upstream_provider=role.upstream_provider,
+            completion_token_parameter=role.completion_token_parameter,
             role_configuration_sha256=role.configuration_sha256,
             credential_reference_sha256=_sha256(
                 b"hosted-credential-reference-v1\0" + role.credential_reference.encode("utf-8")
@@ -588,6 +604,7 @@ __all__ = [
     "HOSTED_PROVIDER",
     "HOSTED_ROLE_MAX_MEASURED_USD",
     "HOSTED_ROLE_MODELS",
+    "CompletionTokenParameter",
     "HostedConfigurationPreflight",
     "HostedConfigurationSet",
     "HostedLimits",

@@ -327,7 +327,7 @@ class HostedRoleRuntime:
                 provider_context = context_resolver(
                     execution_id=execution_id,
                     prompt_version=prompt.version,
-                    prompt_sha256=prompt.prompt_sha256,
+                    prompt_sha256=prompt.sha256,
                 )
                 if not isinstance(provider_context, ProviderLogicalContextV1):
                     raise HostedCompositionError("hosted provider lineage context is invalid")

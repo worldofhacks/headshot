@@ -19,7 +19,6 @@ from agentforge.agents.hosted import (
     TokenPrices,
 )
 from agentforge.agents.hosted_policy import DEFAULT_HOSTED_GENERATION_POLICY
-from agentforge.agents.hosted_prompts import hosted_prompt
 from agentforge.agents.hosted_runtime import HostedCallBounds, HostedExecutionLineage
 from agentforge.agents.prompts import load_prompt_registry
 from agentforge.agents.red_team.hosted_generation import (
@@ -66,6 +65,12 @@ from agentforge.telemetry import OutboundHttpTelemetry
 from agentforge.telemetry.outbound import _LangfuseBridge
 
 _ORGANIZATION_ID = "org_HostedLineage"
+
+
+def _prompt(role: str):
+    return next(record for record in load_prompt_registry() if record.role == role)
+
+
 _SESSION_GENERATION = "generation-20260724"
 _GENERATION_POLICY = "d" * 64
 _PROMPTS = {record.role: record for record in load_prompt_registry()}
@@ -160,6 +165,7 @@ def _configuration() -> HostedConfigurationSet:
                 provider="openrouter",
                 model_id=_MODELS[role],
                 upstream_provider=_UPSTREAM[role],
+                completion_token_parameter="max_completion_tokens",
                 credential_reference=(
                     f"secretref://staging/providers/openrouter/{role}/{_SESSION_GENERATION}"
                 ),
@@ -388,11 +394,11 @@ def _record_physical_event(
     measured_cost_usd: Decimal | None = Decimal("0"),
     error_code: str | None = None,
 ) -> tuple[object, ProviderTerminalEventV1]:
-    prompt = hosted_prompt(role)  # type: ignore[arg-type]
+    prompt = _prompt(role)  # type: ignore[arg-type]
     logical = store.provider_logical_context(
         execution_id=execution_id,
         prompt_version=prompt.version,
-        prompt_sha256=prompt.prompt_sha256,
+        prompt_sha256=prompt.sha256,
     )
     invocation = store.begin_physical_attempt(logical, sequence)
     if status == "succeeded":
@@ -510,6 +516,7 @@ def _canonical_q_provider(
     handler,
 ) -> TracedHostedRedTeamProvider:
     role = next(item for item in configuration.roles if item.role == "red_team")
+    prompt = _prompt("red_team")
     transport = OpenRouterTransport(
         configuration=configuration,
         credential_resolver=lambda _reference: Secret("synthetic-provider-credential"),
@@ -525,6 +532,8 @@ def _canonical_q_provider(
             provider=role.provider,
             model=role.model_id,
             upstream_provider=role.upstream_provider,
+            prompt_version=prompt.version,
+            prompt_sha256=prompt.sha256,
             role_configuration_sha256=role.configuration_sha256,
         ),
         configuration_sha256=configuration.configuration_sha256,
@@ -1327,11 +1336,11 @@ def test_physical_retry_ledger_is_authoritative_but_does_not_terminalize_role_wo
         configuration,
         role="orchestrator",
     )
-    prompt = hosted_prompt("orchestrator")
+    prompt = _prompt("orchestrator")
     logical = store.provider_logical_context(
         execution_id=execution_id,
         prompt_version=prompt.version,
-        prompt_sha256=prompt.prompt_sha256,
+        prompt_sha256=prompt.sha256,
     )
     assert logical.campaign_attempt_id is None
 
@@ -1474,11 +1483,11 @@ def test_cost_projection_includes_running_reserved_calls_in_incomplete_budgets(
         configuration,
         role="orchestrator",
     )
-    prompt = hosted_prompt("orchestrator")
+    prompt = _prompt("orchestrator")
     running_logical = store.provider_logical_context(
         execution_id=running_execution,
         prompt_version=prompt.version,
-        prompt_sha256=prompt.prompt_sha256,
+        prompt_sha256=prompt.sha256,
     )
     store.begin_physical_attempt(running_logical, 1)
 
@@ -1520,11 +1529,11 @@ def test_physical_judge_success_cannot_bypass_reconciliation(
         judge_calibration_id=f"JC-{'a' * 64}",
         judge_calibration_state="enabled",
     )
-    prompt = hosted_prompt("judge")
+    prompt = _prompt("judge")
     logical = store.provider_logical_context(
         execution_id=execution_id,
         prompt_version=prompt.version,
-        prompt_sha256=prompt.prompt_sha256,
+        prompt_sha256=prompt.sha256,
     )
     invocation = store.begin_physical_attempt(logical, 1)
     store.finish_physical_attempt(
@@ -1586,11 +1595,11 @@ def test_logical_terminalization_requires_closed_provider_events(
         configuration,
         role="documentation",
     )
-    prompt = hosted_prompt("documentation")
+    prompt = _prompt("documentation")
     logical = store.provider_logical_context(
         execution_id=execution_id,
         prompt_version=prompt.version,
-        prompt_sha256=prompt.prompt_sha256,
+        prompt_sha256=prompt.sha256,
     )
     store.begin_physical_attempt(logical, 1)
 
@@ -1682,11 +1691,11 @@ def test_runner_recovers_open_provider_reservation_without_resending(
         configuration,
         role="documentation",
     )
-    prompt = hosted_prompt("documentation")
+    prompt = _prompt("documentation")
     logical = store.provider_logical_context(
         execution_id=execution_id,
         prompt_version=prompt.version,
-        prompt_sha256=prompt.prompt_sha256,
+        prompt_sha256=prompt.sha256,
     )
     invocation = store.begin_physical_attempt(logical, 1)
     runner = object.__new__(DurableCampaignRunner)
@@ -1899,11 +1908,11 @@ def test_pre_provider_recovery_wins_before_late_reservation(
         configuration,
         role="documentation",
     )
-    prompt = hosted_prompt("documentation")
+    prompt = _prompt("documentation")
     logical = store.provider_logical_context(
         execution_id=execution_id,
         prompt_version=prompt.version,
-        prompt_sha256=prompt.prompt_sha256,
+        prompt_sha256=prompt.sha256,
     )
     with migrated_db.begin() as connection:
         connection.execute(
@@ -1942,11 +1951,11 @@ def test_recent_provider_reservation_wins_before_stale_recovery(
             ),
             {"execution": execution_id},
         )
-    prompt = hosted_prompt("documentation")
+    prompt = _prompt("documentation")
     logical = store.provider_logical_context(
         execution_id=execution_id,
         prompt_version=prompt.version,
-        prompt_sha256=prompt.prompt_sha256,
+        prompt_sha256=prompt.sha256,
     )
     store.begin_physical_attempt(logical, 1)
 
@@ -1997,11 +2006,11 @@ def test_reap_and_reclaim_cannot_replay_unresolved_hosted_execution(
         configuration,
         role="documentation",
     )
-    prompt = hosted_prompt("documentation")
+    prompt = _prompt("documentation")
     logical = store.provider_logical_context(
         execution_id=execution_id,
         prompt_version=prompt.version,
-        prompt_sha256=prompt.prompt_sha256,
+        prompt_sha256=prompt.sha256,
     )
     invocation = store.begin_physical_attempt(logical, 1)
     with migrated_db.begin() as connection:
@@ -2101,11 +2110,11 @@ def test_live_campaign_job_lease_blocks_cross_runner_provider_recovery(
         configuration,
         role="documentation",
     )
-    prompt = hosted_prompt("documentation")
+    prompt = _prompt("documentation")
     logical = store.provider_logical_context(
         execution_id=execution_id,
         prompt_version=prompt.version,
-        prompt_sha256=prompt.prompt_sha256,
+        prompt_sha256=prompt.sha256,
     )
     invocation = store.begin_physical_attempt(logical, 1)
     with migrated_db.begin() as connection:
@@ -2222,12 +2231,12 @@ def test_runner_provider_recovery_limit_bounds_each_pass(
         )
         for _ in range(2)
     ]
-    prompt = hosted_prompt("documentation")
+    prompt = _prompt("documentation")
     for execution_id in execution_ids:
         logical = store.provider_logical_context(
             execution_id=execution_id,
             prompt_version=prompt.version,
-            prompt_sha256=prompt.prompt_sha256,
+            prompt_sha256=prompt.sha256,
         )
         store.begin_physical_attempt(logical, 1)
     runner = object.__new__(DurableCampaignRunner)
@@ -2263,11 +2272,11 @@ def test_concurrent_crash_recovery_records_exactly_one_terminal_fact(
         configuration,
         role="documentation",
     )
-    prompt = hosted_prompt("documentation")
+    prompt = _prompt("documentation")
     logical = store.provider_logical_context(
         execution_id=execution_id,
         prompt_version=prompt.version,
-        prompt_sha256=prompt.prompt_sha256,
+        prompt_sha256=prompt.sha256,
     )
     invocation = store.begin_physical_attempt(logical, 1)
 
@@ -2338,11 +2347,11 @@ def test_provider_attempt_sequences_are_contiguous_in_app_and_database(
         configuration,
         role="orchestrator",
     )
-    prompt = hosted_prompt("orchestrator")
+    prompt = _prompt("orchestrator")
     logical = store.provider_logical_context(
         execution_id=execution_id,
         prompt_version=prompt.version,
-        prompt_sha256=prompt.prompt_sha256,
+        prompt_sha256=prompt.sha256,
     )
     with pytest.raises(RecordConflictError, match="contiguous"):
         store.begin_physical_attempt(logical, 2)
@@ -2407,11 +2416,11 @@ def test_attempt_identity_cannot_change_after_provider_reservation(
         configuration,
         role="red_team",
     )
-    prompt = hosted_prompt("red_team")
+    prompt = _prompt("red_team")
     logical = store.provider_logical_context(
         execution_id=execution_id,
         prompt_version=prompt.version,
-        prompt_sha256=prompt.prompt_sha256,
+        prompt_sha256=prompt.sha256,
     )
     store.begin_physical_attempt(logical, 1)
     attempt = store.ensure_campaign_attempt(
@@ -2469,11 +2478,11 @@ def test_database_rejects_direct_provider_invocation_reattribution(
         configuration,
         role="orchestrator",
     )
-    prompt = hosted_prompt("orchestrator")
+    prompt = _prompt("orchestrator")
     logical = store.provider_logical_context(
         execution_id=execution_id,
         prompt_version=prompt.version,
-        prompt_sha256=prompt.prompt_sha256,
+        prompt_sha256=prompt.sha256,
     )
     raw_invocation = hashlib.sha256(f"raw:{field}".encode()).hexdigest()
     values: dict[str, object] = {
@@ -2551,11 +2560,11 @@ def test_database_rejects_false_success_and_timing_facts(
         configuration,
         role="orchestrator",
     )
-    prompt = hosted_prompt("orchestrator")
+    prompt = _prompt("orchestrator")
     logical = store.provider_logical_context(
         execution_id=execution_id,
         prompt_version=prompt.version,
-        prompt_sha256=prompt.prompt_sha256,
+        prompt_sha256=prompt.sha256,
     )
     invocation = store.begin_physical_attempt(logical, 1)
     finished_at = invocation.started_at + datetime.timedelta(seconds=1)

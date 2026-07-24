@@ -20,7 +20,6 @@ from decimal import Decimal
 
 import pytest
 
-from agentforge.agents.hosted_prompts import hosted_prompt
 from agentforge.agents.hosted_runtime import HostedCallBounds, HostedExecutionLineage
 from agentforge.agents.prompts import load_prompt_registry
 from agentforge.agents.red_team.hosted_generation import (
@@ -55,6 +54,12 @@ ROLE = RedTeamRoleIdentity(
     prompt_sha256=RED_TEAM_PROMPT.sha256,
     role_configuration_sha256="a" * 64,
 )
+
+
+def _prompt(role: str):
+    return next(record for record in load_prompt_registry() if record.role == role)
+
+
 CONFIG_SHA = "b" * 64
 POLICY_SHA = "c" * 64
 BOUNDS = HostedCallBounds(
@@ -111,7 +116,7 @@ class _FakeLifecycle:
 
     def provider_context(self, **kwargs) -> ProviderLogicalContextV1:
         self.context_requests.append(kwargs)
-        prompt = hosted_prompt("red_team")
+        prompt = _prompt("red_team")
         return ProviderLogicalContextV1(
             organization_id="org-red-team-generation",
             campaign_run_id="run-red-team-generation",
@@ -122,7 +127,7 @@ class _FakeLifecycle:
             requested_model=ROLE.model,
             configured_upstream=ROLE.upstream_provider,
             prompt_version=prompt.version,
-            prompt_sha256=prompt.prompt_sha256,
+            prompt_sha256=prompt.sha256,
             configuration_set_sha256=CONFIG_SHA,
             role_configuration_sha256=ROLE.role_configuration_sha256,
             generation_policy_sha256=POLICY_SHA,
@@ -136,7 +141,7 @@ class _ContextLifecycle(_FakeLifecycle):
 
     def provider_context(self, **kwargs) -> ProviderLogicalContextV1:
         self.context_requests.append(kwargs)
-        prompt = hosted_prompt("red_team")
+        prompt = _prompt("red_team")
         return ProviderLogicalContextV1(
             organization_id="org-red-team-generation",
             campaign_run_id="run-red-team-generation",
@@ -147,7 +152,7 @@ class _ContextLifecycle(_FakeLifecycle):
             requested_model=ROLE.model,
             configured_upstream=ROLE.upstream_provider,
             prompt_version=prompt.version,
-            prompt_sha256=prompt.prompt_sha256,
+            prompt_sha256=prompt.sha256,
             configuration_set_sha256=CONFIG_SHA,
             role_configuration_sha256=ROLE.role_configuration_sha256,
             generation_policy_sha256=POLICY_SHA,
@@ -203,8 +208,8 @@ def test_generation_passes_durable_provider_context_to_the_shared_transport() ->
     assert lifecycle.context_requests == [
         {
             "execution_id": "exec-rt-1",
-            "prompt_version": hosted_prompt("red_team").version,
-            "prompt_sha256": hosted_prompt("red_team").prompt_sha256,
+            "prompt_version": _prompt("red_team").version,
+            "prompt_sha256": _prompt("red_team").sha256,
         }
     ]
     provider_context = transport.calls[0]["provider_context"]
@@ -215,12 +220,12 @@ def test_generation_passes_durable_provider_context_to_the_shared_transport() ->
     system_message = transport.calls[0]["messages"][0]
     assert system_message == {
         "role": "system",
-        "content": hosted_prompt("red_team").system_prompt,
+        "content": _prompt("red_team").content,
     }
     assert (
         hashlib.sha256(system_message["content"].encode()).hexdigest()
         == provider_context.prompt_sha256
-        == hosted_prompt("red_team").prompt_sha256
+        == _prompt("red_team").sha256
     )
 
 

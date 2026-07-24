@@ -38,10 +38,16 @@ USD_CAPS = {
     "documentation": Decimal("0.50"),
 }
 UPSTREAM_PROVIDERS = {
-    "orchestrator": "anthropic",
-    "red_team": "together",
-    "judge": "google-vertex",
-    "documentation": "openai",
+    "orchestrator": "amazon-bedrock/eu-west-1",
+    "red_team": "atlas-cloud/fp8",
+    "judge": "google-vertex/global",
+    "documentation": "azure/eu",
+}
+COMPLETION_TOKEN_PARAMETERS = {
+    "orchestrator": "max_tokens",
+    "red_team": "max_tokens",
+    "judge": "max_tokens",
+    "documentation": "max_completion_tokens",
 }
 _PROMPTS = {record.role: record for record in load_prompt_registry()}
 
@@ -70,6 +76,7 @@ def _role(role: str) -> HostedRoleConfiguration:
         provider="openrouter",
         model_id=MODELS[role],
         upstream_provider=UPSTREAM_PROVIDERS[role],
+        completion_token_parameter=COMPLETION_TOKEN_PARAMETERS[role],
         credential_reference=(
             f"secretref://staging/providers/openrouter/{role}/generation-20260724"
         ),
@@ -122,7 +129,7 @@ def test_configuration_is_frozen_canonical_and_order_independent() -> None:
     assert first.configuration_sha256 == second.configuration_sha256
     assert len(first.configuration_sha256) == 64
     with pytest.raises(FrozenInstanceError):
-        first.schema_version = "2"  # type: ignore[misc]
+        first.schema_version = "3"  # type: ignore[misc]
 
 
 def test_configuration_requires_each_exact_role_once() -> None:
@@ -265,12 +272,20 @@ def test_every_identity_price_and_cap_change_rebinds_the_hash() -> None:
         baseline.global_limits,
         max_usd=Decimal("4.99"),
     )
+    changed_completion_parameter = replace(
+        baseline.roles[0],
+        completion_token_parameter="max_completion_tokens",
+    )
 
     assert _configuration((changed_upstream, *baseline.roles[1:])).configuration_sha256 != (
         baseline.configuration_sha256
     )
     assert _configuration((changed_price, *baseline.roles[1:])).configuration_sha256 != (
         baseline.configuration_sha256
+    )
+    assert (
+        _configuration((changed_completion_parameter, *baseline.roles[1:])).configuration_sha256
+        != baseline.configuration_sha256
     )
     assert replace(baseline, global_limits=changed_cap).configuration_sha256 != (
         baseline.configuration_sha256
@@ -283,6 +298,18 @@ def test_routing_provider_requires_an_exact_lowercase_openrouter_slug(
 ) -> None:
     with pytest.raises(ValueError, match="provider slug"):
         replace(_role("judge"), upstream_provider=routing_slug)
+
+
+def test_nested_endpoint_tag_and_completion_parameter_are_closed_authority() -> None:
+    judge = _role("judge")
+
+    assert judge.upstream_provider == "google-vertex/global"
+    assert judge.completion_token_parameter == "max_tokens"
+    with pytest.raises(ValueError, match="completion token parameter"):
+        replace(judge, completion_token_parameter="max_output_tokens")
+    for invalid_tag in ("google-vertex//global", "google-vertex/Global", "google-vertex/global/"):
+        with pytest.raises(ValueError, match="provider slug"):
+            replace(judge, upstream_provider=invalid_tag)
 
 
 def test_decimal_canonicalization_is_independent_of_ambient_context() -> None:

@@ -206,7 +206,8 @@ class HostedRoleInput(_StrictModel):
     role: Literal["orchestrator", "red_team", "judge", "documentation"]
     provider: Literal["openrouter"]
     model_id: str = Field(min_length=3, max_length=192)
-    upstream_provider: str = Field(min_length=1, max_length=64)
+    upstream_provider: str = Field(min_length=1, max_length=128)
+    completion_token_parameter: Literal["max_tokens", "max_completion_tokens"]
     credential_reference: str = Field(min_length=1, max_length=512)
     prompt_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
     policy_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
@@ -215,7 +216,7 @@ class HostedRoleInput(_StrictModel):
 
 
 class HostedConfigurationInput(_StrictModel):
-    schema_version: Literal["1"]
+    schema_version: Literal["2"]
     roles: tuple[HostedRoleInput, ...] = Field(min_length=4, max_length=4)
     global_limits: HostedLimitsInput
 

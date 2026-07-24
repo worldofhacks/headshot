@@ -20,9 +20,9 @@ from sqlalchemy.exc import IntegrityError
 from agentforge.agents.hosted import (
     HostedConfigurationSet,
     HostedRoleConfiguration,
+    resolve_hosted_prompt,
     validate_hosted_configuration_set,
 )
-from agentforge.agents.hosted_prompts import hosted_prompt
 from agentforge.agents.runtime import (
     AGENT_ROLES,
     AgentAssignment,
@@ -1984,12 +1984,21 @@ class ControlPlaneStore:
                 (item for item in configuration.roles if item.role == row["agent_role"]),
                 None,
             )
-            trusted_prompt = hosted_prompt(str(row["agent_role"]))
-            if role is None or (
+            if role is None:
+                raise AuthorizationDeniedError(
+                    "physical provider context differs from hosted authority"
+                )
+            try:
+                trusted_prompt = resolve_hosted_prompt(role.role, role.prompt_sha256)
+            except ValueError:
+                raise AuthorizationDeniedError(
+                    "physical provider context differs from hosted authority"
+                ) from None
+            if (
                 row["model"] != role.model_id
                 or row["role_configuration_sha256"] != role.configuration_sha256
                 or prompt_version != trusted_prompt.version
-                or prompt_sha256 != trusted_prompt.prompt_sha256
+                or prompt_sha256 != trusted_prompt.sha256
                 or prompt_sha256 != role.prompt_sha256
             ):
                 raise AuthorizationDeniedError(
@@ -2011,7 +2020,7 @@ class ControlPlaneStore:
                 requested_model=role.model_id,
                 configured_upstream=role.upstream_provider,
                 prompt_version=trusted_prompt.version,
-                prompt_sha256=trusted_prompt.prompt_sha256,
+                prompt_sha256=trusted_prompt.sha256,
                 configuration_set_sha256=configuration.configuration_sha256,
                 role_configuration_sha256=role.configuration_sha256,
                 generation_policy_sha256=str(row["generation_policy_sha256"]),
@@ -2099,12 +2108,21 @@ class ControlPlaneStore:
                     (item for item in configuration.roles if item.role == invocation.agent_role),
                     None,
                 )
-                trusted_prompt = hosted_prompt(invocation.agent_role)
-                if role is None or (
+                if role is None:
+                    raise AuthorizationDeniedError(
+                        "physical provider identity differs from hosted authority"
+                    )
+                try:
+                    trusted_prompt = resolve_hosted_prompt(role.role, role.prompt_sha256)
+                except ValueError:
+                    raise AuthorizationDeniedError(
+                        "physical provider identity differs from hosted authority"
+                    ) from None
+                if (
                     role.model_id != invocation.requested_model
                     or role.upstream_provider != invocation.configured_upstream
                     or trusted_prompt.version != invocation.prompt_version
-                    or trusted_prompt.prompt_sha256 != invocation.prompt_sha256
+                    or trusted_prompt.sha256 != invocation.prompt_sha256
                     or role.prompt_sha256 != invocation.prompt_sha256
                     or role.configuration_sha256 != invocation.role_configuration_sha256
                 ):

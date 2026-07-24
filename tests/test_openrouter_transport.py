@@ -16,7 +16,6 @@ from agentforge.agents.hosted import (
     HostedRoleConfiguration,
     TokenPrices,
 )
-from agentforge.agents.hosted_prompts import hosted_prompt
 from agentforge.agents.prompts import load_prompt_registry
 from agentforge.providers.lineage import (
     ProviderInvocationContextV1,
@@ -39,6 +38,12 @@ _MODELS = {
     "judge": ("google/gemini-2.5-pro", "google-vertex", 19),
     "documentation": ("openai/gpt-5.4", "openai", 9),
 }
+
+
+def _prompt(role: str):
+    return next(record for record in load_prompt_registry() if record.role == role)
+
+
 _USD_CAPS = {
     "orchestrator": Decimal("1.5"),
     "red_team": Decimal("1"),
@@ -60,7 +65,7 @@ def _messages(
     return (
         {
             "role": "system",
-            "content": hosted_prompt(role).system_prompt,  # type: ignore[arg-type]
+            "content": _prompt(role).content,  # type: ignore[arg-type]
         },
         {"role": "user", "content": user},
     )
@@ -73,6 +78,7 @@ def _configuration() -> HostedConfigurationSet:
             provider="openrouter",
             model_id=model,
             upstream_provider=upstream,
+            completion_token_parameter="max_completion_tokens",
             credential_reference=f"secretref://production/openrouter/{role}/generation-1",
             prompt_sha256=_PROMPTS[role].sha256,
             policy_sha256=_digest(f"{role}:policy"),
@@ -123,8 +129,8 @@ def _provider_context(
         agent_role=role.role,
         requested_model=role.model_id,
         configured_upstream=role.upstream_provider,
-        prompt_version=hosted_prompt(role.role).version,
-        prompt_sha256=hosted_prompt(role.role).prompt_sha256,
+        prompt_version=_prompt(role.role).version,
+        prompt_sha256=_prompt(role.role).sha256,
         configuration_set_sha256=configuration.configuration_sha256,
         role_configuration_sha256=role.configuration_sha256,
         generation_policy_sha256=_digest("generation-policy"),
@@ -212,8 +218,8 @@ def _success(request_id: str = "gen-1") -> httpx.Response:
     (
         ({"role": "system", "content": "mutated system authority"},),
         (
-            {"role": "system", "content": hosted_prompt("judge").system_prompt},
-            {"role": "system", "content": hosted_prompt("judge").system_prompt},
+            {"role": "system", "content": _prompt("judge").content},
+            {"role": "system", "content": _prompt("judge").content},
         ),
     ),
 )
@@ -307,6 +313,8 @@ def test_transport_rejects_wrong_prompt_version_before_any_side_effect() -> None
     (
         ("atlas-cloud", "AtlasCloud", True),
         ("atlas-cloud/fp8", "AtlasCloud", True),
+        ("amazon-bedrock/eu-west-1", "Amazon Bedrock", True),
+        ("azure/eu", "Azure", True),
         ("atlas-cloud", "Together", False),
     ),
 )
@@ -372,6 +380,42 @@ def test_transport_disables_fallback_and_verifies_usage_and_identity() -> None:
     assert transport.ledger.snapshot.physical_calls == 1
     assert transport.ledger.snapshot.measured_usd == Decimal("0.000065")
     assert "test-provider-value" not in repr(result)
+
+
+def test_transport_sends_only_hash_bound_max_tokens_parameter() -> None:
+    configuration = _configuration()
+    judge = next(role for role in configuration.roles if role.role == "judge")
+    max_tokens_judge = replace(judge, completion_token_parameter="max_tokens")
+    configuration = replace(
+        configuration,
+        roles=tuple(
+            max_tokens_judge if role.role == "judge" else role for role in configuration.roles
+        ),
+    )
+    seen: list[httpx.Request] = []
+    transport = OpenRouterTransport(
+        configuration=configuration,
+        credential_resolver=lambda _reference: Secret("test-provider-value"),
+        client=httpx.Client(
+            transport=httpx.MockTransport(lambda request: seen.append(request) or _success())
+        ),
+    )
+
+    transport.invoke(
+        role="judge",
+        messages=_messages(),
+        output_schema={"type": "object"},
+        schema_name="judge_verdict",
+        generation_policy_sha256=_digest("generation-policy"),
+        input_tokens_upper_bound=100,
+        max_output_tokens=50,
+        max_reasoning_tokens=20,
+        timeout_seconds=5,
+    )
+
+    payload = __import__("json").loads(seen[0].content)
+    assert payload["max_tokens"] == 70
+    assert "max_completion_tokens" not in payload
 
 
 def test_transport_permits_only_one_retry_and_counts_both_physical_calls() -> None:

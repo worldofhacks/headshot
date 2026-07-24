@@ -1867,6 +1867,7 @@ class PostgresApiBackend(ApiBackend):
                                 "provider": role.provider,
                                 "model_id": role.model_id,
                                 "upstream_provider": role.upstream_provider,
+                                "completion_token_parameter": (role.completion_token_parameter),
                                 "prompt_sha256": role.prompt_sha256,
                                 "policy_sha256": role.policy_sha256,
                                 "prices": role.prices.canonical_payload(),

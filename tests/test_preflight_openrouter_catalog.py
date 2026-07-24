@@ -34,10 +34,16 @@ _MODELS = {
     "documentation": "openai/gpt-5.4",
 }
 _PROVIDERS = {
-    "orchestrator": "anthropic",
-    "red_team": "together",
-    "judge": "google-vertex",
-    "documentation": "openai",
+    "orchestrator": "amazon-bedrock/eu-west-1",
+    "red_team": "atlas-cloud/fp8",
+    "judge": "google-vertex/global",
+    "documentation": "azure/eu",
+}
+_COMPLETION_TOKEN_PARAMETERS = {
+    "orchestrator": "max_tokens",
+    "red_team": "max_tokens",
+    "judge": "max_tokens",
+    "documentation": "max_completion_tokens",
 }
 _PROMPTS = {prompt.role: prompt for prompt in load_prompt_registry()}
 _NOW = datetime(2026, 7, 24, 22, 44, 17, tzinfo=UTC)
@@ -66,13 +72,17 @@ def _limits(role: str) -> HostedLimits:
     )
 
 
-def _configuration() -> HostedConfigurationSet:
+def _configuration(
+    providers: dict[str, str] | None = None,
+) -> HostedConfigurationSet:
+    selected_providers = providers or _PROVIDERS
     roles = tuple(
         HostedRoleConfiguration(
             role=role,
             provider="openrouter",
             model_id=model,
-            upstream_provider=_PROVIDERS[role],
+            upstream_provider=selected_providers[role],
+            completion_token_parameter=_COMPLETION_TOKEN_PARAMETERS[role],
             credential_reference=f"secretref://test/openrouter/{role}/generation-1",
             prompt_sha256=_PROMPTS[role].sha256,
             policy_sha256=_digest(f"policy:{role}:v1"),
@@ -121,7 +131,13 @@ def _endpoint(
         "context_length": 1_100_000,
         "max_completion_tokens": max_completion_tokens,
         "supported_parameters": supported_parameters
-        or ["max_tokens", "reasoning", "response_format", "structured_outputs"],
+        or [
+            "max_tokens",
+            "max_completion_tokens",
+            "reasoning",
+            "response_format",
+            "structured_outputs",
+        ],
         "pricing": {
             "prompt": prompt_price,
             "completion": completion_price,
@@ -131,16 +147,10 @@ def _endpoint(
 
 
 def _feeds() -> dict[str, Any]:
-    endpoint_tags = {
-        "orchestrator": "anthropic",
-        "red_team": "together",
-        "judge": "google-vertex",
-        "documentation": "openai",
-    }
     feeds: dict[str, Any] = {}
     zdr: list[dict[str, Any]] = []
     for role, model_id in _MODELS.items():
-        tag = endpoint_tags[role]
+        tag = _PROVIDERS[role]
         endpoint = _endpoint(model_id, tag)
         feeds[catalog._model_endpoint_url(model_id)] = {
             "data": {"id": model_id, "endpoints": [endpoint]}
@@ -160,8 +170,11 @@ def _fetcher(feeds: dict[str, Any]):
     return fetch
 
 
-def _audit(feeds: dict[str, Any] | None = None) -> dict[str, Any]:
-    configuration = _configuration()
+def _audit(
+    feeds: dict[str, Any] | None = None,
+    configuration: HostedConfigurationSet | None = None,
+) -> dict[str, Any]:
+    configuration = configuration or _configuration()
     return catalog.audit_catalog(
         configuration.canonical_bytes(),
         fetch=_fetcher(feeds or _feeds()),
@@ -192,16 +205,18 @@ def test_exact_catalog_pass_is_redacted_canonical_and_zero_inference() -> None:
     assert b"generation-1" not in rendered
 
 
-def test_current_together_route_and_base_slug_ambiguity_fail_closed() -> None:
+def test_base_slug_ambiguity_and_missing_exact_route_fail_closed() -> None:
     feeds = _feeds()
     orchestrator_url = catalog._model_endpoint_url(_MODELS["orchestrator"])
     feeds[orchestrator_url]["data"]["endpoints"].append(
-        _endpoint(_MODELS["orchestrator"], "anthropic/2")
+        _endpoint(_MODELS["orchestrator"], "amazon-bedrock/us-east-1")
     )
     red_team_url = catalog._model_endpoint_url(_MODELS["red_team"])
     feeds[red_team_url]["data"]["endpoints"] = [_endpoint(_MODELS["red_team"], "digitalocean")]
+    providers = dict(_PROVIDERS)
+    providers["orchestrator"] = "amazon-bedrock"
 
-    result = _audit(feeds)
+    result = _audit(feeds, _configuration(providers))
 
     assert result["ok"] is False
     by_role = {role["role"]: role for role in result["roles"]}
@@ -229,6 +244,24 @@ def test_null_completion_bound_and_missing_parameter_are_blocking() -> None:
         "endpoint_completion_bound_unavailable",
         "endpoint_required_parameters_missing",
     } <= set(red_team["reason_codes"])
+
+
+def test_preflight_requires_the_configured_completion_token_parameter() -> None:
+    feeds = _feeds()
+    documentation_url = catalog._model_endpoint_url(_MODELS["documentation"])
+    feeds[documentation_url]["data"]["endpoints"][0]["supported_parameters"] = [
+        "max_tokens",
+        "reasoning",
+        "response_format",
+        "structured_outputs",
+    ]
+
+    result = _audit(feeds)
+    documentation = next(role for role in result["roles"] if role["role"] == "documentation")
+
+    assert documentation["completion_token_parameter"] == "max_completion_tokens"
+    assert documentation["endpoint"]["missing_required_parameters"] == ["max_completion_tokens"]
+    assert "endpoint_required_parameters_missing" in documentation["reason_codes"]
 
 
 def test_decimal_price_comparison_has_no_float_rounding_escape() -> None:
@@ -284,7 +317,7 @@ def test_invalid_configuration_stops_before_any_public_get() -> None:
     calls: list[str] = []
 
     result = catalog.audit_catalog(
-        b'{"schema_version":"1","roles":[],"global_limits":{}}',
+        b'{"schema_version":"2","roles":[],"global_limits":{}}',
         fetch=lambda url: calls.append(url) or b"{}",
         observed_at=_NOW,
     )

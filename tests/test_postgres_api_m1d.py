@@ -151,6 +151,7 @@ def _hosted_configuration_payload() -> dict[str, Any]:
                 "provider": "openrouter",
                 "model_id": model,
                 "upstream_provider": upstream,
+                "completion_token_parameter": "max_completion_tokens",
                 "credential_reference": (
                     f"secretref://staging/openrouter/{role}/generation-20260724"
                 ),
@@ -174,7 +175,7 @@ def _hosted_configuration_payload() -> dict[str, Any]:
             }
         )
     return {
-        "schema_version": "1",
+        "schema_version": "2",
         "roles": roles,
         "global_limits": {
             "max_calls": 56,
@@ -688,7 +689,8 @@ def test_agent_activation_calibration_and_budget_follow_latest_authority(
                 "(execution_id, organization_id, campaign_run_id, agent_role, status, provider, "
                 "model, execution_mode, configuration_version, input_sha256, output_sha256, "
                 "returned_model, upstream_provider, provider_request_id, input_tokens, "
-                "output_tokens, reasoning_tokens, measured_cost, trace_id, "
+                "output_tokens, reasoning_tokens, measured_cost, cost_measurement_state, "
+                "provider_event_ids, trace_id, "
                 "configuration_set_sha256, role_configuration_sha256, "
                 "generation_policy_sha256, physical_attempts, judge_calibration_id, "
                 "judge_calibration_state, oracle_agreement, decision_authority, "
@@ -696,6 +698,7 @@ def test_agent_activation_calibration_and_budget_follow_latest_authority(
                 "('judge-history', :org, :run, 'judge', 'succeeded', 'openrouter', :model, "
                 "'hosted_advisory', 1, :input_hash, :output_hash, :model, "
                 "'Google AI Studio', 'provider-request-history', 100, 20, 5, 0.2, "
+                "'measured', CAST(:provider_events AS jsonb), "
                 ":trace, :configuration, :role_configuration, :generation_policy, 1, "
                 ":calibration, 'enabled', true, 'model', 'disabled', '{}'::jsonb, "
                 ":started_at, :finished_at, 1000)"
@@ -707,6 +710,7 @@ def test_agent_activation_calibration_and_budget_follow_latest_authority(
                 "input_hash": "2" * 64,
                 "output_hash": "3" * 64,
                 "trace": "4" * 32,
+                "provider_events": json.dumps(["b" * 64]),
                 "configuration": configuration_sha256,
                 "role_configuration": judge_configuration.configuration_sha256,
                 "generation_policy": generation_policy_sha256,
@@ -819,7 +823,8 @@ def test_agent_activation_calibration_and_budget_follow_latest_authority(
                 "(execution_id, organization_id, campaign_run_id, agent_role, status, provider, "
                 "model, execution_mode, configuration_version, input_sha256, output_sha256, "
                 "returned_model, upstream_provider, provider_request_id, input_tokens, "
-                "output_tokens, reasoning_tokens, measured_cost, trace_id, "
+                "output_tokens, reasoning_tokens, measured_cost, cost_measurement_state, "
+                "provider_event_ids, trace_id, "
                 "configuration_set_sha256, role_configuration_sha256, "
                 "generation_policy_sha256, physical_attempts, judge_calibration_id, "
                 "judge_calibration_state, oracle_agreement, decision_authority, "
@@ -827,12 +832,14 @@ def test_agent_activation_calibration_and_budget_follow_latest_authority(
                 "('judge-current-measured', :org, :run, 'judge', 'succeeded', 'openrouter', "
                 ":model, 'hosted_advisory', 1, :input_hash, :output_hash, :model, "
                 "'Google AI Studio', 'provider-request-current', 100, 20, 5, 0.1, "
+                "'partial', CAST(:measured_provider_events AS jsonb), "
                 ":trace, :configuration, :role_configuration, :generation_policy, 2, "
                 ":calibration, 'failed', false, 'oracle', 'disabled', '{}'::jsonb, "
                 ":started_at, :finished_at, 1000), "
                 "('judge-current-running', :org, :run, 'judge', 'running', 'openrouter', "
                 ":model, 'hosted_advisory', 1, :running_input_hash, NULL, NULL, NULL, NULL, "
-                "NULL, NULL, NULL, 0, :running_trace, :configuration, :role_configuration, "
+                "NULL, NULL, NULL, NULL, 'not_observed', '[]'::jsonb, :running_trace, "
+                ":configuration, :role_configuration, "
                 ":generation_policy, NULL, :calibration, 'failed', NULL, NULL, 'queued', "
                 "'{}'::jsonb, :running_started_at, NULL, NULL)"
             ),
@@ -843,6 +850,7 @@ def test_agent_activation_calibration_and_budget_follow_latest_authority(
                 "input_hash": "6" * 64,
                 "output_hash": "7" * 64,
                 "trace": "8" * 32,
+                "measured_provider_events": json.dumps(["c" * 64, "d" * 64]),
                 "running_input_hash": "9" * 64,
                 "running_trace": "a" * 32,
                 "configuration": configuration_sha256,
@@ -881,16 +889,18 @@ def test_agent_activation_calibration_and_budget_follow_latest_authority(
 
     budget = judge["provider_budget"]
     assert budget["status"] == "active"
-    assert budget["role_physical_calls"] == 1
-    assert budget["role_unresolved_physical_calls"] == 3
+    assert budget["role_physical_calls"] == 2
+    assert budget["role_unresolved_physical_calls"] == 2
     assert budget["role_calls_remaining"] == 15
-    assert abs(budget["role_unresolved_usd_exposure"] - 0.386016) < 1e-9
-    assert abs(budget["role_usd_remaining"] - 2.013984) < 1e-9
-    assert budget["global_physical_calls"] == 1
-    assert budget["global_unresolved_physical_calls"] == 3
+    assert abs(budget["role_unresolved_usd_exposure"] - 0.514688) < 1e-9
+    assert budget["role_usd_remaining"] is None
+    assert budget["role_usd_remaining_upper_bound"] == 2.4
+    assert budget["global_physical_calls"] == 2
+    assert budget["global_unresolved_physical_calls"] == 2
     assert budget["global_calls_remaining"] == 52
-    assert abs(budget["global_unresolved_usd_exposure"] - 0.386016) < 1e-9
-    assert abs(budget["global_usd_remaining"] - 4.513984) < 1e-9
+    assert abs(budget["global_unresolved_usd_exposure"] - 0.514688) < 1e-9
+    assert budget["global_usd_remaining"] is None
+    assert budget["global_usd_remaining_upper_bound"] == 4.9
 
     costs = client.get("/api/v1/costs").json()
     assert costs["state"] == "ready", costs
@@ -901,7 +911,7 @@ def test_agent_activation_calibration_and_budget_follow_latest_authority(
     }
     assert judge_costs[first_run]["provider_budget"]["status"] == "historical"
     assert judge_costs[current_run]["provider_budget"]["status"] == "active"
-    assert judge_costs[current_run]["provider_budget"]["role_unresolved_physical_calls"] == 3
+    assert judge_costs[current_run]["provider_budget"]["role_unresolved_physical_calls"] == 2
 
 
 def test_tooling_does_not_count_scheduled_attempt_without_authoritative_result(

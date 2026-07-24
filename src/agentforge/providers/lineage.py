@@ -44,11 +44,13 @@ _SENSITIVE = re.compile(
 # human-facing provider name. Keep the two identities distinct and normalize only explicitly
 # documented/tested routes. Unknown slugs fail closed.
 _OPENROUTER_SERVED_NAMES: Final = {
+    "amazon-bedrock": frozenset({"Amazon Bedrock"}),
     "anthropic": frozenset({"Anthropic"}),
     "together": frozenset({"Together"}),
     "google-vertex": frozenset({"Google", "Google Vertex"}),
     "openai": frozenset({"OpenAI"}),
     "atlas-cloud": frozenset({"AtlasCloud"}),
+    "azure": frozenset({"Azure"}),
 }
 
 

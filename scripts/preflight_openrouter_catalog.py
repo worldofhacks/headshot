@@ -36,14 +36,12 @@ from agentforge.agents.hosted import (
 )
 from agentforge.agents.hosted_policy import DEFAULT_HOSTED_GENERATION_POLICY
 
-_SCHEMA_VERSION = "headshot-openrouter-catalog-preflight-v1"
-_REQUEST_CONTRACT_VERSION = "openrouter-chat-json-schema-reasoning-v1"
+_SCHEMA_VERSION = "headshot-openrouter-catalog-preflight-v2"
+_REQUEST_CONTRACT_VERSION = "openrouter-chat-json-schema-reasoning-v2"
 _OPENROUTER_ORIGIN = "https://openrouter.ai"
 _MODEL_ENDPOINT_ROOT = f"{_OPENROUTER_ORIGIN}/api/v1/models"
 _ZDR_ENDPOINT_URL = f"{_OPENROUTER_ORIGIN}/api/v1/endpoints/zdr"
-_REQUIRED_PARAMETERS = frozenset(
-    {"max_tokens", "reasoning", "response_format", "structured_outputs"}
-)
+_REQUIRED_PARAMETERS = frozenset({"reasoning", "response_format", "structured_outputs"})
 _MAX_INPUT_BYTES = 1_000_000
 _MAX_FEED_BYTES = 10_000_000
 _MILLION = Decimal("1000000")
@@ -283,6 +281,7 @@ def _role_result(
         "role": role.role,
         "model_id": role.model_id,
         "configured_provider_slug": role.upstream_provider,
+        "completion_token_parameter": role.completion_token_parameter,
         "role_configuration_sha256": role.configuration_sha256,
         "match_count": 0,
         "matched_endpoint_tags": [],
@@ -326,7 +325,8 @@ def _role_result(
         if isinstance(supported, list)
         else set()
     )
-    missing_parameters = sorted(_REQUIRED_PARAMETERS - supported_set)
+    required_parameters = _REQUIRED_PARAMETERS | {role.completion_token_parameter}
+    missing_parameters = sorted(required_parameters - supported_set)
     call_bounds = DEFAULT_HOSTED_GENERATION_POLICY.call_bounds[role.role]
     requested_completion_tokens = call_bounds.output_tokens + call_bounds.reasoning_tokens
 
@@ -534,6 +534,7 @@ def _request_contract() -> dict[str, Any]:
         "api_route": "/api/v1/chat/completions",
         "provider_fallbacks_allowed": False,
         "required_parameters": sorted(_REQUIRED_PARAMETERS),
+        "completion_token_parameter_authority": "role_configuration",
         "structured_output_type": "json_schema",
         "privacy_requirement": "public_zdr_registry_membership",
     }

@@ -51,6 +51,7 @@ def _configuration() -> HostedConfigurationSet:
             provider="openrouter",
             model_id=model,
             upstream_provider=upstream,
+            completion_token_parameter="max_completion_tokens",
             credential_reference=f"secretref://staging/openrouter/{role}/generation-1",
             prompt_sha256=_PROMPTS[role].sha256,
             policy_sha256=_digest(f"{role}:policy"),
