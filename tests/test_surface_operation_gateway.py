@@ -9,14 +9,28 @@ and networkless.
 from __future__ import annotations
 
 import dataclasses
-import inspect
+import datetime
 import socket
 from collections.abc import Callable
 from typing import Any
 
 import pytest
+from sqlalchemy import Engine, text
+from sqlalchemy.exc import DBAPIError
 
+from agentforge.auth.permissions import CAMPAIGN_AUTHORIZE, CAMPAIGN_LAUNCH
+from agentforge.auth.principal import Principal
+from agentforge.campaign.authorization import AuthorizationError, RunAuthorization
+from agentforge.campaign.binding import BindingError, TargetBinding
+from agentforge.campaign.coordinator import (
+    RunConfig,
+    SecureCampaignCoordinator,
+)
+from agentforge.campaign.manifest import ManifestStore
 from agentforge.config import Settings
+from agentforge.control_plane.errors import RecordConflictError
+from agentforge.control_plane.store import ControlPlaneStore
+from agentforge.policy import gateway as gateway_module
 from agentforge.policy.allowlist import Allowlist, AllowlistEntry
 from agentforge.policy.gateway import (
     AbortError,
@@ -24,15 +38,20 @@ from agentforge.policy.gateway import (
     RunPolicy,
     WorkUnitCoordinates,
 )
+from agentforge.storage.queue import JobRecord, LogicalQueue, PostgresJobQueue
 from agentforge.target import base as target_base
 from agentforge.target.base import (
     TargetRequest,
     TargetResponse,
+    TargetSessionExpiredError,
     TargetUnreachableError,
 )
+from agentforge.target.catalog import TrustedTargetCatalog
 from agentforge.target.spec import (
     AuthMode,
+    ExecutionProfile,
     FixtureDescriptor,
+    SafetyCaps,
     SurfaceOperationTemplate,
     SurfacePolicy,
 )
@@ -42,6 +61,10 @@ _BASE_URL = "https://copilot.example.test"
 _ATTEMPT_ID = "attempt-t-f16b"
 _SECRET_CANARY = "SESSION-CANARY-MUST-NOT-LEAK"
 _BODY_CANARY = "BODY-CANARY-MUST-NOT-LEAK"
+_ORG = "org_TF16bOperationFixture"
+_CORPUS_HASH = "9" * 64
+_CORPUS_ID = "headshot-live-100-v1"
+_LEASE = datetime.timedelta(minutes=5)
 
 
 class _Clock:
@@ -66,6 +89,124 @@ class _Accounting:
         self.spent_usd += self.per_call_usd
 
 
+@dataclasses.dataclass(frozen=True)
+class _DurableRun:
+    store: ControlPlaneStore
+    job: JobRecord
+    run_id: str
+
+
+def _principal(user_id: str, permission: str) -> Principal:
+    return Principal(
+        user_id=user_id,
+        session_id=f"sess_{user_id.removeprefix('user_')}",
+        organization_id=_ORG,
+        organization_role="org:operator",
+        organization_permissions=frozenset({permission}),
+    )
+
+
+def _clean_control_plane(engine: Engine) -> None:
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "TRUNCATE TABLE campaign_work_unit_reservations, agent_executions, "
+                "agent_configuration_versions, regression_dispositions, vuln_reports, "
+                "campaign_run_summaries, finding_evidence_links, finding_decision_events, "
+                "finding, verdict, attempt_result, audit_events, command_idempotency, "
+                "campaign_attempts, campaign_run_events, campaign_runs, "
+                "campaign_authorization_decisions, campaign_authorization_requests, "
+                "surface_state_events, attack_surface_definitions, surface_identities, "
+                "target_lifecycle_events, target_definitions, target_identities, jobs "
+                "RESTART IDENTITY CASCADE"
+            )
+        )
+
+
+def _running_operation_run(
+    engine: Engine,
+    *,
+    physical_count: int = 3,
+    retry_count: int = 2,
+) -> _DurableRun:
+    _clean_control_plane(engine)
+    launcher = _principal("user_TF16bLauncher", CAMPAIGN_LAUNCH)
+    approver = _principal("user_TF16bApprover", CAMPAIGN_AUTHORIZE)
+    store = ControlPlaneStore(engine, environment="staging")
+    TrustedTargetCatalog.from_environment("staging").synchronize(
+        store,
+        organization_id=_ORG,
+    )
+    scope = store.build_scope(
+        principal=launcher,
+        target_id="synthetic-copilot",
+        target_version="1.1.0",
+        surface_id="synthetic-chat",
+        surface_version="1.1.0",
+        corpus_id=_CORPUS_ID,
+        corpus_hash=_CORPUS_HASH,
+        caps=SafetyCaps(
+            budget_usd=1.0,
+            max_attempts_per_run=1,
+            target_requests_per_second=100.0,
+            run_timeout_seconds=300.0,
+            logical_case_limit=1,
+            physical_request_limit=physical_count,
+            target_retries_per_turn=retry_count,
+        ),
+        run_nonce="t-f16b-operation-run-nonce",
+        execution_profile=ExecutionProfile.SYNTHETIC,
+    )
+    request = store.request_campaign_authorization(
+        principal=launcher,
+        scope=scope,
+        expires_at=datetime.datetime.now(datetime.UTC) + datetime.timedelta(minutes=10),
+        idempotency_key="request",
+    )
+    store.decide_campaign_authorization(
+        principal=approver,
+        request_id=request.request_id,
+        decision="approved",
+        idempotency_key="approval",
+    )
+    run = store.launch_campaign(
+        principal=launcher,
+        request_id=request.request_id,
+        idempotency_key="launch",
+    )
+    queue = PostgresJobQueue(
+        engine,
+        supported_payload_versions={
+            LogicalQueue.AGENT_WORK: {"campaign.execute": (1,)},
+        },
+    )
+    job = queue.claim(
+        LogicalQueue.AGENT_WORK,
+        worker_id="t-f16b-operation-worker",
+        lease_duration=_LEASE,
+    )
+    assert job is not None
+    store.append_campaign_state(run_id=run.run_id, state="running")
+    return _DurableRun(store=store, job=job, run_id=run.run_id)
+
+
+def _durable_rows(engine: Engine, run_id: str) -> list[dict[str, Any]]:
+    with engine.connect() as connection:
+        rows = (
+            connection.execute(
+                text(
+                    "SELECT attempt_id, turn_index, retry_index, observed_at, "
+                    "observation_outcome FROM campaign_work_unit_reservations "
+                    "WHERE run_id = :run_id ORDER BY turn_index, retry_index"
+                ),
+                {"run_id": run_id},
+            )
+            .mappings()
+            .all()
+        )
+    return [dict(row) for row in rows]
+
+
 class _ForbiddenLegacyAdapter:
     """The operation path must never fall back to the legacy adapter.send boundary."""
 
@@ -78,6 +219,11 @@ class _ForbiddenLegacyAdapter:
     def send(self, request: TargetRequest) -> TargetResponse:
         self.calls.append(request)
         raise AssertionError("surface operation bypassed the injected one-operation sender")
+
+
+class _CoordinatorLegacyAdapter(_ForbiddenLegacyAdapter):
+    name = "openemr"
+    base_url = _BASE_URL
 
 
 class _LegacyAdapter:
@@ -124,8 +270,6 @@ def _require_operation_api() -> tuple[type[Any], type[Any], type[BaseException]]
         for name in ("SurfaceOperation", "SurfaceOperationResponse")
         if not hasattr(target_base, name)
     ]
-    gateway_module = inspect.getmodule(PolicyGateway)
-    assert gateway_module is not None
     if not hasattr(gateway_module, "OperationFlowAborted"):
         missing.append("OperationFlowAborted")
     if not hasattr(PolicyGateway, "execute_operation_flow"):
@@ -389,6 +533,97 @@ def _execute_flow(
         pytest.fail(f"T-F16b execute_operation_flow contract is incomplete: {exc}")
 
 
+def _operation_coordinator(
+    engine: Engine,
+    manifest_root: Any,
+    durable: _DurableRun,
+    *,
+    clock: _Clock,
+    accounting: _Accounting,
+    reserver: Callable[[WorkUnitCoordinates], None],
+    observer: Callable[[WorkUnitCoordinates, str], None],
+    pre_dispatch_gate: Callable[[str], None],
+) -> SecureCampaignCoordinator:
+    authorized = durable.store.load_run_for_execution(durable.run_id)
+    scope = authorized.scope
+    binding = TargetBinding(
+        target_id=scope.target_id,
+        host=scope.exact_host,
+        adapter_kind=scope.adapter_kind,
+        credential_ref=scope.credential_ref,
+        auth_mode=scope.auth_mode.value,
+    )
+    run_policy = RunPolicy(**scope.caps.canonical_payload())
+    adapter = _CoordinatorLegacyAdapter()
+    adapter.name = scope.adapter_kind
+    adapter.base_url = f"https://{scope.exact_host}"
+
+    def revalidate_then_reserve(coordinates: WorkUnitCoordinates) -> None:
+        """Mirror Runner composition: persisted gates precede every durable reservation."""
+
+        pre_dispatch_gate(coordinates.attempt_id)
+        reserver(coordinates)
+
+    return SecureCampaignCoordinator(
+        config=RunConfig(
+            binding=binding,
+            authorization=RunAuthorization(
+                operation_hash=authorized.run.scope_hash,
+                run_nonce=scope.run_nonce,
+                deadline=authorized.expires_at.timestamp(),
+            ),
+            policy=run_policy,
+            run_nonce=scope.run_nonce,
+            canary_token="synthetic",
+            environment="local",
+            corpus_id=scope.corpus_id,
+            corpus_sha=scope.corpus_hash,
+            authorization_operation_hash=authorized.run.scope_hash,
+            campaign_run_id=durable.run_id,
+            pre_dispatch_gate=pre_dispatch_gate,
+            work_unit_reserver=revalidate_then_reserve,
+            work_unit_observer=observer,
+            dispatch_sleeper=clock.advance,
+        ),
+        adapter=adapter,
+        engine=engine,
+        manifests=ManifestStore(root=manifest_root),
+        clock=clock,
+        accounting=accounting,
+    )
+
+
+def _execute_coordinator_flow(
+    coordinator: SecureCampaignCoordinator,
+    flow: _ScriptedFlow,
+    surface_policy: SurfacePolicy,
+    *,
+    operation_sender: Callable[[Any], Any],
+    attempt_id: str,
+    lease_expires_at: float,
+    trace_capacity: int,
+) -> Any:
+    _require_operation_api()
+    assert hasattr(SecureCampaignCoordinator, "execute_operation_flow"), (
+        "T-F16b coordinator operation-flow entrypoint is absent"
+    )
+    authorization = coordinator.config.authorization
+    assert authorization is not None
+    try:
+        return coordinator.execute_operation_flow(
+            flow,
+            surface_policy,
+            operation_sender=operation_sender,
+            surface_policy_sha256=surface_policy.policy_hash(),
+            authorization_expires_at=authorization.deadline,
+            lease_expires_at=lease_expires_at,
+            trace_capacity=trace_capacity,
+            attempt_id=attempt_id,
+        )
+    except TypeError as exc:
+        pytest.fail(f"T-F16b coordinator operation-flow contract is incomplete: {exc}")
+
+
 # spec(T-F16b:AC-1)
 def test_spec_t_f16b_ac_1_lab_preflight_reserves_retry_inclusive_67_before_upload() -> None:
     events: list[str] = []
@@ -532,7 +767,244 @@ def test_spec_t_f16b_ac_2_4_fail_twice_succeed_third_reserves_and_accounts_three
 
 # spec(T-F16b:AC-2)
 # spec(T-F16b:AC-5)
-@pytest.mark.parametrize("gate_failure", ["authorization", "abort", "lease", "integrity"])
+# spec(T-F16b:AC-6)
+@pytest.mark.parametrize(
+    "mode",
+    ["retry-success", "terminal-failure", "lease-revoked"],
+)
+def test_spec_t_f16b_ac_2_5_6_coordinator_persists_each_physical_operation_once(
+    migrated_db: Engine,
+    tmp_path: Any,
+    mode: str,
+) -> None:
+    _require_operation_api()
+    durable = _running_operation_run(migrated_db)
+    attempt = durable.store.ensure_campaign_attempt(
+        run_id=durable.run_id,
+        ordinal=0,
+        case_id="case-operation-flow",
+    )
+    coordinates: list[WorkUnitCoordinates] = []
+    calls: list[Any] = []
+    dispatch_checks: list[str] = []
+    events: list[str] = []
+    clock = _Clock()
+    accounting = _Accounting()
+    hostile = f"{_SECRET_CANARY} {_BODY_CANARY} " + ("hostile-exception-" * 300)
+
+    def pre_dispatch(attempt_id: str) -> None:
+        dispatch_checks.append(attempt_id)
+        if mode == "lease-revoked" and calls:
+            events.append("gate-blocked")
+            raise AbortError("persisted lease revoked", code="lease-revoked")
+        durable.store.assert_job_lease(durable.job)
+        durable.store.resolve_dispatch(durable.run_id, attempt_id)
+        events.append("gate")
+
+    def reserve(item: WorkUnitCoordinates) -> None:
+        durable.store.reserve_campaign_work_unit(
+            job=durable.job,
+            attempt_id=item.attempt_id,
+            turn_index=item.turn_index,
+            retry_index=item.retry_index,
+        )
+        coordinates.append(item)
+        events.append("reserve")
+
+    def observe(item: WorkUnitCoordinates, outcome: str) -> None:
+        durable.store.observe_campaign_work_unit(
+            job=durable.job,
+            attempt_id=item.attempt_id,
+            turn_index=item.turn_index,
+            retry_index=item.retry_index,
+            outcome=outcome,
+        )
+        events.append("observe")
+
+    def send(operation: Any) -> Any:
+        assert coordinates, "sender ran without a durable reservation"
+        current = coordinates[-1]
+        with migrated_db.connect() as connection:
+            row = (
+                connection.execute(
+                    text(
+                        "SELECT observed_at FROM campaign_work_unit_reservations "
+                        "WHERE run_id = :run_id AND attempt_id = :attempt_id "
+                        "AND turn_index = :turn_index AND retry_index = :retry_index"
+                    ),
+                    {
+                        "run_id": durable.run_id,
+                        "attempt_id": current.attempt_id,
+                        "turn_index": current.turn_index,
+                        "retry_index": current.retry_index,
+                    },
+                )
+                .mappings()
+                .one()
+            )
+        assert row["observed_at"] is None
+        calls.append(operation)
+        events.append("send")
+        if mode == "terminal-failure":
+            raise TargetSessionExpiredError(hostile)
+        if mode == "lease-revoked":
+            raise TargetUnreachableError("retry reaches persisted lease gate")
+        if len(calls) < 3:
+            raise TargetUnreachableError(f"durable-retry-{len(calls)}")
+        return _response(trace_ref="trace-durable-third")
+
+    coordinator = _operation_coordinator(
+        migrated_db,
+        tmp_path,
+        durable,
+        clock=clock,
+        accounting=accounting,
+        reserver=reserve,
+        observer=observe,
+        pre_dispatch_gate=pre_dispatch,
+    )
+    flow = _ScriptedFlow(_operation("generic_read", "GET", "resource"))
+
+    caught: BaseException | None = None
+    if mode != "retry-success":
+        _, _, operation_error = _require_operation_api()
+        with pytest.raises(operation_error) as excinfo:
+            _execute_coordinator_flow(
+                coordinator,
+                flow,
+                _generic_policy(retries=2),
+                operation_sender=send,
+                attempt_id=attempt.attempt_id,
+                lease_expires_at=durable.job.lease_expires_at.timestamp(),
+                trace_capacity=3,
+            )
+        caught = excinfo.value
+    else:
+        result = _execute_coordinator_flow(
+            coordinator,
+            flow,
+            _generic_policy(retries=2),
+            operation_sender=send,
+            attempt_id=attempt.attempt_id,
+            lease_expires_at=durable.job.lease_expires_at.timestamp(),
+            trace_capacity=3,
+        )
+        assert result.physical_attempt_count == 3
+
+    expected_count = 3 if mode == "retry-success" else 1
+    rows = _durable_rows(migrated_db, durable.run_id)
+    assert len(calls) == accounting.charges == len(coordinates) == len(rows) == expected_count
+    assert [(row["turn_index"], row["retry_index"]) for row in rows] == [
+        (0, retry_index) for retry_index in range(expected_count)
+    ]
+    assert all(row["observed_at"] is not None for row in rows)
+    assert [row["observation_outcome"] for row in rows] == (
+        ["raised"] if mode != "retry-success" else ["raised", "raised", "returned"]
+    )
+    assert dispatch_checks.count(attempt.attempt_id) >= expected_count
+    completed_boundary = 0
+    for send_index in (index for index, event in enumerate(events) if event == "send"):
+        assert events[send_index - 1] == "reserve"
+        assert "gate" in events[completed_boundary : send_index - 1]
+        assert events[send_index + 1] == "observe"
+        completed_boundary = send_index + 2
+    if mode == "lease-revoked":
+        assert events[-1] == "gate-blocked"
+
+    if mode == "terminal-failure":
+        assert caught is not None
+        assert 0 < len(caught.terminal_reason) <= 160
+        rendered = f"{caught!s} {caught!r} {caught.__cause__!r} {rows!r}"
+        assert _SECRET_CANARY not in rendered
+        assert _BODY_CANARY not in rendered
+        assert "hostile-exception-" not in rendered
+
+    with pytest.raises(RecordConflictError, match="already reserved"):
+        durable.store.reserve_campaign_work_unit(
+            job=durable.job,
+            attempt_id=attempt.attempt_id,
+            turn_index=0,
+            retry_index=0,
+        )
+    with pytest.raises(DBAPIError), migrated_db.begin() as connection:
+        connection.execute(
+            text(
+                "UPDATE campaign_work_unit_reservations SET observation_outcome = 'returned' "
+                "WHERE run_id = :run_id AND attempt_id = :attempt_id "
+                "AND turn_index = 0 AND retry_index = 0"
+            ),
+            {"run_id": durable.run_id, "attempt_id": attempt.attempt_id},
+        )
+    assert coordinator.adapter.calls == []
+
+
+# spec(T-F16b:AC-2)
+# spec(T-F16b:AC-6)
+@pytest.mark.parametrize("refusal", ["authorization-scope", "binding"])
+def test_spec_t_f16b_ac_2_6_coordinator_revalidates_authority_before_operation_sender(
+    migrated_db: Engine,
+    tmp_path: Any,
+    refusal: str,
+) -> None:
+    _require_operation_api()
+    durable = _running_operation_run(migrated_db, physical_count=1, retry_count=0)
+    attempt = durable.store.ensure_campaign_attempt(
+        run_id=durable.run_id,
+        ordinal=0,
+        case_id=f"case-{refusal}",
+    )
+    sends: list[Any] = []
+    reservations: list[WorkUnitCoordinates] = []
+    clock = _Clock()
+    accounting = _Accounting()
+    coordinator = _operation_coordinator(
+        migrated_db,
+        tmp_path,
+        durable,
+        clock=clock,
+        accounting=accounting,
+        reserver=reservations.append,
+        observer=lambda _coordinates, _outcome: None,
+        pre_dispatch_gate=lambda _attempt_id: None,
+    )
+    if refusal == "authorization-scope":
+        authorization = coordinator.config.authorization
+        assert authorization is not None
+        coordinator.config = dataclasses.replace(
+            coordinator.config,
+            authorization=dataclasses.replace(authorization, operation_hash="0" * 64),
+        )
+        expected_error: type[BaseException] = AuthorizationError
+        match = "scope"
+    else:
+        coordinator.adapter.name = "wrong-adapter"
+        expected_error = BindingError
+        match = "bound adapter|adapter kind"
+
+    with pytest.raises(expected_error, match=match):
+        _execute_coordinator_flow(
+            coordinator,
+            _ScriptedFlow(_operation("generic_read", "GET", "resource")),
+            _generic_policy(retries=0),
+            operation_sender=lambda operation: sends.append(operation) or _response(),
+            attempt_id=attempt.attempt_id,
+            lease_expires_at=durable.job.lease_expires_at.timestamp(),
+            trace_capacity=1,
+        )
+
+    assert sends == []
+    assert reservations == []
+    assert accounting.charges == 0
+    assert _durable_rows(migrated_db, durable.run_id) == []
+    assert coordinator.adapter.calls == []
+
+
+# spec(T-F16b:AC-2)
+# spec(T-F16b:AC-5)
+@pytest.mark.parametrize(
+    "gate_failure",
+    ["authorization", "abort", "lease", "integrity", "capacity"],
+)
 def test_spec_t_f16b_ac_2_5_each_attempt_revalidates_and_gate_failure_stops_before_send(
     gate_failure: str,
 ) -> None:
@@ -575,6 +1047,93 @@ def test_spec_t_f16b_ac_2_5_each_attempt_revalidates_and_gate_failure_stops_befo
     assert traces[0].outcome == "raised"
     assert caught.value.physical_attempt_count == 1
     assert caught.value.trace_refs == ()
+    assert legacy.calls == []
+
+
+# spec(T-F16b:AC-2)
+# spec(T-F16b:AC-5)
+@pytest.mark.parametrize("dimension", ["budget", "rate", "timeout"])
+def test_spec_t_f16b_ac_2_5_native_budget_rate_or_timeout_stops_before_retry(
+    dimension: str,
+) -> None:
+    calls: list[Any] = []
+    traces: list[Any] = []
+    clock = _Clock()
+    accounting = _Accounting()
+
+    def send(operation: Any) -> Any:
+        calls.append(operation)
+        if dimension == "budget":
+            accounting.spent_usd = 1.0
+            raise TargetUnreachableError("retry after concurrent spend")
+        if dimension == "rate":
+            clock.advance(0.1)
+            raise TargetUnreachableError("retry would enter the native rate window")
+        clock.advance(31.0)
+        raise TargetUnreachableError("retry after deadline")
+
+    gateway, _actual_clock, _actual_accounting, legacy = _gateway(
+        sender=send,
+        clock=clock,
+        accounting=accounting,
+        operation_observer=traces.append,
+    )
+    _, _, operation_error = _require_operation_api()
+    with pytest.raises(operation_error, match=dimension) as caught:
+        _execute_flow(
+            gateway,
+            _ScriptedFlow(_operation("generic_read", "GET", "resource")),
+            _generic_policy(retries=2),
+            _run_policy(
+                budget_usd=1.0,
+                physical_request_limit=3,
+                target_requests_per_second=1.0,
+                run_timeout_seconds=30.0,
+            ),
+            trace_capacity=3,
+        )
+
+    assert len(calls) == accounting.charges == len(traces) == 1
+    assert traces[0].outcome == "raised"
+    assert caught.value.physical_attempt_count == 1
+    assert legacy.calls == []
+
+
+# spec(T-F16b:AC-2)
+# spec(T-F16b:AC-5)
+def test_spec_t_f16b_ac_2_5_budget_becoming_insufficient_blocks_later_logical_operation() -> None:
+    calls: list[Any] = []
+    traces: list[Any] = []
+    accounting = _Accounting()
+    surface_policy = _policy_from(
+        _template("first_read", "GET", "first", retry_count=0),
+        _template("second_read", "GET", "second", retry_count=0),
+    )
+
+    def advance(_operation_value: Any, _response_value: Any, completed: int) -> Any | None:
+        if completed == 1:
+            accounting.spent_usd = 1.0
+            return _operation("second_read", "GET", "second")
+        return None
+
+    gateway, _clock, _actual_accounting, legacy = _gateway(
+        sender=lambda operation: calls.append(operation) or _response(trace_ref="trace-first"),
+        accounting=accounting,
+        operation_observer=traces.append,
+    )
+    _, _, operation_error = _require_operation_api()
+    with pytest.raises(operation_error, match="budget") as caught:
+        _execute_flow(
+            gateway,
+            _ScriptedFlow(_operation("first_read", "GET", "first"), advance),
+            surface_policy,
+            _run_policy(budget_usd=1.0, physical_request_limit=2),
+            trace_capacity=2,
+        )
+
+    assert len(calls) == accounting.charges == len(traces) == 1
+    assert traces[0].outcome == "returned"
+    assert caught.value.physical_attempt_count == 1
     assert legacy.calls == []
 
 
@@ -773,6 +1332,87 @@ def test_spec_t_f16b_ac_3_declared_logical_operation_maximum_stops_expansion() -
     assert len(sent) == accounting.charges == 31  # upload + exactly thirty authorized polls
 
 
+# spec(T-F16b:AC-1)
+# spec(T-F16b:AC-3)
+# spec(T-F16b:AC-4)
+def test_spec_t_f16b_ac_1_3_4_complete_mixed_lab_flow_uses_exactly_67_not_68() -> None:
+    operations = [
+        _operation("upload", "POST", "documents"),
+        *[_operation("status_poll", "GET", "documents/doc_1/status") for _index in range(30)],
+        _operation("report", "GET", "documents/doc_1/report"),
+        _operation("preview", "GET", "documents/doc_1/preview"),
+        _operation("readback", "GET", "documents/doc_1"),
+    ]
+    sent: list[Any] = []
+    gates: list[Any] = []
+    traces: list[Any] = []
+    reservations: list[Any] = []
+
+    def advance(_prior: Any, _response_value: Any, completed: int) -> Any:
+        if completed < len(operations):
+            return operations[completed]
+        return _operation("readback", "GET", "documents/doc_1")
+
+    def send(operation: Any) -> Any:
+        assert gates, "sender ran before the immediate operation gate"
+        sent.append(operation)
+        if operation.operation_class != "upload" and gates[-1].coordinates.retry_index == 0:
+            raise TargetUnreachableError("first read attempt is transient")
+        content_type = {
+            "preview": "image/png",
+            "readback": "application/pdf",
+        }.get(operation.operation_class, "application/json")
+        payload = (
+            {"document_id": "doc_1"}
+            if operation.operation_class == "upload"
+            else {"state": "complete"}
+        )
+        return _response(
+            content_type=content_type,
+            payload=payload,
+            trace_ref=f"trace-mixed-{len(sent)}",
+        )
+
+    gateway, clock, accounting, legacy = _gateway(
+        sender=send,
+        reservation_observer=reservations.append,
+        pre_operation_gate=gates.append,
+        operation_observer=traces.append,
+    )
+    _, _, operation_error = _require_operation_api()
+    with pytest.raises(operation_error, match="maximum|physical|operation|flow") as caught:
+        _execute_flow(
+            gateway,
+            _ScriptedFlow(operations[0], advance),
+            _lab_policy(),
+            _run_policy(
+                budget_usd=1.0,
+                physical_request_limit=67,
+                target_requests_per_second=100.0,
+                run_timeout_seconds=300.0,
+            ),
+            trace_capacity=67,
+        )
+
+    assert len(operations) == 34
+    assert reservations[0].maximum_physical_attempts == 67
+    assert len(sent) == accounting.charges == len(gates) == len(traces) == 67
+    assert [operation.operation_class for operation in sent].count("upload") == 1
+    assert [operation.operation_class for operation in sent].count("status_poll") == 60
+    assert [operation.operation_class for operation in sent].count("report") == 2
+    assert [operation.operation_class for operation in sent].count("preview") == 2
+    assert [operation.operation_class for operation in sent].count("readback") == 2
+    assert [(trace.coordinates.turn_index, trace.coordinates.retry_index) for trace in traces] == [
+        (0, 0)
+    ] + [(logical_index, retry_index) for logical_index in range(1, 34) for retry_index in (0, 1)]
+    assert [trace.outcome for trace in traces].count("raised") == 33
+    assert [trace.outcome for trace in traces].count("returned") == 34
+    assert caught.value.physical_attempt_count == 67
+    assert len(caught.value.trace_refs) == 34
+    assert clock.now() >= 66.0
+    assert legacy.calls == []
+
+
 # spec(T-F16b:AC-4)
 def test_spec_t_f16b_ac_4_ambiguous_zero_retry_upload_is_sent_exactly_once() -> None:
     calls: list[Any] = []
@@ -813,6 +1453,61 @@ def test_spec_t_f16b_ac_4_ambiguous_zero_retry_upload_is_sent_exactly_once() -> 
 
     assert len(calls) == accounting.charges == len(traces) == 1
     assert traces[0].outcome == "raised"
+    assert legacy.calls == []
+
+
+# spec(T-F16b:AC-2)
+# spec(T-F16b:AC-4)
+@pytest.mark.parametrize(
+    "failure",
+    [
+        pytest.param(
+            TargetSessionExpiredError("delegated session ended"),
+            id="non-retryable",
+        ),
+        pytest.param(RuntimeError("unexpected transport failure"), id="unexpected"),
+    ],
+)
+def test_spec_t_f16b_ac_2_4_nonretryable_and_unexpected_failures_are_metered_once(
+    failure: Exception,
+) -> None:
+    calls: list[Any] = []
+    gates: list[Any] = []
+    traces: list[Any] = []
+    advances = 0
+
+    def send(operation: Any) -> Any:
+        calls.append(operation)
+        raise failure
+
+    def advance(_operation_value: Any, _response_value: Any, _completed: int) -> None:
+        nonlocal advances
+        advances += 1
+
+    gateway, _clock, accounting, legacy = _gateway(
+        sender=send,
+        pre_operation_gate=gates.append,
+        operation_observer=traces.append,
+    )
+    _, _, operation_error = _require_operation_api()
+    with pytest.raises(operation_error) as caught:
+        _execute_flow(
+            gateway,
+            _ScriptedFlow(
+                _operation("generic_read", "GET", "resource"),
+                advance,
+            ),
+            _generic_policy(retries=2),
+            _run_policy(physical_request_limit=3),
+            trace_capacity=3,
+        )
+
+    assert len(calls) == accounting.charges == len(gates) == len(traces) == 1
+    assert gates[0].coordinates.retry_index == 0
+    assert traces[0].coordinates.retry_index == 0
+    assert traces[0].outcome == "raised"
+    assert caught.value.physical_attempt_count == 1
+    assert advances == 0
     assert legacy.calls == []
 
 
@@ -893,6 +1588,61 @@ def test_spec_t_f16b_ac_5_terminal_trace_is_immutable_bounded_and_sanitized() ->
         traces[0].outcome = "forged"
 
 
+# spec(T-F16b:AC-2)
+# spec(T-F16b:AC-5)
+@pytest.mark.parametrize("failure_site", ["transport", "retry-gate"])
+def test_spec_t_f16b_ac_2_5_hostile_exception_text_is_bounded_and_never_persisted(
+    failure_site: str,
+) -> None:
+    sent: list[Any] = []
+    traces: list[Any] = []
+    checks = 0
+    hostile = f"{_SECRET_CANARY} {_BODY_CANARY} SESSION=synthetic-session " + (
+        "attacker-controlled-" * 300
+    )
+
+    def guard(_context: Any) -> None:
+        nonlocal checks
+        checks += 1
+        if failure_site == "retry-gate" and checks == 2:
+            raise AbortError(hostile, code="hostile-gate-refusal")
+
+    def send(operation: Any) -> Any:
+        sent.append(operation)
+        if failure_site == "transport":
+            raise RuntimeError(hostile)
+        raise TargetUnreachableError("first attempt requires retry")
+
+    gateway, _clock, accounting, legacy = _gateway(
+        sender=send,
+        pre_operation_gate=guard,
+        operation_observer=traces.append,
+    )
+    _, _, operation_error = _require_operation_api()
+    with pytest.raises(operation_error) as caught:
+        _execute_flow(
+            gateway,
+            _ScriptedFlow(_operation("generic_read", "GET", "resource")),
+            _generic_policy(retries=2),
+            _run_policy(physical_request_limit=3),
+            trace_capacity=3,
+        )
+
+    error = caught.value
+    expected_sends = 1
+    assert len(sent) == accounting.charges == len(traces) == expected_sends
+    assert traces[0].outcome == "raised"
+    assert 0 < len(error.terminal_reason) <= 160
+    rendered = f"{error!s} {error!r} {error.__cause__!r} {traces!r}"
+    assert _SECRET_CANARY not in rendered
+    assert _BODY_CANARY not in rendered
+    assert "synthetic-session" not in rendered
+    assert "attacker-controlled-" not in rendered
+    assert error.physical_attempt_count == 1
+    assert checks == (1 if failure_site == "transport" else 2)
+    assert legacy.calls == []
+
+
 # spec(T-F16b:AC-5)
 def test_spec_t_f16b_ac_5_terminal_failure_preserves_completed_trace_and_stops_later_op() -> None:
     sent: list[Any] = []
@@ -933,8 +1683,13 @@ def test_spec_t_f16b_ac_5_terminal_failure_preserves_completed_trace_and_stops_l
 
 
 # spec(T-F16b:AC-6)
+@pytest.mark.parametrize(
+    "sender_path",
+    ["success", "retry-success", "typed-terminal", "unexpected-terminal"],
+)
 def test_spec_t_f16b_ac_6_flow_has_no_transport_bypass_and_sender_is_gateway_owned(
     monkeypatch: pytest.MonkeyPatch,
+    sender_path: str,
 ) -> None:
     monkeypatch.setattr(
         socket,
@@ -944,27 +1699,56 @@ def test_spec_t_f16b_ac_6_flow_has_no_transport_bypass_and_sender_is_gateway_own
         ),
     )
     sent: list[Any] = []
+    traces: list[Any] = []
+
+    def send(operation: Any) -> Any:
+        sent.append(operation)
+        if sender_path == "retry-success" and len(sent) == 1:
+            raise TargetUnreachableError("one authorized retry")
+        if sender_path == "typed-terminal":
+            raise TargetSessionExpiredError("typed terminal")
+        if sender_path == "unexpected-terminal":
+            raise RuntimeError("unexpected terminal")
+        return _response(trace_ref=f"trace-{sender_path}")
+
     flow = _ScriptedFlow(_operation("generic_read", "GET", "resource"))
     gateway, _clock, accounting, legacy = _gateway(
-        sender=lambda operation: sent.append(operation) or _response(),
+        sender=send,
+        operation_observer=traces.append,
     )
-    result = _execute_flow(
-        gateway,
-        flow,
-        _generic_policy(retries=0),
-        _run_policy(physical_request_limit=1),
-        trace_capacity=1,
-    )
+    if sender_path.endswith("terminal"):
+        _, _, operation_error = _require_operation_api()
+        with pytest.raises(operation_error):
+            _execute_flow(
+                gateway,
+                flow,
+                _generic_policy(retries=1),
+                _run_policy(physical_request_limit=2),
+                trace_capacity=2,
+            )
+    else:
+        result = _execute_flow(
+            gateway,
+            flow,
+            _generic_policy(retries=1),
+            _run_policy(physical_request_limit=2),
+            trace_capacity=2,
+        )
+        assert result.physical_attempt_count == len(sent)
 
     assert not any(
         hasattr(flow, attribute)
         for attribute in ("send", "client", "transport", "session", "request")
     )
-    method_source = inspect.getsource(PolicyGateway.execute_operation_flow)
-    assert "operation_sender" in method_source
-    assert "self.adapter.send" not in method_source
-    assert "flow.send" not in method_source
-    assert len(sent) == accounting.charges == result.physical_attempt_count == 1
+    expected_calls = 2 if sender_path == "retry-success" else 1
+    assert len(sent) == accounting.charges == len(traces) == expected_calls
+    expected_outcomes = {
+        "success": ["returned"],
+        "retry-success": ["raised", "returned"],
+        "typed-terminal": ["raised"],
+        "unexpected-terminal": ["raised"],
+    }
+    assert [trace.outcome for trace in traces] == expected_outcomes[sender_path]
     assert legacy.calls == []
 
 
