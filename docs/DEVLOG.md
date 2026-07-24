@@ -99,3 +99,37 @@ Append-only project record. Newest entries appear at the bottom.
   role/MFA/two-user proof remains pending but does not substitute for campaign authorization.
 - Stage: Final integration candidate. No deployment, target request, campaign, Langfuse export
   verification, production promotion, publication, or remediation was performed by this entry.
+
+## [2026-07-24] Exact provider routes and physical-attempt tracing   ·   type: observability correction
+
+- What: Advanced the candidate hosted-configuration contract to schema v2 and bound each role to an
+  exact OpenRouter route plus its endpoint-supported output-token parameter: Bedrock `eu-west-1`,
+  AtlasCloud `fp8`, Vertex `global`, and Azure `eu`. Added one native
+  `provider.openrouter.attempt` Langfuse child generation per durable physical send/retry.
+- Why: A broad provider slug or substituted token-limit field could select a different endpoint,
+  while logical aggregate telemetry could hide retries or double-count provider usage.
+- Result: Exact-route catalog preflight and transport validation fail closed; physical generations
+  carry invocation/event order, returned identity, latency, errors, token usage, and provider-reported
+  cost, while hosted logical runtime generations remain metadata-only for tokens/cost.
+- Stage: Final integration candidate source and tests only. Not deployed, not exercised against the
+  target, and not reconciled from Langfuse Cloud by this entry.
+
+## [2026-07-24] Hosted Red Team quarantine composition and exact UI scope   ·   type: integration correction
+
+- What: Composed one real, traced Qwen Red Team generation per selected frozen seed in hosted
+  campaigns. The Runner stores only the generated-output hash and
+  `quarantined_not_dispatched`, discards the raw proposal, and dispatches only the byte-exact
+  authorized SeedReplay case. Threaded provider-request parentage through
+  Orchestrator → Red Team → Judge → Documentation.
+- What: Split server-derived workload counts from target ceilings in the campaign template. The
+  browser now refuses missing or inconsistent corpus, target/allowlist, synthetic attestation,
+  workload, hosted binding, budget/rate/timeout, nonce, or expiry authority instead of inventing
+  launch values.
+- Why: A four-role claim requires a physical Red Team model attempt, while the frozen-corpus grant
+  forbids unreviewed generated text from becoming target traffic. Target maxima likewise cannot be
+  mistaken for the exact authorized workload.
+- Result: Full backend, frontend, Playwright, Ruff, format, build, forbidden-language, and bundle
+  checks passed locally. The model Judge remains advisory under the current identity drift, with
+  deterministic-oracle precedence.
+- Stage: Final integration candidate source and tests only. No target request, deployment, Langfuse
+  query-back, production promotion, publication, or remediation was performed by this entry.

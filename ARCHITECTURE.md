@@ -8,12 +8,14 @@
 > `docs/planning/DECISIONS.md` (D#) and `docs/planning/RESEARCH.md` (R#). The finalize audit trail is
 > `docs/planning/gap-audit.md`; every finding's resolution is registered in **§20**.
 >
-> **Implementation reconciliation — 2026-07-24.** The source audited for this update was `eac2968`
-> with one Alembic head at `0017`. GitHub `main`, GitLab `main`, and the observed Railway release
-> were still `23490ea` with schema `0013`. Consequently, the controls described as implemented below
-> are candidate-source capabilities unless a linked artifact explicitly labels them live-verified.
-> The newer hosted-agent and Langfuse paths have not been proved in Railway. Cost, performance, final
-> corpus/Judge, demo, and promotion evidence remain separate release gates; no value is invented here.
+> **Implementation reconciliation — 2026-07-24.** The deployment audit began from source `eac2968`
+> with one Alembic head at `0017`; the moving integration candidate now has one head at `0018`,
+> hosted-configuration schema v2, exact provider routes, and physical provider-attempt tracing.
+> GitHub `main`, GitLab `main`, and the observed Railway release were still `23490ea` with schema
+> `0013`. Consequently, the controls described as implemented below are candidate-source capabilities
+> unless a linked artifact explicitly labels them live-verified. The newer hosted-agent and Langfuse
+> paths have not been proved in Railway. Cost, performance, final corpus/Judge, demo, and promotion
+> evidence remain separate release gates; no value is invented here.
 
 ---
 
@@ -45,16 +47,20 @@ which never count as safe and never enter the regression corpus. Cross-provider 
 as defense-in-depth, not the invariant.
 
 **Stack (build-vs-configure, ADR-0001).** Python on Railway (Docker-from-GitHub, managed Postgres,
-deployment history + database recovery). Runtime orchestration is custom Python:
+and application deployment history). Database recovery is a separate production gate: the audit
+found no configured database backup/PITR schedule or confirmed restore point. Runtime orchestration
+is custom Python:
 `SecureCampaignCoordinator`, `DurableCampaignRunner`, `DurableScheduler`, and a PostgreSQL
 `SKIP LOCKED` job queue. The queue is at-least-once with leases, heartbeats, reaping, cancellation,
 dead-lettering, versioned payloads, and durable physical work-unit reservations. PostgreSQL is the
 system of record; Langfuse Cloud is a redacted projection that must be queried back before export is
 claimed. Hosted role configurations are pinned to Claude Opus 4.8 (Orchestrator), Qwen 3.5
 397B-A17B (Red Team), Gemini 2.5 Pro (Judge), and GPT-5.4 (Documentation), routed through OpenRouter
-with an exact upstream provider and fallback disabled. The current Runner hosts Orchestrator, Judge,
-and Documentation. The traced hosted Red Team generator exists and is tested, but is not yet composed
-into the reviewed-candidate/fresh-authorization campaign loop.
+with an exact upstream provider and fallback disabled. In hosted mode the candidate Runner composes
+all four roles. For each selected frozen case, Qwen produces one traced proposal whose raw text is
+not persisted or dispatched: only its hash and the explicit
+`quarantined_not_dispatched` disposition are recorded. The byte-exact authorized SeedReplay case is
+the only target payload.
 
 **Human identity and hosting boundary (implemented in source; final live proof pending).** The console
 and API run on a public Railway **Web** service; Runner, Scheduler, and PostgreSQL remain on Railway's
@@ -120,10 +126,16 @@ assignment (PRD-13). An agent that both attacks and judges is compromised by des
 | **Policy Gateway + Execution Recorder** | Enforces allowlist, scoped creds, synthetic-data, budget, rate caps, hard abort; executes vs target; records request/response/policy decision; emits canonically-hashed `AttemptResult` | **Trusted enforcement boundary** | Deterministic policy code — no model | `AttackAttempt` → `AttemptResult` (append-only, hashed) |
 | **Judge** | Independent verdict via the deterministic state machine (§5); consistent cross-run criteria; escalates on ambiguity | **Independent evaluator** | Pure evaluator: emits a schema-validated `Verdict` and nothing else — **holds no target credentials, no mutation tools, no publish authority, executes no actions**; never generates/mutates attacks; **never approves a confirmed exploit as safe** | typed **Evidence Envelope** (§4): recorder `AttemptResult` + code-populated oracle/canary results + expected-safe behavior + ground truth → `Verdict` |
 | **Documentation** | Confirmed exploit → structured, reproducible vuln report; data-quality gated | **Gated** | Autonomous drafting; **human gate on critical publish** | confirmed exploit → `VulnReport` |
-| **Regression harness** | Versioned exploit store; deterministic replay; reappearance + cross-category detection | **Deterministic** | Runs on Orchestrator trigger / target change | `RegressionAdmissionCandidate` → `RegressionRun` results |
+| **Regression harness** | Versioned exploit store and admission; plans deterministic replay, reappearance, and cross-category checks | **Deterministic** | Planning may follow an Orchestrator trigger / target change; execution remains separately authorization-gated | `RegressionAdmissionCandidate` → blocked replay plan; an authorized deployed `RegressionRun` remains unproved |
 
 (The observability layer, §9, is the seventh, append-only component — the data substrate the Orchestrator
 reads.)
+
+[![D2/D4 Agent Interaction and Trust Boundaries](docs/diagrams/D2-D4-agent-interaction-trust.svg)](docs/diagrams/D2-D4-agent-interaction-trust.svg)
+
+The rendered [D2/D4 agent-interaction and trust-boundary diagram](docs/diagrams/D2-D4-agent-interaction-trust.svg)
+is governed by its [source-of-truth build specification](docs/diagrams/D2-D4-agent-interaction-trust.spec.md);
+the [diagram plan](docs/planning/DIAGRAM_PLAN.md) records its required views and maintenance order.
 
 **Human identity is not workload identity.** A Clerk `Principal` identifies a human operating the Web
 console/API and is used for application RBAC and attribution. Runtime agents and infrastructure use
@@ -413,8 +425,10 @@ credentials control workloads; neither identity class can be substituted for the
   inline). No Redis/Celery. Fallback: pgmq on the same Postgres.
 - **Run-scoped identity (S3).** Every `AttemptResult` and `Verdict` carries a fresh `campaign_run_id` per
   dispatch, bound inside `content_hash`. A UNIQUE constraint on `(campaign_run_id, attempt_id)` rejects a
-  replay rather than overwriting; coverage/resilience aggregates count **distinct** pairs. Regression runs
-  **generate a new `campaign_run_id` and re-execute against the live target** — verdicts are never reused.
+  replay rather than overwriting; coverage/resilience aggregates count **distinct** pairs. Any future
+  authorized regression execution must generate a new `campaign_run_id` and re-execute against the target;
+  verdicts are never reused. The candidate currently records authorization-blocked replay plans, not
+  deployed live replay evidence.
 - **Durable correlation (O6).** `campaign_id` / `attempt_id` / `finding_id` are generated at campaign start,
   written as columns on Attempt / Verdict / Finding / RegressionRun rows **and** propagated as Langfuse span
   attributes. `finding_id` is the join key across the Langfuse↔exploit-DB system-of-record split (§9), so
@@ -466,30 +480,36 @@ and `DurableScheduler` records target-version replay plans. PostgreSQL is the du
 
 ## §8. Models per Role
 
-A content-addressed configuration set binds every requested model, prompt, provider, upstream provider,
-limits, and retry policy before activation:
+A content-addressed hosted-configuration set binds every requested model, prompt, exact provider route,
+output-token parameter, limits, and retry policy before activation. Schema v2 makes
+`completion_token_parameter` part of each role's authorization-bound hash; catalog preflight must prove
+that exact parameter on the exact endpoint, and transport may not substitute its sibling spelling:
 
-| Role | Exact configured model | Current candidate composition |
-|---|---|---|
-| **Orchestrator** | `anthropic/claude-opus-4.8` | `HostedPlanner` is composed by the Runner when hosted mode is enabled |
-| **Red Team** | `qwen/qwen3.5-397b-a17b` | Traced hosted generator exists and is tested; the Runner still selects authorized cases with `SeedReplayRedTeam` |
-| **Judge** | `google/gemini-2.5-pro` | Hosted assessment is composed, but deterministic oracles remain decisive unless the exact calibration artifact enables the model |
-| **Documentation** | `openai/gpt-5.4` | `HostedReportWriter` is composed for confirmed findings; schema and human publication gates still apply |
+| Role | Exact configured model | Exact `provider.only` route | Accepted router identity | Output-token parameter | Current candidate composition |
+|---|---|---|---|---|---|
+| **Orchestrator** | `anthropic/claude-opus-4.8` | `amazon-bedrock/eu-west-1` | `Amazon Bedrock` | `max_tokens` | `HostedPlanner` is composed by the Runner when hosted mode is enabled |
+| **Red Team** | `qwen/qwen3.5-397b-a17b` | `atlas-cloud/fp8` | `AtlasCloud` | `max_tokens` | One traced generation runs per selected frozen seed; unreviewed output is hash-recorded and discarded, while `SeedReplayRedTeam` supplies the byte-exact target payload |
+| **Judge** | `google/gemini-2.5-pro` | `google-vertex/global` | `Google` or `Google Vertex` | `max_tokens` | Hosted assessment is composed, but deterministic oracles remain decisive unless the exact calibration artifact enables the model |
+| **Documentation** | `openai/gpt-5.4` | `azure/eu` | `Azure` | `max_completion_tokens` | `HostedReportWriter` is composed for confirmed findings; schema and human publication gates still apply |
 
-All calls use OpenRouter with exact upstream-provider routing and provider fallback disabled. Returned
-provider/model identity is checked and persisted. Cross-vendor separation is defense-in-depth, not the
-Judge invariant. The final release must prove these identities from the deployed run; configuration and
-local tests alone are not live evidence.
+All calls use OpenRouter with the exact route above, `allow_fallbacks: false`, and
+`require_parameters: true`. Returned provider/model identity is checked and persisted.
+Cross-vendor separation is defense-in-depth, not the Judge invariant. The final release must prove
+these identities from the deployed run; configuration and local tests alone are not live evidence.
 
 ## §9. Observability Layer
 
 **Langfuse Cloud** is the external observability backend, using the pinned Python SDK
 `langfuse==4.14.1`. PostgreSQL remains authoritative. One campaign has a stable trace ID; each durable
-`agent_execution` projects a native AGENT observation with a child GENERATION, and each physical target
-request is a child of its same-attempt Red Team observation. The projection records campaign/run/attempt
-lineage, role and order, requested and returned provider/model, duration, usage tokens, retries, typed
-errors, and actual cost when supplied. Payload hashes and byte counts are exported instead of raw
-credentials or hostile bodies.
+`agent_execution` projects a native AGENT observation with a logical `agent.<role>.runtime` child
+GENERATION. Every pre-reserved physical OpenRouter send/retry projects a separate
+`provider.openrouter.attempt` GENERATION beneath its owning role AGENT, and each physical target request
+is a child of its same-attempt Red Team observation. Physical provider generations carry invocation/event
+identity, physical sequence and retry number, requested/returned model, configured/served provider,
+provider request identity, latency, typed error, disjoint token usage, and measured cost when supplied.
+For hosted work, the logical runtime child is metadata-only for usage and cost so Langfuse cannot count
+the physical values twice. Payload hashes and byte counts are exported instead of raw credentials or
+hostile bodies.
 
 Provider calls fail closed if their Langfuse observation cannot be opened first; deterministic telemetry
 may degrade fail-soft because PostgreSQL still holds the result. SDK flush changes no row to `exported`.
@@ -507,11 +527,10 @@ implemented but not live-verified.
   without N distinct verified attempts **and** ≥1 deterministic-oracle or human-spot-checked case; an
   unexplained resilience jump without a `target_version` change is flagged, not trusted. "Which agent wrote
   this coverage row" is part of lineage.
-- **Alerting (O3).** An alert channel (app-emitted / cron-driven webhook to Slack/email/PagerDuty-equivalent)
-  fires on: human-approval-pending (with response SLA), regression detected / finding reopened, budget
-  circuit-breaker tripped, target-unreachable beyond backoff, queue depth over threshold, and Langfuse/DB
-  emission failure. Alerts are tied to the **durable source** (exploit DB / queue table), not Langfuse alone,
-  so an observability outage does not silence them.
+- **Alerting (O3) — required, not implemented or live-verified.** No configured Slack/email/PagerDuty
+  channel or delivery evidence was found in the candidate audit. A future app/cron-driven notifier must
+  source human-approval-pending, regression/finding, budget breaker, target reachability, queue depth, and
+  Langfuse/DB emission conditions from durable Postgres state rather than Langfuse alone.
 
 **The layer's acceptance criteria are fixed regardless of backend** — it must answer, for a human *and* the
 Orchestrator: (1) categories tested + cases per category; (2) pass/fail rate across categories + versions;
@@ -525,20 +544,19 @@ cost attribution; append-only; the data substrate the Orchestrator reads (not ju
 implemented. The Scheduler records authorization-blocked replay plans; it does not automatically execute
 live replay work. A deployed authorized replay and reappearance/cross-category proof remain pending.
 
-- Stores confirmed exploits in a versioned, queryable format; runs the suite automatically on Orchestrator
-  trigger (**Railway cron** enqueues) or target change.
-- Detects (a) a previously-fixed vulnerability reappearing, (b) fixing one category regressing another.
+- Stores confirmed exploits in a versioned, queryable format. The current Scheduler records a replay
+  plan on a target-version change; it does not automatically authorize or execute the suite.
+- Reappearance and cross-category detection are acceptance criteria for an authorized replay. Neither has
+  deployed execution evidence yet.
 - **Admission invariant:** a case is admitted only if it reproduces **deterministically** *and* passes for the
   right reason — a real fix, not changed model behavior (PRD-24). "A test that passes because behavior changed
   is worse than no test." Admission consumes only `EXPLOIT_CONFIRMED` evidence via a deterministic regression
   oracle + expected-safe assertion (D13); `adversarial-eval-lifecycle` governs admission, the harness is app
   code.
-- **Tiered regression at scale (O5).** "Sample regression runs" (the 100K cost lever, §11) is **stratified**,
-  not uniform: **every critical-severity and every recently-reopened case runs on every target change**; only
-  lower-severity/older cases are sampled; the **full** suite runs on a scheduled cadence. The documented
-  residual detection-latency is capped. Verdict caching for duplicate sequences is bounded by
-  `target_version` + case-content hash — a cached verdict is invalidated whenever the target or the case
-  changes (never "passes for the wrong reason").
+- **Tiered regression at scale (O5) — target design, not current execution proof.** The intended 100K
+  lever is stratified rather than uniform: every critical/reopened case on every target change,
+  lower-severity/older sampling, and a scheduled full suite. Implementing and measuring that executor,
+  its residual detection latency, and any `target_version` + case-hash verdict cache remain open work.
 - **SLO (two numbers, PRD-OPT-16):** a **full-suite** time budget and a **per-change critical-subset** budget,
   each verified in CI against fixtures (§18). Concrete budgets are MVP-measured (`open question`, §17).
 
@@ -581,7 +599,7 @@ for unavailable billing evidence.
   wheel, then carries runtime Python, compiled assets, `alembic.ini`, and the migration tree. The older
   observed release (`23490ea`, schema `0013`) has a public **Web** service and private **Runner**,
   **Scheduler**, and managed **PostgreSQL**. That proves the prior topology only. Candidate migrations
-  `0014`-`0017` and hosted-agent/Langfuse behavior are not deployed by this architecture update.
+  `0014`-`0018` and hosted-agent/Langfuse behavior are not deployed by this architecture update.
 - **Environments (O1) — the section now defines them.** At least **two Railway environments**:
   - **non-prod (CI/staging):** TargetAdapter points at a **mock or an explicitly non-production allowlist
     entry**; its **own** Postgres; the environment-scoped allowlist **cannot resolve** the live target's
@@ -595,17 +613,17 @@ for unavailable billing evidence.
     and the no-real-PHI invariant have an environment boundary — a test run and a live campaign are never
     indistinguishable at the infra level. Authentication tests, route-protection tests, and the
     distinct-approver invariant are also promotion gates.
-- **Rollback discipline (O2).** Code rollback (Railway deployment history) reverts the *container*, not the
-  managed-Postgres schema/rows. Therefore: **expand/contract (backward-compatible) migrations** are the rule so
-  any single deploy is rollback-safe without a DB downgrade; destructive migrations are forbidden in the same
-  release that introduces their consumers; job payloads are versioned and unknown rows are
-  dead-lettered (§7); a **pre-deploy drain/quiesce** step ensures a deploy never lands mid-lease; **Postgres
-  PITR is the true rollback of record** for data.
+- **Rollback discipline (O2).** Railway deployment history can revert a container; it cannot restore
+  managed-Postgres schema or rows. Candidate migrations therefore follow expand/contract compatibility,
+  job payloads are versioned, and the release procedure requires worker drain/quiesce. The audit found
+  application deployment snapshots but **no configured production database backup/PITR schedule and no
+  confirmed restore point**. Production promotion is blocked until a database rollback binding is created
+  and restore-tested; source documentation is not a substitute.
 - **Deploy sequence:** drain/quiesce workers → run backward-compatible Alembic migrations as a
   pre-deploy job → deploy Web/runner/scheduler → require `/health` and `/ready` → exercise an
   authenticated smoke path without invoking a live campaign → promote. A failed auth configuration or
   readiness check blocks promotion.
-- **Current migration boundary:** source has exactly one Alembic head at `0017`; the observed Railway
+- **Current migration boundary:** source has exactly one Alembic head at `0018`; the observed Railway
   database is still `0013`. Pre-deploy runs `alembic upgrade head`, and `/ready` requires PostgreSQL
   connectivity, the packaged head, built assets, and locally parsed Clerk/Web security configuration
   without Clerk/JWKS/target/model egress. Runner and Scheduler entrypoints open no public socket.
@@ -622,16 +640,16 @@ for unavailable billing evidence.
 | Judge agrees with everything (drift) | Deterministic oracle precedence + async dual-judging calibration + drift detection (`judge-calibration`, §15); escalate on uncertainty; the Judge never occupies the attacker role |
 | Attacker forges/replays evidence | Canonical hash + append-only + per-agent DB roles (S1/S2); run-nonce + UNIQUE constraint (S3) reject replay |
 | Orchestrator has no clear next priority | Fallback policy: least-covered category → oldest open finding → regression sweep |
-| **Observability (Langfuse) unavailable/degraded (O7)** | Orchestrator falls back to the **exploit-DB system-of-record + queue table** for coverage/priority (the documented fallback policy above), degrading to structured signals rather than random or blocked; emits an alert. The coverage signal the Orchestrator needs is derivable from Postgres |
+| **Observability (Langfuse) unavailable/degraded (O7)** | Orchestrator falls back to the **exploit-DB system-of-record + queue table** for coverage/priority. The durable fallback is implemented; external alert delivery is still pending |
 | Cascading agent failure in one run | Typed errors per boundary; run isolation; partial results persisted; run marked degraded not lost |
-| Target unreachable / rate-limited | Typed error → backoff → queue → abort; campaign paused, not failed silently; alert fired |
+| Target unreachable / rate-limited | Typed error → backoff → queue → abort; campaign paused, not failed silently; external alert delivery remains pending |
 | Missing, malformed, expired, not-yet-valid, wrong-party, or invalid-signature human token | Reject with generic 401; create no Principal; never log the token/header; no network fallback |
 | Valid human session lacks the Headshot organization or required custom permission | Reject with generic 403; ignore frontend role/permission text; record only safe denial metadata |
 | Clerk verifier/SDK or identity configuration unavailable/invalid | Fail readiness or return generic 503 and deny the operation; never fail open, fetch JWKS dynamically, or trust raw claims |
 | Session stolen or a permission revoked before JWT expiry | Bound exposure with short Clerk session lifetime, MFA, secure browser controls, redaction, and audit/revocation response; networkless verification deliberately accepts a valid signed claim until expiry, so freshness remains an owned residual risk |
-| Cost accrues without signal | Circuit-breaker halts/redirects the campaign; alert fired |
+| Cost accrues without signal | Circuit-breaker halts/redirects the campaign; external alert delivery remains pending |
 | Deploy-time version skew | Expand/contract migrations + versioned job payloads + drain-before-deploy (§7/§12) |
-| Overnight run auditability | Append-only audit log + durable correlation IDs reconstruct who/what/when/order; alerts route human-gate + critical events to a person |
+| Overnight run auditability | Append-only audit log + durable correlation IDs reconstruct who/what/when/order; human routing through an external alert channel remains pending |
 
 ## §14. Human Approval Gates & Platform Trust/Safety
 
@@ -656,11 +674,13 @@ for unavailable billing evidence.
 For each AI-powered role: what AI does, what deterministic verification or human approval follows, and what
 residual risk remains.
 
-- **Red Team (AI, untrusted):** the hosted Qwen component generates candidates and emits traced lineage, but
-  at this baseline it is not wired into the Runner's reviewed-candidate/fresh-authorization loop. The
-  composed Runner uses deterministic authorized seed selection. Neither path can reach the target, hold
-  credentials, or create authoritative evidence (§5). Residual: a future composed generator may produce
-  genuinely harmful content, which must remain quarantined.
+- **Red Team (AI, untrusted):** the hosted Qwen component emits one traced proposal per selected frozen
+  seed. The Runner records only its hash and `quarantined_not_dispatched` disposition; it neither
+  persists the raw proposal nor uses it as target input. Deterministic `SeedReplayRedTeam` selection
+  supplies the byte-exact authorization-bound case to the Policy Gateway. The model cannot reach the
+  target, hold credentials, or create authoritative evidence (§5). Residual: generated content may be
+  genuinely harmful; making any proposal executable would require a separate human review, frozen-corpus
+  update, and fresh authorization path that is not implemented.
 - **Judge (AI, governed):** Gemini may assess attempts, but deterministic oracle/canary confirmation and
   evidence errors have precedence. The model becomes decisive only for the exact identity whose calibration
   artifact is valid and enabled; otherwise its output is advisory and deterministic ground truth remains
@@ -695,9 +715,10 @@ residual risk remains.
   deterministic validator over OWASP ZAP output**, not by Promptfoo; `owasp:api` partially covers the
   API/write-back surface. · **OWASP ZAP** (web-layer DAST, *contingent on a target web surface*, OQ2) ·
   **Semgrep** (SAST on our code).
-- **Build (no tool delivers these):** Orchestrator · the Red Team's governed candidate/selection boundary ·
-  the independent deterministic-oracle-first **Judge** · Documentation + regression admission. The hosted
-  Red Team generation component is not yet composed into live Runner execution.
+- **Build (no tool delivers these):** Orchestrator · the Red Team's governed generation/quarantine and
+  deterministic selection boundary · the independent deterministic-oracle-first **Judge** ·
+  Documentation + regression admission. The candidate composes all four hosted roles; it deliberately
+  does not authorize unreviewed model-generated text for target dispatch.
 - **Do not adopt:** any commercial LLM red-team platform (Lakera / HiddenLayer / Robust Intelligence–Cisco AI
   Defense) — out of budget, closed, un-governable, and *is* the product we're asked to build. Burp Suite Pro
   deferred to optional-at-Final; never Burp DAST/Enterprise. (Promptfoo was OpenAI-acquired Mar 2026 — if it
@@ -709,9 +730,10 @@ residual risk remains.
 
 - Consume the security owner's frozen corpus, Judge identity, calibration decision, 100-case results,
   reports, and bottleneck recommendation without rerunning or silently changing that analysis.
-- Compose the traced hosted Red Team generator into a reviewed-candidate boundary that requires a fresh
-  operation hash before any generated payload is eligible for target execution.
-- Deploy one exact commit and migration `0017` to staging, then prove the four ordered role executions,
+- If generated Red Team proposals are ever to become target payloads, add the missing human-review,
+  frozen-corpus publication, and fresh-operation-hash path. The current discard-only composition must
+  not be silently widened.
+- Deploy one exact commit and migration `0018` to staging, then prove the four ordered role executions,
   physical request lineage, findings/report behavior, and exact returned provider/model identities.
 - Query Langfuse Cloud back for that campaign and reconcile every durable observation/request. The current
   zero-observation staging baseline is not success evidence.
@@ -816,7 +838,7 @@ detail: `docs/planning/gap-audit.md`.
 | **F12** | ADR-0001 softened: no Promptfoo `owasp:web`; OWASP-Web = our validator over ZAP; `owasp:api` partial | §16; ADR-0001 |
 | **S1** | Signing-key custody: within one shared trust domain a signature adds nothing over canonical-hash + append-only + DB-role separation (a compromised in-process node could read the key); separate-recorder-principal signing/KMS = documented hardening path | §5, §21; D14 |
 | **S2** | Per-agent DB roles: Red Team INSERT-only staging (no read-back); **Recorder role INSERT-only** on the append-only authoritative AttemptResult table (no UPDATE/DELETE to any role); Judge SELECT-only on hash-verified payload; a Red Team write to the Recorder-owned AttemptResult table is DB-rejected (contract test) | §5, §6, §18; D14 |
-| **S3** | Run-nonce `{campaign_run_id, attempt_id}` in hashed payload + UNIQUE constraint; regression re-executes live | §4, §6, §10 |
+| **S3** | Run-nonce `{campaign_run_id, attempt_id}` in hashed payload + UNIQUE constraint; any authorized regression must re-execute with a new run ID (deployed replay still pending) | §4, §6, §10 |
 | **S4** | Evaluators consume a typed, trust-labelled, size-bounded **evidence envelope**; oracle/canary results are code-applied typed fields so injection **cannot downgrade `EXPLOIT_CONFIRMED`**; Judge holds no creds/mutation/publish/execute and emits a schema-validated Verdict; Documentation gets the validated Verdict + sanitized excerpts by default; raw evidence quarantined behind a warned operator action; separation/encoding are mitigations, not proof (residual owned) | §3, §4, §5, §15, §18; **D18** |
 | **S5** | Vendor-disjoint Judge failover invariant | §8; D8 |
 | **S6** | Coverage/resilience computed only from verified, deduped verdicts + sanity invariants | §9, §13 |
@@ -824,12 +846,12 @@ detail: `docs/planning/gap-audit.md`.
 | **S8** | Explicit canary provisioning where writable; honest "not deterministic" where the external target can't be seeded | §5, §10, §15 |
 | **S9** | Hashed `AttemptResult` is authoritative evidence; span carries same hash; reconciliation check | §6, §9 |
 | **O1** | ≥2 environments; prod-only live creds; environment-scoped target allowlist and Clerk origin/org configuration; only Web public; gated promotion | §12 |
-| **O2** | Expand/contract migrations; versioned jobs; drain-before-deploy; database recovery as true rollback | §7, §12 |
-| **O3** | Alert channel + conditions tied to durable source | §9, §13 |
+| **O2** | Expand/contract migrations and versioned jobs are implemented; drain is a release step; database backup/PITR and a restore-tested rollback binding remain blockers | §7, §12 |
+| **O3** | Durable alert conditions are specified; an external alert channel and delivery proof are not implemented | §9, §13 |
 | **O4** | Platform testing strategy (pyramid + BUILD-capability + invariant tests + CI matrix) | §18 |
-| **O5** | Stratified regression (critical + reopened always); bounded verdict caching; two-number SLO | §10, §11 |
+| **O5** | Stratified regression, bounded caching, and the two-number SLO remain target design; storage/admission/planning exist, deployed execution evidence does not | §10, §11 |
 | **O6** | Durable `campaign_id`/`attempt_id`/`finding_id` across spans + rows | §6, §9 |
-| **O7** | Langfuse-unavailable failure mode → Postgres fallback + alert | §9, §13 |
+| **O7** | Langfuse-unavailable failure mode → Postgres fallback; external alert delivery remains pending | §9, §13 |
 | **O8** | CI substrate (ephemeral PG + mock adapter + cassettes); CI/dev as a cost line | §11, §18, §19 |
 
 ## §21. Non-Goals & Owned Tradeoffs
@@ -849,8 +871,10 @@ detail: `docs/planning/gap-audit.md`.
 
 **Owned tradeoffs (the defense, not softened):**
 
-- The hosted Red Team generator may produce unconstrained content; the composed Runner does not yet use it.
-  Composition is accepted only behind reviewed candidates, fresh corpus authorization, and the Policy Gateway.
+- The hosted Red Team generator may produce unconstrained content. The candidate Runner invokes it for
+  observed four-role execution but records only a hash and discards the proposal; only the reviewed,
+  freshly authorized frozen seed reaches the Policy Gateway. This sacrifices adaptive live mutation
+  until a separate review-and-reauthorization workflow exists.
 - Anyone with repo access + credentials could widen the allowlist; the control is **auditability + two-person
   approval**, not prevention (§14).
 - Networkless Clerk JWT verification removes request-time IdP/JWKS availability from the hot path but means

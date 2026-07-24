@@ -16,16 +16,17 @@ a claim about the eventual final commit.
 
 | Item | Audited value | Evidence meaning |
 |---|---|---|
-| Documentation/source baseline | `eac2968` | Integration candidate inspected for this update; not a final release |
+| Deployment-audit source baseline | `eac2968` | Point-in-time source baseline; not a final release |
+| Current integration candidate | Moving release branch; final SHA pending | One migration head at `0018`, hosted configuration schema v2, exact provider routes, and physical provider-attempt tracing; not deployed |
 | GitHub `main` | `23490ea` | Older deployed release |
 | GitLab `main` | `23490ea` | Exact mirror of the older release |
 | Railway staging/production source | `23490ea` | Healthy prior Web/Runner/Scheduler/PostgreSQL baseline |
 | Railway database revision | `0013` | Prior schema |
-| Candidate migration graph | one head at `0017` | Source capability only; not applied to Railway |
+| Candidate migration graph | one head at `0018` | Source capability only; not applied to Railway |
 | Headshot Langfuse staging observations | `0` | The new agent-observability path has not run in staging |
 
 The prior release proves basic health, readiness, protected-route denial, and the Railway topology.
-It does **not** prove the candidate hosted-agent implementation, migration `0014`-`0017`, the final
+It does **not** prove the candidate hosted-agent implementation, migrations `0014`-`0018`, the final
 corpus, a live four-agent campaign, or Langfuse query-back. See the
 [predeployment Langfuse baseline](docs/evidence/langfuse/PREDEPLOYMENT_BASELINE_2026-07-24.md).
 
@@ -50,17 +51,24 @@ corpus, a live four-agent campaign, or Langfuse query-back. See the
   deterministic Runner path records their real ordered executions; Documentation runs only when a
   confirmed finding exists.
 - Hosted OpenRouter configuration, transport, provider/model lineage, token/retry/cost accounting,
-  and role adapters. At this source baseline the campaign Runner can host the Orchestrator, Judge,
-  and Documentation roles. A traced Qwen Red Team generation component exists and is tested, but it
-  is not yet wired into the reviewed-candidate/fresh-authorization campaign loop. It must not be
-  described as a deployed fourth hosted agent.
+  and role adapters. Schema v2 binds the exact endpoint tag and its exact supported output-token
+  parameter into each role hash: Orchestrator `amazon-bedrock/eu-west-1` + `max_tokens`, Red Team
+  `atlas-cloud/fp8` + `max_tokens`, Judge `google-vertex/global` + `max_tokens`, and Documentation
+  `azure/eu` + `max_completion_tokens`. Fallbacks and token-parameter substitution are disabled.
+  In hosted mode the candidate Runner composes all four roles. Qwen makes one traced proposal per
+  selected frozen seed, but the proposal is hash-recorded and explicitly
+  `quarantined_not_dispatched`; only the byte-exact authorized SeedReplay case reaches the target.
+  This is tested source behavior, not deployed four-role evidence, and it is not a
+  generation-to-review-to-reauthorization workflow.
 - Deterministic-oracle precedence. Oracle/canary confirmation and evidence errors are decisive.
   A model Judge is advisory unless the exact Judge identity has a valid, enabled calibration
   artifact. Failed or unavailable calibration does not convert an exploit into a safe result.
 - PostgreSQL-authoritative agent and physical-request accounting plus Langfuse Cloud projection.
-  Agent observations carry parent/run/attempt identity, provider/model, latency, tokens, retries,
-  errors, and measured cost when supplied. Raw credentials and evidence bodies are not exported.
-  An SDK flush remains `queued`; only exact remote query-back can mark a row `exported`.
+  Every physical OpenRouter send/retry is a `provider.openrouter.attempt` child generation under
+  its owning role AGENT. Physical generations carry provider-event identity, order, model/provider,
+  latency, tokens, errors, and measured cost when supplied; hosted logical runtime generations are
+  metadata-only for tokens/cost to avoid double counting. Raw credentials and evidence bodies are
+  not exported. An SDK flush remains `queued`; only exact remote query-back can mark a row `exported`.
 - An ATO-style packet, integration packet, migration notes, and evidence-classification rules. They
   deliberately leave final release, live campaign, performance, cost, demo, and social evidence
   pending where it does not yet exist.
@@ -219,13 +227,15 @@ SLOs.
 The runtime package contains versioned JSON Schemas in
 [`src/agentforge/contracts/v1`](src/agentforge/contracts/v1), including typed success, evidence,
 verdict, report, regression, tool, and error shapes. Producer/consumer and compatibility tests run
-against that registry. At this audit baseline the PRD's additional literal root `/contracts`
-publication is still a release item.
+against that registry. Reviewer-facing copies are now published at [`contracts/v1`](contracts/v1);
+byte-equality and registry tests prevent the package and root publications from drifting.
 
-The candidate Alembic graph has exactly one head at `0017`. Revisions `0014`-`0017` add physical
+The candidate Alembic graph has exactly one head at `0018`. Revisions `0014`-`0018` add physical
 work-unit reservations, append-only hosted configuration sets, exact Langfuse delivery verification,
-and provider/model/Judge lineage. These revisions are additive, but database downgrade can discard
-evidence; normal rollback retains the expanded schema and deploys a compatible prior image.
+provider/model/Judge lineage, and the authoritative physical provider-call ledger. These revisions
+are additive, but database downgrade can discard evidence; normal code rollback retains the expanded
+schema and deploys a compatible prior image. Production database rollback remains blocked until a
+backup/restore point is configured and confirmed.
 
 ## Release discipline
 

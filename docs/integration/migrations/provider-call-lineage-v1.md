@@ -36,12 +36,22 @@ Runners observe the same row.
 
 OpenRouter request routing and response attribution use different identifiers. The request sends
 an exact lowercase provider slug through `provider.only` with fallbacks disabled; router metadata
-returns a display name. The release accepts only these explicitly normalized pairs:
-`anthropic` → `Anthropic`, `together` → `Together`, `google-vertex` (including region variants) →
-`Google` or `Google Vertex`, and `openai` → `OpenAI`. Both configured and served identities remain
-persisted. Any other pairing is recorded as an invalid physical response and cannot become a
-successful logical execution. This follows OpenRouter's provider-routing and router-metadata
-contracts:
+returns a display name. Hosted-configuration schema v2 binds the exact route and a closed
+`completion_token_parameter` to each role configuration hash:
+
+| Role | Model | Exact `provider.only` route | Accepted router identity | Authorized output-token parameter |
+|---|---|---|---|---|
+| Orchestrator | `anthropic/claude-opus-4.8` | `amazon-bedrock/eu-west-1` | `Amazon Bedrock` | `max_tokens` |
+| Red Team | `qwen/qwen3.5-397b-a17b` | `atlas-cloud/fp8` | `AtlasCloud` | `max_tokens` |
+| Judge | `google/gemini-2.5-pro` | `google-vertex/global` | `Google` or `Google Vertex` | `max_tokens` |
+| Documentation | `openai/gpt-5.4` | `azure/eu` | `Azure` | `max_completion_tokens` |
+
+Catalog preflight must find exactly that endpoint, confirm its ZDR membership and support for the
+role's configured parameter, and content-address the result before activation. Transport emits only
+that parameter name and never falls back to `max_tokens`/`max_completion_tokens` substitution.
+Both configured and served identities remain persisted. Any other pairing is recorded as an invalid
+physical response and cannot become a successful logical execution. This follows OpenRouter's
+provider-routing and router-metadata contracts:
 
 - <https://openrouter.ai/docs/guides/routing/provider-selection>
 - <https://openrouter.ai/docs/guides/features/router-metadata>
@@ -49,14 +59,26 @@ contracts:
 Prompt text remains owned by the immutable hosted prompt registry. The physical invocation stores
 only the registry's existing version and `prompt_sha256`; it does not introduce prompt storage.
 
+Each durable physical reservation also has one Langfuse
+`provider.openrouter.attempt` GENERATION beneath the owning role AGENT. That generation, rather than
+the logical hosted-runtime child, carries the physical attempt's tokens and measured/partial cost.
+The query-back verifier reconciles invocation/event identity, sequence, model/provider, request ID,
+latency, error, token counts, and cost against PostgreSQL before marking delivery exported. This is
+candidate behavior, not deployed or query-back evidence.
+
 The canonical q generator component resolves the same durable `provider_context` immediately after
 starting its logical Red Team execution and passes it into the shared transport. Its exact system
 text comes from the immutable prompt authority; count, category, and synthetic seed data remain in
 the user payload, so the recorded prompt hash attests the text actually sent. Missing or invalid
 context fails before network I/O, while every send and retry uses this migration's physical ledger.
 
-This does **not** make q live in the production Runner. The current Runner consumes only immutable,
-already-reviewed campaign corpora; it has no production generation → quarantine → human review →
-fresh corpus authorization entrypoint. Calling q inside authorized case selection would violate
-that boundary, so this migration deliberately does not do it. Until that separate governed
-candidate-generation workflow is composed, the console must not claim four live hosted roles.
+The candidate Runner now invokes q once per selected frozen seed so a hosted campaign has a real,
+physical Red Team provider attempt in the ordered four-role trace. The unreviewed variant is never a
+target payload: the Runner stores only its hash plus `quarantined_not_dispatched`, discards the raw
+text, and sends the byte-exact SeedReplay case already bound by the campaign grant. Provider or
+telemetry failure aborts before target dispatch.
+
+This remains candidate source behavior, not deployed evidence. It also does not create the absent
+generation → quarantine → human review → frozen corpus publication → fresh authorization entrypoint.
+Any future use of a generated variant must cross that separate boundary; the console may claim four
+hosted roles only when the exact deployed campaign and Langfuse query-back prove them.

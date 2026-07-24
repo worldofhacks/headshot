@@ -10,9 +10,10 @@ browser-authored text, checkout-relative paths, and role-only lookup are not pro
 Missing, altered, ambiguous, oversized, non-UTF-8, or secret-shaped resources fail closed with a
 generic error before provider composition.
 
-This ticket packages authority but does not yet send provider messages. T-F17c will require the
-staged role configuration's prompt SHA-256 to match this registry before adding the exact system
-message.
+The current integration candidate now requires the staged role configuration's prompt SHA-256 to
+match this registry before composing the exact system message for a provider send. Every physical
+send/retry records the resolved prompt version and digest without persisting prompt text. This is
+implemented and locally tested candidate behavior; it is not evidence of a deployed provider call.
 
 Deployment must build and verify a wheel outside the checkout before promotion. Rollback deploys
 the preceding reviewed wheel and its matching staged configuration; it must not mix v1

@@ -1,5 +1,13 @@
 # Agent-by-Agent Orchestration Trace — Authorized Live Co-Pilot Campaign
 
+> **REJECTED AS FINAL RELEASE EVIDENCE — HISTORICAL ARTIFACT ONLY.** The approval described below
+> was not exercised through the final Clerk-controlled Operator/Approver workflow, and this trace
+> does not prove the current four-hosted-role candidate, migration head, provider identities,
+> Langfuse query-back, or final release. Every `INDETERMINATE` verdict means **not established**; it
+> is never a safe/pass result and cannot support a target-resisted claim. The body is retained
+> unchanged as historical provenance and must not be cited as the final campaign or used to
+> reinterpret the security owner's conclusions.
+
 **Target:** `https://agent-production-9f62.up.railway.app` (OpenEMR Clinical Co-Pilot, synthetic data only)
 **Surface:** `/chat` (`copilot_chat` profile) · **Corpus:** `m11-seed-corpus-v1` (`corpus_sha 011d2f2f…`)
 **Provenance:** human-approved (`approver != launcher`); credentials by reference; synthetic-only.
