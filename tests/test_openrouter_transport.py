@@ -338,7 +338,13 @@ def test_a_substituted_call_still_surrenders_its_observation_when_settle_fails(
     assert observed.returned_model == "google/gemini-flash", label
 
 
-def test_transport_fails_closed_when_the_served_model_is_absent() -> None:
+def test_an_unusable_served_model_is_recorded_as_a_substitution_not_discarded() -> None:
+    """An absent or unusable served model must still leave a record.
+
+    Refusing it is right; treating it as a reason to throw away the identity, the request id and
+    the billed cost would let the provider erase a substitution by returning junk.
+    """
+
     payload = _success().json()
     payload["model"] = None
     client = httpx.Client(
@@ -350,7 +356,7 @@ def test_transport_fails_closed_when_the_served_model_is_absent() -> None:
         client=client,
     )
 
-    with pytest.raises(HostedProviderError, match="no served model"):
+    with pytest.raises(HostedProviderResponseError) as raised:
         transport.invoke(
             role="judge",
             messages=({"role": "user", "content": "Judge."},),
@@ -362,6 +368,11 @@ def test_transport_fails_closed_when_the_served_model_is_absent() -> None:
             max_reasoning_tokens=20,
             timeout_seconds=5,
         )
+
+    observed = raised.value.observed_result
+    assert raised.value.code == "provider-model-substituted"
+    assert observed.requested_model == "google/gemini-2.5-pro"
+    assert observed.returned_model.startswith("unsafe-provider-text-")
 
 
 @pytest.mark.parametrize(
@@ -376,12 +387,6 @@ def test_transport_fails_closed_when_the_served_model_is_absent() -> None:
                 }
             ),
             "unique selected endpoint",
-        ),
-        (
-            lambda payload: payload["openrouter_metadata"]["endpoints"]["available"][0].update(
-                {"model": "google/gemini-flash"}
-            ),
-            "different endpoint model",
         ),
     ),
 )
@@ -565,3 +570,92 @@ def test_shared_ledger_refuses_persisted_usage_over_a_role_subcap() -> None:
             output_tokens=1,
             reasoning_tokens=1,
         )
+
+
+@pytest.mark.parametrize(
+    ("hostile", "label"),
+    (
+        ("  google/gemini-flash  ", "padded name the control-plane store would reject"),
+        ("google/gemini-flash\nevil=1", "interior newline bound for the audit log"),
+        ("sk-or-v1-abcdefghijklmnop", "a name shaped like a provider key"),
+        ("google/gemini-flash" + "x" * 200, "a name longer than the column"),
+    ),
+)
+def test_a_provider_cannot_erase_its_substitution_by_choosing_the_name(
+    hostile: str,
+    label: str,
+) -> None:
+    """The served model is provider-chosen, so it must never be usable as a delete switch.
+
+    Each of these previously destroyed the record somewhere downstream — the runtime lineage
+    guard, or the control-plane store, whose rules disagreed with each other.
+    """
+
+    payload = _success().json()
+    payload["model"] = hostile
+    payload["openrouter_metadata"]["endpoints"]["available"][0]["model"] = hostile
+    client = httpx.Client(
+        transport=httpx.MockTransport(lambda _request: httpx.Response(200, json=payload))
+    )
+    transport = OpenRouterTransport(
+        configuration=_configuration(),
+        credential_resolver=lambda _reference: Secret("test-provider-value"),
+        client=client,
+    )
+
+    with pytest.raises(HostedProviderResponseError) as raised:
+        transport.invoke(
+            role="judge",
+            messages=({"role": "user", "content": "Judge."},),
+            output_schema={"type": "object"},
+            schema_name="judge_verdict",
+            generation_policy_sha256=_digest("generation-policy"),
+            input_tokens_upper_bound=100,
+            max_output_tokens=50,
+            max_reasoning_tokens=20,
+            timeout_seconds=5,
+        )
+
+    observed = raised.value.observed_result
+    assert raised.value.code == "provider-model-substituted", label
+    # Normalized to something every downstream validator accepts, and still a substitution.
+    assert observed.returned_model == observed.returned_model.strip()
+    assert len(observed.returned_model) <= 160
+    assert observed.returned_model != observed.requested_model
+    assert hostile not in observed.returned_model
+    # The billed usage is still settled and carried.
+    assert observed.measured_cost_usd > 0
+
+
+def test_a_hostile_upstream_provider_name_cannot_erase_the_record() -> None:
+    """The same switch existed on upstream_provider, which had no length bound at all."""
+
+    payload = _success().json()
+    payload["model"] = "google/gemini-flash"
+    payload["openrouter_metadata"]["endpoints"]["available"][0]["model"] = "google/gemini-flash"
+    payload["openrouter_metadata"]["endpoints"]["available"][0]["provider"] = "G" * 76
+    client = httpx.Client(
+        transport=httpx.MockTransport(lambda _request: httpx.Response(200, json=payload))
+    )
+    transport = OpenRouterTransport(
+        configuration=_configuration(),
+        credential_resolver=lambda _reference: Secret("test-provider-value"),
+        client=client,
+    )
+
+    with pytest.raises(HostedProviderResponseError) as raised:
+        transport.invoke(
+            role="judge",
+            messages=({"role": "user", "content": "Judge."},),
+            output_schema={"type": "object"},
+            schema_name="judge_verdict",
+            generation_policy_sha256=_digest("generation-policy"),
+            input_tokens_upper_bound=100,
+            max_output_tokens=50,
+            max_reasoning_tokens=20,
+            timeout_seconds=5,
+        )
+
+    observed = raised.value.observed_result
+    assert len(observed.upstream_provider) <= 64
+    assert observed.returned_model == "google/gemini-flash"

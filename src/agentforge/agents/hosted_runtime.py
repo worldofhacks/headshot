@@ -23,7 +23,7 @@ from agentforge.agents.hosted_prompts import hosted_prompt
 from agentforge.agents.judge import CalibrationGateClosed, JudgeIdentity
 from agentforge.agents.judge.enablement import require_model_judge_enablement
 from agentforge.agents.runtime import AgentRole
-from agentforge.providers.openrouter import OpenRouterResult
+from agentforge.providers.openrouter import OpenRouterResult, normalize_provider_text
 from agentforge.secrets import looks_like_provider_key
 from agentforge.target.spec import HostedRunBinding
 
@@ -60,18 +60,6 @@ class HostedModelSubstitutionError(HostedCompositionError):
     """
 
     code = "provider-model-substituted"
-
-
-def _redacted_model_reference(value: object) -> str:
-    """A safe, stable stand-in for a served model name we refuse to store verbatim.
-
-    Keeps the observation usable — it still differs from the requested model, so the row is still
-    a recorded substitution — while the provider's actual bytes never reach the audit log.
-    """
-
-    raw = value if isinstance(value, str) else repr(value)
-    digest = hashlib.sha256(raw.encode("utf-8", "replace")).hexdigest()[:32]
-    return f"unsafe-model-text-{digest}"
 
 
 def require_safe_model_text(label: str, value: object, *, maximum: int) -> str:
@@ -502,30 +490,21 @@ class HostedRoleRuntime:
         if not isinstance(result, OpenRouterResult):
             return None
         configuration = self._roles[role]
-        # returned_model is no longer pinned equal to the authorized id, so it is now
-        # provider-controlled text on its way to the audit log, Langfuse and the console. It must
-        # not be stored raw — but discarding the record on unsafe text would hand the provider a
-        # switch for erasing its own evidence, including the cost it already billed, just by
-        # naming its substitute something that looks like a key. Redact the text, keep the record.
-        try:
-            observed_model = require_safe_model_text(
-                "returned_model", result.returned_model, maximum=160
-            )
-        except HostedCompositionError:
-            observed_model = _redacted_model_reference(result.returned_model)
+        # Every provider-controlled identity string goes through the SAME normalization the
+        # transport applies at ingress. Three layers used to police these independently with
+        # different rules, and any of them could drop the record — which handed the provider a
+        # delete switch it operated simply by choosing a name. Normalize, never discard.
+        observed_model = normalize_provider_text(result.returned_model, maximum=160)
+        observed_upstream = normalize_provider_text(result.upstream_provider, maximum=64)
+        observed_request_id = normalize_provider_text(result.request_id, maximum=256)
         if (
             # requested_model is ours: if it is wrong we sent the wrong call and the whole
             # observation is untrustworthy. returned_model is theirs — a divergence is exactly
             # what this record exists to preserve, so it must not discard the lineage.
             result.requested_model != configuration.model_id
-            or not isinstance(result.upstream_provider, str)
-            or not result.upstream_provider
-            or len(result.upstream_provider) > 64
             or result.configuration_sha256 != self._configuration.configuration_sha256
             or result.role_configuration_sha256 != configuration.configuration_sha256
             or result.generation_policy_sha256 != self._authorization.generation_policy_sha256
-            or not isinstance(result.request_id, str)
-            or not result.request_id
             or any(
                 type(value) is not int or value < 0
                 for value in (
@@ -558,8 +537,8 @@ class HostedRoleRuntime:
             parent_request_id=parent_request_id,
             requested_model=result.requested_model,
             returned_model=observed_model,
-            upstream_provider=result.upstream_provider,
-            provider_request_id=result.request_id,
+            upstream_provider=observed_upstream,
+            provider_request_id=observed_request_id,
             input_tokens=result.input_tokens,
             output_tokens=result.output_tokens,
             reasoning_tokens=result.reasoning_tokens,

@@ -495,7 +495,7 @@ def test_an_unsafe_served_model_name_is_redacted_not_used_to_erase_the_record(
     assert Decimal(lineage.measured_cost_usd) == Decimal("0.01")
     assert lineage.provider_request_id == "provider-request-orchestrator"
     # The provider's bytes never reach the record, but it is still a recorded substitution.
-    assert lineage.returned_model.startswith("unsafe-model-text-")
+    assert lineage.returned_model.startswith("unsafe-provider-text-")
     assert hostile not in lineage.returned_model
     assert lineage.returned_model != lineage.requested_model
 

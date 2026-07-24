@@ -8,8 +8,10 @@ It never returns or records a credential value.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
+import re
 import threading
 import time
 from collections.abc import Callable, Mapping, Sequence
@@ -27,7 +29,7 @@ from agentforge.agents.hosted import (
     validate_hosted_configuration_set,
 )
 from agentforge.agents.runtime import AgentRole
-from agentforge.secrets import Secret
+from agentforge.secrets import Secret, looks_like_provider_key
 
 OPENROUTER_CHAT_COMPLETIONS_URL = "https://openrouter.ai/api/v1/chat/completions"
 _MILLION = Decimal(1_000_000)
@@ -309,6 +311,36 @@ class OpenRouterResult:
     physical_attempts: int
 
 
+# Provider-controlled identity strings are normalized ONCE, here at the wire, to a form that
+# satisfies every downstream predicate by construction. Three separate layers used to validate
+# these independently — the transport, the runtime lineage guard and the control-plane store —
+# each with a different rule, and any of them could discard or reject the record. That handed the
+# provider a switch: choose a served-model name that trips one layer and its own substitution
+# disappears. Normalizing at ingress means no later layer can be made to drop the evidence.
+_SAFE_PROVIDER_TEXT = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9._:/@+-]*\Z")
+
+
+def normalize_provider_text(value: object, *, maximum: int) -> str:
+    """Return provider text guaranteed safe and bounded, or a stable digest standing in for it.
+
+    Never raises and never returns something a downstream validator can refuse, so an unusable
+    name costs the provider its own anonymity rather than costing us the record.
+    """
+
+    if isinstance(value, str):
+        candidate = value.strip()
+        if (
+            candidate
+            and len(candidate) <= maximum
+            and _SAFE_PROVIDER_TEXT.fullmatch(candidate) is not None
+            and not looks_like_provider_key(candidate)
+        ):
+            return candidate
+    raw = value if isinstance(value, str) else repr(value)
+    digest = hashlib.sha256(raw.encode("utf-8", "replace")).hexdigest()[:32]
+    return f"unsafe-provider-text-{digest}"
+
+
 class _ModelSubstituted(HostedProviderError):
     """Internal marker: the served model is not the authorized one.
 
@@ -540,18 +572,15 @@ class OpenRouterTransport:
         if not isinstance(payload, dict):
             raise HostedProviderError("OpenRouter response has an invalid shape")
         requested_model = configuration.model_id
-        returned_model = payload.get("model")
+        # Normalized at ingress: a served model, provider or request id the provider chose to make
+        # unusable becomes a digest rather than a reason to throw the observation away.
+        returned_model = normalize_provider_text(payload.get("model"), maximum=160)
+        request_id = normalize_provider_text(payload.get("id"), maximum=256)
         upstream_provider, selected_model = self._selected_endpoint(
             payload,
             requested_model=requested_model,
         )
-        request_id = payload.get("id")
-        if not isinstance(returned_model, str) or not returned_model:
-            raise HostedProviderError("OpenRouter response has no served model")
-        if selected_model != returned_model:
-            raise HostedProviderError("OpenRouter selected a different endpoint model")
-        if not isinstance(request_id, str) or not request_id:
-            raise HostedProviderError("OpenRouter response has no provider request id")
+        upstream_provider = normalize_provider_text(upstream_provider, maximum=64)
         usage = self._usage(payload)
         observed_result = OpenRouterResult(
             output={},
@@ -569,13 +598,23 @@ class OpenRouterTransport:
             physical_attempts=physical_attempts,
         )
         # Everything from here on runs inside the wrapper, because every step below can fail on
-        # provider-controlled input and each one must still surrender the observation. settle()
-        # in particular raises HostedBudgetExceeded when the served usage overruns the
-        # reservation or the role cap — and since the request pins max_price to the AUTHORIZED
-        # model's price, a substituted model is precisely the case that breaches the cap.
+        # provider-controlled input and each one must still surrender the observation.
+        substituted = returned_model != requested_model or selected_model != returned_model
         try:
-            self._ledger.settle(reservation, **usage)
-            if returned_model != requested_model:
+            try:
+                self._ledger.settle(reservation, **usage)
+            except HostedProviderError as settle_exc:
+                # settle() raises HostedBudgetExceeded when the served usage overruns the
+                # reservation or the role cap — and because the request pins max_price to the
+                # AUTHORIZED model's price, a substituted model is precisely the case that
+                # breaches it. The substitution is the finding; the breach is its consequence, so
+                # it must not take over the error code.
+                if not substituted:
+                    raise
+                raise _ModelSubstituted(
+                    "OpenRouter served a model other than the authorized one"
+                ) from settle_exc
+            if substituted:
                 raise _ModelSubstituted("OpenRouter served a model other than the authorized one")
             output = self._structured_output(payload, output_schema)
         except HostedProviderError as exc:

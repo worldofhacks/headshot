@@ -97,12 +97,36 @@ physical recorder is T-F17c. Two consequences until it lands:
   seven-column observation tuple belongs to that same ticket — a partial propagation would violate
   `agent_execution_hosted_measurement_tuple`.
 
-**Hostile served-model text.** `returned_model` is no longer pinned to the authorized id, so it is
-provider-controlled text bound for the audit log, Langfuse and the console. It is held to
-`require_safe_model_text`; a string carrying control characters or raw auth material discards the
-lineage rather than storing it. The substitution is still recorded, because `_record_failure` takes
-`error_code` from the exception rather than the lineage — so the row keeps
-`provider-model-substituted` even when the observed identity itself was too dangerous to persist.
+**Provider-controlled text is normalized once, at ingress.** `returned_model`, `upstream_provider`
+and `provider_request_id` are all chosen by the provider and all end up in the audit log, Langfuse
+and the console. They used to be policed independently by three layers — the transport, the runtime
+lineage guard, and the control-plane store — each with a *different* rule, and any of them could
+discard or reject the record. That handed the provider a delete switch it operated simply by
+choosing a name: a value that tripped one layer's rule made its own substitution disappear.
+
+Three review rounds each closed one instance of this and the class reappeared in an adjacent field
+(`returned_model` length → `upstream_provider` length → a merely *padded* name that the sanitizer
+accepted and the store then rejected, losing the row, the error code and the audit event together).
+The fix is structural rather than another predicate: `normalize_provider_text` runs once at the wire
+and yields a value guaranteed to satisfy every downstream rule — stripped, bounded, restricted
+charset, not key-shaped — or a stable digest standing in for it. Downstream layers normalize with
+the same function and **never discard on these fields**. An unusable name now costs the provider its
+anonymity instead of costing us the record.
+
+**Residual: a response with no readable usage or router metadata still cannot be recorded.**
+`_usage` and `_selected_endpoint` raise before an observation exists, so a substitution accompanied
+by a malformed `usage` block or an absent `openrouter_metadata` still lands as a bare
+`hosted-provider-unavailable` with no lineage. This one is not a missing predicate — it is the
+all-or-nothing shape of `agent_execution_hosted_measurement_tuple` (0017), which requires the seven
+observation columns to be all-NULL or all-NOT-NULL and therefore cannot represent "identity
+observed, usage not observed". Closing it needs either a schema change or the physical
+`provider_call_events` path, which already models exactly that with nullable tokens and
+`cost_measurement_state`. That is T-F17c. Recorded here rather than half-implemented.
+
+**Residual (pre-existing): a reservation is never released on a pre-settle terminal error.**
+`HostedUsageLedger` has no release path, so those paths leave `unresolved_exposure_usd` inflated for
+the rest of the campaign. Fail-closed — it over-counts exposure — but it will trip
+`HostedBudgetExceeded` earlier than real spend justifies.
 
 **Not durable before terminalization.** The observed identity lives only in the in-process result
 until the single `finish` write. A runner death between the provider response and that write leaves
