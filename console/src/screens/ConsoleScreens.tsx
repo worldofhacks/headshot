@@ -53,6 +53,10 @@ import {
 } from "../hooks/useResource";
 import { navigateTo } from "../router";
 import {
+  buildCampaignAuthorizationPayload,
+  exactWorkloadCaps,
+} from "../campaignAuthorization";
+import {
   PERMISSIONS,
   type ApprovalReadModel,
   type ApprovalDetailReadModel,
@@ -284,17 +288,10 @@ export function LiveScreen({ client, principal, entityId, getToken }: ScreenProp
   // A persisted campaign is an immutable historical scope. A rerun must use the current
   // server-prepared target/corpus template, bounded by both that target and the prior run's
   // operator-selected budget/rate/timeout. A fresh nonce prevents authorization replay.
-  const preparedScope = effectiveCampaign && rerunTemplate && rerunTemplate.hosted_run
-    && rerunTemplate.maximum_caps.max_attempts_per_run >= rerunTemplate.case_count
-    ? {
-        target_id: rerunTemplate.target_id,
-        target_version: rerunTemplate.target_version,
-        surface_id: rerunTemplate.surface_id,
-        surface_version: rerunTemplate.surface_version,
-        corpus_id: rerunTemplate.corpus_id,
-        corpus_hash: rerunTemplate.corpus_hash,
-        execution_profile: rerunTemplate.execution_profile,
-        caps: {
+  const preparedScope = effectiveCampaign && rerunTemplate
+    ? buildCampaignAuthorizationPayload({
+        template: rerunTemplate,
+        selection: {
           budget_usd: Math.min(
             effectiveCampaign.caps.budget_usd,
             rerunTemplate.maximum_caps.budget_usd,
@@ -309,10 +306,8 @@ export function LiveScreen({ client, principal, entityId, getToken }: ScreenProp
             rerunTemplate.maximum_caps.run_timeout_seconds,
           ),
         },
-        run_nonce: rerunNonce,
-        hosted_run: rerunTemplate.hosted_run,
-        expires_in_seconds: 900,
-      }
+        runNonce: rerunNonce,
+      })
     : null;
   const componentRecords = components.result.data ?? [];
   const operationalComponents = componentRecords.filter(
@@ -1301,40 +1296,19 @@ function TargetManagement({
   const [timeoutSeconds, setTimeoutSeconds] = useState(
     () => template ? String(template.maximum_caps.run_timeout_seconds) : "",
   );
+  const workloadCaps = template ? exactWorkloadCaps(template) : null;
   const parsedCaps = {
     budget_usd: Number(budgetUsd),
     max_attempts_per_run: Number(maxAttempts),
     target_requests_per_second: Number(requestsPerSecond),
     run_timeout_seconds: Number(timeoutSeconds),
   };
-  const capsValid = Object.values(parsedCaps).every((value) => Number.isFinite(value) && value > 0)
-    && Number.isSafeInteger(parsedCaps.max_attempts_per_run);
-  const fullScanFitsTarget = Boolean(
-    template && template.maximum_caps.max_attempts_per_run >= template.case_count,
-  );
-  const capsWithinTarget = template
-    ? parsedCaps.budget_usd <= template.maximum_caps.budget_usd
-      && parsedCaps.max_attempts_per_run <= template.maximum_caps.max_attempts_per_run
-      && parsedCaps.max_attempts_per_run >= template.case_count
-      && parsedCaps.target_requests_per_second <= template.maximum_caps.target_requests_per_second
-      && parsedCaps.run_timeout_seconds <= template.maximum_caps.run_timeout_seconds
-    : false;
-  const requestPayload = template && template.hosted_run
-    && fullScanFitsTarget && capsValid && capsWithinTarget
-    && runNonce.trim().length >= 16
-    ? {
-        target_id: template.target_id,
-        target_version: template.target_version,
-        surface_id: template.surface_id,
-        surface_version: template.surface_version,
-        corpus_id: template.corpus_id,
-        corpus_hash: template.corpus_hash,
-        execution_profile: template.execution_profile,
-        caps: parsedCaps,
-        run_nonce: runNonce.trim(),
-        hosted_run: template.hosted_run,
-        expires_in_seconds: 900,
-      }
+  const requestPayload = template
+    ? buildCampaignAuthorizationPayload({
+        template,
+        selection: parsedCaps,
+        runNonce,
+      })
     : null;
   return (
     <Panel title="Registered target" meta={targetId ?? undefined}>
@@ -1424,6 +1398,18 @@ function TargetManagement({
             { label: "Reviewed tool sources", value: count(template.tool_sources.length), note: template.tool_sources.join(" · ") || "No reviewed tool sources" },
             { label: "Execution", value: template.execution_profile, note: "Every request passes the policy gateway" },
           ]} />
+          {workloadCaps ? (
+            <EvidenceGrid values={[
+              { label: "Logical case limit", value: count(workloadCaps.logical_case_limit) },
+              { label: "Physical request limit", value: count(workloadCaps.physical_request_limit) },
+              { label: "Retries / turn", value: count(workloadCaps.target_retries_per_turn) },
+            ]} />
+          ) : (
+            <StateNotice
+              state="degraded"
+              detail="The server did not bind a complete exact workload envelope to this immutable corpus. Campaign authorization is unavailable."
+            />
+          )}
           <RecordDetails
             data={template}
             preferredKeys={[
@@ -1495,8 +1481,10 @@ function TargetManagement({
             allowed={Boolean(requestPayload) && hasPermission(principal, PERMISSIONS.campaignLaunch)}
             unavailableReason={requestPayload
               ? PERMISSIONS.campaignLaunch
-              : template.hosted_run
-                ? "a complete full-scan cap envelope and valid nonce"
+              : template.hosted_run && workloadCaps
+                ? "operator caps within the target envelope and a valid nonce"
+                : template.hosted_run
+                  ? "server-bound exact logical, physical-request, and retry limits"
                 : "a staged server-owned four-role configuration set"}
             onAcknowledged={() => {
               // Roll a fresh unused nonce after each accepted request so the next campaign

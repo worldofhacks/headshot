@@ -381,7 +381,12 @@ describe("target console operability", () => {
         case_count: 2,
         tool_sources: [],
         execution_profile: "live" as const,
-        maximum_caps: target(true).safety_caps,
+        maximum_caps: {
+          ...target(true).safety_caps,
+          logical_case_limit: 2,
+          physical_request_limit: 6,
+          target_retries_per_turn: 1,
+        },
         hosted_run: hostedRun,
       },
     };
@@ -421,9 +426,70 @@ describe("target console operability", () => {
       target_id: "target-1",
       corpus_hash: "c".repeat(64),
       hosted_run: hostedRun,
+      caps: {
+        budget_usd: 1,
+        max_attempts_per_run: 2,
+        target_requests_per_second: 0.5,
+        run_timeout_seconds: 60,
+        logical_case_limit: 2,
+        physical_request_limit: 6,
+        target_retries_per_turn: 1,
+      },
     }));
     expect(JSON.stringify(payload)).not.toContain("credential_reference");
     expect(JSON.stringify(payload)).not.toContain("model_id");
+  });
+
+  it("surfaces an unavailable exact workload envelope and does not submit invented limits", async () => {
+    const launchPrincipal: Principal = {
+      ...principal,
+      organization_permissions: [
+        ...principal.organization_permissions,
+        PERMISSIONS.campaignLaunch,
+      ],
+    };
+    const campaignTarget = {
+      ...target(true),
+      campaign_template: {
+        target_id: "target-1",
+        target_version: "1.0.0",
+        surface_id: "chat",
+        surface_version: "1.0.0",
+        corpus_id: "week-3",
+        corpus_hash: "c".repeat(64),
+        case_count: 2,
+        tool_sources: [],
+        execution_profile: "live" as const,
+        maximum_caps: target(true).safety_caps,
+        hosted_run: hostedRun,
+      },
+    };
+    const command = vi.fn();
+    const client = {
+      read: vi.fn(async (path: string) => path === "target-catalog"
+        ? { state: "empty" as const, data: [] }
+        : { state: "ready" as const, data: [campaignTarget] }),
+      command,
+    } as unknown as ApiClient;
+
+    render(
+      <TargetsScreen
+        client={client}
+        principal={launchPrincipal}
+        entityId={null}
+        getToken={async () => "session"}
+      />,
+    );
+
+    fireEvent.click(await screen.findByText("Registered target"));
+    expect(await screen.findByText(/did not bind a complete exact workload envelope/i))
+      .toBeTruthy();
+    const authorize = screen.getByRole("button", {
+      name: "Request exact campaign authorization",
+    });
+    expect((authorize as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(authorize);
+    expect(command).not.toHaveBeenCalled();
   });
 });
 
