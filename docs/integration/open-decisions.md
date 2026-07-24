@@ -76,15 +76,31 @@ Sequencing note: `0019` depends on `0018_provider_call_lineage`, which is the st
 `codex/integration-provider-lineage-0018` work. `0018` must land first. The number was chosen
 specifically to avoid a second double-numbering incident.
 
-**Scope, stated precisely.** What is complete is the *logical* record: the row is writable, the
-store refuses to terminalize it as succeeded, the runtime preserves the lineage instead of
-discarding it, and the read model and console surface it. What is **not** wired is the *physical*
-half. `provider_call_events` already carries `model_mismatch` as a first-class terminal status with
-a bijective status/error-code map, but nothing emits those rows yet — there is no production caller
-of the provider-call lineage methods outside `control_plane/store.py`. Connecting the physical
-recorder to the hosted runtime is T-F17c. Until it lands, a substitution is provable from
-`agent_executions` alone (`model` vs `returned_model`, plus the `provider-model-substituted` error
-code), not from a per-attempt physical event.
+**Scope, stated precisely.** The *logical* record is complete and reachable on the real transport:
+`OpenRouterTransport` raises `HostedProviderResponseError(code="provider-model-substituted")`
+carrying the observed result after settling the billed usage, the runtime preserves that lineage,
+the store refuses to terminalize it as succeeded, and the read model, Birdseye and the console all
+show the divergence rather than the served model alone.
+
+What is **not** wired is the *physical* half. `provider_call_events` already carries
+`model_mismatch` as a first-class status, but nothing emits those rows — there is no production
+caller of the provider-call lineage methods outside `control_plane/store.py`. Connecting the
+physical recorder is T-F17c. Two consequences until it lands:
+
+- A substitution is provable from `agent_executions` and the `agent.failed` audit event (which
+  records `requested_model` and `returned_model` together), not from a per-attempt physical event.
+- `finish_physical_attempt` already rejects a `succeeded` event whose `returned_model` differs from
+  the invocation's `requested_model`, and a `model_mismatch` event correctly terminalizes the
+  logical row as `failed`. But that path never propagates the observed identity **onto** the
+  logical row, so once it is wired a substitution recorded physically would leave
+  `agent_executions.returned_model` NULL and `model_substituted` false. Propagating the full
+  seven-column observation tuple belongs to that same ticket — a partial propagation would violate
+  `agent_execution_hosted_measurement_tuple`.
+
+**Not durable before terminalization.** The observed identity lives only in the in-process result
+until the single `finish` write. A runner death between the provider response and that write leaves
+the row `running` with the evidence gone. Closing that gap needs the pre-call physical reservation,
+which is again T-F17c.
 
 Two properties worth keeping when that wiring happens, both verified against a migrated database:
 

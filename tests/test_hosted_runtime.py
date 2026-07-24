@@ -28,7 +28,7 @@ from agentforge.agents.hosted_runtime import (
     hosted_judge_identity,
 )
 from agentforge.agents.judge import CalibrationGate
-from agentforge.providers.openrouter import OpenRouterResult
+from agentforge.providers.openrouter import HostedProviderResponseError, OpenRouterResult
 from agentforge.target.spec import HostedRunBinding
 
 _GROUND_TRUTH = Path(__file__).resolve().parents[1] / "evals" / "ground-truth"
@@ -414,13 +414,19 @@ def test_a_substituted_provider_model_is_refused_but_recorded() -> None:
 
     def substituting(**kwargs: Any) -> OpenRouterResult:
         result = authorized(**kwargs)
-        if kwargs["role"] == "orchestrator":
-            return dataclasses.replace(result, returned_model="openai/gpt-5.4")
-        return result
+        if kwargs["role"] != "orchestrator":
+            return result
+        # Exactly what OpenRouterTransport raises on a substitution: the output is refused, but
+        # the observation is carried out on the exception after the billed usage is settled.
+        raise HostedProviderResponseError(
+            "OpenRouter served a model other than the authorized one",
+            observed_result=dataclasses.replace(result, returned_model="openai/gpt-5.4"),
+            code="provider-model-substituted",
+        )
 
     transport.invoke = substituting  # type: ignore[method-assign]
 
-    with pytest.raises(HostedModelSubstitutionError):
+    with pytest.raises(HostedProviderResponseError):
         runtime.run_attempt(authorized_case={"case_id": "case-1"})
 
     # The output is refused: nothing was accepted as a success.
@@ -437,6 +443,40 @@ def test_a_substituted_provider_model_is_refused_but_recorded() -> None:
     # The call was billed, so its usage is preserved rather than dropped with the output.
     assert lineage.provider_request_id == "provider-request-orchestrator"
     assert Decimal(lineage.measured_cost_usd) == Decimal("0.01")
+
+
+def test_a_transport_that_returns_a_substituted_result_is_still_caught() -> None:
+    """Defence in depth for a transport that does not refuse the substitution itself.
+
+    OpenRouterTransport raises before returning, so this guard is not what fires in production —
+    but the runtime must not accept a substituted model just because a transport handed one back.
+    """
+
+    recorded: list[Any] = []
+    lifecycle = _FakeExecutionLifecycle(recorded)
+    runtime, transport = _runtime(
+        outputs=_outputs(),
+        target=lambda _attempt: {"status_code": 200},
+        recorded=recorded,
+        lifecycle=lifecycle,
+    )
+    authorized = transport.invoke
+
+    def substituting(**kwargs: Any) -> OpenRouterResult:
+        result = authorized(**kwargs)
+        if kwargs["role"] == "orchestrator":
+            return dataclasses.replace(result, returned_model="openai/gpt-5.4")
+        return result
+
+    transport.invoke = substituting  # type: ignore[method-assign]
+
+    with pytest.raises(HostedModelSubstitutionError):
+        runtime.run_attempt(authorized_case={"case_id": "case-1"})
+
+    assert recorded == []
+    failure = next(item for item in lifecycle.finishes if item["status"] == "failed")
+    assert failure["error_code"] == "provider-model-substituted"
+    assert failure["lineage"].returned_model == "openai/gpt-5.4"
 
 
 def test_runtime_sends_the_exact_registry_prompt_as_the_system_message() -> None:

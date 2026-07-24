@@ -533,8 +533,8 @@ class OpenRouterTransport:
             requested_model=requested_model,
         )
         request_id = payload.get("id")
-        if returned_model != requested_model:
-            raise HostedProviderError("OpenRouter returned a different model")
+        if not isinstance(returned_model, str) or not returned_model:
+            raise HostedProviderError("OpenRouter response has no served model")
         if selected_model != returned_model:
             raise HostedProviderError("OpenRouter selected a different endpoint model")
         if not isinstance(request_id, str) or not request_id:
@@ -555,6 +555,16 @@ class OpenRouterTransport:
             generation_policy_sha256=generation_policy_sha256,
             physical_attempts=physical_attempts,
         )
+        if returned_model != requested_model:
+            # The substitution is refused, but it was still billed and it is the whole point of
+            # observing served identity. Settle the real usage and carry the observation out on
+            # the exception so the caller records it instead of losing it to a generic failure.
+            self._ledger.settle(reservation, **usage)
+            raise HostedProviderResponseError(
+                "OpenRouter served a model other than the authorized one",
+                observed_result=observed_result,
+                code="provider-model-substituted",
+            )
         try:
             self._ledger.settle(reservation, **usage)
             output = self._structured_output(payload, output_schema)

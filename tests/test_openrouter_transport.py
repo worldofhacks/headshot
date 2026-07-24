@@ -240,10 +240,18 @@ def test_retry_exhaustion_exposes_consumed_physical_attempts_without_inventing_u
     assert transport.ledger.snapshot.measured_usd == 0
 
 
-def test_transport_fails_closed_on_model_or_provider_substitution() -> None:
-    response = _success()
-    payload = response.json()
+def test_transport_refuses_a_substituted_model_but_carries_the_observation_out() -> None:
+    """A served model that is not the authorized one must leave the transport as evidence.
+
+    This is the only path that can actually observe a substitution. Raising before the
+    observation is built would destroy the record here, below everything downstream.
+    """
+
+    payload = _success().json()
+    # A coherent substitution: the provider says it served a different model and its router
+    # metadata agrees, while "requested" still records what we actually asked for.
     payload["model"] = "google/gemini-flash"
+    payload["openrouter_metadata"]["endpoints"]["available"][0]["model"] = "google/gemini-flash"
     client = httpx.Client(
         transport=httpx.MockTransport(lambda _request: httpx.Response(200, json=payload))
     )
@@ -253,7 +261,7 @@ def test_transport_fails_closed_on_model_or_provider_substitution() -> None:
         client=client,
     )
 
-    with pytest.raises(HostedProviderError, match="different model") as raised:
+    with pytest.raises(HostedProviderResponseError) as raised:
         transport.invoke(
             role="judge",
             messages=({"role": "user", "content": "Judge."},),
@@ -265,7 +273,45 @@ def test_transport_fails_closed_on_model_or_provider_substitution() -> None:
             max_reasoning_tokens=20,
             timeout_seconds=5,
         )
-    assert raised.value.physical_attempts == 1
+
+    failure = raised.value
+    assert failure.code == "provider-model-substituted"
+    assert failure.physical_attempts == 1
+    observed = failure.observed_result
+    # Both identities survive, and they are distinguishable.
+    assert observed.requested_model == "google/gemini-2.5-pro"
+    assert observed.returned_model == "google/gemini-flash"
+    assert observed.request_id == "gen-1"
+    assert observed.upstream_provider == "Google"
+    # The refused call was still billed, so its usage is settled rather than left dangling.
+    assert observed.measured_cost_usd > 0
+    assert transport.ledger.snapshot.measured_usd == observed.measured_cost_usd
+
+
+def test_transport_fails_closed_when_the_served_model_is_absent() -> None:
+    payload = _success().json()
+    payload["model"] = None
+    client = httpx.Client(
+        transport=httpx.MockTransport(lambda _request: httpx.Response(200, json=payload))
+    )
+    transport = OpenRouterTransport(
+        configuration=_configuration(),
+        credential_resolver=lambda _reference: Secret("test-provider-value"),
+        client=client,
+    )
+
+    with pytest.raises(HostedProviderError, match="no served model"):
+        transport.invoke(
+            role="judge",
+            messages=({"role": "user", "content": "Judge."},),
+            output_schema={"type": "object"},
+            schema_name="judge_verdict",
+            generation_policy_sha256=_digest("generation-policy"),
+            input_tokens_upper_bound=100,
+            max_output_tokens=50,
+            max_reasoning_tokens=20,
+            timeout_seconds=5,
+        )
 
 
 @pytest.mark.parametrize(

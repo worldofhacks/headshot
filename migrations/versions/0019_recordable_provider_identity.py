@@ -44,12 +44,20 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    # Rows recording a genuine substitution cannot satisfy the old constraint. Drop only the
-    # observed identity on those rows; the physical provider_call_events record survives, so the
-    # substitution remains provable after a rollback.
+    # A row recording a substitution cannot satisfy the old constraint, so the observation has to
+    # go. It must be cleared as a whole: agent_execution_hosted_measurement_tuple requires the
+    # seven observation columns to be all-NULL or all-NOT-NULL, so nulling only the three identity
+    # columns leaves a shape the older constraint rejects and aborts the rollback on exactly the
+    # rows this migration exists to permit.
+    #
+    # The substitution stays provable after the rollback through the agent.failed audit event,
+    # which records requested_model and returned_model together. (Not through
+    # provider_call_events — that table has no production writer yet; wiring it is T-F17c.)
     op.execute(
-        "UPDATE agent_executions "
-        "SET returned_model = NULL, upstream_provider = NULL, provider_request_id = NULL "
+        "UPDATE agent_executions SET "
+        "returned_model = NULL, upstream_provider = NULL, provider_request_id = NULL, "
+        "input_tokens = NULL, output_tokens = NULL, reasoning_tokens = NULL, "
+        "physical_attempts = NULL "
         "WHERE returned_model IS NOT NULL AND returned_model <> model"
     )
     op.drop_constraint("agent_execution_provider_identity", "agent_executions", type_="check")

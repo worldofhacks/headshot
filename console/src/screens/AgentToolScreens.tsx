@@ -18,6 +18,7 @@ import {
   Panel,
   percent,
   ScreenHeading,
+  servedModel,
   shortId,
   TagMatrix,
   time,
@@ -463,7 +464,7 @@ export function AgentsScreen({
           <Timeline rows={selectedActivity.slice(0, 30).map((row) => ({
             id: row.execution_id,
             title: `${row.agent_role.replace("_", " ")} · ${row.status}`,
-            detail: `${shortId(row.campaign_run_id)} · ${row.returned_model ?? row.model} · ${row.duration_ms === null ? "running" : `${row.duration_ms.toFixed(1)} ms`} · ${activityAccountingValue(row)} · ${langfuseDeliveryState(row)}${row.agent_role === "judge" ? ` · calibration ${row.judge_calibration_state ?? "unavailable"} · ${row.decision_authority ?? "no"} authority` : ""}`,
+            detail: `${shortId(row.campaign_run_id)} · ${servedModel(row)} · ${row.duration_ms === null ? "running" : `${row.duration_ms.toFixed(1)} ms`} · ${activityAccountingValue(row)} · ${langfuseDeliveryState(row)}${row.agent_role === "judge" ? ` · calibration ${row.judge_calibration_state ?? "unavailable"} · ${row.decision_authority ?? "no"} authority` : ""}`,
             at: row.started_at,
             tone: statusTone(row.status),
           }))} />

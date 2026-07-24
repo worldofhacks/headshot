@@ -23,6 +23,24 @@ export const money = (value: number) =>
 export const shortId = (value: string | null | undefined) =>
   value ? `${value.slice(0, 8)}…${value.slice(-4)}` : "—";
 
+/**
+ * Render provider model identity so a substitution is never mistaken for the authorized model.
+ *
+ * Collapsing to `returned_model ?? model` shows the provider's claim alone, which reads exactly
+ * like a normal call. When the two differ, both must stay visible and be marked.
+ */
+export const servedModel = (row: {
+  model: string;
+  returned_model: string | null;
+  model_substituted?: boolean;
+}) => {
+  const substituted = row.model_substituted
+    ?? (row.returned_model !== null && row.returned_model !== row.model);
+  return substituted
+    ? `${row.model} → ${row.returned_model} SUBSTITUTED`
+    : (row.returned_model ?? row.model);
+};
+
 export const time = (value: string) => new Intl.DateTimeFormat("en-US", {
   month: "short",
   day: "numeric",

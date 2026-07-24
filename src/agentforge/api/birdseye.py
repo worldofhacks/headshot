@@ -811,7 +811,21 @@ def build_birdseye_snapshot(
             else None
         )
         displayed_provider = observed_provider or assignment["provider"]
-        displayed_model = observed_model or assignment["model"]
+        # A served model that is not the one that execution requested must not be presented as
+        # this agent's identity — shown alone it reads exactly like a normal call. Compare against
+        # the execution's own requested model, not the assignment, which may be a default
+        # placeholder rather than anything that was actually asked for.
+        requested_model = str(execution["model"]) if execution is not None else None
+        model_substituted = (
+            observed_model is not None
+            and requested_model is not None
+            and observed_model != requested_model
+        )
+        displayed_model = (
+            f"{requested_model} → {observed_model} (substituted)"
+            if model_substituted
+            else (observed_model or assignment["model"])
+        )
         displayed_mode = (
             execution["execution_mode"]
             if observed_model is not None and execution is not None

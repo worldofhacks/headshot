@@ -226,3 +226,72 @@ def test_contract_downgrade_preserves_rows_and_drops_only_the_added_column(
         assert surviving == set(seeded), "contract downgrade lost seeded rows"
     finally:
         engine.dispose()
+
+
+def test_0019_downgrade_survives_a_recorded_model_substitution() -> None:
+    """Rolling back must not be blocked by the very rows 0019 exists to permit.
+
+    A substituted row cannot satisfy the pre-0019 identity constraint, so its observation has to
+    be cleared — but the seven observation columns are an all-or-nothing tuple, so clearing only
+    the three identity columns aborts the rollback on exactly this row.
+    """
+
+    admin = _db.admin_url()
+    dbname = f"agentforge_mig_{uuid.uuid4().hex[:12]}"
+    base, _sep = _db.split_db(admin)
+    url = f"{base}/{dbname}"
+
+    _db.create_fresh_database(admin, dbname)
+    try:
+        _db.alembic_upgrade(url, "head")
+        engine = _db.build_engine(url)
+        with engine.begin() as conn:
+            conn.execute(text("SET LOCAL session_replication_role = replica"))
+            conn.execute(
+                text(
+                    "INSERT INTO agent_executions "
+                    "(execution_id, organization_id, campaign_run_id, agent_role, status, "
+                    "provider, model, execution_mode, configuration_version, input_sha256, "
+                    "output_sha256, returned_model, upstream_provider, provider_request_id, "
+                    "input_tokens, output_tokens, reasoning_tokens, physical_attempts, "
+                    "configuration_set_sha256, role_configuration_sha256, "
+                    "generation_policy_sha256, measured_cost, cost_measurement_state, trace_id, "
+                    "detail, started_at, finished_at, duration_ms, error_code) VALUES "
+                    "('substituted-1', 'org_Rollback', 'run_Rollback', 'judge', 'failed', "
+                    "'openrouter', 'google/gemini-2.5-pro', 'hosted_advisory', 1, repeat('a',64), "
+                    "repeat('b',64), 'openai/gpt-5.4', 'OpenAI', 'req-substituted', "
+                    "100, 20, 5, 1, repeat('c',64), repeat('d',64), repeat('e',64), "
+                    "0.01, 'measured', repeat('f',32), '{}'::jsonb, clock_timestamp(), "
+                    "clock_timestamp(), 10, 'provider-model-substituted')"
+                )
+            )
+        engine.dispose()
+
+        _db.alembic_downgrade(url, "0018")
+
+        engine = _db.build_engine(url)
+        with engine.connect() as conn:
+            row = (
+                conn.execute(
+                    text(
+                        "SELECT status, model, returned_model, input_tokens, physical_attempts, "
+                        "error_code FROM agent_executions WHERE execution_id = 'substituted-1'"
+                    )
+                )
+                .mappings()
+                .one()
+            )
+        engine.dispose()
+
+        # The row survives the rollback; only the observation it can no longer represent is gone.
+        assert row["status"] == "failed"
+        assert row["model"] == "google/gemini-2.5-pro"
+        assert row["returned_model"] is None
+        assert row["input_tokens"] is None
+        assert row["physical_attempts"] is None
+        # The substitution stays detectable after the rollback through the typed error code.
+        assert row["error_code"] == "provider-model-substituted"
+
+        _db.alembic_upgrade(url, "head")
+    finally:
+        _db.drop_database(admin, dbname)

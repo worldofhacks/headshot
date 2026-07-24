@@ -490,14 +490,18 @@ class HostedRoleRuntime:
         if not isinstance(result, OpenRouterResult):
             return None
         configuration = self._roles[role]
+        # returned_model is no longer pinned equal to the authorized id, so it is now
+        # provider-controlled text on its way to the audit log, Langfuse and the console. Hold it
+        # to the same bound as every other provider-supplied string rather than storing it raw.
+        try:
+            require_safe_model_text("returned_model", result.returned_model, maximum=160)
+        except HostedCompositionError:
+            return None
         if (
             # requested_model is ours: if it is wrong we sent the wrong call and the whole
             # observation is untrustworthy. returned_model is theirs — a divergence is exactly
             # what this record exists to preserve, so it must not discard the lineage.
             result.requested_model != configuration.model_id
-            or not isinstance(result.returned_model, str)
-            or not result.returned_model
-            or len(result.returned_model) > 160
             or not isinstance(result.upstream_provider, str)
             or not result.upstream_provider
             or len(result.upstream_provider) > 64

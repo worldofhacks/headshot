@@ -10,6 +10,7 @@ import {
   count,
   money,
   Panel,
+  servedModel,
   shortId,
   Timeline,
 } from "./Analytics";
@@ -119,7 +120,7 @@ export function AgentActivityPanel({
           <Timeline rows={records.slice(0, 12).map((row) => ({
             id: row.execution_id,
             title: `${row.agent_role.replace("_", " ")} · ${row.status}`,
-            detail: `${row.returned_model ?? row.model} · ${shortId(row.trace_id)} · ${rowAccountingValue(row)} · Langfuse ${row.langfuse_status.replaceAll("_", " ")}${evaluatorState(row)}`,
+            detail: `${servedModel(row)} · ${shortId(row.trace_id)} · ${rowAccountingValue(row)} · Langfuse ${row.langfuse_status.replaceAll("_", " ")}${evaluatorState(row)}`,
             at: row.started_at,
             tone: activityTone(row.status),
           }))} />
