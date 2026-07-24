@@ -1,8 +1,9 @@
-"""Traced hosted Red Team generation — qwen as the fourth live agent, identical lineage.
+"""Component-ready traced Red Team generation pending governed production composition.
 
-The two-stage loop's GENERATION is the Red Team's LLM work. This provider makes every hosted
-generation/mutation call a REAL, traced qwen invocation that lines up identically with the other
-three roles (Orchestrator/opus, Judge/gemini, Documentation/gpt):
+The future two-stage loop's GENERATION is the Red Team's LLM work. This provider can make a hosted
+generation/mutation call a traced qwen invocation with the same lineage contract as the other
+roles, but it is not production-live until its quarantine, human review, and fresh-authorization
+composition root exists:
 
 * it routes through the SAME :class:`~agentforge.providers.openrouter.OpenRouterTransport` as the
   other roles (``role='red_team'``), so the shared :class:`HostedUsageLedger` enforces the Red Team
@@ -31,6 +32,7 @@ from typing import Any, Protocol
 from agentforge.agents.hosted_runtime import HostedCallBounds, HostedExecutionLineage
 from agentforge.agents.prompts import PromptRegistryError, prompt_for_identity
 from agentforge.agents.red_team.providers import _collect_usable
+from agentforge.providers.lineage import ProviderLogicalContextV1
 
 _GENERATION_SCHEMA_NAME = "red_team_variants"
 _MAX_VARIANTS = 16
@@ -48,6 +50,7 @@ class _Invoker(Protocol):
 class _Lifecycle(Protocol):
     def start(self, **kwargs: Any) -> str: ...
     def finish(self, **kwargs: Any) -> None: ...
+    def provider_context(self, **kwargs: Any) -> ProviderLogicalContextV1: ...
 
 
 class TracedRedTeamGenerationError(RuntimeError):
@@ -160,6 +163,11 @@ def build_generation_messages(
     user = {
         "category": category,
         "count": count,
+        "output_contract": {
+            "field": "variants",
+            "item_kind": "proposed_next_attacker_turn",
+            "required_distinct_items": count,
+        },
         "seed_case_ref": seed.get("case_ref"),
         "seed_turns": seed_turns,
     }
@@ -175,9 +183,10 @@ def build_generation_messages(
 
 
 class TracedHostedRedTeamProvider:
-    """A ``RedTeamProvider`` whose generation is a traced, cost-capped, lineage-emitting qwen call.
+    """A component whose generation is a traced, cost-capped, lineage-emitting qwen call.
 
-    Drop-in for ``mutation.mutate(..., provider=...)`` so the two-stage loop's generation is live.
+    It is ready for the governed two-stage composition; it is not the authorized case-selection
+    implementation used by the current production Runner.
     """
 
     def __init__(
@@ -194,8 +203,10 @@ class TracedHostedRedTeamProvider:
     ) -> None:
         if not callable(getattr(transport, "invoke", None)):
             raise TracedRedTeamGenerationError("hosted transport is unavailable")
-        if not callable(getattr(lifecycle, "start", None)) or not callable(
-            getattr(lifecycle, "finish", None)
+        if (
+            not callable(getattr(lifecycle, "start", None))
+            or not callable(getattr(lifecycle, "finish", None))
+            or not callable(getattr(lifecycle, "provider_context", None))
         ):
             raise TracedRedTeamGenerationError("execution lifecycle is unavailable")
         try:
@@ -220,8 +231,27 @@ class TracedHostedRedTeamProvider:
         # chain is uniform — never silently dropped to None.
         self._parent_request_id = parent_request_id
 
-    def _invoke_transport(self, seed: dict[str, Any], count: int, category: str) -> Any:
-        """The raw traced qwen call through the shared transport (role='red_team'), unrecorded."""
+    def _invoke_transport(
+        self,
+        seed: dict[str, Any],
+        count: int,
+        category: str,
+        *,
+        execution_id: str | None,
+    ) -> Any:
+        """Invoke qwen with the durable logical identity required by the physical recorder."""
+
+        if not isinstance(execution_id, str) or not execution_id:
+            raise TracedRedTeamGenerationError(
+                "red_team provider lineage requires its logical execution identity"
+            )
+        provider_context = self._lifecycle.provider_context(
+            execution_id=execution_id,
+            prompt_version=self._role.prompt_version,
+            prompt_sha256=self._role.prompt_sha256,
+        )
+        if not isinstance(provider_context, ProviderLogicalContextV1):
+            raise TracedRedTeamGenerationError("red_team provider lineage context is invalid")
         return self._transport.invoke(
             role="red_team",
             messages=build_generation_messages(
@@ -238,17 +268,28 @@ class TracedHostedRedTeamProvider:
             max_output_tokens=self._call_bounds.output_tokens,
             max_reasoning_tokens=self._call_bounds.reasoning_tokens,
             timeout_seconds=self._call_bounds.timeout_seconds,
+            provider_context=provider_context,
         )
 
     def generate_traced(
-        self, seed: dict[str, Any], *, count: int, category: str
+        self,
+        seed: dict[str, Any],
+        *,
+        count: int,
+        category: str,
+        execution_id: str | None = None,
     ) -> RedTeamGenerationResult:
         """Run the traced qwen generation and return variants + measured cost/token/trace metadata.
 
         The caller owns recording (used by a composition root that already starts/finishes the
         red_team agent execution). The shared ledger still enforces the red_team subcap here.
         """
-        result = self._invoke_transport(seed, count, category)
+        result = self._invoke_transport(
+            seed,
+            count,
+            category,
+            execution_id=execution_id,
+        )
         variants = _collect_usable(seed, list(result.output.get("variants", [])), count)
         return RedTeamGenerationResult(
             variants=variants,
@@ -290,7 +331,12 @@ class TracedHostedRedTeamProvider:
             raise TracedRedTeamGenerationError("execution lifecycle returned no identity")
 
         try:
-            result = self._invoke_transport(seed, count, category)
+            result = self._invoke_transport(
+                seed,
+                count,
+                category,
+                execution_id=execution_id,
+            )
             # _collect_usable stays INSIDE the try: a short/exhausted generation raises
             # ProviderExhaustedError AFTER the (cost-incurring) transport call has already STARTED
             # the execution, so it must be recorded as a failed finish here — never left dangling as

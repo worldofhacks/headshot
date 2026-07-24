@@ -72,6 +72,7 @@ from agentforge.policy.scoped_credentials import (
     CredentialResolutionError,
     SealedEnvironmentCredentialResolver,
 )
+from agentforge.providers.lineage import ProviderLogicalContextV1
 from agentforge.providers.openrouter import HostedUsageLedger, OpenRouterTransport
 from agentforge.readiness import expected_alembic_head
 from agentforge.regression import RegressionAdmissionGate, RegressionLifecycle
@@ -92,6 +93,9 @@ _PAYLOAD_SCHEMA = "campaign.execute"
 _PAYLOAD_VERSION = 1
 _DEFAULT_LEASE = datetime.timedelta(minutes=10)
 _DEFAULT_POLL_SECONDS = 1.0
+_PROVIDER_RECOVERY_INTERVAL_SECONDS = 30.0
+_PROVIDER_RECOVERY_LIMIT = 32
+_PROVIDER_RECOVERY_STALE_AFTER_SECONDS = _DEFAULT_LEASE.total_seconds() + 60.0
 
 
 class DispatchUnavailable(RuntimeError):
@@ -358,6 +362,23 @@ class _DurableHostedExecutionLifecycle:
             raise DispatchUnavailable("hosted_langfuse_observation_unavailable")
         return execution_id
 
+    def provider_context(
+        self,
+        *,
+        execution_id: str,
+        prompt_version: str,
+        prompt_sha256: str,
+    ) -> ProviderLogicalContextV1:
+        """Resolve the exact durable logical identity immediately before provider I/O."""
+
+        if execution_id not in self._execution_context:
+            raise DispatchUnavailable("hosted_execution_context_missing")
+        return self._store.provider_logical_context(
+            execution_id=execution_id,
+            prompt_version=prompt_version,
+            prompt_sha256=prompt_sha256,
+        )
+
     def finish(
         self,
         *,
@@ -405,25 +426,11 @@ class _DurableHostedExecutionLifecycle:
             "error_code": error_code,
             "detail": detail,
         }
-        if lineage is not None:
-            if failed_physical_attempts is not None:
-                raise DispatchUnavailable("hosted_failure_accounting_conflicts_with_lineage")
-            terminal.update(
-                {
-                    "returned_model": lineage.returned_model,
-                    "upstream_provider": lineage.upstream_provider,
-                    "provider_request_id": lineage.provider_request_id,
-                    "input_tokens": lineage.input_tokens,
-                    "output_tokens": lineage.output_tokens,
-                    "reasoning_tokens": lineage.reasoning_tokens,
-                    "measured_cost_usd": lineage.measured_cost_usd,
-                    "configuration_set_sha256": lineage.configuration_sha256,
-                    "role_configuration_sha256": lineage.role_configuration_sha256,
-                    "generation_policy_sha256": lineage.generation_policy_sha256,
-                    "physical_attempts": lineage.physical_attempts,
-                }
-            )
-        elif failed_physical_attempts is not None:
+        if lineage is not None and failed_physical_attempts is not None:
+            raise DispatchUnavailable("hosted_failure_accounting_conflicts_with_lineage")
+        # The append-only provider ledger is authoritative. The role result is still required to
+        # prove semantic success, but its duplicate provider fields are not re-persisted.
+        if lineage is None and failed_physical_attempts is not None:
             terminal["physical_attempts"] = failed_physical_attempts
         self._store.finish_hosted_agent_execution(**terminal)
         if reconciliation is not None:
@@ -826,6 +833,7 @@ class DurableCampaignRunner:
         self._campaign_adapter: Any | None = None
         self._hosted_transport: OpenRouterTransport | None = None
         self._last_hosted_readiness_check = 0.0
+        self._last_provider_recovery_check = 0.0
 
     def _start_agent_execution(self, **values: Any) -> str:
         """Start the durable ledger row, then fail-soft project the same work to Langfuse."""
@@ -903,8 +911,16 @@ class DurableCampaignRunner:
     def heartbeat_runtime(self, *, force_connection_check: bool = False) -> None:
         """Publish worker health plus sealed-binding readiness per exact configuration hash."""
 
-        self.telemetry.heartbeat(force_connection_check=force_connection_check)
+        if not _schema_is_current(self.engine):
+            return
         now = time.monotonic()
+        if (
+            force_connection_check
+            or now - self._last_provider_recovery_check >= _PROVIDER_RECOVERY_INTERVAL_SECONDS
+        ):
+            self._last_provider_recovery_check = now
+            self.recover_interrupted_provider_calls()
+        self.telemetry.heartbeat(force_connection_check=force_connection_check)
         if not force_connection_check and now - self._last_hosted_readiness_check < 30.0:
             return
         self._last_hosted_readiness_check = now
@@ -938,6 +954,38 @@ class DurableCampaignRunner:
                     provider_bindings_verified=verified,
                     langfuse_observation_ready=langfuse_ready,
                 )
+
+    def recover_interrupted_provider_calls(
+        self,
+        *,
+        limit: int = _PROVIDER_RECOVERY_LIMIT,
+        stale_after_seconds: float = _PROVIDER_RECOVERY_STALE_AFTER_SECONDS,
+    ) -> int:
+        """Close bounded crash reservations, then explicitly fail their logical executions.
+
+        Physical recovery records facts only. This separate Runner lifecycle step invokes the
+        normal logical terminalizer, so an event can never approve or terminalize role work by
+        itself.
+        """
+
+        recovered = self.store.recover_interrupted_hosted_executions(
+            limit=limit,
+            stale_after_seconds=stale_after_seconds,
+        )
+        for execution_id, reason in recovered:
+            output_payload = {
+                "status": "failed",
+                "reason_code": reason,
+            }
+            telemetry = getattr(self, "telemetry", None)
+            if callable(getattr(telemetry, "finish_agent", None)):
+                with contextlib.suppress(Exception):
+                    telemetry.finish_agent(
+                        execution_id=execution_id,
+                        output_payload=output_payload,
+                        error_code=reason,
+                    )
+        return len(recovered)
 
     def _hosted_usage_ledger(
         self,
@@ -1040,6 +1088,24 @@ class DurableCampaignRunner:
             self.store.assert_job_lease(job)
         except Exception:
             blockers.append("lease_not_owned")
+        try:
+            with self.engine.connect() as connection:
+                unresolved_hosted_execution = bool(
+                    connection.execute(
+                        text(
+                            "SELECT EXISTS (SELECT 1 FROM agent_executions "
+                            "WHERE campaign_run_id = :run_id "
+                            "AND execution_mode = 'hosted_advisory' "
+                            "AND configuration_set_sha256 IS NOT NULL "
+                            "AND status = 'running')"
+                        ),
+                        {"run_id": job.campaign_run_id},
+                    ).scalar_one()
+                )
+            if unresolved_hosted_execution:
+                blockers.append("unresolved_hosted_execution")
+        except Exception:
+            blockers.append("hosted_execution_replay_guard_unavailable")
 
         authorized: Any | None = None
         try:
@@ -1370,6 +1436,7 @@ class DurableCampaignRunner:
                     configuration=prepared.hosted.configuration,
                     generation_policy=prepared.hosted.generation_policy,
                 ),
+                lineage_recorder=self.store,
                 sleeper=self.sleeper,
             )
             hosted_runtime = HostedRoleRuntime(
@@ -1987,6 +2054,10 @@ class DurableCampaignRunner:
     def run_once(self, *, worker_id: str) -> bool:
         """Claim at most one job. Returns false only when no eligible work exists."""
 
+        # A newly deployed Runner can intentionally wait behind the Web-owned migration step.
+        # This gate must precede queue.claim so schema skew cannot lease, fail, or mutate work.
+        if not _schema_is_current(self.engine):
+            return False
         job = self.queue.claim(
             LogicalQueue.AGENT_WORK,
             worker_id=worker_id,
@@ -2058,15 +2129,20 @@ def main(argv: list[str] | None = None) -> int:
     except Exception:
         print("runner unavailable: trusted composition failed", file=sys.stderr)
         return 1
-    with contextlib.suppress(Exception):
-        runner.heartbeat_runtime(force_connection_check=True)
     stop = threading.Event()
+    force_runtime_connection_check = True
     for signum in (signal.SIGTERM, signal.SIGINT):
         signal.signal(signum, lambda *_args: stop.set())
     try:
         while not stop.is_set():
+            if not _schema_is_current(runner.engine):
+                if args.once:
+                    break
+                stop.wait(_DEFAULT_POLL_SECONDS)
+                continue
             with contextlib.suppress(Exception):
-                runner.heartbeat_runtime()
+                runner.heartbeat_runtime(force_connection_check=force_runtime_connection_check)
+                force_runtime_connection_check = False
             try:
                 worked = runner.run_once(worker_id=_worker_id())
             except DispatchUnavailable:

@@ -8,6 +8,8 @@ It never returns or records a credential value.
 
 from __future__ import annotations
 
+import datetime
+import hashlib
 import json
 import math
 import threading
@@ -26,12 +28,31 @@ from agentforge.agents.hosted import (
     HostedRoleConfiguration,
     validate_hosted_configuration_set,
 )
+from agentforge.agents.hosted_prompts import hosted_prompt
 from agentforge.agents.runtime import AgentRole
+from agentforge.providers.lineage import (
+    ProviderInvocationContextV1,
+    ProviderLineageRecorder,
+    ProviderLogicalContextV1,
+    ProviderTerminalEventV1,
+    served_provider_matches_configured,
+)
 from agentforge.secrets import Secret
 
 OPENROUTER_CHAT_COMPLETIONS_URL = "https://openrouter.ai/api/v1/chat/completions"
 _MILLION = Decimal(1_000_000)
+_COST_QUANTUM = Decimal("0.000000000001")
+_MAX_COST = Decimal("99999999.999999999999")
 _RETRYABLE_STATUS = frozenset({429, 502, 503})
+_EVENT_ERRORS = {
+    "timeout": "provider_timeout",
+    "retryable_failure": "provider_retryable",
+    "terminal_failure": "provider_terminal",
+    "model_mismatch": "returned_model_mismatch",
+    "invalid_usage": "invalid_provider_usage",
+    "invalid_output": "invalid_structured_output",
+    "outcome_unknown": "provider_outcome_unknown",
+}
 
 
 class HostedProviderError(RuntimeError):
@@ -318,6 +339,7 @@ class HostedProviderResponseError(HostedProviderError):
         *,
         observed_result: OpenRouterResult,
         code: str,
+        provider_event_status: str = "invalid_output",
     ) -> None:
         super().__init__(
             message,
@@ -327,8 +349,42 @@ class HostedProviderResponseError(HostedProviderError):
             raise TypeError("observed provider result is invalid")
         if not isinstance(code, str) or not code:
             raise ValueError("observed provider failure code is invalid")
+        if provider_event_status not in {"invalid_usage", "invalid_output"}:
+            raise ValueError("observed provider event status is invalid")
         self.observed_result = observed_result
         self.code = code
+        self.provider_event_status = provider_event_status
+
+
+class _PhysicalCallError(HostedProviderError):
+    """A safe failure plus any content-free facts observed from one physical response."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        provider_event_status: str,
+        returned_model: str | None = None,
+        upstream_provider: str | None = None,
+        provider_request_id: str | None = None,
+        input_tokens: int | None = None,
+        output_tokens: int | None = None,
+        reasoning_tokens: int | None = None,
+        cost_measurement_state: str = "not_observed",
+        measured_cost_usd: Decimal | None = None,
+    ) -> None:
+        super().__init__(message)
+        if provider_event_status not in _EVENT_ERRORS:
+            raise ValueError("physical provider event status is invalid")
+        self.provider_event_status = provider_event_status
+        self.returned_model = returned_model
+        self.upstream_provider = upstream_provider
+        self.provider_request_id = provider_request_id
+        self.input_tokens = input_tokens
+        self.output_tokens = output_tokens
+        self.reasoning_tokens = reasoning_tokens
+        self.cost_measurement_state = cost_measurement_state
+        self.measured_cost_usd = measured_cost_usd
 
 
 class OpenRouterTransport:
@@ -341,6 +397,7 @@ class OpenRouterTransport:
         credential_resolver: Callable[[str], Secret],
         client: httpx.Client | None = None,
         ledger: HostedUsageLedger | None = None,
+        lineage_recorder: ProviderLineageRecorder | None = None,
         sleeper: Callable[[float], None] = time.sleep,
         monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
@@ -351,6 +408,12 @@ class OpenRouterTransport:
         self._client = client or httpx.Client()
         self._owns_client = client is None
         self._ledger = ledger or HostedUsageLedger(configuration)
+        if lineage_recorder is not None and (
+            not callable(getattr(lineage_recorder, "begin_physical_attempt", None))
+            or not callable(getattr(lineage_recorder, "finish_physical_attempt", None))
+        ):
+            raise TypeError("provider lineage recorder is invalid")
+        self._lineage_recorder = lineage_recorder
         self._sleeper = sleeper
         self._monotonic = monotonic
         self._last_request_at: float | None = None
@@ -376,6 +439,7 @@ class OpenRouterTransport:
         max_output_tokens: int,
         max_reasoning_tokens: int,
         timeout_seconds: float,
+        provider_context: ProviderLogicalContextV1 | None = None,
     ) -> OpenRouterResult:
         configuration = self._roles.get(role)
         if configuration is None:
@@ -387,6 +451,26 @@ class OpenRouterTransport:
             generation_policy_sha256=generation_policy_sha256,
             timeout_seconds=timeout_seconds,
         )
+        self._validate_prompt_authority(
+            configuration=configuration,
+            messages=messages,
+        )
+        if self._lineage_recorder is not None and not isinstance(
+            provider_context,
+            ProviderLogicalContextV1,
+        ):
+            raise HostedProviderError("provider lineage context is unavailable")
+        if provider_context is not None and (
+            provider_context.agent_role != role
+            or provider_context.requested_model != configuration.model_id
+            or provider_context.configured_upstream != configuration.upstream_provider
+            or provider_context.configuration_set_sha256 != self._configuration.configuration_sha256
+            or provider_context.role_configuration_sha256 != configuration.configuration_sha256
+            or provider_context.generation_policy_sha256 != generation_policy_sha256
+            or provider_context.prompt_sha256 != configuration.prompt_sha256
+            or provider_context.prompt_version != hosted_prompt(role).version
+        ):
+            raise HostedProviderError("provider lineage context differs from authorization")
         attempts = 1 + min(
             HOSTED_MAX_LOGICAL_RETRIES,
             configuration.limits.max_retries,
@@ -397,7 +481,29 @@ class OpenRouterTransport:
         conservative_input_bound = self._conservative_input_token_bound(messages)
         with self._concurrency:
             for attempt in range(1, attempts + 1):
-                self._pace(configuration)
+                try:
+                    self._pace(configuration)
+                except HostedProviderError as exc:
+                    exc.account_physical_attempts(physical_attempts)
+                    raise
+                except Exception as exc:
+                    raise HostedProviderError(
+                        "provider pacing failed before another physical send",
+                        physical_attempts=physical_attempts,
+                    ) from exc
+                invocation: ProviderInvocationContextV1 | None = None
+                try:
+                    credential = self._credential_resolver(configuration.credential_reference)
+                    if not isinstance(credential, Secret) or not credential:
+                        raise HostedProviderError("hosted credential reference is unavailable")
+                except HostedProviderError as exc:
+                    exc.account_physical_attempts(physical_attempts)
+                    raise
+                except Exception as exc:
+                    raise HostedProviderError(
+                        "hosted credential reference is unavailable",
+                        physical_attempts=physical_attempts,
+                    ) from exc
                 try:
                     reservation = self._ledger.reserve(
                         role,
@@ -411,10 +517,15 @@ class OpenRouterTransport:
                 except HostedProviderError as exc:
                     exc.account_physical_attempts(physical_attempts)
                     raise
-                physical_attempts = attempt
                 try:
+                    invocation = self._begin_physical_attempt(
+                        provider_context,
+                        sequence=attempt,
+                    )
+                    physical_attempts = attempt
                     result = self._send(
                         configuration=configuration,
+                        credential=credential,
                         messages=messages,
                         output_schema=output_schema,
                         schema_name=schema_name,
@@ -424,24 +535,221 @@ class OpenRouterTransport:
                         reservation=reservation,
                         physical_attempts=attempt,
                     )
-                    return result
-                except (httpx.TimeoutException, httpx.TransportError) as exc:
+                except httpx.TimeoutException as exc:
+                    self._record_unobserved_failure(
+                        invocation,
+                        status="timeout",
+                    )
+                    last_error = exc
+                    if attempt >= attempts:
+                        break
+                except httpx.TransportError as exc:
+                    self._record_unobserved_failure(
+                        invocation,
+                        status="retryable_failure",
+                    )
                     last_error = exc
                     if attempt >= attempts:
                         break
                 except _RetryableResponse as exc:
+                    self._record_unobserved_failure(
+                        invocation,
+                        status="retryable_failure",
+                    )
                     last_error = exc
                     if attempt >= attempts:
                         break
                     if exc.retry_after_seconds > 0:
-                        self._sleeper(min(exc.retry_after_seconds, 5.0))
-                except HostedProviderError as exc:
+                        try:
+                            self._sleeper(min(exc.retry_after_seconds, 5.0))
+                        except Exception as sleep_error:
+                            raise HostedProviderError(
+                                "provider retry pacing failed",
+                                physical_attempts=physical_attempts,
+                            ) from sleep_error
+                except HostedProviderResponseError as exc:
+                    self._record_observed_failure(invocation, exc)
                     exc.account_physical_attempts(physical_attempts)
                     raise
+                except _PhysicalCallError as exc:
+                    self._record_physical_failure(invocation, exc)
+                    exc.account_physical_attempts(physical_attempts)
+                    raise
+                except HostedProviderError as exc:
+                    if invocation is not None:
+                        self._record_unobserved_failure(
+                            invocation,
+                            status="terminal_failure",
+                        )
+                    exc.account_physical_attempts(physical_attempts)
+                    raise
+                except Exception as exc:
+                    if invocation is not None:
+                        self._record_unobserved_failure(
+                            invocation,
+                            status="outcome_unknown",
+                        )
+                    raise HostedProviderError(
+                        "provider call outcome could not be determined",
+                        physical_attempts=physical_attempts,
+                    ) from exc
+                else:
+                    self._record_success(invocation, result)
+                    return result
         raise HostedProviderError(
             "OpenRouter request failed after the authorized retry",
             physical_attempts=physical_attempts,
         ) from last_error
+
+    def _begin_physical_attempt(
+        self,
+        context: ProviderLogicalContextV1 | None,
+        *,
+        sequence: int,
+    ) -> ProviderInvocationContextV1 | None:
+        if self._lineage_recorder is None:
+            return None
+        if not isinstance(context, ProviderLogicalContextV1):
+            raise HostedProviderError("provider lineage context is unavailable")
+        try:
+            invocation = self._lineage_recorder.begin_physical_attempt(
+                context,
+                sequence,
+            )
+        except Exception as exc:
+            raise HostedProviderError(
+                "physical provider invocation could not be durably reserved"
+            ) from exc
+        if (
+            not isinstance(invocation, ProviderInvocationContextV1)
+            or invocation.logical_execution_id != context.logical_execution_id
+            or invocation.physical_sequence != sequence
+        ):
+            raise HostedProviderError("physical provider invocation returned invalid identity")
+        return invocation
+
+    def _record_success(
+        self,
+        invocation: ProviderInvocationContextV1 | None,
+        result: OpenRouterResult,
+    ) -> None:
+        self._record_terminal_event(
+            invocation,
+            status="succeeded",
+            returned_model=result.returned_model,
+            upstream_provider=result.upstream_provider,
+            provider_request_id=result.request_id,
+            input_tokens=result.input_tokens,
+            output_tokens=result.output_tokens,
+            reasoning_tokens=result.reasoning_tokens,
+            cost_measurement_state="measured",
+            measured_cost_usd=result.measured_cost_usd,
+        )
+
+    def _record_observed_failure(
+        self,
+        invocation: ProviderInvocationContextV1 | None,
+        error: HostedProviderResponseError,
+    ) -> None:
+        result = error.observed_result
+        self._record_terminal_event(
+            invocation,
+            status=error.provider_event_status,
+            returned_model=result.returned_model,
+            upstream_provider=result.upstream_provider,
+            provider_request_id=result.request_id,
+            input_tokens=result.input_tokens,
+            output_tokens=result.output_tokens,
+            reasoning_tokens=result.reasoning_tokens,
+            cost_measurement_state="measured",
+            measured_cost_usd=result.measured_cost_usd,
+        )
+
+    def _record_physical_failure(
+        self,
+        invocation: ProviderInvocationContextV1 | None,
+        error: _PhysicalCallError,
+    ) -> None:
+        self._record_terminal_event(
+            invocation,
+            status=error.provider_event_status,
+            returned_model=error.returned_model,
+            upstream_provider=error.upstream_provider,
+            provider_request_id=error.provider_request_id,
+            input_tokens=error.input_tokens,
+            output_tokens=error.output_tokens,
+            reasoning_tokens=error.reasoning_tokens,
+            cost_measurement_state=error.cost_measurement_state,
+            measured_cost_usd=error.measured_cost_usd,
+        )
+
+    def _record_unobserved_failure(
+        self,
+        invocation: ProviderInvocationContextV1 | None,
+        *,
+        status: str,
+    ) -> None:
+        self._record_terminal_event(
+            invocation,
+            status=status,
+            returned_model=None,
+            upstream_provider=None,
+            provider_request_id=None,
+            input_tokens=None,
+            output_tokens=None,
+            reasoning_tokens=None,
+            cost_measurement_state="not_observed",
+            measured_cost_usd=None,
+        )
+
+    def _record_terminal_event(
+        self,
+        invocation: ProviderInvocationContextV1 | None,
+        *,
+        status: str,
+        returned_model: str | None,
+        upstream_provider: str | None,
+        provider_request_id: str | None,
+        input_tokens: int | None,
+        output_tokens: int | None,
+        reasoning_tokens: int | None,
+        cost_measurement_state: str,
+        measured_cost_usd: Decimal | None,
+    ) -> None:
+        if invocation is None:
+            return
+        if self._lineage_recorder is None:
+            raise HostedProviderError("provider lineage recorder is unavailable")
+        try:
+            event = ProviderTerminalEventV1(
+                invocation_id=invocation.invocation_id,
+                physical_sequence=invocation.physical_sequence,
+                status=status,
+                returned_model=returned_model,
+                upstream_provider=upstream_provider,
+                provider_request_id=provider_request_id,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                reasoning_tokens=reasoning_tokens,
+                cost_measurement_state=cost_measurement_state,
+                measured_cost_usd=measured_cost_usd,
+                error_code=_EVENT_ERRORS.get(status),
+                finished_at=datetime.datetime.now(datetime.UTC),
+            )
+            recorded = self._lineage_recorder.finish_physical_attempt(
+                invocation,
+                event,
+            )
+        except Exception as exc:
+            raise HostedProviderError(
+                "physical provider terminal facts could not be durably recorded",
+                physical_attempts=invocation.physical_sequence,
+            ) from exc
+        if recorded != event:
+            raise HostedProviderError(
+                "physical provider terminal recorder changed observed facts",
+                physical_attempts=invocation.physical_sequence,
+            )
 
     def _pace(self, configuration: HostedRoleConfiguration) -> None:
         rate = min(
@@ -464,6 +772,7 @@ class OpenRouterTransport:
         self,
         *,
         configuration: HostedRoleConfiguration,
+        credential: Secret,
         messages: Sequence[Mapping[str, str]],
         output_schema: Mapping[str, Any],
         schema_name: str,
@@ -473,9 +782,6 @@ class OpenRouterTransport:
         reservation: _Reservation,
         physical_attempts: int,
     ) -> OpenRouterResult:
-        credential = self._credential_resolver(configuration.credential_reference)
-        if not isinstance(credential, Secret) or not credential:
-            raise HostedProviderError("hosted credential reference is unavailable")
         response = self._client.post(
             OPENROUTER_CHAT_COMPLETIONS_URL,
             headers={
@@ -519,27 +825,110 @@ class OpenRouterTransport:
         if response.status_code in _RETRYABLE_STATUS:
             raise _RetryableResponse(self._retry_after(response))
         if response.status_code < 200 or response.status_code >= 300:
-            raise HostedProviderError("OpenRouter returned a terminal HTTP error")
+            raise _PhysicalCallError(
+                "OpenRouter returned a terminal HTTP error",
+                provider_event_status="terminal_failure",
+            )
         try:
             payload = response.json()
         except (TypeError, ValueError) as exc:
-            raise HostedProviderError("OpenRouter returned invalid JSON") from exc
+            raise _PhysicalCallError(
+                "OpenRouter returned invalid JSON",
+                provider_event_status="invalid_output",
+            ) from exc
         if not isinstance(payload, dict):
-            raise HostedProviderError("OpenRouter response has an invalid shape")
+            raise _PhysicalCallError(
+                "OpenRouter response has an invalid shape",
+                provider_event_status="invalid_output",
+            )
         requested_model = configuration.model_id
-        returned_model = payload.get("model")
-        upstream_provider, selected_model = self._selected_endpoint(
-            payload,
-            requested_model=requested_model,
-        )
-        request_id = payload.get("id")
+        raw_returned_model = payload.get("model")
+        returned_model = raw_returned_model if isinstance(raw_returned_model, str) else None
+        raw_request_id = payload.get("id")
+        request_id = raw_request_id if isinstance(raw_request_id, str) else None
+        try:
+            usage = self._usage(payload)
+        except HostedProviderError as exc:
+            raw_usage = payload.get("usage")
+            cost_was_present = isinstance(raw_usage, Mapping) and "cost" in raw_usage
+            raise _PhysicalCallError(
+                str(exc),
+                provider_event_status="invalid_usage",
+                returned_model=returned_model,
+                provider_request_id=request_id,
+                cost_measurement_state=("invalid" if cost_was_present else "not_observed"),
+            ) from exc
+        try:
+            upstream_provider, selected_model = self._selected_endpoint(
+                payload,
+                requested_model=requested_model,
+            )
+        except HostedProviderError as exc:
+            raise _PhysicalCallError(
+                str(exc),
+                provider_event_status="invalid_output",
+                returned_model=returned_model,
+                provider_request_id=request_id,
+                input_tokens=usage["input_tokens"],
+                output_tokens=usage["output_tokens"],
+                reasoning_tokens=usage["reasoning_tokens"],
+                cost_measurement_state="measured",
+                measured_cost_usd=usage["measured_cost"],
+            ) from exc
+        if not served_provider_matches_configured(
+            configuration.upstream_provider,
+            upstream_provider,
+        ):
+            raise _PhysicalCallError(
+                "OpenRouter selected an unauthorized provider route",
+                provider_event_status="invalid_output",
+                returned_model=returned_model,
+                upstream_provider=upstream_provider,
+                provider_request_id=request_id,
+                input_tokens=usage["input_tokens"],
+                output_tokens=usage["output_tokens"],
+                reasoning_tokens=usage["reasoning_tokens"],
+                cost_measurement_state="measured",
+                measured_cost_usd=usage["measured_cost"],
+            )
         if returned_model != requested_model:
-            raise HostedProviderError("OpenRouter returned a different model")
+            raise _PhysicalCallError(
+                "OpenRouter returned a different model",
+                provider_event_status="model_mismatch",
+                returned_model=returned_model,
+                upstream_provider=upstream_provider,
+                provider_request_id=request_id,
+                input_tokens=usage["input_tokens"],
+                output_tokens=usage["output_tokens"],
+                reasoning_tokens=usage["reasoning_tokens"],
+                cost_measurement_state="measured",
+                measured_cost_usd=usage["measured_cost"],
+            )
         if selected_model != returned_model:
-            raise HostedProviderError("OpenRouter selected a different endpoint model")
-        if not isinstance(request_id, str) or not request_id:
-            raise HostedProviderError("OpenRouter response has no provider request id")
-        usage = self._usage(payload)
+            raise _PhysicalCallError(
+                "OpenRouter selected a different endpoint model",
+                provider_event_status="model_mismatch",
+                returned_model=returned_model,
+                upstream_provider=upstream_provider,
+                provider_request_id=request_id,
+                input_tokens=usage["input_tokens"],
+                output_tokens=usage["output_tokens"],
+                reasoning_tokens=usage["reasoning_tokens"],
+                cost_measurement_state="measured",
+                measured_cost_usd=usage["measured_cost"],
+            )
+        if request_id is None or not request_id:
+            raise _PhysicalCallError(
+                "OpenRouter response has no provider request id",
+                provider_event_status="invalid_output",
+                returned_model=returned_model,
+                upstream_provider=upstream_provider,
+                input_tokens=usage["input_tokens"],
+                output_tokens=usage["output_tokens"],
+                reasoning_tokens=usage["reasoning_tokens"],
+                cost_measurement_state="measured",
+                measured_cost_usd=usage["measured_cost"],
+            )
         observed_result = OpenRouterResult(
             output={},
             requested_model=requested_model,
@@ -557,12 +946,21 @@ class OpenRouterTransport:
         )
         try:
             self._ledger.settle(reservation, **usage)
+        except HostedProviderError as exc:
+            raise HostedProviderResponseError(
+                "OpenRouter response failed after measured usage was observed",
+                observed_result=observed_result,
+                code=exc.code,
+                provider_event_status="invalid_usage",
+            ) from exc
+        try:
             output = self._structured_output(payload, output_schema)
         except HostedProviderError as exc:
             raise HostedProviderResponseError(
                 "OpenRouter response failed after measured usage was observed",
                 observed_result=observed_result,
                 code=exc.code,
+                provider_event_status="invalid_output",
             ) from exc
         return replace(observed_result, output=output)
 
@@ -638,8 +1036,16 @@ class OpenRouterTransport:
             measured_cost = Decimal(str(usage["cost"]))
         except (InvalidOperation, KeyError, TypeError, ValueError) as exc:
             raise HostedProviderError("OpenRouter measured cost is unavailable") from exc
+        if not measured_cost.is_finite() or measured_cost < 0 or measured_cost > _MAX_COST:
+            raise HostedProviderError("OpenRouter measured cost is invalid")
+        try:
+            stored_cost = measured_cost.quantize(_COST_QUANTUM)
+        except InvalidOperation as exc:
+            raise HostedProviderError("OpenRouter measured cost exceeds storage precision") from exc
+        if stored_cost != measured_cost:
+            raise HostedProviderError("OpenRouter measured cost exceeds storage precision")
         return {
-            "measured_cost": measured_cost,
+            "measured_cost": stored_cost,
             "input_tokens": input_tokens,
             "output_tokens": output_tokens,
             "reasoning_tokens": reasoning_tokens,
@@ -659,6 +1065,23 @@ class OpenRouterTransport:
         if not isinstance(decoded, Mapping):
             raise HostedProviderError("OpenRouter structured output must be an object")
         return dict(decoded)
+
+    @staticmethod
+    def _validate_prompt_authority(
+        *,
+        configuration: HostedRoleConfiguration,
+        messages: Sequence[Mapping[str, str]],
+    ) -> None:
+        system_messages = [message for message in messages if message.get("role") == "system"]
+        if (
+            len(system_messages) != 1
+            or messages[0].get("role") != "system"
+            or hashlib.sha256(system_messages[0]["content"].encode("utf-8")).hexdigest()
+            != configuration.prompt_sha256
+        ):
+            raise HostedProviderError(
+                "hosted system prompt differs from immutable prompt authority"
+            )
 
     @staticmethod
     def _validate_invocation(

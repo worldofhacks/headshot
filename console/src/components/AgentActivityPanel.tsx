@@ -34,9 +34,11 @@ const evaluatorState = (row: AgentActivityReadModel): string => {
 };
 
 const accountingValue = (records: AgentActivityReadModel[]): string => {
-  const known = records.filter((row) => row.accounting_status !== "unavailable");
+  const known = records.filter(
+    (row) => row.accounting_status !== "unavailable" && row.measured_cost !== null,
+  );
   if (known.length === 0) return "Unavailable";
-  const measured = known.reduce((total, row) => total + row.measured_cost, 0);
+  const measured = known.reduce((total, row) => total + (row.measured_cost ?? 0), 0);
   return known.length === records.length
     && known.every((row) => row.accounting_status === "measured")
     ? money(measured)
@@ -64,6 +66,8 @@ const tokenValue = (records: AgentActivityReadModel[]): string => {
 const rowAccountingValue = (row: AgentActivityReadModel): string =>
   row.accounting_status === "unavailable"
     ? "cost unavailable"
+    : row.measured_cost === null
+      ? "cost unavailable"
     : row.accounting_status === "partial"
       ? `${money(row.measured_cost)} known cost`
       : money(row.measured_cost);

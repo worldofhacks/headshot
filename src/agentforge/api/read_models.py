@@ -34,6 +34,16 @@ def _validate_token_observation(
         raise ValueError(f"{label} token observation requires a reported total")
 
 
+def _validate_provider_event_ids(values: list[str], *, label: str) -> None:
+    if len(values) != len(set(values)) or any(
+        not isinstance(value, str)
+        or len(value) != 64
+        or any(character not in "0123456789abcdef" for character in value)
+        for value in values
+    ):
+        raise ValueError(f"{label} provider event identities are invalid")
+
+
 class _ReadModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -434,8 +444,10 @@ class TraceReadModel(_ReadModel):
     duration_ms: float | None = Field(default=None, ge=0)
     request_bytes: int = Field(ge=0)
     response_bytes: int | None = Field(default=None, ge=0)
-    measured_cost: float = Field(ge=0)
+    measured_cost: float | None = Field(default=None, ge=0)
+    cost_measurement_state: Literal["measured", "partial", "not_observed", "invalid"]
     accounting_status: Literal["measured", "partial", "unavailable"]
+    provider_event_ids: list[str]
     currency: str
     input_tokens: int | None = Field(default=None, ge=0)
     output_tokens: int | None = Field(default=None, ge=0)
@@ -466,8 +478,27 @@ class TraceReadModel(_ReadModel):
 
     @model_validator(mode="after")
     def validate_accounting_status(self) -> Self:
+        expected_accounting_status = {
+            "measured": "measured",
+            "partial": "partial",
+            "not_observed": "unavailable",
+            "invalid": "unavailable",
+        }[self.cost_measurement_state]
+        if self.accounting_status != expected_accounting_status:
+            raise ValueError("trace accounting contradicts its persisted cost state")
+        _validate_provider_event_ids(self.provider_event_ids, label="trace")
+        if self.agent_role is not None:
+            observed_event_count = len(self.provider_event_ids)
+            if observed_event_count > (self.physical_attempts or 0) or (
+                self.status != "running"
+                and self.physical_attempts is not None
+                and observed_event_count != self.physical_attempts
+            ):
+                raise ValueError("trace provider event identities contradict its physical attempts")
+        if self.accounting_status in {"measured", "partial"} and self.measured_cost is None:
+            raise ValueError("observed trace accounting requires known measured cost")
         if self.accounting_status == "unavailable" and (
-            self.measured_cost != 0
+            self.measured_cost is not None
             or self.input_tokens is not None
             or self.output_tokens is not None
             or self.reasoning_tokens is not None
@@ -500,6 +531,7 @@ class TraceReadModel(_ReadModel):
                 self.judge_calibration_state,
                 self.oracle_agreement,
                 self.decision_authority,
+                *self.provider_event_ids,
             )
         ):
             raise ValueError("non-agent traces cannot contain hosted agent lineage")
@@ -535,20 +567,28 @@ class AgentBudgetReadModel(_ReadModel):
     status: Literal["staged_pending_authorization", "active", "historical", "unavailable"]
     campaign_run_id: str | None = None
     configuration_set_sha256: str | None = None
+    role_cost_measurement_state: (
+        Literal["measured", "partial", "not_observed", "invalid"] | None
+    ) = None
     role_usd_cap: float | None = Field(default=None, ge=0)
     role_usd_spent: float = Field(ge=0)
     role_unresolved_usd_exposure: float = Field(ge=0)
     role_usd_remaining: float | None = Field(default=None, ge=0)
+    role_usd_remaining_upper_bound: float | None = Field(default=None, ge=0)
     role_usd_overrun: float = Field(ge=0)
     role_call_cap: int | None = Field(default=None, ge=1)
     role_physical_calls: int = Field(ge=0)
     role_unresolved_physical_calls: int = Field(ge=0)
     role_calls_remaining: int | None = Field(default=None, ge=0)
     role_call_overrun: int = Field(ge=0)
+    global_cost_measurement_state: (
+        Literal["measured", "partial", "not_observed", "invalid"] | None
+    ) = None
     global_usd_cap: float | None = Field(default=None, ge=0)
     global_usd_spent: float = Field(ge=0)
     global_unresolved_usd_exposure: float = Field(ge=0)
     global_usd_remaining: float | None = Field(default=None, ge=0)
+    global_usd_remaining_upper_bound: float | None = Field(default=None, ge=0)
     global_usd_overrun: float = Field(ge=0)
     global_call_cap: int | None = Field(default=None, ge=1)
     global_physical_calls: int = Field(ge=0)
@@ -560,16 +600,25 @@ class AgentBudgetReadModel(_ReadModel):
     def validate_budget_reconciliation(self) -> Self:
         cap_values = (
             self.role_usd_cap,
-            self.role_usd_remaining,
+            self.role_usd_remaining_upper_bound,
             self.role_call_cap,
             self.role_calls_remaining,
             self.global_usd_cap,
-            self.global_usd_remaining,
+            self.global_usd_remaining_upper_bound,
             self.global_call_cap,
             self.global_calls_remaining,
         )
         if self.status == "unavailable":
-            if any(value is not None for value in cap_values):
+            if any(
+                value is not None
+                for value in (
+                    *cap_values,
+                    self.role_usd_remaining,
+                    self.global_usd_remaining,
+                    self.role_cost_measurement_state,
+                    self.global_cost_measurement_state,
+                )
+            ):
                 raise ValueError("unavailable hosted budget cannot contain inferred caps")
             if self.configuration_set_sha256 is not None or self.campaign_run_id is not None:
                 raise ValueError("unavailable hosted budget cannot identify a configuration")
@@ -592,7 +641,11 @@ class AgentBudgetReadModel(_ReadModel):
             ):
                 raise ValueError("unavailable hosted budget cannot claim provider usage")
             return self
-        if any(value is None for value in cap_values):
+        if (
+            any(value is None for value in cap_values)
+            or self.role_cost_measurement_state is None
+            or self.global_cost_measurement_state is None
+        ):
             raise ValueError("hosted budget requires complete role and global cap reconciliation")
         if self.configuration_set_sha256 is None:
             raise ValueError("hosted budget requires its configuration-set identity")
@@ -601,21 +654,46 @@ class AgentBudgetReadModel(_ReadModel):
         if self.status == "staged_pending_authorization" and self.campaign_run_id is not None:
             raise ValueError("staged hosted budget cannot claim campaign activity")
         assert self.role_usd_cap is not None
-        assert self.role_usd_remaining is not None
+        assert self.role_usd_remaining_upper_bound is not None
         assert self.role_call_cap is not None
         assert self.role_calls_remaining is not None
         assert self.global_usd_cap is not None
-        assert self.global_usd_remaining is not None
+        assert self.global_usd_remaining_upper_bound is not None
         assert self.global_call_cap is not None
         assert self.global_calls_remaining is not None
+        expected_role_upper_bound = max(0.0, self.role_usd_cap - self.role_usd_spent)
+        expected_global_upper_bound = max(
+            0.0,
+            self.global_usd_cap - self.global_usd_spent,
+        )
         if (
-            abs(
-                (self.role_usd_spent + self.role_unresolved_usd_exposure + self.role_usd_remaining)
-                - (self.role_usd_cap + self.role_usd_overrun)
-            )
+            abs(self.role_usd_remaining_upper_bound - expected_role_upper_bound) > 0.000001
+            or abs(self.global_usd_remaining_upper_bound - expected_global_upper_bound) > 0.000001
+        ):
+            raise ValueError("known provider spend does not reconcile to its upper bound")
+        if self.role_cost_measurement_state == "measured":
+            if (
+                self.role_usd_remaining is None
+                or abs(self.role_usd_remaining - self.role_usd_remaining_upper_bound) > 0.000001
+            ):
+                raise ValueError("measured role spend requires exact remaining USD")
+        elif self.role_usd_remaining is not None:
+            raise ValueError("incomplete role spend cannot claim exact remaining USD")
+        if self.global_cost_measurement_state == "measured":
+            if (
+                self.global_usd_remaining is None
+                or abs(self.global_usd_remaining - self.global_usd_remaining_upper_bound) > 0.000001
+            ):
+                raise ValueError("measured global spend requires exact remaining USD")
+        elif self.global_usd_remaining is not None:
+            raise ValueError("incomplete global spend cannot claim exact remaining USD")
+        if (
+            abs(self.role_usd_overrun - max(0.0, self.role_usd_spent - self.role_usd_cap))
+            > 0.000001
+            or abs(self.global_usd_overrun - max(0.0, self.global_usd_spent - self.global_usd_cap))
             > 0.000001
         ):
-            raise ValueError("role provider spend does not reconcile to its subcap")
+            raise ValueError("known provider overrun does not reconcile to known spend")
         if (
             self.role_physical_calls
             + self.role_unresolved_physical_calls
@@ -623,18 +701,6 @@ class AgentBudgetReadModel(_ReadModel):
             != self.role_call_cap + self.role_call_overrun
         ):
             raise ValueError("role provider calls do not reconcile to their subcap")
-        if (
-            abs(
-                (
-                    self.global_usd_spent
-                    + self.global_unresolved_usd_exposure
-                    + self.global_usd_remaining
-                )
-                - (self.global_usd_cap + self.global_usd_overrun)
-            )
-            > 0.000001
-        ):
-            raise ValueError("global provider spend does not reconcile to its kill switch")
         if (
             self.global_physical_calls
             + self.global_unresolved_physical_calls
@@ -651,14 +717,18 @@ class CostReadModel(_ReadModel):
     provider: str
     agent_role: Literal["orchestrator", "red_team", "judge", "documentation"] | None = None
     record_kind: Literal["campaign", "agent"]
-    measured_cost: float = Field(ge=0)
+    measured_cost: float | None = Field(default=None, ge=0)
+    cost_measurement_state: Literal[
+        "not_applicable", "measured", "partial", "not_observed", "invalid"
+    ]
     accounting_status: Literal["not_applicable", "measured", "partial", "unavailable"]
+    provider_event_ids: list[str]
     currency: str
     request_count: int = Field(ge=0)
     execution_count: int = Field(ge=0)
     attempt_count: int = Field(ge=0)
     confirmed_finding_count: int = Field(ge=0)
-    average_cost_per_request: float = Field(ge=0)
+    average_cost_per_request: float | None = Field(default=None, ge=0)
     input_tokens: int | None = Field(default=None, ge=0)
     output_tokens: int | None = Field(default=None, ge=0)
     reasoning_tokens: int | None = Field(default=None, ge=0)
@@ -672,11 +742,21 @@ class CostReadModel(_ReadModel):
     duration_ms: float = Field(ge=0)
     execution_profile: Literal["synthetic", "live"]
     started_at: datetime.datetime
-    ended_at: datetime.datetime
+    ended_at: datetime.datetime | None = None
     recorded_at: datetime.datetime
 
     @model_validator(mode="after")
     def validate_observed_accounting(self) -> Self:
+        expected_accounting_status = {
+            "not_applicable": "not_applicable",
+            "measured": "measured",
+            "partial": "partial",
+            "not_observed": "unavailable",
+            "invalid": "unavailable",
+        }[self.cost_measurement_state]
+        if self.accounting_status != expected_accounting_status:
+            raise ValueError("cost accounting contradicts its persisted cost state")
+        _validate_provider_event_ids(self.provider_event_ids, label="cost")
         _validate_token_observation(
             input_tokens=self.input_tokens,
             output_tokens=self.output_tokens,
@@ -687,17 +767,32 @@ class CostReadModel(_ReadModel):
             raise ValueError("agent cost records require exactly one agent role")
         if self.accounting_status in {"partial", "unavailable"} and self.record_kind != "agent":
             raise ValueError("partial accounting states apply only to agent cost records")
+        if self.accounting_status in {"measured", "partial"} and self.measured_cost is None:
+            raise ValueError("observed cost accounting requires known measured cost")
+        if self.accounting_status in {"not_applicable", "unavailable"} and (
+            self.measured_cost is not None
+        ):
+            raise ValueError("unobserved cost accounting cannot claim measured cost")
+        if self.average_cost_per_request is not None and (
+            self.accounting_status != "measured" or self.request_count == 0
+        ):
+            raise ValueError("average request cost requires complete measured call accounting")
+        if (
+            self.accounting_status == "measured"
+            and self.request_count > 0
+            and self.average_cost_per_request is None
+        ):
+            raise ValueError("complete measured calls require their average cost")
         if self.accounting_status == "unavailable" and (
-            self.measured_cost != 0
-            or self.token_observation_count != 0
-            or self.reasoning_tokens is not None
-            or self.physical_call_count != 0
+            self.token_observation_count != 0 or self.reasoning_tokens is not None
         ):
             raise ValueError("unavailable agent accounting cannot contain measured values")
         if (self.record_kind == "agent") != (self.provider_budget is not None):
             raise ValueError("only agent cost records carry a role provider budget")
         if self.record_kind == "campaign" and (
-            self.reasoning_tokens is not None or self.physical_call_count != 0
+            self.reasoning_tokens is not None
+            or self.physical_call_count != 0
+            or self.provider_event_ids
         ):
             raise ValueError("target campaign cost records cannot contain provider call accounting")
         role_latencies = (self.p50_duration_ms, self.p95_duration_ms)
@@ -708,6 +803,8 @@ class CostReadModel(_ReadModel):
                 raise ValueError("agent cost latency percentiles require a completed execution")
             if self.execution_count > 0 and any(value is None for value in role_latencies):
                 raise ValueError("completed agent cost records require role latency percentiles")
+            if (self.execution_count == 0) != (self.ended_at is None):
+                raise ValueError("agent cost terminal timestamp requires a completed execution")
         if (
             self.p50_duration_ms is not None
             and self.p95_duration_ms is not None
@@ -841,8 +938,12 @@ class AgentReadModel(_ReadModel):
     succeeded_count: int = Field(ge=0)
     failed_count: int = Field(ge=0)
     skipped_count: int = Field(ge=0)
-    measured_cost: float = Field(ge=0)
+    measured_cost: float | None = Field(default=None, ge=0)
+    cost_measurement_state: Literal[
+        "not_applicable", "measured", "partial", "not_observed", "invalid"
+    ]
     accounting_status: Literal["not_applicable", "measured", "partial", "unavailable"]
+    provider_event_ids: list[str]
     currency: str
     input_tokens: int | None = Field(default=None, ge=0)
     output_tokens: int | None = Field(default=None, ge=0)
@@ -892,11 +993,24 @@ class AgentReadModel(_ReadModel):
             raise ValueError("agent token observations cannot exceed executions")
         if (self.execution_count == 0) != (self.accounting_status == "not_applicable"):
             raise ValueError("agent accounting applicability must match execution_count")
+        expected_accounting_status = {
+            "not_applicable": "not_applicable",
+            "measured": "measured",
+            "partial": "partial",
+            "not_observed": "unavailable",
+            "invalid": "unavailable",
+        }[self.cost_measurement_state]
+        if self.accounting_status != expected_accounting_status:
+            raise ValueError("agent accounting contradicts its persisted cost state")
+        _validate_provider_event_ids(self.provider_event_ids, label="agent")
+        if self.accounting_status in {"measured", "partial"} and self.measured_cost is None:
+            raise ValueError("observed agent accounting requires known measured cost")
+        if self.accounting_status in {"not_applicable", "unavailable"} and (
+            self.measured_cost is not None
+        ):
+            raise ValueError("unobserved agent accounting cannot claim measured cost")
         if self.accounting_status == "unavailable" and (
-            self.measured_cost != 0
-            or self.token_observation_count != 0
-            or self.reasoning_tokens is not None
-            or self.physical_call_count != 0
+            self.token_observation_count != 0 or self.reasoning_tokens is not None
         ):
             raise ValueError("unavailable agent accounting cannot contain measured values")
         if (self.role == "judge") != (self.judge_calibration is not None):
@@ -944,8 +1058,15 @@ class AgentActivityReadModel(_ReadModel):
     output_tokens: int | None = Field(default=None, ge=0)
     reasoning_tokens: int | None = Field(default=None, ge=0)
     physical_attempts: int | None = Field(default=None, ge=1)
-    measured_cost: float = Field(ge=0)
+    measured_cost: float | None = Field(default=None, ge=0)
+    cost_measurement_state: Literal[
+        "measured",
+        "partial",
+        "not_observed",
+        "invalid",
+    ]
     accounting_status: Literal["measured", "partial", "unavailable"]
+    provider_event_ids: list[str]
     currency: str
     trace_id: str
     langfuse_status: Literal["not_attempted", "disabled", "queued", "exported", "error"]
@@ -974,17 +1095,31 @@ class AgentActivityReadModel(_ReadModel):
             and self.output_tokens is not None
             and (self.configuration_set_sha256 is None or self.reasoning_tokens is not None)
         )
-        expected_accounting_status = (
-            "measured"
-            if self.execution_mode == "deterministic" or provider_accounting_complete
-            else "partial"
-            if self.physical_attempts is not None
-            else "unavailable"
-        )
+        expected_accounting_status = {
+            "measured": "measured",
+            "partial": "partial",
+            "not_observed": "unavailable",
+            "invalid": "unavailable",
+        }[self.cost_measurement_state]
         if self.accounting_status != expected_accounting_status:
             raise ValueError("agent activity accounting status contradicts its execution record")
+        _validate_provider_event_ids(
+            self.provider_event_ids,
+            label="agent activity",
+        )
+        observed_event_count = len(self.provider_event_ids)
+        if observed_event_count > (self.physical_attempts or 0) or (
+            self.status != "running"
+            and self.physical_attempts is not None
+            and observed_event_count != self.physical_attempts
+        ):
+            raise ValueError(
+                "agent activity provider event identities contradict its physical attempts"
+            )
+        if self.accounting_status in {"measured", "partial"} and self.measured_cost is None:
+            raise ValueError("observed agent activity accounting requires known measured cost")
         if self.accounting_status == "unavailable" and (
-            self.measured_cost != 0
+            self.measured_cost is not None
             or (self.input_tokens or 0) != 0
             or (self.output_tokens or 0) != 0
             or (self.reasoning_tokens or 0) != 0

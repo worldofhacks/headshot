@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import datetime
 import hashlib
+from dataclasses import replace
 from decimal import Decimal
 
 import httpx
@@ -14,7 +16,14 @@ from agentforge.agents.hosted import (
     HostedRoleConfiguration,
     TokenPrices,
 )
+from agentforge.agents.hosted_prompts import hosted_prompt
 from agentforge.agents.prompts import load_prompt_registry
+from agentforge.providers.lineage import (
+    ProviderInvocationContextV1,
+    ProviderLogicalContextV1,
+    ProviderTerminalEventV1,
+    served_provider_matches_configured,
+)
 from agentforge.providers.openrouter import (
     HostedBudgetExceeded,
     HostedProviderError,
@@ -41,6 +50,20 @@ _PROMPTS = {record.role: record for record in load_prompt_registry()}
 
 def _digest(value: str) -> str:
     return hashlib.sha256(value.encode()).hexdigest()
+
+
+def _messages(
+    *,
+    role: str = "judge",
+    user: str = "Judge.",
+) -> tuple[dict[str, str], ...]:
+    return (
+        {
+            "role": "system",
+            "content": hosted_prompt(role).system_prompt,  # type: ignore[arg-type]
+        },
+        {"role": "user", "content": user},
+    )
 
 
 def _configuration() -> HostedConfigurationSet:
@@ -86,6 +109,73 @@ def _configuration() -> HostedConfigurationSet:
     )
 
 
+def _provider_context(
+    configuration: HostedConfigurationSet,
+    role_name: str = "judge",
+) -> ProviderLogicalContextV1:
+    role = next(item for item in configuration.roles if item.role == role_name)
+    return ProviderLogicalContextV1(
+        organization_id="org_lineage",
+        campaign_run_id="run_lineage",
+        campaign_attempt_id=None,
+        logical_execution_id="execution_lineage",
+        parent_execution_id=None,
+        agent_role=role.role,
+        requested_model=role.model_id,
+        configured_upstream=role.upstream_provider,
+        prompt_version=hosted_prompt(role.role).version,
+        prompt_sha256=hosted_prompt(role.role).prompt_sha256,
+        configuration_set_sha256=configuration.configuration_sha256,
+        role_configuration_sha256=role.configuration_sha256,
+        generation_policy_sha256=_digest("generation-policy"),
+    )
+
+
+class _ProviderRecorder:
+    def __init__(self) -> None:
+        self.invocations: list[ProviderInvocationContextV1] = []
+        self.events: list[ProviderTerminalEventV1] = []
+
+    def begin_physical_attempt(
+        self,
+        logical_context: ProviderLogicalContextV1,
+        sequence: int,
+    ) -> ProviderInvocationContextV1:
+        invocation_id = _digest(
+            f"{logical_context.organization_id}:{logical_context.logical_execution_id}:{sequence}"
+        )
+        invocation = ProviderInvocationContextV1(
+            invocation_id=invocation_id,
+            organization_id=logical_context.organization_id,
+            campaign_run_id=logical_context.campaign_run_id,
+            campaign_attempt_id=logical_context.campaign_attempt_id,
+            logical_execution_id=logical_context.logical_execution_id,
+            parent_execution_id=logical_context.parent_execution_id,
+            agent_role=logical_context.agent_role,
+            physical_sequence=sequence,
+            idempotency_key=f"provider-call:{invocation_id}",
+            requested_model=logical_context.requested_model,
+            configured_upstream=logical_context.configured_upstream,
+            prompt_version=logical_context.prompt_version,
+            prompt_sha256=logical_context.prompt_sha256,
+            configuration_set_sha256=logical_context.configuration_set_sha256,
+            role_configuration_sha256=logical_context.role_configuration_sha256,
+            generation_policy_sha256=logical_context.generation_policy_sha256,
+            started_at=datetime.datetime.now(datetime.UTC),
+        )
+        self.invocations.append(invocation)
+        return invocation
+
+    def finish_physical_attempt(
+        self,
+        invocation: ProviderInvocationContextV1,
+        event: ProviderTerminalEventV1,
+    ) -> ProviderTerminalEventV1:
+        assert event.invocation_id == invocation.invocation_id
+        self.events.append(event)
+        return event
+
+
 def _success(request_id: str = "gen-1") -> httpx.Response:
     return httpx.Response(
         200,
@@ -117,6 +207,117 @@ def _success(request_id: str = "gen-1") -> httpx.Response:
     )
 
 
+@pytest.mark.parametrize(
+    "messages",
+    (
+        ({"role": "system", "content": "mutated system authority"},),
+        (
+            {"role": "system", "content": hosted_prompt("judge").system_prompt},
+            {"role": "system", "content": hosted_prompt("judge").system_prompt},
+        ),
+    ),
+)
+def test_transport_rejects_mutated_prompt_before_any_side_effect(
+    messages: tuple[dict[str, str], ...],
+) -> None:
+    configuration = _configuration()
+    recorder = _ProviderRecorder()
+    credential_calls = 0
+    network_calls = 0
+
+    def credential(_reference: str) -> Secret:
+        nonlocal credential_calls
+        credential_calls += 1
+        return Secret("test-provider-value")
+
+    def send(_request: httpx.Request) -> httpx.Response:
+        nonlocal network_calls
+        network_calls += 1
+        return _success()
+
+    transport = OpenRouterTransport(
+        configuration=configuration,
+        credential_resolver=credential,
+        client=httpx.Client(transport=httpx.MockTransport(send)),
+        lineage_recorder=recorder,
+    )
+    with pytest.raises(HostedProviderError, match="immutable prompt authority"):
+        transport.invoke(
+            role="judge",
+            messages=messages,
+            output_schema={"type": "object"},
+            schema_name="judge_verdict",
+            generation_policy_sha256=_digest("generation-policy"),
+            input_tokens_upper_bound=100,
+            max_output_tokens=50,
+            max_reasoning_tokens=20,
+            timeout_seconds=5,
+            provider_context=_provider_context(configuration),
+        )
+
+    assert credential_calls == network_calls == 0
+    assert recorder.invocations == recorder.events == []
+    assert transport.ledger.snapshot.physical_calls == 0
+
+
+def test_transport_rejects_wrong_prompt_version_before_any_side_effect() -> None:
+    configuration = _configuration()
+    recorder = _ProviderRecorder()
+    context = replace(
+        _provider_context(configuration),
+        prompt_version="untrusted-version",
+    )
+    credential_calls = 0
+
+    def credential(_reference: str) -> Secret:
+        nonlocal credential_calls
+        credential_calls += 1
+        return Secret("test-provider-value")
+
+    transport = OpenRouterTransport(
+        configuration=configuration,
+        credential_resolver=credential,
+        client=httpx.Client(
+            transport=httpx.MockTransport(
+                lambda _request: pytest.fail("wrong prompt version reached network")
+            )
+        ),
+        lineage_recorder=recorder,
+    )
+    with pytest.raises(HostedProviderError, match="differs from authorization"):
+        transport.invoke(
+            role="judge",
+            messages=_messages(),
+            output_schema={"type": "object"},
+            schema_name="judge_verdict",
+            generation_policy_sha256=_digest("generation-policy"),
+            input_tokens_upper_bound=100,
+            max_output_tokens=50,
+            max_reasoning_tokens=20,
+            timeout_seconds=5,
+            provider_context=context,
+        )
+    assert credential_calls == 0
+    assert recorder.invocations == recorder.events == []
+    assert transport.ledger.snapshot.physical_calls == 0
+
+
+@pytest.mark.parametrize(
+    ("configured", "served", "expected"),
+    (
+        ("atlas-cloud", "AtlasCloud", True),
+        ("atlas-cloud/fp8", "AtlasCloud", True),
+        ("atlas-cloud", "Together", False),
+    ),
+)
+def test_served_provider_normalization_includes_atlas_cloud(
+    configured: str,
+    served: str,
+    expected: bool,
+) -> None:
+    assert served_provider_matches_configured(configured, served) is expected
+
+
 def test_transport_disables_fallback_and_verifies_usage_and_identity() -> None:
     seen: list[httpx.Request] = []
 
@@ -132,7 +333,7 @@ def test_transport_disables_fallback_and_verifies_usage_and_identity() -> None:
     )
     result = transport.invoke(
         role="judge",
-        messages=({"role": "system", "content": "Return a verdict."},),
+        messages=_messages(user="Return a verdict."),
         output_schema={
             "type": "object",
             "properties": {"verdict": {"type": "string"}},
@@ -193,7 +394,7 @@ def test_transport_permits_only_one_retry_and_counts_both_physical_calls() -> No
 
     result = transport.invoke(
         role="judge",
-        messages=({"role": "user", "content": "Judge."},),
+        messages=_messages(),
         output_schema={"type": "object"},
         schema_name="judge_verdict",
         generation_policy_sha256=_digest("generation-policy"),
@@ -207,6 +408,120 @@ def test_transport_permits_only_one_retry_and_counts_both_physical_calls() -> No
     assert transport.ledger.snapshot.physical_calls == 2
     assert transport.ledger.snapshot.unresolved_exposure_usd > 0
     assert sleeps == [2.0]
+
+
+def test_transport_records_each_actual_send_and_retry_as_physical_facts() -> None:
+    responses = iter(
+        [
+            httpx.Response(503, headers={"Retry-After": "0"}),
+            _success("gen-lineage-after-retry"),
+        ]
+    )
+    configuration = _configuration()
+    recorder = _ProviderRecorder()
+    monotonic_values = iter((0.0, 0.0, 2.0))
+    transport = OpenRouterTransport(
+        configuration=configuration,
+        credential_resolver=lambda _reference: Secret("test-provider-value"),
+        client=httpx.Client(transport=httpx.MockTransport(lambda _request: next(responses))),
+        lineage_recorder=recorder,
+        sleeper=lambda _seconds: None,
+        monotonic=lambda: next(monotonic_values),
+    )
+
+    result = transport.invoke(
+        role="judge",
+        messages=_messages(),
+        output_schema={"type": "object"},
+        schema_name="judge_verdict",
+        generation_policy_sha256=_digest("generation-policy"),
+        input_tokens_upper_bound=100,
+        max_output_tokens=50,
+        max_reasoning_tokens=20,
+        timeout_seconds=5,
+        provider_context=_provider_context(configuration),
+    )
+
+    assert result.physical_attempts == 2
+    assert [item.physical_sequence for item in recorder.invocations] == [1, 2]
+    assert [item.campaign_attempt_id for item in recorder.invocations] == [None, None]
+    assert [item.status for item in recorder.events] == [
+        "retryable_failure",
+        "succeeded",
+    ]
+    assert [item.cost_measurement_state for item in recorder.events] == [
+        "not_observed",
+        "measured",
+    ]
+    assert recorder.events[1].measured_cost_usd == Decimal("0.000065")
+
+
+def test_q_generator_with_a_recorder_refuses_before_network_without_logical_context() -> None:
+    seen: list[httpx.Request] = []
+    configuration = _configuration()
+    recorder = _ProviderRecorder()
+    transport = OpenRouterTransport(
+        configuration=configuration,
+        credential_resolver=lambda _reference: Secret("test-provider-value"),
+        client=httpx.Client(
+            transport=httpx.MockTransport(lambda request: seen.append(request) or _success())
+        ),
+        lineage_recorder=recorder,
+    )
+
+    with pytest.raises(HostedProviderError, match="lineage context"):
+        transport.invoke(
+            role="red_team",
+            messages=_messages(
+                role="red_team",
+                user="Generate a synthetic attack.",
+            ),
+            output_schema={"type": "object"},
+            schema_name="generated_attack",
+            generation_policy_sha256=_digest("generation-policy"),
+            input_tokens_upper_bound=100,
+            max_output_tokens=50,
+            max_reasoning_tokens=20,
+            timeout_seconds=5,
+        )
+
+    assert seen == []
+    assert recorder.invocations == []
+    assert recorder.events == []
+
+
+def test_unrepresentable_provider_cost_is_invalid_not_rounded() -> None:
+    payload = _success().json()
+    payload["usage"]["cost"] = "0.0000000000001"
+    configuration = _configuration()
+    recorder = _ProviderRecorder()
+    transport = OpenRouterTransport(
+        configuration=configuration,
+        credential_resolver=lambda _reference: Secret("test-provider-value"),
+        client=httpx.Client(
+            transport=httpx.MockTransport(lambda _request: httpx.Response(200, json=payload))
+        ),
+        lineage_recorder=recorder,
+    )
+
+    with pytest.raises(HostedProviderError, match="storage precision"):
+        transport.invoke(
+            role="judge",
+            messages=_messages(),
+            output_schema={"type": "object"},
+            schema_name="judge_verdict",
+            generation_policy_sha256=_digest("generation-policy"),
+            input_tokens_upper_bound=100,
+            max_output_tokens=50,
+            max_reasoning_tokens=20,
+            timeout_seconds=5,
+            provider_context=_provider_context(configuration),
+        )
+
+    assert len(recorder.events) == 1
+    assert recorder.events[0].status == "invalid_usage"
+    assert recorder.events[0].cost_measurement_state == "invalid"
+    assert recorder.events[0].measured_cost_usd is None
 
 
 def test_retry_exhaustion_exposes_consumed_physical_attempts_without_inventing_usage() -> None:
@@ -226,7 +541,7 @@ def test_retry_exhaustion_exposes_consumed_physical_attempts_without_inventing_u
     with pytest.raises(HostedProviderError, match="authorized retry") as raised:
         transport.invoke(
             role="judge",
-            messages=({"role": "user", "content": "Judge."},),
+            messages=_messages(),
             output_schema={"type": "object"},
             schema_name="judge_verdict",
             generation_policy_sha256=_digest("generation-policy"),
@@ -257,7 +572,7 @@ def test_transport_fails_closed_on_model_or_provider_substitution() -> None:
     with pytest.raises(HostedProviderError, match="different model") as raised:
         transport.invoke(
             role="judge",
-            messages=({"role": "user", "content": "Judge."},),
+            messages=_messages(),
             output_schema={"type": "object"},
             schema_name="judge_verdict",
             generation_policy_sha256=_digest("generation-policy"),
@@ -267,6 +582,133 @@ def test_transport_fails_closed_on_model_or_provider_substitution() -> None:
             timeout_seconds=5,
         )
     assert raised.value.physical_attempts == 1
+
+
+def test_transport_records_served_provider_substitution_as_invalid_output() -> None:
+    payload = _success().json()
+    payload["openrouter_metadata"]["endpoints"]["available"][0]["provider"] = "Together"
+    configuration = _configuration()
+    recorder = _ProviderRecorder()
+    transport = OpenRouterTransport(
+        configuration=configuration,
+        credential_resolver=lambda _reference: Secret("test-provider-value"),
+        client=httpx.Client(
+            transport=httpx.MockTransport(lambda _request: httpx.Response(200, json=payload))
+        ),
+        lineage_recorder=recorder,
+    )
+
+    with pytest.raises(HostedProviderError, match="unauthorized provider route") as raised:
+        transport.invoke(
+            role="judge",
+            messages=_messages(),
+            output_schema={"type": "object"},
+            schema_name="judge_verdict",
+            generation_policy_sha256=_digest("generation-policy"),
+            input_tokens_upper_bound=100,
+            max_output_tokens=50,
+            max_reasoning_tokens=20,
+            timeout_seconds=5,
+            provider_context=_provider_context(configuration),
+        )
+
+    assert raised.value.physical_attempts == 1
+    assert len(recorder.events) == 1
+    event = recorder.events[0]
+    assert event.status == "invalid_output"
+    assert event.upstream_provider == "Together"
+    assert event.returned_model == "google/gemini-2.5-pro"
+    assert event.provider_request_id == "gen-1"
+    assert event.cost_measurement_state == "measured"
+    assert event.measured_cost_usd == Decimal("0.000065")
+
+
+def test_retry_then_pacing_failure_preserves_durable_attempt_count() -> None:
+    configuration = _configuration()
+    recorder = _ProviderRecorder()
+    clock_calls = 0
+
+    def monotonic() -> float:
+        nonlocal clock_calls
+        clock_calls += 1
+        if clock_calls == 1:
+            return 0.0
+        raise RuntimeError("synthetic clock failure")
+
+    transport = OpenRouterTransport(
+        configuration=configuration,
+        credential_resolver=lambda _reference: Secret("test-provider-value"),
+        client=httpx.Client(
+            transport=httpx.MockTransport(
+                lambda _request: httpx.Response(503, headers={"Retry-After": "0"})
+            )
+        ),
+        lineage_recorder=recorder,
+        monotonic=monotonic,
+    )
+
+    with pytest.raises(HostedProviderError, match="pacing failed") as raised:
+        transport.invoke(
+            role="judge",
+            messages=_messages(),
+            output_schema={"type": "object"},
+            schema_name="judge_verdict",
+            generation_policy_sha256=_digest("generation-policy"),
+            input_tokens_upper_bound=100,
+            max_output_tokens=50,
+            max_reasoning_tokens=20,
+            timeout_seconds=5,
+            provider_context=_provider_context(configuration),
+        )
+
+    assert raised.value.physical_attempts == 1
+    assert [event.status for event in recorder.events] == ["retryable_failure"]
+
+
+def test_retry_then_credential_failure_preserves_durable_attempt_count() -> None:
+    configuration = _configuration()
+    recorder = _ProviderRecorder()
+    ledger = HostedUsageLedger(configuration)
+    credential_calls = 0
+
+    def credential_resolver(_reference: str) -> Secret:
+        nonlocal credential_calls
+        credential_calls += 1
+        if credential_calls == 1:
+            return Secret("test-provider-value")
+        raise RuntimeError("synthetic credential resolution failure")
+
+    monotonic_values = iter((0.0, 2.0))
+    transport = OpenRouterTransport(
+        configuration=configuration,
+        credential_resolver=credential_resolver,
+        client=httpx.Client(
+            transport=httpx.MockTransport(
+                lambda _request: httpx.Response(503, headers={"Retry-After": "0"})
+            )
+        ),
+        lineage_recorder=recorder,
+        ledger=ledger,
+        monotonic=lambda: next(monotonic_values),
+    )
+
+    with pytest.raises(HostedProviderError, match="credential reference is unavailable") as raised:
+        transport.invoke(
+            role="judge",
+            messages=_messages(),
+            output_schema={"type": "object"},
+            schema_name="judge_verdict",
+            generation_policy_sha256=_digest("generation-policy"),
+            input_tokens_upper_bound=100,
+            max_output_tokens=50,
+            max_reasoning_tokens=20,
+            timeout_seconds=5,
+            provider_context=_provider_context(configuration),
+        )
+
+    assert raised.value.physical_attempts == 1
+    assert [event.status for event in recorder.events] == ["retryable_failure"]
+    assert ledger.snapshot.physical_calls == 1
 
 
 @pytest.mark.parametrize(
@@ -309,7 +751,7 @@ def test_transport_requires_one_exact_selected_router_endpoint(
     with pytest.raises(HostedProviderError, match=message):
         transport.invoke(
             role="judge",
-            messages=({"role": "user", "content": "Judge."},),
+            messages=_messages(),
             output_schema={"type": "object"},
             schema_name="judge_verdict",
             generation_policy_sha256=_digest("generation-policy"),
@@ -338,7 +780,7 @@ def test_charged_invalid_output_exposes_exact_observed_usage() -> None:
     ) as raised:
         transport.invoke(
             role="judge",
-            messages=({"role": "user", "content": "Judge."},),
+            messages=_messages(),
             output_schema={
                 "type": "object",
                 "properties": {"verdict": {"type": "string"}},
@@ -380,7 +822,7 @@ def test_transport_rejects_reasoning_outside_completion_total() -> None:
     with pytest.raises(HostedProviderError, match="reasoning token accounting"):
         transport.invoke(
             role="judge",
-            messages=({"role": "user", "content": "Judge."},),
+            messages=_messages(),
             output_schema={"type": "object"},
             schema_name="judge_verdict",
             generation_policy_sha256=_digest("generation-policy"),

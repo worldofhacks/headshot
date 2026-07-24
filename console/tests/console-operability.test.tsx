@@ -14,7 +14,11 @@ import {
   ApprovalsScreen,
   TargetsScreen,
 } from "../src/screens/ConsoleScreens";
-import { CostsScreen } from "../src/screens/ObservabilityScreens";
+import { AgentsScreen } from "../src/screens/AgentToolScreens";
+import {
+  CostsScreen,
+  TracesScreen,
+} from "../src/screens/ObservabilityScreens";
 import { PERMISSIONS } from "../src/types";
 
 afterEach(cleanup);
@@ -156,7 +160,9 @@ const activity = (
   reasoning_tokens: 10,
   physical_attempts: 1,
   measured_cost: 0.03,
+  cost_measurement_state: "measured",
   accounting_status: "measured",
+  provider_event_ids: ["f".repeat(64)],
   currency: "USD",
   trace_id: `trace-${executionId}`,
   langfuse_status: "exported",
@@ -179,7 +185,9 @@ const campaignCost = {
   agent_role: null,
   record_kind: "campaign",
   measured_cost: 0.2,
+  cost_measurement_state: "measured",
   accounting_status: "measured",
+  provider_event_ids: [],
   currency: "USD",
   request_count: 4,
   execution_count: 0,
@@ -210,7 +218,9 @@ const agentCost = {
   agent_role: "judge",
   record_kind: "agent",
   measured_cost: 0.04,
+  cost_measurement_state: "measured",
   accounting_status: "measured",
+  provider_event_ids: ["d".repeat(64), "e".repeat(64)],
   currency: "USD",
   request_count: 2,
   execution_count: 1,
@@ -226,20 +236,24 @@ const agentCost = {
     status: "active",
     campaign_run_id: "run-selected",
     configuration_set_sha256: configurationHash,
+    role_cost_measurement_state: "measured",
     role_usd_cap: 4,
     role_usd_spent: 0.04,
     role_unresolved_usd_exposure: 0,
     role_usd_remaining: 3.96,
+    role_usd_remaining_upper_bound: 3.96,
     role_usd_overrun: 0,
     role_call_cap: 10,
     role_physical_calls: 2,
     role_unresolved_physical_calls: 0,
     role_calls_remaining: 8,
     role_call_overrun: 0,
+    global_cost_measurement_state: "measured",
     global_usd_cap: 10,
     global_usd_spent: 0.04,
     global_unresolved_usd_exposure: 0,
     global_usd_remaining: 9.96,
+    global_usd_remaining_upper_bound: 9.96,
     global_usd_overrun: 0,
     global_call_cap: 56,
     global_physical_calls: 2,
@@ -256,6 +270,153 @@ const agentCost = {
   started_at: "2026-07-24T00:00:00Z",
   ended_at: "2026-07-24T00:00:00.005Z",
   recorded_at: "2026-07-24T00:00:02Z",
+} as const;
+
+const partiallyAccountedAgent = {
+  role: "orchestrator",
+  display_name: "Orchestrator",
+  responsibility: "Select authorized work.",
+  trust_level: "trusted governor",
+  target_access: "none",
+  input_contract: "Snapshot",
+  output_contract: "Directive",
+  active_assignment: {
+    role: "orchestrator",
+    provider: "openrouter",
+    model: "anthropic/claude-opus-4.8",
+    resolved_model: "anthropic/claude-opus-4.8",
+    upstream_provider: "Anthropic",
+    prompt_sha256: "c".repeat(64),
+    prompt_version: "v1",
+    execution_mode: "hosted_advisory",
+    activation_state: "active",
+    version: 1,
+    configuration_sha256: configurationHash,
+    configured_at: "2026-07-24T00:00:00Z",
+    configured_by: "operator-1",
+  },
+  staged_assignment: null,
+  execution_count: 1,
+  running_count: 0,
+  succeeded_count: 1,
+  failed_count: 0,
+  skipped_count: 0,
+  measured_cost: 0.03,
+  cost_measurement_state: "partial",
+  accounting_status: "partial",
+  provider_event_ids: ["f".repeat(64), "9".repeat(64)],
+  currency: "USD",
+  input_tokens: 100,
+  output_tokens: 20,
+  reasoning_tokens: 10,
+  token_observation_count: 1,
+  physical_call_count: 2,
+  provider_budget: {
+    status: "active",
+    campaign_run_id: "run-selected",
+    configuration_set_sha256: configurationHash,
+    role_cost_measurement_state: "partial",
+    role_usd_cap: 4,
+    role_usd_spent: 0.03,
+    role_usd_remaining: null,
+    role_usd_remaining_upper_bound: 3.97,
+    role_usd_overrun: 0,
+    role_call_cap: 10,
+    role_physical_calls: 2,
+    role_calls_remaining: 8,
+    role_call_overrun: 0,
+    global_cost_measurement_state: "partial",
+    global_usd_cap: 10,
+    global_usd_spent: 0.03,
+    global_usd_remaining: null,
+    global_usd_remaining_upper_bound: 9.97,
+    global_usd_overrun: 0,
+    global_call_cap: 56,
+    global_physical_calls: 2,
+    global_calls_remaining: 54,
+    global_call_overrun: 0,
+  },
+  judge_calibration: null,
+  average_duration_ms: 1_000,
+  p50_duration_ms: 1_000,
+  p95_duration_ms: 1_000,
+  langfuse_not_attempted_count: 0,
+  langfuse_disabled_count: 0,
+  langfuse_queued_count: 0,
+  langfuse_exported_count: 1,
+  langfuse_error_count: 0,
+  langfuse_verified_count: 1,
+  last_langfuse_verified_at: "2026-07-24T00:02:01Z",
+  last_activity_at: "2026-07-24T00:02:00Z",
+  last_status: "succeeded",
+  last_campaign_run_id: "run-selected",
+  last_attempt_id: null,
+} as const;
+
+const partiallyAccountedActivity = {
+  ...activity(
+    "run-selected",
+    "execution-partial",
+    "anthropic/claude-opus-4.8",
+  ),
+  physical_attempts: 2,
+  measured_cost: 0.03,
+  cost_measurement_state: "partial",
+  accounting_status: "partial",
+  provider_event_ids: ["f".repeat(64), "9".repeat(64)],
+} as const;
+
+const partiallyAccountedTrace = {
+  request_id: null,
+  execution_id: "execution-partial",
+  parent_execution_id: null,
+  trace_id: "trace-execution-partial",
+  campaign_id: "run-selected",
+  attempt_id: null,
+  operation: "agent.execute",
+  provider: "openrouter",
+  agent_role: "orchestrator",
+  execution_mode: "hosted_advisory",
+  returned_model: "anthropic/claude-opus-4.8",
+  upstream_provider: "Anthropic",
+  provider_request_id: "provider-execution-partial",
+  configuration_set_sha256: configurationHash,
+  role_configuration_sha256: "c".repeat(64),
+  generation_policy_sha256: generationPolicyHash,
+  physical_attempts: 2,
+  method: null,
+  destination_host: null,
+  relative_path: null,
+  status: "succeeded",
+  status_code: null,
+  error_code: null,
+  started_at: "2026-07-24T00:02:00Z",
+  finished_at: "2026-07-24T00:02:01Z",
+  duration_ms: 1_000,
+  request_bytes: 0,
+  response_bytes: null,
+  measured_cost: 0.03,
+  cost_measurement_state: "partial",
+  accounting_status: "partial",
+  provider_event_ids: ["f".repeat(64), "9".repeat(64)],
+  currency: "USD",
+  input_tokens: 100,
+  output_tokens: 20,
+  reasoning_tokens: 10,
+  judge_calibration_id: null,
+  judge_calibration_state: null,
+  oracle_agreement: null,
+  decision_authority: null,
+  p50_duration_ms: 1_000,
+  p95_duration_ms: 1_000,
+  langfuse_status: "exported",
+  langfuse_verified_at: "2026-07-24T00:02:01Z",
+  request_preview: null,
+  response_preview: null,
+  request_sha256: null,
+  response_sha256: null,
+  inspection_flags: [],
+  inspection_owasp_mappings: [],
 } as const;
 
 describe("target console operability", () => {
@@ -594,5 +755,60 @@ describe("cost accounting labels", () => {
     expect(judgeCells[7]?.textContent).toBe("Not applicable");
     expect(judgeCells[13]?.textContent).toBe("Not applicable");
     expect(judgeCells[14]?.textContent).toBe("$0.0200");
+  });
+
+  it("labels partial activity cost and bounded budget remaining without inventing exact values", async () => {
+    const client = {
+      read: vi.fn(async (path: string) => {
+        if (path === "agents") {
+          return {
+            state: "ready" as const,
+            data: [partiallyAccountedAgent],
+          };
+        }
+        if (path === "agent-activity") {
+          return {
+            state: "ready" as const,
+            data: [partiallyAccountedActivity],
+          };
+        }
+        throw new Error(`Unexpected read: ${path}`);
+      }),
+      command: vi.fn(),
+    } as unknown as ApiClient;
+
+    render(<AgentsScreen client={client} principal={principal} />);
+
+    const records = await screen.findByLabelText("Authoritative records");
+    expect(within(records).getByText("$0.0300 known · partial")).toBeTruthy();
+    expect(
+      screen.getByText("Role USD remaining").parentElement?.textContent,
+    ).toBe("Role USD remaining≤ $3.97 / $4.00 (known-spend bound)");
+    expect(
+      screen.getByText("Global USD remaining").parentElement?.textContent,
+    ).toBe("Global USD remaining≤ $9.97 / $10.00 (known-spend bound)");
+  });
+
+  it("labels partial trace cost as a known amount in list and detail views", async () => {
+    const client = {
+      read: vi.fn(async (path: string) => {
+        if (path === "traces") {
+          return {
+            state: "ready" as const,
+            data: [partiallyAccountedTrace],
+          };
+        }
+        throw new Error(`Unexpected read: ${path}`);
+      }),
+      command: vi.fn(),
+    } as unknown as ApiClient;
+
+    render(<TracesScreen client={client} />);
+
+    const traceRow = await screen.findByRole("listitem");
+    expect(traceRow.textContent).toContain("$0.030 known · partial");
+    expect(
+      screen.getByText("Measured cost").parentElement?.textContent,
+    ).toBe("Measured cost$0.0300 known · partial");
   });
 });

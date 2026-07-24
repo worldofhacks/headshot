@@ -166,3 +166,108 @@ def test_hosted_agent_lineage_columns_survive_0017_round_trip(admin_url: str) ->
         if engine is not None:
             engine.dispose()
         _db.drop_database(admin_url, database_name)
+
+
+def test_physical_provider_lineage_survives_0018_round_trip(
+    admin_url: str,
+) -> None:
+    database_name = f"agentforge_provider_lineage_{uuid.uuid4().hex[:12]}"
+    base, _ = _db.split_db(admin_url)
+    database_url = f"{base}/{database_name}"
+    _db.create_fresh_database(admin_url, database_name)
+    engine: Engine | None = None
+    try:
+        _db.alembic_upgrade(database_url, "0018")
+        engine = _db.build_engine(database_url)
+        with engine.connect() as connection:
+            tables = set(
+                connection.execute(
+                    text(
+                        "SELECT table_name FROM information_schema.tables "
+                        "WHERE table_schema = 'public' "
+                        "AND table_name = ANY(:tables)"
+                    ),
+                    {
+                        "tables": [
+                            "provider_call_invocations",
+                            "provider_call_events",
+                        ]
+                    },
+                ).scalars()
+            )
+            attempt_nullable = connection.execute(
+                text(
+                    "SELECT is_nullable FROM information_schema.columns "
+                    "WHERE table_name = 'provider_call_invocations' "
+                    "AND column_name = 'campaign_attempt_id'"
+                )
+            ).scalar_one()
+            event_cost_shape = connection.execute(
+                text(
+                    "SELECT numeric_precision, numeric_scale "
+                    "FROM information_schema.columns "
+                    "WHERE table_name = 'provider_call_events' "
+                    "AND column_name = 'measured_cost_usd'"
+                )
+            ).one()
+            logical_identity_lengths = dict(
+                connection.execute(
+                    text(
+                        "SELECT column_name, character_maximum_length "
+                        "FROM information_schema.columns "
+                        "WHERE table_name = 'agent_executions' "
+                        "AND column_name = ANY(:columns)"
+                    ),
+                    {"columns": ["returned_model", "upstream_provider"]},
+                ).all()
+            )
+        assert tables == {
+            "provider_call_invocations",
+            "provider_call_events",
+        }
+        assert attempt_nullable == "YES"
+        assert event_cost_shape == (20, 12)
+        assert logical_identity_lengths == {
+            "returned_model": 192,
+            "upstream_provider": 128,
+        }
+
+        _db.alembic_downgrade(database_url, "0017")
+        with engine.connect() as connection:
+            assert (
+                connection.execute(
+                    text(
+                        "SELECT count(*) FROM information_schema.tables "
+                        "WHERE table_schema = 'public' "
+                        "AND table_name = ANY(:tables)"
+                    ),
+                    {
+                        "tables": [
+                            "provider_call_invocations",
+                            "provider_call_events",
+                        ]
+                    },
+                ).scalar_one()
+                == 0
+            )
+            assert (
+                connection.execute(
+                    text(
+                        "SELECT count(*) FROM information_schema.columns "
+                        "WHERE table_name = 'agent_executions' "
+                        "AND column_name = ANY(:columns)"
+                    ),
+                    {
+                        "columns": [
+                            "cost_measurement_state",
+                            "provider_event_ids",
+                        ]
+                    },
+                ).scalar_one()
+                == 0
+            )
+        _db.alembic_upgrade(database_url, "0018")
+    finally:
+        if engine is not None:
+            engine.dispose()
+        _db.drop_database(admin_url, database_name)

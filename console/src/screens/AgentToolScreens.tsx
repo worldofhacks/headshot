@@ -10,7 +10,6 @@ import {
   decodeTooling,
 } from "../api/read-models";
 import { AdversarialText } from "../components/AdversarialText";
-import { AgentBudgetSummary } from "../components/AgentBudgetSummary";
 import {
   count,
   MetricStrip,
@@ -112,15 +111,36 @@ const langfuseDeliveryState = (activity: AgentActivityReadModel) => {
 };
 
 const accountingValue = (agent: AgentReadModel) => {
-  if (agent.accounting_status === "unavailable") return "unavailable";
+  if (
+    agent.accounting_status === "unavailable"
+    || agent.accounting_status === "not_applicable"
+    || agent.measured_cost === null
+  ) return agent.accounting_status.replaceAll("_", " ");
   if (agent.accounting_status === "partial") return `${money(agent.measured_cost)} known · partial`;
   return money(agent.measured_cost);
 };
 
-const activityAccountingValue = (activity: AgentActivityReadModel) =>
-  activity.accounting_status === "unavailable"
-    ? "unavailable"
-    : money(activity.measured_cost);
+const activityAccountingValue = (activity: AgentActivityReadModel) => {
+  if (activity.accounting_status === "unavailable" || activity.measured_cost === null) {
+    return "unavailable";
+  }
+  if (activity.accounting_status === "partial") {
+    return `${money(activity.measured_cost)} known · partial`;
+  }
+  return money(activity.measured_cost);
+};
+
+const budgetRemainingValue = (
+  remaining: number | null,
+  upperBound: number | null,
+  cap: number | null,
+) => {
+  if (cap === null || upperBound === null) return "unavailable";
+  if (remaining === null) {
+    return `≤ ${money(upperBound)} / ${money(cap)} (known-spend bound)`;
+  }
+  return `${money(remaining)} / ${money(cap)}`;
+};
 
 function AgentPromptPanel({
   client,
@@ -215,7 +235,7 @@ export function AgentsScreen({
   const totals = useMemo(() => ({
     executions: records.reduce((sum, agent) => sum + agent.execution_count, 0),
     running: records.reduce((sum, agent) => sum + agent.running_count, 0),
-    cost: records.reduce((sum, agent) => sum + agent.measured_cost, 0),
+    cost: records.reduce((sum, agent) => sum + (agent.measured_cost ?? 0), 0),
     observedTokens: records.reduce(
       (sum, agent) =>
         sum
@@ -368,7 +388,45 @@ export function AgentsScreen({
                 <div><dt>Last Langfuse query-back</dt><dd className="mono">{selected.last_langfuse_verified_at ? time(selected.last_langfuse_verified_at) : "not yet observed remotely"}</dd></div>
                 <div><dt>Last activity</dt><dd className="mono">{selected.last_activity_at ? time(selected.last_activity_at) : "not yet executed"}</dd></div>
               </dl>
-              <AgentBudgetSummary budget={selected.provider_budget} />
+              <div className="evidence-stack">
+                <p className="field-label">Provider budget guard</p>
+                {selected.provider_budget.status === "unavailable" ? (
+                  <StateNotice
+                    state="unavailable"
+                    detail="No authorized hosted subcap is active, staged, or historically bound for this role."
+                  />
+                ) : (
+                  <>
+                    {selected.provider_budget.status === "historical" && (
+                      <StateNotice
+                        state="empty"
+                        detail="Historical authorization snapshot. Unused amounts were available at close but cannot authorize new provider calls."
+                      />
+                    )}
+                    <dl className="agent-ledger-summary">
+                      <div><dt>Budget state</dt><dd className="mono">{selected.provider_budget.status === "historical" ? "historical · closed" : selected.provider_budget.status.replaceAll("_", " ")}</dd></div>
+                      <div><dt>Role cost measurement</dt><dd className="mono">{selected.provider_budget.role_cost_measurement_state?.replaceAll("_", " ") ?? "unavailable"}</dd></div>
+                      <div><dt>Role known spend</dt><dd className="mono">{money(selected.provider_budget.role_usd_spent)}</dd></div>
+                      <div><dt>Role unresolved USD exposure</dt><dd className="mono">{money(selected.provider_budget.role_unresolved_usd_exposure)}</dd></div>
+                      <div><dt>{selected.provider_budget.status === "historical" ? "Role USD unused at close" : "Role USD remaining"}</dt><dd className="mono">{budgetRemainingValue(selected.provider_budget.role_usd_remaining, selected.provider_budget.role_usd_remaining_upper_bound, selected.provider_budget.role_usd_cap)}</dd></div>
+                      <div><dt>Role observed provider calls</dt><dd className="mono">{count(selected.provider_budget.role_physical_calls)}</dd></div>
+                      <div><dt>Role unresolved provider calls</dt><dd className="mono">{count(selected.provider_budget.role_unresolved_physical_calls)}</dd></div>
+                      <div><dt>{selected.provider_budget.status === "historical" ? "Role calls unused at close" : "Role calls remaining"}</dt><dd className="mono">{count(selected.provider_budget.role_calls_remaining ?? 0)} / {count(selected.provider_budget.role_call_cap ?? 0)}</dd></div>
+                      <div><dt>Global cost measurement</dt><dd className="mono">{selected.provider_budget.global_cost_measurement_state?.replaceAll("_", " ") ?? "unavailable"}</dd></div>
+                      <div><dt>Global known spend</dt><dd className="mono">{money(selected.provider_budget.global_usd_spent)}</dd></div>
+                      <div><dt>Global unresolved USD exposure</dt><dd className="mono">{money(selected.provider_budget.global_unresolved_usd_exposure)}</dd></div>
+                      <div><dt>{selected.provider_budget.status === "historical" ? "Global USD unused at close" : "Global USD remaining"}</dt><dd className="mono">{budgetRemainingValue(selected.provider_budget.global_usd_remaining, selected.provider_budget.global_usd_remaining_upper_bound, selected.provider_budget.global_usd_cap)}</dd></div>
+                      <div><dt>Global observed provider calls</dt><dd className="mono">{count(selected.provider_budget.global_physical_calls)}</dd></div>
+                      <div><dt>Global unresolved provider calls</dt><dd className="mono">{count(selected.provider_budget.global_unresolved_physical_calls)}</dd></div>
+                      <div><dt>{selected.provider_budget.status === "historical" ? "Global calls unused at close" : "Global calls remaining"}</dt><dd className="mono">{count(selected.provider_budget.global_calls_remaining ?? 0)} / {count(selected.provider_budget.global_call_cap ?? 0)}</dd></div>
+                    </dl>
+                    <p className="data-note">
+                      Incomplete provider accounting exposes only a known-spend upper bound.
+                      Unresolved provider exposure is reserved separately and is never presented as measured spend.
+                    </p>
+                  </>
+                )}
+              </div>
               {selected.judge_calibration && (
                 <div className="evidence-stack">
                   <p className="field-label">Evaluator calibration and authority</p>

@@ -170,6 +170,14 @@ const stringArray = (value: JsonRecord, key: string, name: string): string[] => 
   return candidate;
 };
 
+const sha256Array = (value: JsonRecord, key: string, name: string): string[] => {
+  const candidate = stringArray(value, key, name);
+  if (!candidate.every((entry) => /^[0-9a-f]{64}$/.test(entry))) {
+    return invalid(name);
+  }
+  return candidate;
+};
+
 const objectArray = (value: JsonRecord, key: string, name: string): JsonRecord[] =>
   records(value[key], name, (entry) => record(entry, name));
 
@@ -881,20 +889,24 @@ const decodeAgentBudget = (value: unknown): AgentBudgetReadModel => {
     "status",
     "campaign_run_id",
     "configuration_set_sha256",
+    "role_cost_measurement_state",
     "role_usd_cap",
     "role_usd_spent",
     "role_unresolved_usd_exposure",
     "role_usd_remaining",
+    "role_usd_remaining_upper_bound",
     "role_usd_overrun",
     "role_call_cap",
     "role_physical_calls",
     "role_unresolved_physical_calls",
     "role_calls_remaining",
     "role_call_overrun",
+    "global_cost_measurement_state",
     "global_usd_cap",
     "global_usd_spent",
     "global_unresolved_usd_exposure",
     "global_usd_remaining",
+    "global_usd_remaining_upper_bound",
     "global_usd_overrun",
     "global_call_cap",
     "global_physical_calls",
@@ -920,6 +932,12 @@ const decodeAgentBudget = (value: unknown): AgentBudgetReadModel => {
   ) {
     invalid(name);
   }
+  const roleCostState = nullableLiteral(
+    result,
+    "role_cost_measurement_state",
+    ["measured", "partial", "not_observed", "invalid"],
+    name,
+  );
   const roleUsdCap = nullableNumber(result, "role_usd_cap", name);
   const roleUsdSpent = number(result, "role_usd_spent", name, { minimum: 0 });
   const roleUnresolvedUsdExposure = number(
@@ -929,6 +947,11 @@ const decodeAgentBudget = (value: unknown): AgentBudgetReadModel => {
     { minimum: 0 },
   );
   const roleUsdRemaining = nullableNumber(result, "role_usd_remaining", name);
+  const roleUsdRemainingUpperBound = nullableNumber(
+    result,
+    "role_usd_remaining_upper_bound",
+    name,
+  );
   const roleUsdOverrun = number(result, "role_usd_overrun", name, { minimum: 0 });
   const roleCallCap = nullableNonnegativeInteger(result, "role_call_cap", name);
   const rolePhysicalCalls = number(
@@ -954,6 +977,12 @@ const decodeAgentBudget = (value: unknown): AgentBudgetReadModel => {
     name,
     { integer: true, minimum: 0 },
   );
+  const globalCostState = nullableLiteral(
+    result,
+    "global_cost_measurement_state",
+    ["measured", "partial", "not_observed", "invalid"],
+    name,
+  );
   const globalUsdCap = nullableNumber(result, "global_usd_cap", name);
   const globalUsdSpent = number(result, "global_usd_spent", name, { minimum: 0 });
   const globalUnresolvedUsdExposure = number(
@@ -963,6 +992,11 @@ const decodeAgentBudget = (value: unknown): AgentBudgetReadModel => {
     { minimum: 0 },
   );
   const globalUsdRemaining = nullableNumber(result, "global_usd_remaining", name);
+  const globalUsdRemainingUpperBound = nullableNumber(
+    result,
+    "global_usd_remaining_upper_bound",
+    name,
+  );
   const globalUsdOverrun = number(result, "global_usd_overrun", name, { minimum: 0 });
   const globalCallCap = nullableNonnegativeInteger(result, "global_call_cap", name);
   const globalPhysicalCalls = number(
@@ -991,18 +1025,20 @@ const decodeAgentBudget = (value: unknown): AgentBudgetReadModel => {
   for (const candidate of [
     roleUsdCap,
     roleUsdRemaining,
+    roleUsdRemainingUpperBound,
     globalUsdCap,
     globalUsdRemaining,
+    globalUsdRemainingUpperBound,
   ]) {
     if (candidate !== null && candidate < 0) invalid(name);
   }
   const caps = [
     roleUsdCap,
-    roleUsdRemaining,
+    roleUsdRemainingUpperBound,
     roleCallCap,
     roleCallsRemaining,
     globalUsdCap,
-    globalUsdRemaining,
+    globalUsdRemainingUpperBound,
     globalCallCap,
     globalCallsRemaining,
   ];
@@ -1011,6 +1047,10 @@ const decodeAgentBudget = (value: unknown): AgentBudgetReadModel => {
       caps.some((candidate) => candidate !== null)
       || campaignRunId !== null
       || configurationSha256 !== null
+      || roleCostState !== null
+      || globalCostState !== null
+      || roleUsdRemaining !== null
+      || globalUsdRemaining !== null
       || [
         roleUsdSpent,
         roleUnresolvedUsdExposure,
@@ -1032,6 +1072,8 @@ const decodeAgentBudget = (value: unknown): AgentBudgetReadModel => {
   }
   if (
     caps.some((candidate) => candidate === null)
+    || roleCostState === null
+    || globalCostState === null
     || configurationSha256 === null
     || (["active", "historical"].includes(status) && campaignRunId === null)
     || (status === "staged_pending_authorization" && campaignRunId !== null)
@@ -1042,15 +1084,47 @@ const decodeAgentBudget = (value: unknown): AgentBudgetReadModel => {
   }
   if (
     Math.abs(
-      roleUsdSpent + roleUnresolvedUsdExposure + (roleUsdRemaining ?? 0)
-      - ((roleUsdCap ?? 0) + roleUsdOverrun),
+      (roleUsdRemainingUpperBound ?? 0)
+      - Math.max(0, (roleUsdCap ?? 0) - roleUsdSpent),
+    ) > 0.000001
+    || Math.abs(
+      (globalUsdRemainingUpperBound ?? 0)
+      - Math.max(0, (globalUsdCap ?? 0) - globalUsdSpent),
+    ) > 0.000001
+    || roleUnresolvedUsdExposure > (roleUsdRemainingUpperBound ?? 0)
+    || globalUnresolvedUsdExposure > (globalUsdRemainingUpperBound ?? 0)
+    || (
+      roleCostState === "measured"
+        ? roleUsdRemaining === null
+          || Math.abs(
+            roleUsdRemaining
+            - Math.max(
+              0,
+              (roleUsdRemainingUpperBound ?? 0) - roleUnresolvedUsdExposure,
+            ),
+          ) > 0.000001
+        : roleUsdRemaining !== null
+    )
+    || (
+      globalCostState === "measured"
+        ? globalUsdRemaining === null
+          || Math.abs(
+            globalUsdRemaining
+            - Math.max(
+              0,
+              (globalUsdRemainingUpperBound ?? 0) - globalUnresolvedUsdExposure,
+            ),
+          ) > 0.000001
+        : globalUsdRemaining !== null
+    )
+    || Math.abs(
+      roleUsdOverrun - Math.max(0, roleUsdSpent - (roleUsdCap ?? 0)),
+    ) > 0.000001
+    || Math.abs(
+      globalUsdOverrun - Math.max(0, globalUsdSpent - (globalUsdCap ?? 0)),
     ) > 0.000001
     || rolePhysicalCalls + roleUnresolvedPhysicalCalls + (roleCallsRemaining ?? 0)
       !== (roleCallCap ?? 0) + roleCallOverrun
-    || Math.abs(
-      globalUsdSpent + globalUnresolvedUsdExposure + (globalUsdRemaining ?? 0)
-      - ((globalUsdCap ?? 0) + globalUsdOverrun),
-    ) > 0.000001
     || globalPhysicalCalls + globalUnresolvedPhysicalCalls + (globalCallsRemaining ?? 0)
       !== (globalCallCap ?? 0) + globalCallOverrun
   ) {
@@ -1168,7 +1242,9 @@ const decodeTrace = (value: unknown): TraceReadModel => {
     "request_bytes",
     "response_bytes",
     "measured_cost",
+    "cost_measurement_state",
     "accounting_status",
+    "provider_event_ids",
     "currency",
     "input_tokens",
     "output_tokens",
@@ -1250,13 +1326,50 @@ const decodeTrace = (value: unknown): TraceReadModel => {
   if (result.duration_ms !== null) number(result, "duration_ms", name, { minimum: 0 });
   number(result, "request_bytes", name, { integer: true, minimum: 0 });
   if (result.response_bytes !== null) number(result, "response_bytes", name, { integer: true, minimum: 0 });
-  number(result, "measured_cost", name, { minimum: 0 });
+  const measuredCost = nullableNumber(result, "measured_cost", name);
+  if (measuredCost !== null && measuredCost < 0) invalid(name);
+  const costMeasurementState = literal(
+    result,
+    "cost_measurement_state",
+    ["measured", "partial", "not_observed", "invalid"],
+    name,
+  );
   const accountingStatus = literal(
     result,
     "accounting_status",
     ["measured", "partial", "unavailable"],
     name,
   );
+  const providerEventIds = sha256Array(result, "provider_event_ids", name);
+  if (
+    new Set(providerEventIds).size !== providerEventIds.length
+    || (
+      result.agent_role !== null
+      && (
+        providerEventIds.length > (physicalAttempts ?? 0)
+        || (
+          result.status !== "running"
+          && physicalAttempts !== null
+          && providerEventIds.length !== physicalAttempts
+        )
+      )
+    )
+  ) {
+    invalid(name);
+  }
+  const expectedAccountingStatus = {
+    measured: "measured",
+    partial: "partial",
+    not_observed: "unavailable",
+    invalid: "unavailable",
+  }[costMeasurementState];
+  if (accountingStatus !== expectedAccountingStatus) invalid(name);
+  if (
+    (["measured", "partial"].includes(accountingStatus) && measuredCost === null)
+    || (accountingStatus === "unavailable" && measuredCost !== null)
+  ) {
+    invalid(name);
+  }
   nullableNonnegativeInteger(result, "input_tokens", name);
   nullableNonnegativeInteger(result, "output_tokens", name);
   const reasoningTokens = nullableNonnegativeInteger(result, "reasoning_tokens", name);
@@ -1297,8 +1410,7 @@ const decodeTrace = (value: unknown): TraceReadModel => {
   }
   if (
     accountingStatus === "unavailable" &&
-    (result.measured_cost !== 0 ||
-      result.input_tokens !== null ||
+    (result.input_tokens !== null ||
       result.output_tokens !== null ||
       reasoningTokens !== null)
   ) {
@@ -1324,6 +1436,7 @@ const decodeTrace = (value: unknown): TraceReadModel => {
       calibrationState,
       oracleAgreement,
       decisionAuthority,
+      ...providerEventIds,
     ].some((candidate) => candidate !== null)
   ) {
     invalid(name);
@@ -1349,7 +1462,9 @@ const decodeCost = (value: unknown): CostReadModel => {
     "agent_role",
     "record_kind",
     "measured_cost",
+    "cost_measurement_state",
     "accounting_status",
+    "provider_event_ids",
     "currency",
     "request_count",
     "execution_count",
@@ -1377,14 +1492,45 @@ const decodeCost = (value: unknown): CostReadModel => {
   }
   nullableLiteral(result, "agent_role", agentRoles, name);
   literal(result, "record_kind", ["campaign", "agent"], name);
-  number(result, "measured_cost", name, { minimum: 0 });
+  const measuredCost = nullableNumber(result, "measured_cost", name);
+  if (measuredCost !== null && measuredCost < 0) invalid(name);
+  const costMeasurementState = literal(
+    result,
+    "cost_measurement_state",
+    ["not_applicable", "measured", "partial", "not_observed", "invalid"],
+    name,
+  );
   const accountingStatus = literal(
     result,
     "accounting_status",
     ["not_applicable", "measured", "partial", "unavailable"],
     name,
   );
-  number(result, "request_count", name, { integer: true, minimum: 0 });
+  const providerEventIds = sha256Array(result, "provider_event_ids", name);
+  if (new Set(providerEventIds).size !== providerEventIds.length) {
+    invalid(name);
+  }
+  const expectedAccountingStatus = {
+    not_applicable: "not_applicable",
+    measured: "measured",
+    partial: "partial",
+    not_observed: "unavailable",
+    invalid: "unavailable",
+  }[costMeasurementState];
+  if (accountingStatus !== expectedAccountingStatus) invalid(name);
+  if (
+    (["measured", "partial"].includes(accountingStatus) && measuredCost === null)
+    || (["not_applicable", "unavailable"].includes(accountingStatus)
+      && measuredCost !== null)
+  ) {
+    invalid(name);
+  }
+  const requestCount = number(
+    result,
+    "request_count",
+    name,
+    { integer: true, minimum: 0 },
+  );
   const executionCount = number(
     result,
     "execution_count",
@@ -1393,7 +1539,22 @@ const decodeCost = (value: unknown): CostReadModel => {
   );
   number(result, "attempt_count", name, { integer: true, minimum: 0 });
   number(result, "confirmed_finding_count", name, { integer: true, minimum: 0 });
-  number(result, "average_cost_per_request", name, { minimum: 0 });
+  const averageCostPerRequest = nullableNumber(
+    result,
+    "average_cost_per_request",
+    name,
+  );
+  if (
+    (averageCostPerRequest !== null
+      && (averageCostPerRequest < 0
+        || accountingStatus !== "measured"
+        || requestCount === 0))
+    || (accountingStatus === "measured"
+      && requestCount > 0
+      && averageCostPerRequest === null)
+  ) {
+    invalid(name);
+  }
   const inputTokens = nullableNonnegativeInteger(result, "input_tokens", name);
   const outputTokens = nullableNonnegativeInteger(result, "output_tokens", name);
   const reasoningTokens = nullableNonnegativeInteger(result, "reasoning_tokens", name);
@@ -1439,10 +1600,8 @@ const decodeCost = (value: unknown): CostReadModel => {
   if (
     accountingStatus === "unavailable" &&
     (
-      result.measured_cost !== 0
-      || tokenObservationCount !== 0
+      tokenObservationCount !== 0
       || reasoningTokens !== null
-      || physicalCallCount !== 0
     )
   ) {
     invalid(name);
@@ -1451,7 +1610,11 @@ const decodeCost = (value: unknown): CostReadModel => {
     (result.record_kind === "agent") !== (result.provider_budget !== null)
     || (
       result.record_kind === "campaign"
-      && (reasoningTokens !== null || physicalCallCount !== 0)
+      && (
+        reasoningTokens !== null
+        || physicalCallCount !== 0
+        || providerEventIds.length !== 0
+      )
     )
   ) {
     invalid(name);
@@ -1461,7 +1624,13 @@ const decodeCost = (value: unknown): CostReadModel => {
   number(result, "duration_ms", name, { minimum: 0 });
   literal(result, "execution_profile", ["synthetic", "live"], name);
   timestamp(result, "started_at", name);
-  timestamp(result, "ended_at", name);
+  const endedAt = nullableTimestamp(result, "ended_at", name);
+  if (
+    result.record_kind === "agent"
+    && ((executionCount === 0) !== (endedAt === null))
+  ) {
+    invalid(name);
+  }
   timestamp(result, "recorded_at", name);
   return result as CostReadModel;
 };
@@ -1705,7 +1874,9 @@ const decodeAgent = (value: unknown): AgentReadModel => {
     "failed_count",
     "skipped_count",
     "measured_cost",
+    "cost_measurement_state",
     "accounting_status",
+    "provider_event_ids",
     "currency",
     "input_tokens",
     "output_tokens",
@@ -1761,13 +1932,39 @@ const decodeAgent = (value: unknown): AgentReadModel => {
     key,
     number(result, key, name, { integer: true, minimum: 0 }),
   ]));
-  number(result, "measured_cost", name, { minimum: 0 });
+  const measuredCost = nullableNumber(result, "measured_cost", name);
+  if (measuredCost !== null && measuredCost < 0) invalid(name);
+  const costMeasurementState = literal(
+    result,
+    "cost_measurement_state",
+    ["not_applicable", "measured", "partial", "not_observed", "invalid"],
+    name,
+  );
   const accountingStatus = literal(
     result,
     "accounting_status",
     ["not_applicable", "measured", "partial", "unavailable"],
     name,
   );
+  const providerEventIds = sha256Array(result, "provider_event_ids", name);
+  if (new Set(providerEventIds).size !== providerEventIds.length) {
+    invalid(name);
+  }
+  const expectedAccountingStatus = {
+    not_applicable: "not_applicable",
+    measured: "measured",
+    partial: "partial",
+    not_observed: "unavailable",
+    invalid: "unavailable",
+  }[costMeasurementState];
+  if (accountingStatus !== expectedAccountingStatus) invalid(name);
+  if (
+    (["measured", "partial"].includes(accountingStatus) && measuredCost === null)
+    || (["not_applicable", "unavailable"].includes(accountingStatus)
+      && measuredCost !== null)
+  ) {
+    invalid(name);
+  }
   const inputTokens = nullableNonnegativeInteger(result, "input_tokens", name);
   const outputTokens = nullableNonnegativeInteger(result, "output_tokens", name);
   const reasoningTokens = nullableNonnegativeInteger(result, "reasoning_tokens", name);
@@ -1819,10 +2016,8 @@ const decodeAgent = (value: unknown): AgentReadModel => {
   if (
     accountingStatus === "unavailable" &&
     (
-      result.measured_cost !== 0
-      || counters.token_observation_count !== 0
+      counters.token_observation_count !== 0
       || reasoningTokens !== null
-      || counters.physical_call_count !== 0
     )
   ) {
     invalid(name);
@@ -1894,7 +2089,9 @@ const decodeAgentActivityRecord = (value: unknown): AgentActivityReadModel => {
     "reasoning_tokens",
     "physical_attempts",
     "measured_cost",
+    "cost_measurement_state",
     "accounting_status",
+    "provider_event_ids",
     "currency",
     "trace_id",
     "langfuse_status",
@@ -1971,21 +2168,50 @@ const decodeAgentActivityRecord = (value: unknown): AgentActivityReadModel => {
     name,
   );
   if (physicalAttempts === 0) invalid(name);
-  number(result, "measured_cost", name, { minimum: 0 });
-  literal(result, "accounting_status", ["measured", "partial", "unavailable"], name);
+  const measuredCost = nullableNumber(result, "measured_cost", name);
+  if (measuredCost !== null && measuredCost < 0) invalid(name);
+  const costMeasurementState = literal(
+    result,
+    "cost_measurement_state",
+    ["measured", "partial", "not_observed", "invalid"],
+    name,
+  );
+  const accountingStatus = literal(
+    result,
+    "accounting_status",
+    ["measured", "partial", "unavailable"],
+    name,
+  );
+  const providerEventIds = sha256Array(result, "provider_event_ids", name);
+  if (
+    new Set(providerEventIds).size !== providerEventIds.length
+    || providerEventIds.length > (physicalAttempts ?? 0)
+    || (
+      result.status !== "running"
+      && physicalAttempts !== null
+      && providerEventIds.length !== physicalAttempts
+    )
+  ) {
+    invalid(name);
+  }
   const providerAccountingComplete =
     inputTokens !== null && outputTokens !== null && reasoningTokens !== null;
-  const expectedAccountingStatus =
-    result.execution_mode === "deterministic" || providerAccountingComplete
-      ? "measured"
-      : physicalAttempts !== null
-        ? "partial"
-        : "unavailable";
-  if (result.accounting_status !== expectedAccountingStatus) invalid(name);
+  const expectedAccountingStatus = {
+    measured: "measured",
+    partial: "partial",
+    not_observed: "unavailable",
+    invalid: "unavailable",
+  }[costMeasurementState];
+  if (accountingStatus !== expectedAccountingStatus) invalid(name);
+  if (
+    (["measured", "partial"].includes(accountingStatus) && measuredCost === null)
+    || (accountingStatus === "unavailable" && measuredCost !== null)
+  ) {
+    invalid(name);
+  }
   if (
     result.accounting_status === "unavailable" &&
-    (result.measured_cost !== 0 ||
-      (inputTokens !== null && inputTokens !== 0) ||
+    ((inputTokens !== null && inputTokens !== 0) ||
       (outputTokens !== null && outputTokens !== 0) ||
       (reasoningTokens !== null && reasoningTokens !== 0))
   ) {

@@ -1,11 +1,11 @@
-# Red Team (qwen) as the fourth live, traced agent — wiring handoff
+# Red Team (qwen) traced component — production wiring still blocked
 
-Goal: Red Team (qwen) lands in `agent_executions` with the **identical** trace/cost/lineage shape
+Goal: Red Team (qwen) must eventually land in `agent_executions` with the **identical** trace/cost/lineage shape
 as Orchestrator (opus) / Judge (gemini) / Documentation (gpt), so all four appear uniformly across
 Langfuse / Costs / Traces / Agents. This note is the composition-root wiring; the component lives
 in my lane (`agents/red_team/hosted_generation.py`), the wiring lives in Codex's `runner.py`.
 
-## What's built (my lane, done + tested)
+## What's built and tested at the component seam
 
 `agents/red_team/hosted_generation.py`:
 
@@ -28,17 +28,19 @@ input only (`input_sequence` continuations), never a credential/`content_hash`/v
 target credential or a second network exit; the provider (model) credential is resolved only inside
 the transport via the sealed reference. Candidates still flow review → authorization → dispatch.
 
-## The gap in `runner.py` (Codex's lane) and the exact wiring
+## The production blocker
 
-Today `runner.py` (~lines 810–871) records a `red_team` execution but the step is
+Today `runner.py` records a `red_team` execution but the step is
 `self.red_team.propose(...)` — a **seed-replay case-selection** whose `_finish_agent_execution`
 carries **no `measured_cost` and no tokens**. So Red Team shows up as a silent seed-replay (0 cost,
 no live trace) while the other three show real LLM cost/tokens. That case-selection is correctly
 deterministic (the corpus-hash invariant forbids mutation inside an authorized run) — leave it.
 
-The Red Team's **LLM work** is the two-stage **generation** phase (produce variants → normalize/
-content-address → human review → fresh authorization → dispatch). Wire the traced generation there
-so it records real cost/tokens. Minimal shape for the generation step:
+The Red Team's **LLM work** requires a separate two-stage **generation** phase (produce variants →
+normalize/content-address → quarantine → human review → fresh corpus authorization → dispatch).
+No production composition root for that workflow exists yet. Do not call q during the current
+authorized case-selection loop and do not claim that q is live until the governed boundary exists.
+The eventual composition shape is:
 
 ```python
 # construct once per run (composition root), from the same config/transport as the other roles:
