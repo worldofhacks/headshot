@@ -386,8 +386,11 @@ def test_spec_T_F17a_AC_4_offline_installed_wheel_preserves_prompt_authority(
 
     probe = r"""
 import base64
+import builtins
 import http.client
+import importlib.resources
 import json
+import os
 import socket
 import sys
 import urllib.request
@@ -404,13 +407,58 @@ http.client.HTTPConnection.connect = denied
 http.client.HTTPSConnection.connect = denied
 sys.path.insert(0, sys.argv[1])
 
+probe_mode = sys.argv[2]
+archive_member_prefix = f"{Path(sys.argv[1]).resolve()}/agentforge/"
+if probe_mode == "zip":
+    original_path_open = Path.open
+    original_builtin_open = builtins.open
+    filesystem_attempts = []
+
+    def deny_archive_member_path_open(path, *args, **kwargs):
+        candidate = str(path)
+        if candidate.startswith(archive_member_prefix):
+            filesystem_attempts.append(("Path.open", candidate))
+            raise AssertionError(
+                "prompt registry used a Path(__file__) package-filesystem fallback"
+            )
+        return original_path_open(path, *args, **kwargs)
+
+    def deny_archive_member_builtin_open(file, *args, **kwargs):
+        try:
+            candidate = os.fspath(file)
+        except TypeError:
+            candidate = ""
+        if isinstance(candidate, str) and candidate.startswith(archive_member_prefix):
+            filesystem_attempts.append(("builtins.open", candidate))
+            raise AssertionError(
+                "prompt registry used an open(__file__) package-filesystem fallback"
+            )
+        return original_builtin_open(file, *args, **kwargs)
+
+    Path.open = deny_archive_member_path_open
+    builtins.open = deny_archive_member_builtin_open
+
 import agentforge.agents.prompts as prompts
+
+module_path = str(prompts.__file__)
+resource_root = importlib.resources.files(prompts)
+if probe_mode == "zip":
+    assert module_path.startswith(archive_member_prefix)
+    assert not Path(module_path).exists()
+    assert type(resource_root).__module__.startswith("zipfile")
+    assert resource_root.joinpath("registry.v1.json").is_file()
 
 records = prompts.load_prompt_registry()
 for record in records:
     assert prompts.prompt_for_identity(record.role, record.version, record.sha256) == record
+if probe_mode == "zip":
+    assert filesystem_attempts == [], (
+        f"prompt registry attempted package-filesystem access: {filesystem_attempts!r}"
+    )
 print(json.dumps({
-    "module": str(Path(prompts.__file__).resolve()),
+    "module": module_path,
+    "resource_backend": type(resource_root).__module__,
+    "zip_backed": probe_mode == "zip",
     "records": [
         {
             "role": record.role,
@@ -433,7 +481,7 @@ print(json.dumps({
     outside = tmp_path / "outside"
     outside.mkdir()
     loaded = subprocess.run(
-        [sys.executable, "-I", "-c", probe, str(install_root)],
+        [sys.executable, "-I", "-c", probe, str(install_root), "installed"],
         cwd=outside,
         env=probe_environment,
         capture_output=True,
@@ -445,13 +493,32 @@ print(json.dumps({
 
     payload = json.loads(loaded.stdout)
     assert Path(payload["module"]).is_relative_to(install_root)
-    assert tuple(record["role"] for record in payload["records"]) == roles
+    assert payload["zip_backed"] is False
+
+    zip_loaded = subprocess.run(
+        [sys.executable, "-I", "-c", probe, str(wheel_path), "zip"],
+        cwd=outside,
+        env=probe_environment,
+        capture_output=True,
+        text=True,
+    )
+    assert zip_loaded.returncode == 0, (
+        "zip-backed prompt registry failed direct-from-wheel package-resource resolution:\n"
+        f"{zip_loaded.stdout}\n{zip_loaded.stderr}"
+    )
+    zip_payload = json.loads(zip_loaded.stdout)
+    assert zip_payload["zip_backed"] is True
+    assert zip_payload["resource_backend"].startswith("zipfile")
+    assert zip_payload["module"].startswith(f"{wheel_path}/agentforge/agents/prompts/")
+
     manifest_by_role = {entry["role"]: entry for entry in manifest["prompts"]}
-    for record in payload["records"]:
-        raw = base64.b64decode(record["content"], validate=True)
-        role = record["role"]
-        assert raw == packaged_bytes[role]
-        assert b"DECOY-FILESYSTEM-FALLBACK" not in raw
-        assert record["version"] == manifest_by_role[role]["version"]
-        assert record["sha256"] == manifest_by_role[role]["sha256"]
-        assert record["sha256"] == hashlib.sha256(raw).hexdigest()
+    for probe_payload in (payload, zip_payload):
+        assert tuple(record["role"] for record in probe_payload["records"]) == roles
+        for record in probe_payload["records"]:
+            raw = base64.b64decode(record["content"], validate=True)
+            role = record["role"]
+            assert raw == packaged_bytes[role]
+            assert b"DECOY-FILESYSTEM-FALLBACK" not in raw
+            assert record["version"] == manifest_by_role[role]["version"]
+            assert record["sha256"] == manifest_by_role[role]["sha256"]
+            assert record["sha256"] == hashlib.sha256(raw).hexdigest()

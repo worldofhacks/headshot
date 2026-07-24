@@ -5,7 +5,7 @@ Status: `DONE`
 ## Scope
 
 - Base: `0803849aab0e99387ee80566b359384cb216f2b1`
-- Repaired after review commit: `d630bbb8b21a814a46df93257a75e78d53f00e44`
+- Repaired after review commit: `78b28cadfd962d510abf373db50885a70807e874`
 - Branch: `ticket/T-F17a-hosted-role-prompt-contract`
 - Test ownership: `tests/test_agent_prompts.py`, `tests/test_packaging.py`
 - No production, provider, target, deployment, or main-branch change was made.
@@ -27,9 +27,14 @@ Status: `DONE`
   Orchestrator select/halt, exact-parent bounded Red Team mutation, independent fail-closed Judge
   precedence, and draft-only Documentation behavior.
 - AC-4: a deterministic stdlib-built wheel contains the manifest and four prompt resources,
-  preserves build-input bytes exactly, declares them in setuptools package data, installs with
-  `--no-index --no-deps`, and loads/looks up those bytes outside the repository with sockets denied
-  despite a valid content-addressed decoy filesystem bundle.
+  preserves build-input bytes exactly, declares them in setuptools package data, and installs with
+  `--no-index --no-deps`. One isolated network-denied probe loads/looks up those bytes from the
+  unpacked installation outside the repository despite a valid content-addressed decoy filesystem
+  bundle. A second isolated probe imports directly from the `.whl` archive, verifies a zip-backed
+  `importlib.resources` traversable, instruments and denies both `Path.open` and `builtins.open`
+  for archive-member paths, requires zero recorded filesystem attempts after loading, and checks
+  the same four manifest/content/hash identities. Even a broad-exception filesystem-first loader
+  that later recovers through package resources cannot pass.
 - Size boundary: the test no longer requires public `MAX_PROMPT_BYTES` or an unsupported 256-byte
   minimum. Its private one-MiB-plus-one adversarial resource proves a finite rejection boundary
   without prescribing a production constant or smaller valid-prompt minimum.
@@ -48,6 +53,10 @@ Intentional RED:
 - A separate network-disabled smoke of the same stdlib wheel builder plus
   `pip install --no-index --no-deps` exits 0, proving wheel installation itself is not the RED
   cause.
+- A direct-from-wheel smoke imports the existing `agentforge.contracts` package from the archive,
+  denies sockets and package-member filesystem opening, verifies the `importlib.resources` backend
+  is `zipfile`, and reads a packaged schema successfully. It prints `ZIP_RESOURCE_SMOKE_OK`,
+  proving the zip-backed probe mechanism itself is viable before T-F17a resources exist.
 
 Zero-network proof:
 
@@ -55,6 +64,8 @@ Zero-network proof:
   validation, lookup, and trust-boundary test.
 - The installed-wheel subprocess patches the same connection paths before importing the installed
   package.
+- The direct archive subprocess applies the same network denials before import and runs under
+  isolated mode with only the local wheel prepended to `sys.path`.
 - Wheel creation uses only `zipfile`; installation sets `PIP_NO_INDEX=1`, disables pip config and
   version checks, and passes `--no-index --no-deps`.
 
@@ -81,9 +92,10 @@ top-level: /Users/quietguy/Documents/Dev/Gauntlet/wt-T-F17a
 branch: ticket/T-F17a-hosted-role-prompt-contract
 status:
  M .tdd-swarm/reports/T-F17a-test.md
- M tests/test_agent_prompts.py
  M tests/test_packaging.py
 ```
 
-Verdict: all review blockers are repaired; all eight new tests are clean, criterion-tagged RED for
-the missing T-F17a prompt registry and packaged resources.
+Verdict: review finding I-6 is repaired; all eight new tests remain clean, criterion-tagged RED for
+the missing T-F17a prompt registry and packaged resources. The suite is ready for its third
+independent test-design review and remains explicitly **not frozen** until that reviewer passes and
+hashes it.
