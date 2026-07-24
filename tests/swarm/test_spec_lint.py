@@ -78,19 +78,58 @@ def test_spec_lint_rejects_a_ticket_criterion_without_a_test_mapping(tmp_path: P
     assert "AC-2" in result.stdout + result.stderr
 
 
-def test_spec_lint_rejects_a_new_test_that_omits_its_spec_tag(tmp_path: Path) -> None:
-    """spec(T-F00:AC-1) — newly changed tests may not bypass criterion traceability."""
+def test_spec_lint_rejects_an_untagged_test_beside_a_tagged_test(tmp_path: Path) -> None:
+    """spec(T-F00:AC-1) — tagging one test may not launder an untagged test in the same file."""
     _install_spec_lint(tmp_path)
     _write_ticket(tmp_path, criteria=("AC-1",))
     test_file = _write_test(tmp_path, 'def test_mapped():\n    """spec(T-F00:AC-1)"""\n')
     base = _commit_fixture(tmp_path)
-    test_file.write_text("def test_new_behavior():\n    assert True\n", encoding="utf-8")
+    test_file.write_text(
+        'def test_mapped():\n    """spec(T-F00:AC-1)"""\n\n'
+        "def test_untagged_new_behavior():\n    assert True\n",
+        encoding="utf-8",
+    )
 
     result = _invoke_spec_lint(tmp_path, base)
 
     assert result.returncode == 1
-    assert "test_ticket.py" in result.stdout + result.stderr
-    assert "spec" in (result.stdout + result.stderr).lower()
+    output = result.stdout + result.stderr
+    assert "test_untagged_new_behavior" in output
+    assert "spec" in output.lower()
+
+
+def test_spec_lint_rejects_a_test_tagged_to_the_wrong_ticket(tmp_path: Path) -> None:
+    """spec(T-F00:AC-1) — a tag for another ticket does not map this ticket's test."""
+    _install_spec_lint(tmp_path)
+    _write_ticket(tmp_path, criteria=("AC-1",))
+    _write_test(tmp_path, 'def test_wrong_ticket():\n    """spec(T-OTHER:AC-1)"""\n')
+    base = _commit_fixture(tmp_path)
+
+    result = _invoke_spec_lint(tmp_path, base)
+
+    assert result.returncode == 1
+    output = result.stdout + result.stderr
+    assert "test_wrong_ticket" in output
+    assert "T-OTHER" in output
+
+
+def test_spec_lint_rejects_a_tag_for_a_nonexistent_acceptance_criterion(tmp_path: Path) -> None:
+    """spec(T-F00:AC-1) — tags must name an AC that the ticket actually declares."""
+    _install_spec_lint(tmp_path)
+    _write_ticket(tmp_path, criteria=("AC-1",))
+    _write_test(
+        tmp_path,
+        'def test_mapped():\n    """spec(T-F00:AC-1)"""\n\n'
+        'def test_unknown_criterion():\n    """spec(T-F00:AC-99)"""\n',
+    )
+    base = _commit_fixture(tmp_path)
+
+    result = _invoke_spec_lint(tmp_path, base)
+
+    assert result.returncode == 1
+    output = result.stdout + result.stderr
+    assert "test_unknown_criterion" in output
+    assert "AC-99" in output
 
 
 def test_spec_lint_accepts_a_complete_criterion_to_test_mapping(tmp_path: Path) -> None:
