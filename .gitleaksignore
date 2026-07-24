@@ -1,0 +1,3 @@
+# Deterministic test-only idempotency nonce; not an API credential.
+eac29687d77b22cc7ab851e9e59bb69c424ab39c:tests/auth/test_m1d_api.py:generic-api-key:290
+90cfd2c9762df60303fb98fabea437195d7437bf:tests/auth/test_m1d_api.py:generic-api-key:290
