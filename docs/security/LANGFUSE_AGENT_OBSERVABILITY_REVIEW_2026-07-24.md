@@ -1,5 +1,13 @@
 # Langfuse agent observability review
 
+> **Supersession boundary — 2026-07-24.** The read-only deployment findings below remain valid for
+> the observed `23490ea` / `0013` release. Its candidate-source conclusions were written before
+> migration `0018`, durable physical provider-call lineage, exact route/token-parameter binding, and
+> the current GitHub-authoritative/GitLab-mirror release rule. Use
+> [`../evidence/ato/ARCHITECTURE_DEPLOYMENT.md`](../evidence/ato/ARCHITECTURE_DEPLOYMENT.md) and
+> [`../integration/INTEGRATION_PACKET.md`](../integration/INTEGRATION_PACKET.md) for current source
+> status. Nothing supersedes the need for a new staging deployment and exact Langfuse query-back.
+
 **Date:** 2026-07-24  
 **Scope:** Canonical Orchestrator, Red Team, Judge, and Documentation execution;
 physical target requests; Langfuse export/query-back; Live, Agents, Costs, and Traces
