@@ -47,6 +47,62 @@ def test_import_cycle_check_rejects_a_declared_package_layer_cycle(tmp_path: Pat
     assert "layer_b" in output
 
 
+def test_import_cycle_check_rejects_nested_package_module_alias_cycle(tmp_path: Path) -> None:
+    """spec(T-F00:AC-2) — nested ``from package import module`` edges participate in cycles."""
+    _install_cycle_check(tmp_path)
+    package = tmp_path / "src" / "agentforge" / "subsystem"
+    package.mkdir(parents=True)
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    (package / "layer_a.py").write_text(
+        "from agentforge.subsystem import layer_b\n",
+        encoding="utf-8",
+    )
+    (package / "layer_b.py").write_text(
+        "from agentforge.subsystem import layer_a\n",
+        encoding="utf-8",
+    )
+
+    result = _run_cycle_check(tmp_path)
+
+    output = result.stdout + result.stderr
+    assert result.returncode == 1
+    assert "agentforge.subsystem.layer_a" in output
+    assert "agentforge.subsystem.layer_b" in output
+
+
+def test_import_cycle_check_rejects_a_nested_relative_import_cycle(tmp_path: Path) -> None:
+    """spec(T-F00:AC-2) — relative imports resolve in their nested package context."""
+    _install_cycle_check(tmp_path)
+    package = tmp_path / "src" / "agentforge" / "subsystem"
+    package.mkdir(parents=True)
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    (package / "layer_a.py").write_text("from . import layer_b\n", encoding="utf-8")
+    (package / "layer_b.py").write_text("from . import layer_a\n", encoding="utf-8")
+
+    result = _run_cycle_check(tmp_path)
+
+    output = result.stdout + result.stderr
+    assert result.returncode == 1
+    assert "agentforge.subsystem.layer_a" in output
+    assert "agentforge.subsystem.layer_b" in output
+
+
+def test_import_cycle_check_canonicalizes_package_initializers_in_cycles(tmp_path: Path) -> None:
+    """spec(T-F00:AC-2) — ``__init__.py`` is the importable package module, not a leaf."""
+    _install_cycle_check(tmp_path)
+    package = tmp_path / "src" / "agentforge" / "subsystem"
+    package.mkdir(parents=True)
+    (package / "__init__.py").write_text("from . import layer_a\n", encoding="utf-8")
+    (package / "layer_a.py").write_text("import agentforge.subsystem\n", encoding="utf-8")
+
+    result = _run_cycle_check(tmp_path)
+
+    output = result.stdout + result.stderr
+    assert result.returncode == 1
+    assert "agentforge.subsystem" in output
+    assert "agentforge.subsystem.layer_a" in output
+
+
 def test_import_cycle_check_accepts_the_current_approved_graph() -> None:
     """spec(T-F00:AC-2) — the repository's approved package graph remains acyclic."""
     assert IMPORT_CYCLE_CHECK.is_file(), "spec(T-F00:AC-2) requires the import-cycle checker"
