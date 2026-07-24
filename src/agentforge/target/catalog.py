@@ -53,6 +53,12 @@ _V2_PROFILE_OPERATION_CLASSES = {
         }
     ),
 }
+_V2_DOCUMENT_WORKFLOW_OPERATION_SETS = frozenset(
+    {
+        frozenset({"upload", "status_poll", "report", "preview", "readback"}),
+        frozenset({"upload", "duplicate_check"}),
+    }
+)
 
 
 class TargetCatalogError(RuntimeError):
@@ -189,9 +195,12 @@ class CatalogEntry:
                 if allowed_operations is None:
                     raise TargetCatalogError("surface policy adapter profile is not supported")
                 if surface.surface_policy.adapter_profile == "copilot_document_workflow":
-                    if not operation_classes.issubset(allowed_operations):
+                    if (
+                        not operation_classes.issubset(allowed_operations)
+                        or operation_classes not in _V2_DOCUMENT_WORKFLOW_OPERATION_SETS
+                    ):
                         raise TargetCatalogError(
-                            "document surface operations do not match its adapter profile"
+                            "document surface requires one complete canonical workflow"
                         )
                 elif operation_classes != allowed_operations:
                     raise TargetCatalogError("surface operations do not match its adapter profile")

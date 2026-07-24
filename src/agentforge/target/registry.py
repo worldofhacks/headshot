@@ -65,6 +65,10 @@ def _version_key(version: str) -> tuple[int, int, int]:
     return tuple(int(part) for part in version.split("."))  # type: ignore[return-value]
 
 
+def _requires_surface_policy(target_version: str) -> bool:
+    return _version_key(target_version)[0] >= 2
+
+
 class TargetRegistry:
     """Dynamic, versioned registry whose dispatch path is exact and deny-by-default."""
 
@@ -104,6 +108,10 @@ class TargetRegistry:
             )
         with self._lock:
             target = self._get_target_locked(surface.target_id, surface.target_version)
+            if _requires_surface_policy(surface.target_version) and surface.surface_policy is None:
+                raise RegistrationError(
+                    "schema-v2 surface registration requires canonical surface policy"
+                )
             if target.lifecycle is not TargetLifecycle.DRAFT:
                 raise RegistrationError(
                     "a surface must be registered while its target version is in draft"
@@ -200,6 +208,8 @@ class TargetRegistry:
 
         if not isinstance(scope, AuthorizationScope):
             raise AuthorizationScopeMismatch("dispatch requires a canonical authorization scope")
+        if _requires_surface_policy(scope.target_version) and scope.surface_policy is None:
+            raise AuthorizationScopeMismatch("schema-v2 dispatch requires canonical surface policy")
         with self._lock:
             target = self._get_target_locked(scope.target_id, scope.target_version)
             if target.lifecycle in {TargetLifecycle.DRAFT, TargetLifecycle.VALIDATING}:
@@ -216,6 +226,10 @@ class TargetRegistry:
                 raise AuthorizationScopeMismatch("surface target identity does not match")
             if surface.target_version != target.version:
                 raise VersionMismatchError("surface target version does not match target version")
+            if _requires_surface_policy(surface.target_version) and surface.surface_policy is None:
+                raise AuthorizationScopeMismatch(
+                    "trusted schema-v2 surface lacks canonical surface policy"
+                )
             if not surface.enabled:
                 raise SurfaceUnavailableError("surface is disabled")
 

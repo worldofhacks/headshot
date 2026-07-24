@@ -7,6 +7,8 @@ Status: `DONE_WITH_CONCERNS`
 - Worktree: `/Users/quietguy/Documents/Dev/Gauntlet/wt-T-F16a`
 - Branch: `ticket/T-F16a-surface-policy-contract`
 - Implementation base / frozen review commit: `e392cac`
+- Initial implementation commit: `993bb19b9c0cacd69e3dde6e3d4ec27bb210b820`
+- Independent code/security review commit: `0dc935e`
 - Product baseline: `1ac3ee02be7855b638dd1fa43bb0612a3db5f025`
 - Frozen test commit: `295e9ccd0b8e1d2c13ad1ccfd8074e762461860f`
 - Frozen test SHA-256:
@@ -45,6 +47,26 @@ No test, ticket, plan, runtime adapter, fixture, credential source, or deploymen
 - Added the required hash-break, old-approval invalidation, staged `2.0.0 -> 2.1.0`, rollback, and
   legacy-compatibility migration note.
 
+## Code-review repair
+
+The independent review of `993bb19` found two Important fail-closed gaps. Both were reproduced
+before repair and are closed in the final product diff:
+
+- The schema-v2 policy requirement now keys on the target's major version. A target `2.x` surface
+  cannot restore legacy target-level authentication by claiming a `1.x` surface version or
+  omitting `surface_policy`. Construction of `AttackSurfaceDefinition` and `AuthorizationScope`,
+  scope derivation, surface registration, and both supplied/trusted sides of registry resolution
+  all reject the missing policy. Pre-v2 target definitions retain the AC-6 compatibility path.
+- Document policies now require one of the two complete canonical operation contracts, including
+  each exact logical maximum and retry count. Lab is fixed to upload `(1,0)`, status poll `(30,1)`,
+  report/preview/readback `(1,1)` for exact `34/67`; intake is upload/duplicate-check `(1,0)` for
+  exact `2/2`. Upload-only, missing-operation, extra-operation, `33/65`, and retry-drift variants
+  fail before hashing or catalog admission.
+
+An independent in-memory regression probe explicitly rejected all of:
+`v2-target/v1-surface definition`, a forged equivalent at `TargetRegistry.register_surface`,
+`upload-only document workflow`, `lab 33/65`, and `document retry drift`.
+
 ## RED and GREEN evidence
 
 Initial focused RED:
@@ -78,6 +100,25 @@ Adjacent registry, adapter-registry, store, runner, and accounting suites passed
 backend run exited `0`; collection reported `1231` tests and execution completed with `1228 passed,
 3 skipped`. The only warning was the existing Starlette `TestClient` deprecation warning.
 
+Post-review final verification:
+
+```text
+python -m pytest -o addopts='' tests/test_final_target_surface_policy.py -q
+-> exit 0; 103 passed in 0.24s
+
+python -m pytest -o addopts='' \
+  tests/target/test_relative_path_parameters.py tests/target/test_target_spec.py \
+  tests/target/test_target_registry.py tests/target/test_adapter_registry.py tests/contract -q
+-> exit 0; 160 passed in 0.15s
+
+python -m pytest -o addopts='' tests -q
+-> exit 0; 1228 passed, 3 skipped in 28.09s
+```
+
+The full-suite command ran with ambient `PYTHONPATH` unset so the existing fresh-wheel packaging
+test could prove installation independently; pytest's checked-in `pythonpath = ["src"]` setting
+still selected this worktree's product code for the test process.
+
 ## Static, integrity, and secret checks
 
 - Scoped `ruff check` -> exit `0`, all checks passed.
@@ -87,7 +128,8 @@ backend run exited `0`; collection reported `1231` tests and execution completed
 - Frozen test SHA-256 and Git blob still exactly match the freeze report.
 - No added `TODO`, `FIXME`, `HACK`, `print`, debugger, socket, credential read, fixture-byte read,
   adapter construction, or target call.
-- `bash scripts/secret_scan.sh` -> exit `0`; `secret scan clean (851 files)`.
+- `bash scripts/secret_scan.sh` -> exit `0`; `secret scan clean (852 files)`.
+- `gitleaks git . --redact` -> exit `0`; no leaks found.
 
 ## Concerns
 

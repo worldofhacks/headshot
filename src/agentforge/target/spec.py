@@ -124,6 +124,12 @@ def _version_key(value: str) -> tuple[int, int, int]:
     return tuple(int(part) for part in value.split("."))  # type: ignore[return-value]
 
 
+def _requires_surface_policy(target_version: str) -> bool:
+    """Whether a target version uses the schema-v2 per-surface policy contract."""
+
+    return _version_key(target_version)[0] == 2
+
+
 def _require_text(value: object, field: str, *, maximum: int = 512) -> str:
     if (
         not isinstance(value, str)
@@ -679,6 +685,19 @@ _DOCUMENT_OPERATION_CLASSES = frozenset(
 )
 _DOCUMENT_UPLOAD_OPERATION_CLASSES = frozenset({"upload", "duplicate_check"})
 _DOCUMENT_READ_OPERATION_CLASSES = _DOCUMENT_OPERATION_CLASSES - _DOCUMENT_UPLOAD_OPERATION_CLASSES
+_DOCUMENT_WORKFLOW_OPERATION_CONTRACTS = {
+    frozenset({"upload", "status_poll", "report", "preview", "readback"}): {
+        "upload": (1, 0),
+        "status_poll": (30, 1),
+        "report": (1, 1),
+        "preview": (1, 1),
+        "readback": (1, 1),
+    },
+    frozenset({"upload", "duplicate_check"}): {
+        "upload": (1, 0),
+        "duplicate_check": (1, 0),
+    },
+}
 _SESSION_OPERATION_CLASSES = frozenset(_EXACT_OPERATION_CREDENTIALS) - {"evidence_search"}
 
 
@@ -805,12 +824,20 @@ class SurfacePolicy:
                 "anonymous evidence search must be the only operation in its surface policy"
             )
         if operation_classes.intersection(_DOCUMENT_OPERATION_CLASSES):
-            if not operation_classes.issubset(_DOCUMENT_OPERATION_CLASSES):
-                raise DefinitionError(
-                    "document and non-document operations require separate policies"
+            expected_contract = _DOCUMENT_WORKFLOW_OPERATION_CONTRACTS.get(
+                frozenset(operation_classes)
+            )
+            actual_contract = {
+                operation.operation_class: (
+                    operation.maximum_logical_operations,
+                    operation.retry_count,
                 )
-            if not operation_classes.intersection(_DOCUMENT_UPLOAD_OPERATION_CLASSES):
-                raise DefinitionError("document surface policy requires an upload operation")
+                for operation in operations
+            }
+            if expected_contract is None or actual_contract != expected_contract:
+                raise DefinitionError(
+                    "document surface policy requires one complete canonical workflow"
+                )
 
         if "evidence_search" in operation_classes:
             if self.auth_mode is not AuthMode.NONE:
@@ -1054,6 +1081,8 @@ class AttackSurfaceDefinition:
         if not isinstance(self.enabled, bool):
             raise DefinitionError("enabled must be a boolean")
         if self.surface_policy is None:
+            if _requires_surface_policy(self.target_version):
+                raise DefinitionError("schema-v2 attack surfaces require canonical surface_policy")
             if self.surface_policy_sha256 is not None:
                 raise DefinitionError("surface_policy_sha256 cannot exist without a surface policy")
             return
@@ -1154,6 +1183,10 @@ class AuthorizationScope:
         if self.hosted_run is not None and not isinstance(self.hosted_run, HostedRunBinding):
             raise DefinitionError("hosted_run must be a validated HostedRunBinding")
         if self.surface_policy is None:
+            if _requires_surface_policy(self.target_version):
+                raise DefinitionError(
+                    "schema-v2 authorization scopes require canonical surface_policy"
+                )
             if self.surface_policy_sha256 is not None:
                 raise DefinitionError("surface_policy_sha256 cannot exist without a surface policy")
             return
@@ -1201,6 +1234,10 @@ class AuthorizationScope:
     ) -> AuthorizationScope:
         if surface.target_id != target.target_id or surface.target_version != target.version:
             raise DefinitionError("surface reference does not match the target definition")
+        if _requires_surface_policy(surface.target_version) and surface.surface_policy is None:
+            raise DefinitionError(
+                "schema-v2 definitions require canonical surface policy before authorization"
+            )
         if surface.surface_policy is None:
             auth_mode = target.auth_mode
             credential_ref = target.credential_ref
