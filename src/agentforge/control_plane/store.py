@@ -2953,7 +2953,7 @@ class ControlPlaneStore:
                 "reasoning_tokens": event.reasoning_tokens,
                 "cost_measurement_state": event.cost_measurement_state,
                 "measured_cost_usd": (
-                    format(event.measured_cost_usd, ".6f")
+                    format(event.measured_cost_usd, ".12f")
                     if event.measured_cost_usd is not None
                     else None
                 ),

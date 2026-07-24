@@ -1814,7 +1814,7 @@ class ProviderCallEvent(Base):
     output_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     reasoning_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     cost_measurement_state: Mapped[str] = mapped_column(String(16), nullable=False)
-    measured_cost_usd: Mapped[float | None] = mapped_column(Numeric(14, 6), nullable=True)
+    measured_cost_usd: Mapped[float | None] = mapped_column(Numeric(20, 12), nullable=True)
     error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
     finished_at: Mapped[datetime.datetime] = mapped_column(TIMESTAMP(timezone=True), nullable=False)
     duration_ms: Mapped[float] = mapped_column(Numeric(14, 3), nullable=False)

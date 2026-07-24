@@ -21,8 +21,12 @@ _STATUSES: Final = {
     "outcome_unknown": "provider_outcome_unknown",
 }
 _COST_STATES: Final = frozenset({"measured", "partial", "not_observed", "invalid"})
-_COST_QUANTUM: Final = Decimal("0.000001")
-_MAX_COST: Final = Decimal("99999999.999999")
+# Matches NUMERIC(20, 12) on both provider_call_events.measured_cost_usd and
+# agent_executions.measured_cost. At six places a per-call OpenRouter charge either quantizes
+# to a fabricated 0.000000 or is rejected outright, and sub-microdollar charges are routine on
+# the cheaper roles.
+_COST_QUANTUM: Final = Decimal("0.000000000001")
+_MAX_COST: Final = Decimal("99999999.999999999999")
 _MAX_INTEGER: Final = 2_147_483_647
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _SAFE_IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,191}$")

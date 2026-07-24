@@ -37,7 +37,7 @@ def _terminal_contract_hash(row: sa.RowMapping) -> str:
         "reasoning_tokens": row["reasoning_tokens"],
         "cost_measurement_state": row["cost_measurement_state"],
         "measured_cost_usd": (
-            format(row["measured_cost_usd"], ".6f")
+            format(row["measured_cost_usd"], ".12f")
             if row["measured_cost_usd"] is not None
             else None
         ),
@@ -231,7 +231,7 @@ def upgrade() -> None:
         sa.Column("output_tokens", sa.Integer(), nullable=True),
         sa.Column("reasoning_tokens", sa.Integer(), nullable=True),
         sa.Column("cost_measurement_state", sa.String(length=16), nullable=False),
-        sa.Column("measured_cost_usd", sa.Numeric(14, 6), nullable=True),
+        sa.Column("measured_cost_usd", sa.Numeric(20, 12), nullable=True),
         sa.Column("error_code", sa.String(length=64), nullable=True),
         sa.Column("finished_at", sa.TIMESTAMP(timezone=True), nullable=False),
         sa.Column("duration_ms", sa.Numeric(14, 3), nullable=False),

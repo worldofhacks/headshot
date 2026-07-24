@@ -186,6 +186,42 @@ def _as_role(connection: Connection, role: str) -> Iterator[None]:
         connection.execute(text("RESET ROLE"))
 
 
+def _truncate_lineage_state(engine: Engine) -> None:
+    """Drop every row this module can create, including the physical lineage tables."""
+
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "TRUNCATE TABLE provider_call_events, provider_call_invocations, "
+                "campaign_work_unit_reservations, agent_executions, audit_events, "
+                "command_idempotency, campaign_attempts, campaign_run_events, "
+                "campaign_runs, campaign_authorization_decisions, "
+                "campaign_authorization_requests "
+                "RESTART IDENTITY CASCADE"
+            )
+        )
+
+
+@pytest.fixture(autouse=True)
+def _isolate_lineage_state(request: pytest.FixtureRequest) -> Iterator[None]:
+    """Keep the session-scoped database deterministic across lineage cases.
+
+    ``migrated_db`` is session-scoped, so the deterministic synthetic keys in
+    :func:`_seed_logical_execution` collide on every seeding case after the first. Truncating
+    per case follows the convention in ``tests/test_queue.py`` and costs far less than a
+    freshly migrated database per case. Cases that never ask for ``migrated_db`` — the
+    sensitive-text and cost-state contracts — still run without a database.
+    """
+
+    if "migrated_db" not in request.fixturenames:
+        yield
+        return
+    engine = request.getfixturevalue("migrated_db")
+    _truncate_lineage_state(engine)
+    yield
+    _truncate_lineage_state(engine)
+
+
 def _seed_logical_execution(
     engine: Engine,
     *,
@@ -1424,6 +1460,42 @@ def test_spec_T_F17b_AC_8_cost_states_are_closed_decimal_and_nullable(
                 cost_measurement_state=invalid_state,
                 measured_cost_usd=invalid_amount,
             )
+
+
+# spec(T-F17b:AC-8)
+@pytest.mark.parametrize(
+    "amount",
+    (
+        Decimal("0.0000391"),
+        Decimal("0.000001234567"),
+        Decimal("0.00000078"),
+        Decimal("0.004200"),
+    ),
+)
+def test_spec_T_F17b_AC_8_sub_microdollar_cost_is_preserved_not_zeroed(
+    amount: Decimal,
+) -> None:
+    """A real per-call charge finer than a microdollar must survive exactly.
+
+    Both cost columns are NUMERIC(20, 12). Quantizing to six places would either reject a
+    routine OpenRouter charge outright or round it down to 0.000000 — a fabricated zero,
+    which is precisely what the unknown-cost invariant forbids.
+    """
+
+    module = _lineage_api()
+    invocation = SimpleNamespace(
+        invocation_id="invocation-precision",
+        physical_sequence=1,
+        started_at=_STARTED,
+    )
+    event = _terminal_event(
+        module,
+        invocation,
+        cost_measurement_state="measured",
+        measured_cost_usd=amount,
+    )
+    assert event.measured_cost_usd == amount
+    assert event.measured_cost_usd != Decimal("0")
 
 
 # spec(T-F17b:AC-7)
