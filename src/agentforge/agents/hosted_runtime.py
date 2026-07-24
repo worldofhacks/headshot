@@ -62,6 +62,18 @@ class HostedModelSubstitutionError(HostedCompositionError):
     code = "provider-model-substituted"
 
 
+def _redacted_model_reference(value: object) -> str:
+    """A safe, stable stand-in for a served model name we refuse to store verbatim.
+
+    Keeps the observation usable — it still differs from the requested model, so the row is still
+    a recorded substitution — while the provider's actual bytes never reach the audit log.
+    """
+
+    raw = value if isinstance(value, str) else repr(value)
+    digest = hashlib.sha256(raw.encode("utf-8", "replace")).hexdigest()[:32]
+    return f"unsafe-model-text-{digest}"
+
+
 def require_safe_model_text(label: str, value: object, *, maximum: int) -> str:
     """Accept bounded printable model text only when it contains no raw auth material."""
 
@@ -491,12 +503,16 @@ class HostedRoleRuntime:
             return None
         configuration = self._roles[role]
         # returned_model is no longer pinned equal to the authorized id, so it is now
-        # provider-controlled text on its way to the audit log, Langfuse and the console. Hold it
-        # to the same bound as every other provider-supplied string rather than storing it raw.
+        # provider-controlled text on its way to the audit log, Langfuse and the console. It must
+        # not be stored raw — but discarding the record on unsafe text would hand the provider a
+        # switch for erasing its own evidence, including the cost it already billed, just by
+        # naming its substitute something that looks like a key. Redact the text, keep the record.
         try:
-            require_safe_model_text("returned_model", result.returned_model, maximum=160)
+            observed_model = require_safe_model_text(
+                "returned_model", result.returned_model, maximum=160
+            )
         except HostedCompositionError:
-            return None
+            observed_model = _redacted_model_reference(result.returned_model)
         if (
             # requested_model is ours: if it is wrong we sent the wrong call and the whole
             # observation is untrustworthy. returned_model is theirs — a divergence is exactly
@@ -541,7 +557,7 @@ class HostedRoleRuntime:
             role=role,
             parent_request_id=parent_request_id,
             requested_model=result.requested_model,
-            returned_model=result.returned_model,
+            returned_model=observed_model,
             upstream_provider=result.upstream_provider,
             provider_request_id=result.request_id,
             input_tokens=result.input_tokens,

@@ -445,6 +445,61 @@ def test_a_substituted_provider_model_is_refused_but_recorded() -> None:
     assert Decimal(lineage.measured_cost_usd) == Decimal("0.01")
 
 
+@pytest.mark.parametrize(
+    "hostile",
+    (
+        "sk-or-v1-abcdefghijklmnop",
+        "openai/gpt-5.4\rcookie: a=b",
+        "openai/gpt-5.4" + "x" * 200,
+        "   ",
+    ),
+)
+def test_an_unsafe_served_model_name_is_redacted_not_used_to_erase_the_record(
+    hostile: str,
+) -> None:
+    """The provider names its own substitute, so discarding on unsafe text is a switch it holds.
+
+    Dropping the lineage would let a provider erase the evidence — and the cost it already
+    billed — just by calling its substitute something that looks like a key.
+    """
+
+    recorded: list[Any] = []
+    lifecycle = _FakeExecutionLifecycle(recorded)
+    runtime, transport = _runtime(
+        outputs=_outputs(),
+        target=lambda _attempt: {"status_code": 200},
+        recorded=recorded,
+        lifecycle=lifecycle,
+    )
+    authorized = transport.invoke
+
+    def substituting(**kwargs: Any) -> OpenRouterResult:
+        result = authorized(**kwargs)
+        if kwargs["role"] != "orchestrator":
+            return result
+        raise HostedProviderResponseError(
+            "hostile served model",
+            observed_result=dataclasses.replace(result, returned_model=hostile),
+            code="provider-model-substituted",
+        )
+
+    transport.invoke = substituting  # type: ignore[method-assign]
+
+    with pytest.raises(HostedProviderResponseError):
+        runtime.run_attempt(authorized_case={"case_id": "case-1"})
+
+    failure = next(item for item in lifecycle.finishes if item["status"] == "failed")
+    lineage = failure["lineage"]
+    # The record survives, and the billed cost with it.
+    assert lineage is not None
+    assert Decimal(lineage.measured_cost_usd) == Decimal("0.01")
+    assert lineage.provider_request_id == "provider-request-orchestrator"
+    # The provider's bytes never reach the record, but it is still a recorded substitution.
+    assert lineage.returned_model.startswith("unsafe-model-text-")
+    assert hostile not in lineage.returned_model
+    assert lineage.returned_model != lineage.requested_model
+
+
 def test_a_transport_that_returns_a_substituted_result_is_still_caught() -> None:
     """Defence in depth for a transport that does not refuse the substitution itself.
 

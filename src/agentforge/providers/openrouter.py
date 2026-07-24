@@ -309,6 +309,17 @@ class OpenRouterResult:
     physical_attempts: int
 
 
+class _ModelSubstituted(HostedProviderError):
+    """Internal marker: the served model is not the authorized one.
+
+    Raised only inside the observation-preserving wrapper, which re-raises it as a
+    ``HostedProviderResponseError`` carrying this code together with the observed result. It
+    never escapes on its own.
+    """
+
+    code = "provider-model-substituted"
+
+
 class HostedProviderResponseError(HostedProviderError):
     """A charged provider response whose exact measurements survived terminal rejection."""
 
@@ -319,12 +330,14 @@ class HostedProviderResponseError(HostedProviderError):
         observed_result: OpenRouterResult,
         code: str,
     ) -> None:
+        # Validate before dereferencing, or the intended TypeError is unreachable and a bad
+        # argument surfaces as an AttributeError instead.
+        if not isinstance(observed_result, OpenRouterResult):
+            raise TypeError("observed provider result is invalid")
         super().__init__(
             message,
             physical_attempts=observed_result.physical_attempts,
         )
-        if not isinstance(observed_result, OpenRouterResult):
-            raise TypeError("observed provider result is invalid")
         if not isinstance(code, str) or not code:
             raise ValueError("observed provider failure code is invalid")
         self.observed_result = observed_result
@@ -555,18 +568,15 @@ class OpenRouterTransport:
             generation_policy_sha256=generation_policy_sha256,
             physical_attempts=physical_attempts,
         )
-        if returned_model != requested_model:
-            # The substitution is refused, but it was still billed and it is the whole point of
-            # observing served identity. Settle the real usage and carry the observation out on
-            # the exception so the caller records it instead of losing it to a generic failure.
-            self._ledger.settle(reservation, **usage)
-            raise HostedProviderResponseError(
-                "OpenRouter served a model other than the authorized one",
-                observed_result=observed_result,
-                code="provider-model-substituted",
-            )
+        # Everything from here on runs inside the wrapper, because every step below can fail on
+        # provider-controlled input and each one must still surrender the observation. settle()
+        # in particular raises HostedBudgetExceeded when the served usage overruns the
+        # reservation or the role cap — and since the request pins max_price to the AUTHORIZED
+        # model's price, a substituted model is precisely the case that breaches the cap.
         try:
             self._ledger.settle(reservation, **usage)
+            if returned_model != requested_model:
+                raise _ModelSubstituted("OpenRouter served a model other than the authorized one")
             output = self._structured_output(payload, output_schema)
         except HostedProviderError as exc:
             raise HostedProviderResponseError(

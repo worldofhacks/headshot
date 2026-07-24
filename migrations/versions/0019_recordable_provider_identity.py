@@ -53,11 +53,16 @@ def downgrade() -> None:
     # The substitution stays provable after the rollback through the agent.failed audit event,
     # which records requested_model and returned_model together. (Not through
     # provider_call_events — that table has no production writer yet; wiring it is T-F17c.)
+    # The cost goes with it. Left behind, a measured cost on a row whose usage columns are now
+    # NULL projects as accounting_status='unavailable' carrying a measured value, which
+    # AgentActivityReadModel rejects — and because agent activity serializes every row in one
+    # response, a single rolled-back substitution would fail the whole view.
     op.execute(
         "UPDATE agent_executions SET "
         "returned_model = NULL, upstream_provider = NULL, provider_request_id = NULL, "
         "input_tokens = NULL, output_tokens = NULL, reasoning_tokens = NULL, "
-        "physical_attempts = NULL "
+        "physical_attempts = NULL, "
+        "measured_cost = NULL, cost_measurement_state = 'not_observed' "
         "WHERE returned_model IS NOT NULL AND returned_model <> model"
     )
     op.drop_constraint("agent_execution_provider_identity", "agent_executions", type_="check")

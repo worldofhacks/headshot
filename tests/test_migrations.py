@@ -275,7 +275,8 @@ def test_0019_downgrade_survives_a_recorded_model_substitution() -> None:
                 conn.execute(
                     text(
                         "SELECT status, model, returned_model, input_tokens, physical_attempts, "
-                        "error_code FROM agent_executions WHERE execution_id = 'substituted-1'"
+                        "measured_cost, cost_measurement_state, error_code "
+                        "FROM agent_executions WHERE execution_id = 'substituted-1'"
                     )
                 )
                 .mappings()
@@ -289,6 +290,10 @@ def test_0019_downgrade_survives_a_recorded_model_substitution() -> None:
         assert row["returned_model"] is None
         assert row["input_tokens"] is None
         assert row["physical_attempts"] is None
+        # The cost goes with the observation. Left behind it would project as an "unavailable"
+        # accounting status carrying a measured value, which the read model refuses to serialize.
+        assert row["measured_cost"] is None
+        assert row["cost_measurement_state"] == "not_observed"
         # The substitution stays detectable after the rollback through the typed error code.
         assert row["error_code"] == "provider-model-substituted"
 

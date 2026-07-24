@@ -288,6 +288,56 @@ def test_transport_refuses_a_substituted_model_but_carries_the_observation_out()
     assert transport.ledger.snapshot.measured_usd == observed.measured_cost_usd
 
 
+@pytest.mark.parametrize(
+    ("mutate", "label"),
+    (
+        (lambda usage: usage.update({"completion_tokens": 400}), "usage overruns the reservation"),
+        (lambda usage: usage.update({"cost": 9.5}), "cost breaches the role cap"),
+    ),
+)
+def test_a_substituted_call_still_surrenders_its_observation_when_settle_fails(
+    mutate: object,
+    label: str,
+) -> None:
+    """settle() raises on provider-controlled input, and that must not swallow the evidence.
+
+    The request pins max_price to the AUTHORIZED model's price, so a router that serves a
+    different model is exactly the case that breaches the cap. If that path lost the observation,
+    a substitution would be indistinguishable from an ordinary budget refusal.
+    """
+
+    payload = _success().json()
+    payload["model"] = "google/gemini-flash"
+    payload["openrouter_metadata"]["endpoints"]["available"][0]["model"] = "google/gemini-flash"
+    assert callable(mutate)
+    mutate(payload["usage"])
+    client = httpx.Client(
+        transport=httpx.MockTransport(lambda _request: httpx.Response(200, json=payload))
+    )
+    transport = OpenRouterTransport(
+        configuration=_configuration(),
+        credential_resolver=lambda _reference: Secret("test-provider-value"),
+        client=client,
+    )
+
+    with pytest.raises(HostedProviderResponseError) as raised:
+        transport.invoke(
+            role="judge",
+            messages=({"role": "user", "content": "Judge."},),
+            output_schema={"type": "object"},
+            schema_name="judge_verdict",
+            generation_policy_sha256=_digest("generation-policy"),
+            input_tokens_upper_bound=100,
+            max_output_tokens=50,
+            max_reasoning_tokens=20,
+            timeout_seconds=5,
+        )
+
+    observed = raised.value.observed_result
+    assert observed.requested_model == "google/gemini-2.5-pro"
+    assert observed.returned_model == "google/gemini-flash", label
+
+
 def test_transport_fails_closed_when_the_served_model_is_absent() -> None:
     payload = _success().json()
     payload["model"] = None

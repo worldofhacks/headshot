@@ -504,3 +504,49 @@ def test_birdseye_projects_security_outcomes_and_recorded_agent_causality(
         in verified_edges["runner-to-langfuse"]["detail"]
     )
     assert verified_nodes["langfuse"]["current_task"].startswith("Remote query-back verified")
+
+
+def test_birdseye_never_presents_a_substituted_model_as_the_agent_identity(
+    migrated_db: Engine,
+) -> None:
+    """A served model that is not the requested one must not stand alone as fleet identity.
+
+    Rendered by itself it reads exactly like a normal call, so the system map would show the
+    provider's claim as though it were the authorized model.
+    """
+
+    organization_id = "org_BirdseyeSubstitution"
+    with migrated_db.begin() as connection:
+        connection.execute(text("SET LOCAL session_replication_role = replica"))
+        connection.execute(
+            text(
+                "INSERT INTO agent_executions "
+                "(execution_id, organization_id, campaign_run_id, agent_role, status, provider, "
+                "model, execution_mode, configuration_version, input_sha256, output_sha256, "
+                "returned_model, upstream_provider, provider_request_id, input_tokens, "
+                "output_tokens, reasoning_tokens, physical_attempts, configuration_set_sha256, "
+                "role_configuration_sha256, generation_policy_sha256, measured_cost, "
+                "cost_measurement_state, trace_id, detail, started_at, finished_at, duration_ms, "
+                "error_code) VALUES "
+                "('birdseye-substituted', :org, 'run-substituted', 'red_team', 'failed', "
+                "'openrouter', 'qwen/qwen3.5-397b-a17b', 'hosted_advisory', 1, repeat('a',64), "
+                "repeat('b',64), 'openai/gpt-5.4', 'OpenAI', 'req-substituted', 100, 20, 5, 1, "
+                "repeat('c',64), repeat('d',64), repeat('e',64), 0.01, 'measured', "
+                "repeat('f',32), '{}'::jsonb, clock_timestamp(), clock_timestamp(), 10, "
+                "'provider-model-substituted')"
+            ),
+            {"org": organization_id},
+        )
+
+    with migrated_db.connect() as connection:
+        snapshot = build_birdseye_snapshot(
+            connection,
+            organization_id=organization_id,
+            environment="local",
+        )
+
+    node = next(item for item in snapshot["nodes"] if item["component_id"] == "agent:red_team")
+    # Both identities are present and the divergence is named, not implied.
+    assert "qwen/qwen3.5-397b-a17b" in node["detail"]
+    assert "openai/gpt-5.4" in node["detail"]
+    assert "substituted" in node["detail"]
