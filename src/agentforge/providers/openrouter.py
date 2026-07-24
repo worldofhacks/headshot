@@ -488,7 +488,16 @@ class OpenRouterTransport:
                 "messages": [dict(message) for message in messages],
                 # OpenRouter's completion count includes reasoning tokens. The
                 # configured output bound is only the final-answer allowance.
-                "max_completion_tokens": max_output_tokens + reservation.reasoning_tokens,
+                #
+                # The parameter MUST be `max_tokens`, not `max_completion_tokens`: OpenRouter
+                # advertises `max_tokens` in every endpoint's `supported_parameters`, and this
+                # request sets `provider.require_parameters: true`, which refuses any endpoint
+                # that does not support a parameter we send. Sending `max_completion_tokens`
+                # therefore matched NO endpoint and failed routing with HTTP 404 "No endpoints
+                # found that can handle the requested parameters" for every role — verified
+                # against google/gemini-2.5-pro, whose supported set is
+                # {max_tokens, reasoning, response_format, structured_outputs, ...}.
+                "max_tokens": max_output_tokens + reservation.reasoning_tokens,
                 "stream": False,
                 "provider": {
                     "only": [configuration.upstream_provider],
