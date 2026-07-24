@@ -68,7 +68,7 @@ test("390px navigation exposes every screen without application overflow", async
   await page.getByText("Browser Test Target", { exact: true }).click();
   await expect(page.getByRole("button", { name: "Disable surface" })).toBeEnabled();
   await expect(page.getByRole("button", {
-    name: "Create target from trusted catalog",
+    name: "Register exact catalog target",
   })).toBeDisabled();
   await expect(page.getByLabel("Budget USD")).toHaveValue("1");
   await expect(page.getByLabel("Maximum attempts")).toHaveValue("9");

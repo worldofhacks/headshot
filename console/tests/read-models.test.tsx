@@ -22,6 +22,7 @@ import {
   decodePrincipal,
   decodeReports,
   decodeResilience,
+  decodeTargetCatalog,
   decodeTargets,
   decodeTooling,
   decodeTraces,
@@ -277,6 +278,19 @@ const validResources: Array<[string, (value: unknown) => unknown, unknown]> = [
     "targets and surfaces",
     decodeTargets,
     [{ target_id: "target-1", name: "Registered target", version: "1.0.0", content_hash: "target-hash", lifecycle: "ready", environment: "staging", adapter_kind: "openemr", base_url: "https://target.invalid", auth_mode: "bearer", credential_configured: true, synthetic_data_only: true, safety_caps: caps, allowed_lifecycle_transitions: ["disabled"], campaign_template: null, created_at: at, surfaces: [{ surface_id: "surface-1", version: "1.0.0", target_version: "1.0.0", content_hash: "surface-hash", kind: "chat", protocol: "https", method: "POST", relative_path: "api", trust_boundary: "external-target", authentication_required: true, risk: "high", owasp_mappings: [], oracle_refs: [], enabled: true, created_at: at }] }],
+  ],
+  [
+    "trusted target catalog",
+    decodeTargetCatalog,
+    [{
+      target_id: "target-1",
+      version: "1.0.0",
+      name: "Reviewed target",
+      environment: "staging",
+      synthetic_data_only: true,
+      surface_count: 2,
+      registration_state: "available",
+    }],
   ],
   [
     "configuration",
@@ -591,6 +605,30 @@ describe("v1 read-model decoders", () => {
     }])).toThrow("Invalid coverage read model");
     expect(() => decodeResilience([{ ...resilience, unexpected: true }]))
       .toThrow("Invalid resilience read model");
+  });
+
+  it("rejects browser authority fields in the trusted target catalog projection", () => {
+    const entry = {
+      target_id: "target-1",
+      version: "1.0.0",
+      name: "Reviewed target",
+      environment: "staging",
+      synthetic_data_only: true,
+      surface_count: 1,
+      registration_state: "available",
+    };
+
+    expect(decodeTargetCatalog([entry])).toEqual([entry]);
+    for (const field of [
+      "base_url",
+      "allowlisted_hosts",
+      "adapter_kind",
+      "credential_ref",
+      "ownership_authorization_ref",
+    ]) {
+      expect(() => decodeTargetCatalog([{ ...entry, [field]: "forbidden" }]))
+        .toThrow("Invalid target catalog entry read model");
+    }
   });
 
   it.each([

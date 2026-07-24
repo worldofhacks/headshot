@@ -16,6 +16,7 @@ export const RESOURCE_PATHS = {
   resilience: "resilience",
   traces: "traces",
   costs: "costs",
+  targetCatalog: "target-catalog",
   targets: "targets",
   target: (targetId: string) => `targets/${segment(targetId)}`,
   configuration: "configuration",

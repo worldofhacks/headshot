@@ -122,21 +122,11 @@ class OwaspInput(_StrictModel):
     name: str = Field(min_length=1, max_length=160)
 
 
-class TargetInput(_StrictModel):
+class TargetCatalogSelectionInput(_StrictModel):
+    """An exact server-owned catalog identity; no dispatch authority crosses the browser."""
+
     target_id: str = Field(min_length=1, max_length=64)
-    name: str = Field(min_length=1, max_length=512)
     version: str = Field(min_length=1, max_length=32)
-    adapter_kind: Literal["fake", "openemr"]
-    environment: Literal["local", "staging", "production"]
-    base_url: str = Field(min_length=1, max_length=2048)
-    allowlisted_hosts: tuple[str, ...] = Field(min_length=1, max_length=32)
-    auth_mode: Literal["none", "bearer", "session", "oauth"]
-    credential_ref: str | None = Field(default=None, max_length=512)
-    synthetic_data_only: Literal[True]
-    synthetic_data_attestation_ref: str = Field(min_length=1, max_length=512)
-    canary_refs: tuple[str, ...] = Field(default=(), max_length=32)
-    oracle_refs: tuple[str, ...] = Field(default=(), max_length=32)
-    safety_caps: CapsInput
 
 
 class TargetLifecycleInput(_StrictModel):
@@ -407,6 +397,11 @@ def targets(request: Request, principal: ConsolePrincipal) -> JSONResponse:
     return _read(request, "targets", principal)
 
 
+@router.get("/target-catalog")
+def target_catalog(request: Request, principal: TargetPrincipal) -> JSONResponse:
+    return _read(request, "target_catalog", principal)
+
+
 @router.get("/targets/{target_id}")
 def target(request: Request, target_id: str, principal: ConsolePrincipal) -> JSONResponse:
     return _read(request, "target", principal, {"target_id": target_id})
@@ -575,7 +570,7 @@ def resolve_finding(
 @router.post("/targets")
 def create_target(
     request: Request,
-    body: TargetInput,
+    body: TargetCatalogSelectionInput,
     principal: TargetPrincipal,
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
 ) -> JSONResponse:
@@ -586,7 +581,7 @@ def create_target(
 def revise_target(
     request: Request,
     target_id: str,
-    body: TargetInput,
+    body: TargetCatalogSelectionInput,
     principal: TargetPrincipal,
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
 ) -> JSONResponse:

@@ -204,6 +204,18 @@ class TargetReadModel(_ReadModel):
     created_at: datetime.datetime
 
 
+class TargetCatalogEntryReadModel(_ReadModel):
+    """Safe selectable identity for one immutable server-owned catalog bundle."""
+
+    target_id: str
+    version: str
+    name: str
+    environment: Literal["local", "staging", "production"]
+    synthetic_data_only: Literal[True]
+    surface_count: int = Field(gt=0)
+    registration_state: Literal["available", "registered", "conflict"]
+
+
 class AuditReadModel(_ReadModel):
     cursor: int = Field(ge=1)
     event_type: str
@@ -1319,6 +1331,7 @@ _LIST_ADAPTERS = {
     "attempts": TypeAdapter(list[AttemptReadModel]),
     "approvals": TypeAdapter(list[ApprovalReadModel]),
     "targets": TypeAdapter(list[TargetReadModel]),
+    "target_catalog": TypeAdapter(list[TargetCatalogEntryReadModel]),
     "audit": TypeAdapter(list[AuditReadModel]),
     "findings": TypeAdapter(list[FindingReadModel]),
     "reports": TypeAdapter(list[ReportReadModel]),
@@ -1389,6 +1402,7 @@ __all__ = [
     "ReportReadModel",
     "ResilienceReadModel",
     "SurfaceReadModel",
+    "TargetCatalogEntryReadModel",
     "TargetReadModel",
     "ToolScopeReadModel",
     "TraceReadModel",

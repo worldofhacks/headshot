@@ -1256,6 +1256,21 @@ const browserFixture = (): Plugin => ({
         }));
         return;
       }
+      if (path === "/api/v1/target-catalog") {
+        response.end(JSON.stringify({
+          state: "ready",
+          data: [{
+            target_id: "browser-target",
+            version: "v1",
+            name: "Browser Test Target",
+            environment: "staging",
+            synthetic_data_only: true,
+            surface_count: 1,
+            registration_state: "registered",
+          }],
+        }));
+        return;
+      }
       if (path === "/api/v1/targets") {
         response.end(JSON.stringify({
           state: "ready",
