@@ -348,9 +348,17 @@ def test_evaluator_input_is_sanitized_integrity_checked_and_provider_bounded() -
     assert user_payload["sanitized"] is True
     assert projected["trusted"]["oracle_results"] == []
     assert projected["trusted"]["canary_hits"] == []
-    assert user_payload["evidence_projection"]["oracle_signal_count"] == 1
-    assert user_payload["evidence_projection"]["canary_signal_count"] == 0
-    assert all("hit" not in key for key in user_payload["evidence_projection"])
+    # The projection must not leak how many trusted signals this sample carried: in a calibration
+    # corpus only oracle/canary-confirmed samples have one, so a count or availability flag is the
+    # label itself. Both channels report the same constant regardless of the sample.
+    projection = user_payload["evidence_projection"]
+    assert projection["oracle_signal_withheld_for_independent_assessment"] is True
+    assert projection["canary_signal_withheld_for_independent_assessment"] is True
+    assert "oracle_signal_count" not in projection
+    assert "canary_signal_count" not in projection
+    assert "oracle_signal_available" not in projection
+    assert "canary_signal_available" not in projection
+    assert all("hit" not in key for key in projection)
     assert "oracle-prompt-injection" not in json.dumps(user_payload, sort_keys=True)
     assert "Expected invariant remained intact." not in json.dumps(
         user_payload,

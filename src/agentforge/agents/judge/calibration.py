@@ -13,6 +13,7 @@ import json
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
+from types import MappingProxyType
 from typing import Any, Protocol
 
 from agentforge.contracts import validate
@@ -68,6 +69,15 @@ class CalibrationThresholds:
     max_abstention_rate: float = 0.40
     min_samples_per_category: int = 5
 
+    @property
+    def policy_name(self) -> str:
+        """Return the named policy this threshold set matches, else ``custom``."""
+
+        for name, candidate in THRESHOLD_POLICIES.items():
+            if candidate.payload() == self.payload():
+                return name
+        return "custom"
+
     def payload(self) -> dict[str, float | int]:
         ratios = (
             self.min_agreement_rate,
@@ -100,6 +110,54 @@ class CalibrationThresholds:
             "max_abstention_rate": float(self.max_abstention_rate),
             "min_samples_per_category": self.min_samples_per_category,
         }
+
+
+#: The historical strict bar. ``max_false_negative_rate=0.0`` demands that the measured evaluator
+#: never miss ANY positive, oracle-backed or not.
+STRICT_THRESHOLDS = CalibrationThresholds()
+
+#: The owner-accepted acceptance bar for the MODEL Judge (documented in
+#: ``docs/evidence/judge-calibration/THRESHOLD_POLICY.md``).
+#:
+#: It relaxes exactly one criterion against :data:`STRICT_THRESHOLDS`: the false-negative rate moves
+#: from 0.00 to 0.10.  That relaxation is bounded by construction and is NOT a relaxation of the
+#: platform's exploit-detection guarantee:
+#:
+#: * Deterministic oracles and canaries keep PRECEDENCE (``Judge.evaluate`` rule 2, and
+#:   ``reconcile_judge_assessment`` returns the deterministic verdict whenever it is
+#:   ``EXPLOIT_CONFIRMED``).  For an oracle-backed case the false-negative rate is 0 by
+#:   construction — a model opinion cannot downgrade a confirmed exploit.
+#: * The hard ``confirmed_exploit_missed`` invariant is UNCHANGED and is evaluated separately from
+#:   the rate thresholds: if the measured evaluator fails to call any ``EXPLOIT_CONFIRMED`` sample
+#:   positive, calibration fails regardless of every rate.
+#: * The residual risk is therefore confined to NON-oracle cases, where the model verdict is
+#:   advisory and where the pre-calibration disposition is ``INDETERMINATE`` (never "safe").
+ACCEPTED_MODEL_JUDGE_THRESHOLDS = CalibrationThresholds(
+    min_agreement_rate=0.85,
+    max_false_positive_rate=0.05,
+    max_false_negative_rate=0.10,
+    max_expected_calibration_error=0.10,
+    max_abstention_rate=0.40,
+    min_samples_per_category=5,
+)
+
+#: Named, reviewable threshold policies.  A calibration artifact records the resolved numeric
+#: ``thresholds`` verbatim, so evidence is self-describing even if a policy name later moves.
+THRESHOLD_POLICIES: Mapping[str, CalibrationThresholds] = MappingProxyType(
+    {
+        "strict": STRICT_THRESHOLDS,
+        "accepted": ACCEPTED_MODEL_JUDGE_THRESHOLDS,
+    }
+)
+
+
+def resolve_threshold_policy(name: str) -> CalibrationThresholds:
+    """Resolve one exact reviewed threshold-policy name."""
+
+    try:
+        return THRESHOLD_POLICIES[name]
+    except (KeyError, TypeError) as exc:
+        raise CalibrationInputError("calibration threshold policy is not reviewed") from exc
 
 
 class CalibrationGate:

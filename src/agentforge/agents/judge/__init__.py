@@ -18,11 +18,15 @@ OFFLINE: no hosted-model call, no network, no side effect — evaluating an enve
 from __future__ import annotations
 
 from agentforge.agents.judge.calibration import (
+    ACCEPTED_MODEL_JUDGE_THRESHOLDS,
+    STRICT_THRESHOLDS,
+    THRESHOLD_POLICIES,
     CalibrationGate,
     CalibrationGateClosed,
     CalibrationInputError,
     CalibrationThresholds,
     JudgeIdentity,
+    resolve_threshold_policy,
 )
 from agentforge.agents.judge.calibration_runtime import (
     JudgeCalibrationStatus,
@@ -59,6 +63,10 @@ __all__ = [
     "CalibrationGateClosed",
     "CalibrationInputError",
     "CalibrationThresholds",
+    "ACCEPTED_MODEL_JUDGE_THRESHOLDS",
+    "STRICT_THRESHOLDS",
+    "THRESHOLD_POLICIES",
+    "resolve_threshold_policy",
     "JudgeIdentity",
     "require_model_judge_enablement",
     "JudgeCalibrationStatus",

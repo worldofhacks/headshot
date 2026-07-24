@@ -18,10 +18,12 @@ import json
 from pathlib import Path
 
 from agentforge.agents.judge import (
+    THRESHOLD_POLICIES,
     CalibrationGate,
     CalibrationInputError,
     Judge,
     JudgeIdentity,
+    resolve_threshold_policy,
 )
 from agentforge.agents.judge.calibration_results import (
     load_captured_calibration_evaluator,
@@ -57,6 +59,18 @@ def _parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--threshold-policy",
+        choices=sorted(THRESHOLD_POLICIES),
+        default="accepted",
+        help=(
+            "reviewed acceptance bar to measure against: 'accepted' is the owner-accepted model-"
+            "Judge policy (agreement>=0.85, FN<=0.10, FP<=0.05, ECE<=0.10, abstention<=0.40, "
+            ">=5 samples/category); 'strict' keeps the historical FN<=0.00 bar. The hard "
+            "confirmed-exploit-missed invariant applies under BOTH policies. "
+            "(default: accepted)"
+        ),
+    )
+    parser.add_argument(
         "--require-pass",
         action="store_true",
         help="exit 2 unless calibration thresholds pass (runtime stays disabled regardless)",
@@ -86,6 +100,7 @@ def main() -> int:
         result = CalibrationGate(evaluator=evaluator).evaluate(
             slices=slices,
             identity=identity,
+            thresholds=resolve_threshold_policy(args.threshold_policy),
         )
     except CalibrationInputError as exc:
         parser.error(str(exc))
