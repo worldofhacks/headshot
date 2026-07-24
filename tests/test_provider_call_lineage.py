@@ -24,7 +24,7 @@ from typing import Any
 
 import pytest
 from sqlalchemy import Connection, Engine, inspect, text
-from sqlalchemy.exc import IntegrityError, ProgrammingError
+from sqlalchemy.exc import DBAPIError, IntegrityError, ProgrammingError
 
 from agentforge.control_plane.errors import RecordConflictError, RecordNotFoundError
 from agentforge.control_plane.store import ControlPlaneStore
@@ -412,6 +412,7 @@ def test_spec_T_F17b_AC_1_success_binds_immutable_requested_and_observed_facts(
 
 
 # spec(T-F17b:AC-2)
+# spec(T-F17b:AC-8)
 @pytest.mark.parametrize(
     (
         "status",
@@ -452,6 +453,7 @@ def test_spec_T_F17b_AC_1_success_binds_immutable_requested_and_observed_facts(
     ),
 )
 def test_spec_T_F17b_AC_2_failures_are_typed_bounded_and_never_fabricate_measurements(
+    migrated_db: Engine,
     status: str,
     error_code: str,
     returned_model: str | None,
@@ -460,11 +462,10 @@ def test_spec_T_F17b_AC_2_failures_are_typed_bounded_and_never_fabricate_measure
     measurement_state: str,
 ) -> None:
     module = _lineage_api()
-    invocation = SimpleNamespace(
-        invocation_id="invocation-failure",
-        physical_sequence=1,
-        started_at=_STARTED,
-    )
+    _seed_logical_execution(migrated_db)
+    store = ControlPlaneStore(migrated_db, environment="staging")
+    logical = _logical_context(module)
+    invocation = _begin_physical_attempt(store, logical, 1)
 
     event = _terminal_event(
         module,
@@ -480,7 +481,9 @@ def test_spec_T_F17b_AC_2_failures_are_typed_bounded_and_never_fabricate_measure
         cost_measurement_state=measurement_state,
         measured_cost_usd=None,
     )
+    persisted = _finish_physical_attempt(store, invocation, event, final=False)
 
+    assert persisted == event
     assert event.error_code == error_code
     assert len(event.error_code) <= 64
     assert event.input_tokens is None
@@ -488,6 +491,33 @@ def test_spec_T_F17b_AC_2_failures_are_typed_bounded_and_never_fabricate_measure
     assert event.reasoning_tokens is None
     assert event.measured_cost_usd is None
     assert event.cost_measurement_state == measurement_state
+    stored = _row(
+        migrated_db,
+        "SELECT status, error_code, returned_model, upstream_provider, provider_request_id, "
+        "input_tokens, output_tokens, reasoning_tokens, cost_measurement_state, "
+        "measured_cost_usd FROM provider_call_events "
+        "WHERE organization_id = :org AND invocation_id = :invocation",
+        {"org": logical.organization_id, "invocation": invocation.invocation_id},
+    )
+    assert stored == {
+        "status": status,
+        "error_code": error_code,
+        "returned_model": returned_model,
+        "upstream_provider": upstream_provider,
+        "provider_request_id": provider_request_id,
+        "input_tokens": None,
+        "output_tokens": None,
+        "reasoning_tokens": None,
+        "cost_measurement_state": measurement_state,
+        "measured_cost_usd": None,
+    }
+    logical_row = _row(
+        migrated_db,
+        "SELECT status, finished_at FROM agent_executions "
+        "WHERE organization_id = :org AND execution_id = :execution",
+        {"org": logical.organization_id, "execution": logical.logical_execution_id},
+    )
+    assert logical_row == {"status": "running", "finished_at": None}
 
     for unsafe_error in (
         "provider_timeout\nraw response",
@@ -579,6 +609,151 @@ def test_spec_T_F17b_AC_3_retry_uses_two_precommitted_contexts_and_final_only_te
     assert logical_after_success["status"] == "succeeded"
     assert logical_after_success["finished_at"] is not None
     assert logical_after_success["output_sha256"] is not None
+
+
+# spec(T-F17b:AC-7)
+def test_spec_T_F17b_AC_7_final_terminal_failure_atomically_terminalizes_logical_execution(
+    migrated_db: Engine,
+) -> None:
+    module = _lineage_api()
+    _seed_logical_execution(migrated_db)
+    store = ControlPlaneStore(migrated_db, environment="staging")
+    logical = _logical_context(module)
+    invocation = _begin_physical_attempt(store, logical, 1)
+    event = _terminal_event(
+        module,
+        invocation,
+        status="terminal_failure",
+        returned_model=None,
+        upstream_provider=None,
+        provider_request_id=None,
+        input_tokens=None,
+        output_tokens=None,
+        reasoning_tokens=None,
+        cost_measurement_state="not_observed",
+        measured_cost_usd=None,
+        error_code="provider_terminal",
+    )
+
+    persisted = _finish_physical_attempt(store, invocation, event, final=True)
+
+    assert persisted == event
+    durable = _row(
+        migrated_db,
+        "SELECT "
+        "(SELECT count(*) FROM provider_call_events "
+        " WHERE organization_id = :org AND invocation_id = :invocation) AS events, "
+        "status, error_code, finished_at, output_sha256, measured_cost, "
+        "cost_measurement_state, provider_event_ids "
+        "FROM agent_executions "
+        "WHERE organization_id = :org AND execution_id = :execution",
+        {
+            "org": logical.organization_id,
+            "invocation": invocation.invocation_id,
+            "execution": logical.logical_execution_id,
+        },
+    )
+    assert durable["events"] == 1
+    assert durable["status"] == "failed"
+    assert durable["error_code"] == "provider_terminal"
+    assert durable["finished_at"] == event.finished_at
+    assert durable["output_sha256"] is None
+    assert durable["measured_cost"] is None
+    assert durable["cost_measurement_state"] == "not_observed"
+    assert durable["provider_event_ids"] == [persisted.event_id]
+
+
+# spec(T-F17b:AC-7)
+def test_spec_T_F17b_AC_7_terminal_event_rolls_back_if_logical_terminalization_fails(
+    migrated_db: Engine,
+) -> None:
+    module = _lineage_api()
+    _seed_logical_execution(migrated_db)
+    store = ControlPlaneStore(migrated_db, environment="staging")
+    logical = _logical_context(module)
+    invocation = _begin_physical_attempt(store, logical, 1)
+    event = _terminal_event(
+        module,
+        invocation,
+        status="terminal_failure",
+        returned_model=None,
+        upstream_provider=None,
+        provider_request_id=None,
+        input_tokens=None,
+        output_tokens=None,
+        reasoning_tokens=None,
+        cost_measurement_state="not_observed",
+        measured_cost_usd=None,
+        error_code="provider_terminal",
+    )
+    suffix = uuid.uuid4().hex
+    function_name = f"fail_lineage_terminal_{suffix}"
+    trigger_name = f"trg_fail_lineage_terminal_{suffix}"
+    with migrated_db.begin() as connection:
+        connection.execute(
+            text(
+                f"CREATE FUNCTION {function_name}() RETURNS trigger "
+                "LANGUAGE plpgsql AS $body$ "
+                "BEGIN "
+                "IF NEW.status IS DISTINCT FROM OLD.status THEN "
+                "IF NOT EXISTS ("
+                "SELECT 1 FROM provider_call_events "
+                "WHERE organization_id = NEW.organization_id "
+                "AND logical_execution_id = NEW.execution_id"
+                ") THEN "
+                "RAISE EXCEPTION 'terminal event was not inserted before logical update' "
+                "USING ERRCODE = '23503'; "
+                "END IF; "
+                "RAISE EXCEPTION 'injected logical terminalization failure' "
+                "USING ERRCODE = '23514'; "
+                "END IF; "
+                "RETURN NEW; "
+                "END "
+                "$body$"
+            )
+        )
+        connection.execute(
+            text(
+                f"CREATE TRIGGER {trigger_name} BEFORE UPDATE ON agent_executions "
+                f"FOR EACH ROW EXECUTE FUNCTION {function_name}()"
+            )
+        )
+
+    try:
+        with pytest.raises((DBAPIError, RecordConflictError)) as caught:
+            _finish_physical_attempt(store, invocation, event, final=True)
+        assert _sqlstate(caught.value) == "23514", (
+            "the injected failure must occur only after the terminal event is visible "
+            "inside the same transaction"
+        )
+
+        counts = _row(
+            migrated_db,
+            "SELECT "
+            "(SELECT count(*) FROM provider_call_invocations "
+            " WHERE organization_id = :org AND invocation_id = :invocation) AS invocations, "
+            "(SELECT count(*) FROM provider_call_events "
+            " WHERE organization_id = :org AND invocation_id = :invocation) AS events",
+            {"org": logical.organization_id, "invocation": invocation.invocation_id},
+        )
+        assert counts == {"invocations": 1, "events": 0}
+        logical_row = _row(
+            migrated_db,
+            "SELECT status, error_code, finished_at, provider_event_ids "
+            "FROM agent_executions "
+            "WHERE organization_id = :org AND execution_id = :execution",
+            {"org": logical.organization_id, "execution": logical.logical_execution_id},
+        )
+        assert logical_row == {
+            "status": "running",
+            "error_code": None,
+            "finished_at": None,
+            "provider_event_ids": [],
+        }
+    finally:
+        with migrated_db.begin() as connection:
+            connection.execute(text(f"DROP TRIGGER IF EXISTS {trigger_name} ON agent_executions"))
+            connection.execute(text(f"DROP FUNCTION IF EXISTS {function_name}()"))
 
 
 # spec(T-F17b:AC-3)
@@ -769,7 +944,7 @@ def test_spec_T_F17b_AC_5_schema_has_composite_foreign_keys_checks_and_query_ind
     ):
         assert event_columns[nullable]["nullable"] is True
 
-    foreign_keys = {
+    invocation_foreign_keys = {
         (
             tuple(foreign_key["constrained_columns"]),
             foreign_key["referred_table"],
@@ -781,17 +956,31 @@ def test_spec_T_F17b_AC_5_schema_has_composite_foreign_keys_checks_and_query_ind
         ("organization_id", "logical_execution_id"),
         "agent_executions",
         ("organization_id", "execution_id"),
-    ) in foreign_keys
+    ) in invocation_foreign_keys
     assert (
         ("organization_id", "parent_execution_id"),
         "agent_executions",
         ("organization_id", "execution_id"),
-    ) in foreign_keys
+    ) in invocation_foreign_keys
     assert (
         ("organization_id", "campaign_run_id", "campaign_attempt_id"),
         "campaign_attempts",
         ("organization_id", "run_id", "attempt_id"),
-    ) in foreign_keys
+    ) in invocation_foreign_keys
+
+    event_foreign_keys = {
+        (
+            tuple(foreign_key["constrained_columns"]),
+            foreign_key["referred_table"],
+            tuple(foreign_key["referred_columns"]),
+        )
+        for foreign_key in inspector.get_foreign_keys(_EVENTS)
+    }
+    assert (
+        ("organization_id", "invocation_id"),
+        _INVOCATIONS,
+        ("organization_id", "invocation_id"),
+    ) in event_foreign_keys
 
     unique_sets = {
         tuple(constraint["column_names"])
@@ -802,6 +991,18 @@ def test_spec_T_F17b_AC_5_schema_has_composite_foreign_keys_checks_and_query_ind
         "logical_execution_id",
         "physical_sequence",
     ) in unique_sets
+    event_unique_sets = {
+        tuple(constraint["column_names"])
+        for constraint in inspector.get_unique_constraints(_EVENTS)
+    } | {
+        tuple(index["column_names"])
+        for index in inspector.get_indexes(_EVENTS)
+        if index.get("unique")
+    }
+    assert event_unique_sets & {
+        ("invocation_id",),
+        ("organization_id", "invocation_id"),
+    }, "each committed invocation must own at most one terminal event"
 
     event_indexes = {tuple(index["column_names"]) for index in inspector.get_indexes(_EVENTS)}
     assert ("organization_id", "agent_role", "finished_at") in event_indexes
@@ -812,6 +1013,114 @@ def test_spec_T_F17b_AC_5_schema_has_composite_foreign_keys_checks_and_query_ind
     ) in event_indexes
     assert ("organization_id", "provider_request_id") in event_indexes
     assert ("organization_id", "logical_execution_id") in event_indexes
+
+
+# spec(T-F17b:AC-3)
+# spec(T-F17b:AC-7)
+def test_spec_T_F17b_AC_3_event_ownership_and_single_terminal_fact_are_database_enforced(
+    migrated_db: Engine,
+) -> None:
+    module = _lineage_api()
+    store = ControlPlaneStore(migrated_db, environment="staging")
+
+    _seed_logical_execution(migrated_db)
+    logical_a = _logical_context(module)
+    invocation_a = _begin_physical_attempt(store, logical_a, 1)
+    event_a = _terminal_event(
+        module,
+        invocation_a,
+        status="retryable_failure",
+        returned_model=None,
+        upstream_provider=None,
+        provider_request_id=None,
+        input_tokens=None,
+        output_tokens=None,
+        reasoning_tokens=None,
+        cost_measurement_state="not_observed",
+        measured_cost_usd=None,
+        error_code="provider_retryable",
+    )
+    _finish_physical_attempt(store, invocation_a, event_a, final=False)
+    unused_invocation_a = _begin_physical_attempt(store, logical_a, 2)
+
+    _seed_logical_execution(
+        migrated_db,
+        organization_id="org_LineageB",
+        run_id="run-lineage-b",
+        attempt_id="attempt-lineage-b",
+        logical_execution_id="logical-lineage-b",
+        parent_execution_id="parent-lineage-b",
+    )
+    logical_b = _logical_context(
+        module,
+        organization_id="org_LineageB",
+        campaign_run_id="run-lineage-b",
+        campaign_attempt_id="attempt-lineage-b",
+        logical_execution_id="logical-lineage-b",
+        parent_execution_id="parent-lineage-b",
+    )
+    invocation_b = _begin_physical_attempt(store, logical_b, 1)
+
+    event_columns = (
+        "event_id, invocation_id, organization_id, campaign_run_id, campaign_attempt_id, "
+        "logical_execution_id, agent_role, physical_sequence, status, returned_model, "
+        "upstream_provider, provider_request_id, input_tokens, output_tokens, reasoning_tokens, "
+        "cost_measurement_state, measured_cost_usd, error_code, finished_at, duration_ms"
+    )
+    with pytest.raises(IntegrityError), migrated_db.begin() as connection:
+        connection.execute(
+            text(
+                f"INSERT INTO provider_call_events ({event_columns}) "
+                "SELECT :new_event_id, invocation_id, organization_id, campaign_run_id, "
+                "campaign_attempt_id, logical_execution_id, agent_role, physical_sequence, "
+                "status, returned_model, upstream_provider, provider_request_id, input_tokens, "
+                "output_tokens, reasoning_tokens, cost_measurement_state, measured_cost_usd, "
+                "error_code, finished_at, duration_ms "
+                "FROM provider_call_events "
+                "WHERE organization_id = :org AND invocation_id = :invocation"
+            ),
+            {
+                "new_event_id": uuid.uuid4().hex,
+                "org": logical_a.organization_id,
+                "invocation": invocation_a.invocation_id,
+            },
+        )
+
+    # All B-side attribution columns are valid for B, and the unused A-side invocation has no
+    # event yet. Only the required composite (organization_id, invocation_id) ownership FK can
+    # reject this otherwise-new terminal fact.
+    with pytest.raises(IntegrityError), migrated_db.begin() as connection:
+        connection.execute(
+            text(
+                f"INSERT INTO provider_call_events ({event_columns}) "
+                "SELECT :new_event_id, :cross_org_invocation, i.organization_id, "
+                "i.campaign_run_id, i.campaign_attempt_id, i.logical_execution_id, i.agent_role, "
+                "i.physical_sequence, e.status, e.returned_model, e.upstream_provider, "
+                "e.provider_request_id, e.input_tokens, e.output_tokens, e.reasoning_tokens, "
+                "e.cost_measurement_state, e.measured_cost_usd, e.error_code, e.finished_at, "
+                "e.duration_ms "
+                "FROM provider_call_invocations i CROSS JOIN provider_call_events e "
+                "WHERE i.organization_id = :org_b AND i.invocation_id = :invocation_b "
+                "AND e.organization_id = :org_a AND e.invocation_id = :event_invocation"
+            ),
+            {
+                "new_event_id": uuid.uuid4().hex,
+                "cross_org_invocation": unused_invocation_a.invocation_id,
+                "org_b": logical_b.organization_id,
+                "invocation_b": invocation_b.invocation_id,
+                "org_a": logical_a.organization_id,
+                "event_invocation": invocation_a.invocation_id,
+            },
+        )
+
+    assert (
+        _row(
+            migrated_db,
+            "SELECT count(*) AS count FROM provider_call_events",
+            {},
+        )["count"]
+        == 1
+    )
 
 
 # spec(T-F17b:AC-5)
@@ -1063,13 +1372,17 @@ def test_spec_T_F17b_AC_7_crash_reconciles_once_as_unknown_without_new_call(
         _reconcile_unknown_physical_attempt(store, unreserved)
     logical_row = _row(
         migrated_db,
-        "SELECT status, error_code FROM agent_executions "
+        "SELECT status, error_code, measured_cost, cost_measurement_state, provider_event_ids "
+        "FROM agent_executions "
         "WHERE organization_id = :org AND execution_id = :execution",
         {"org": logical.organization_id, "execution": logical.logical_execution_id},
     )
     assert logical_row == {
         "status": "failed",
         "error_code": "provider_outcome_unknown",
+        "measured_cost": None,
+        "cost_measurement_state": "not_observed",
+        "provider_event_ids": [first.event_id],
     }
 
 
