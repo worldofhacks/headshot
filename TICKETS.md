@@ -132,3 +132,37 @@ T-F07a, T-F08, T-F09a/b, T-F12, T-F13, T-F10a/b/c, T-F15, final T-F01b.
 - [open-question] True production isolation plus owner main merge/deploy and equal dual-remote green CI remain required.
 
 [locked-decision] Fewer than three genuine independently reproduced findings leaves PRD-32 incomplete.
+
+## Console page-truth remediation addendum
+
+Planning source: `docs/planning/console-pages-remediation.md`. T-F18 consumes canonical target and
+provider-lineage contracts from T-F16/T-F17, but owns only console navigation, read projections, and
+human-facing truth. Every feature ticket runs Test RED → independent Test Review → freeze →
+Implementation GREEN → orchestrator gate rerun → independent Code and Security reviews.
+
+| wave | ticket | outcome | dependencies |
+|---:|---|---|---|
+| 1 | T-F18a | Canonical navigation; Resilience replace-redirect | — |
+| 1 | T-F18b | Bounded collection, retry, filter, keyboard primitives | — |
+| 2 | T-F18c | Coverage & Regression truthful projection/page | T-F18a, T-F18b |
+| 3 | T-F18d | Exact ScanPlan Tooling evidence | T-F18b, T-F18c |
+| 4 | T-F18e | Evidence-derived Birdseye and fanout state | T-F18d |
+| 5 | T-F18f | Complete vulnerability-report detail | T-F18b, T-F18e |
+| 6 | T-F18g | Approval preflight/reasons/confirmation | T-F18b, T-F18f |
+| 7 | T-F18h | Canonical target/readiness truth | T-F18g; T-F16 prerequisite |
+| 8 | T-F18i | Unified target/agent/provider trace lineage | T-F18b, T-F18h; T-F17 prerequisite |
+| 9 | T-F18j | Measured cost/token reconciliation | T-F18i; T-F17 prerequisite |
+| 10 | T-F18k | Durable Live selection and targeted SSE refresh | T-F18d/e/g/h/j |
+| 11 | T-F18l | Whole-console route/accessibility/release audit | T-F18a..T-F18k |
+
+```text
+{T-F18a,T-F18b} -> T-F18c -> T-F18d -> T-F18e -> T-F18f -> T-F18g
+T-F18g + T-F16 -> T-F18h
+T-F18h + T-F17 -> T-F18i -> T-F18j
+{T-F18d,T-F18e,T-F18g,T-F18h,T-F18j} -> T-F18k
+{T-F18a..T-F18k} -> T-F18l
+```
+
+[locked-decision] Coverage stays and is renamed **Coverage & Regression**. The standalone
+Resilience page/navigation is removed, while `/resilience` temporarily replace-redirects to
+`/coverage`. Tooling cannot claim all-tools completion without an immutable persisted ScanPlan.
