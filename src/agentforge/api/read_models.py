@@ -10,7 +10,14 @@ from __future__ import annotations
 import datetime
 from typing import Any, Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    TypeAdapter,
+    computed_field,
+    model_validator,
+)
 
 _LANGFUSE_DELIVERY_STATES = (
     "not_attempted",
@@ -941,6 +948,17 @@ class AgentActivityReadModel(_ReadModel):
     started_at: datetime.datetime
     finished_at: datetime.datetime | None = None
     duration_ms: float | None = Field(default=None, ge=0)
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def model_substituted(self) -> bool:
+        """Whether the provider served a model other than the one that was requested.
+
+        Derived from the two identities rather than stored alongside them, so it cannot drift
+        from them. A consumer must never have to remember to compare the pair itself.
+        """
+
+        return self.returned_model is not None and self.returned_model != self.model
 
     @model_validator(mode="after")
     def validate_terminal_shape(self) -> Self:

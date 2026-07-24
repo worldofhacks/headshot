@@ -617,6 +617,128 @@ def test_failed_hosted_call_closes_without_fabricated_provider_accounting(
     assert row["error_code"] == "hosted-agent-failed"
 
 
+def test_provider_model_substitution_is_recorded_not_discarded(
+    migrated_db: Engine,
+) -> None:
+    """A provider that serves a different model than authorized must leave evidence.
+
+    Requested identity is not observed identity. If OpenRouter serves something other than the
+    authorized model, that divergence IS the finding — refusing the output is correct, but
+    discarding the row destroys the only proof the substitution happened.
+    """
+
+    store, run_id, configuration = _authorized_run(migrated_db)
+    role = next(item for item in configuration.roles if item.role == "judge")
+    execution_id = _start(
+        store,
+        run_id,
+        configuration,
+        role="judge",
+        judge_calibration_id=None,
+        judge_calibration_state="unavailable",
+    )
+    substituted = "openai/gpt-5.4"
+    assert substituted != role.model_id
+
+    store.finish_hosted_agent_execution(
+        execution_id=execution_id,
+        status="failed",
+        output_payload={"status": "failed"},
+        error_code="provider-model-substituted",
+        returned_model=substituted,
+        upstream_provider=_SELECTED_PROVIDER["judge"],
+        provider_request_id="openrouter-request-substituted-1",
+        input_tokens=100,
+        output_tokens=20,
+        reasoning_tokens=5,
+        measured_cost_usd="0.010000000000",
+        configuration_set_sha256=configuration.configuration_sha256,
+        role_configuration_sha256=role.configuration_sha256,
+        generation_policy_sha256=_GENERATION_POLICY,
+        physical_attempts=1,
+    )
+
+    with migrated_db.connect() as connection:
+        row = (
+            connection.execute(
+                text(
+                    "SELECT status, model, returned_model, upstream_provider, "
+                    "provider_request_id, measured_cost, error_code "
+                    "FROM agent_executions WHERE execution_id = :execution_id"
+                ),
+                {"execution_id": execution_id},
+            )
+            .mappings()
+            .one()
+        )
+
+    # The substitution is on the record, and the two identities are distinguishable.
+    assert row["model"] == role.model_id
+    assert row["returned_model"] == substituted
+    assert row["returned_model"] != row["model"]
+    # The charge really was incurred, so it is preserved rather than dropped with the output.
+    assert Decimal(str(row["measured_cost"])) == Decimal("0.010000000000")
+    assert row["provider_request_id"] == "openrouter-request-substituted-1"
+    # Refusing the output is still correct — the run must not be treated as a success.
+    assert row["status"] == "failed"
+    assert row["error_code"] == "provider-model-substituted"
+
+
+def test_a_substituted_provider_model_can_never_terminalize_as_succeeded(
+    migrated_db: Engine,
+) -> None:
+    """Recording a substitution must not become trusting it.
+
+    Making the divergence storable is only safe while the substituted model's output stays
+    unusable, so this is the guard that keeps the relaxed constraint from weakening anything.
+    """
+
+    store, run_id, configuration = _authorized_run(migrated_db)
+    role = next(item for item in configuration.roles if item.role == "judge")
+    execution_id = _start(
+        store,
+        run_id,
+        configuration,
+        role="judge",
+        judge_calibration_id=None,
+        judge_calibration_state="unavailable",
+    )
+
+    with pytest.raises(AuthorizationDeniedError, match="substituted provider model"):
+        store.finish_hosted_agent_execution(
+            execution_id=execution_id,
+            status="succeeded",
+            output_payload={"state": "NO_EXPLOIT_OBSERVED"},
+            returned_model="openai/gpt-5.4",
+            upstream_provider=_SELECTED_PROVIDER["judge"],
+            provider_request_id="openrouter-request-substituted-2",
+            input_tokens=100,
+            output_tokens=20,
+            reasoning_tokens=5,
+            measured_cost_usd="0.010000000000",
+            configuration_set_sha256=configuration.configuration_sha256,
+            role_configuration_sha256=role.configuration_sha256,
+            generation_policy_sha256=_GENERATION_POLICY,
+            physical_attempts=1,
+            decision_authority="oracle",
+        )
+
+    with migrated_db.connect() as connection:
+        row = (
+            connection.execute(
+                text(
+                    "SELECT status, returned_model FROM agent_executions "
+                    "WHERE execution_id = :execution_id"
+                ),
+                {"execution_id": execution_id},
+            )
+            .mappings()
+            .one()
+        )
+    assert row["status"] == "running"
+    assert row["returned_model"] is None
+
+
 def test_database_rejects_partial_hosted_provider_measurements(
     migrated_db: Engine,
 ) -> None:

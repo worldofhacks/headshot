@@ -255,29 +255,21 @@ frozen, and the T-F17b fixture is repaired and green in a normal run. Remaining 
    have already hit this. Either drop the default so it fails loudly as a NOT NULL violation, or
    extend the existing `normalize_agent_execution_unknown_cost` trigger to derive `measured` from a
    non-NULL cost. This session fixed the call sites explicitly rather than deciding it mid-merge.
-3. **Resolve the requested-vs-observed identity conflict** before wiring more provenance. Shared
-   `0017`'s `agent_execution_provider_identity` asserts `returned_model IS NULL OR returned_model =
-   model`, and `hosted_runtime.py:425-433` raises `HostedCompositionError` while `:478-495` returns
-   `None` and discards the lineage when they differ. So a provider substitution is currently
-   **unrepresentable and unrecorded**.
+3. ~~**Resolve the requested-vs-observed identity conflict.**~~ **RESOLVED** on branch
+   `codex1/recordable-provider-identity`. `agent_execution_provider_identity` asserted
+   `returned_model = model` while `hosted_runtime` raised and `_observed_failure_lineage` discarded
+   the record, so a provider substitution was both unstorable and unrecorded.
 
-   The two layers verifiably disagree. Against a freshly migrated database:
+   Fixed by separating authority from observation. `requested_model` must still match exactly — a
+   mismatch there means *we* sent the wrong call. `returned_model` may now differ, because that
+   divergence is the finding. Migration `0019` relaxes the constraint to
+   `returned_model IS NULL OR returned_model = model OR status <> 'succeeded'`, so a substitution is
+   recordable but can never terminalize as succeeded: recording it does not become trusting it.
+   `HostedModelSubstitutionError` (`provider-model-substituted`) carries the refusal, the preserved
+   lineage keeps the observed identity and the real charge, and
+   `AgentActivityReadModel.model_substituted` surfaces it as a derived field.
 
-   ```
-   ck_agent_executions_agent_execution_provider_identity
-     CHECK (... AND (returned_model IS NULL OR returned_model::text = model::text))
-   provider_call_events status
-     CHECK (status = ANY (ARRAY['succeeded','timeout','retryable_failure','terminal_failure',
-                                'model_mismatch','invalid_usage','invalid_output','outcome_unknown']))
-   ```
-
-   The physical layer already models the divergence as a first-class terminal status; the logical
-   layer forbids the row outright. That contradicts the locked invariant that requested identity
-   is not observed identity, and for an evidence platform it discards exactly the evidence that
-   matters. The physical lineage already models this correctly — `ProviderTerminalEventV1` has a
-   first-class `model_mismatch` status carrying `returned_model` next to the invocation's
-   `requested_model`. Reconcile toward recording the divergence and enforcing the authorization
-   decision in policy, rather than making the row impossible to write.
+   `0019` depends on `0018_provider_call_lineage` landing first. See `docs/integration/open-decisions.md`.
 4. Implement T-F16c and T-F16d in parallel after T-F16b; serialize T-F16e → T-F16f → T-F16g →
    T-F16h. Keep document surfaces disabled unless the private Runner proves the exact fixture
    binding with zero target calls.

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import dataclasses
 import hashlib
 import json
 from decimal import Decimal
@@ -23,6 +24,7 @@ from agentforge.agents.hosted_runtime import (
     HostedCallBounds,
     HostedCompositionError,
     HostedFourRoleRuntime,
+    HostedModelSubstitutionError,
     hosted_judge_identity,
 )
 from agentforge.agents.judge import CalibrationGate
@@ -202,6 +204,7 @@ def _runtime(
     target: Any,
     recorded: list[Any],
     deterministic_verdict: dict[str, Any] | None = None,
+    lifecycle: _FakeExecutionLifecycle | None = None,
 ) -> tuple[HostedFourRoleRuntime, _FakeTransport]:
     configuration = _configuration()
     transport = _FakeTransport(configuration, outputs)
@@ -224,7 +227,7 @@ def _runtime(
         deterministic_judge=lambda _attempt, _evidence: (
             deterministic_verdict or {"state": "NO_EXPLOIT_OBSERVED"}
         ),
-        execution_lifecycle=_FakeExecutionLifecycle(recorded),
+        execution_lifecycle=lifecycle or _FakeExecutionLifecycle(recorded),
         judge_calibration=_enabled_judge_calibration(),
     )
     return runtime, transport
@@ -390,6 +393,50 @@ def test_confirmed_deterministic_exploit_cannot_be_laundered_safe_and_docs_stay_
     assert outcome.lineage[2].parent_request_id == "provider-request-red_team"
     assert outcome.lineage[2].parent_execution_id == "execution-red_team"
     assert all(item.requested_model == item.returned_model for item in outcome.lineage)
+
+
+def test_a_substituted_provider_model_is_refused_but_recorded() -> None:
+    """A silent model substitution must fail the run and still reach the record.
+
+    Requested identity is not observed identity. Refusing the output is right; discarding the
+    lineage would erase the only evidence that the provider served something else at all.
+    """
+
+    recorded: list[Any] = []
+    lifecycle = _FakeExecutionLifecycle(recorded)
+    runtime, transport = _runtime(
+        outputs=_outputs(),
+        target=lambda _attempt: {"status_code": 200},
+        recorded=recorded,
+        lifecycle=lifecycle,
+    )
+    authorized = transport.invoke
+
+    def substituting(**kwargs: Any) -> OpenRouterResult:
+        result = authorized(**kwargs)
+        if kwargs["role"] == "orchestrator":
+            return dataclasses.replace(result, returned_model="openai/gpt-5.4")
+        return result
+
+    transport.invoke = substituting  # type: ignore[method-assign]
+
+    with pytest.raises(HostedModelSubstitutionError):
+        runtime.run_attempt(authorized_case={"case_id": "case-1"})
+
+    # The output is refused: nothing was accepted as a success.
+    assert recorded == []
+    failure = next(item for item in lifecycle.finishes if item["status"] == "failed")
+    assert failure["error_code"] == "provider-model-substituted"
+
+    # The substitution itself survives, with both identities distinguishable.
+    lineage = failure["lineage"]
+    assert lineage is not None
+    assert lineage.requested_model == "anthropic/claude-opus-4.8"
+    assert lineage.returned_model == "openai/gpt-5.4"
+    assert lineage.returned_model != lineage.requested_model
+    # The call was billed, so its usage is preserved rather than dropped with the output.
+    assert lineage.provider_request_id == "provider-request-orchestrator"
+    assert Decimal(lineage.measured_cost_usd) == Decimal("0.01")
 
 
 def test_runtime_sends_the_exact_registry_prompt_as_the_system_message() -> None:

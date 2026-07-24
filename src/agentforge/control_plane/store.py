@@ -2301,9 +2301,12 @@ class ControlPlaneStore:
                     raise AuthorizationDeniedError(
                         "hosted execution role is absent from its configuration set"
                     )
+                # returned_model is an OBSERVATION, not an authority claim, so it is deliberately
+                # absent here: a provider that serves something other than the authorized model is
+                # the finding, and refusing to store the row would destroy the only evidence of it.
+                # The authority being checked is what we requested plus the bound hashes.
                 if (
-                    returned_model != row["model"]
-                    or returned_model != role.model_id
+                    row["model"] != role.model_id
                     or configuration_set_sha256 != row["configuration_set_sha256"]
                     or configuration_set_sha256 != configuration.configuration_sha256
                     or role_configuration_sha256 != row["role_configuration_sha256"]
@@ -2312,6 +2315,11 @@ class ControlPlaneStore:
                 ):
                     raise AuthorizationDeniedError(
                         "provider lineage differs from the started hosted authority"
+                    )
+                # Recording the substitution must not become trusting it.
+                if returned_model != row["model"] and status == "succeeded":
+                    raise AuthorizationDeniedError(
+                        "a substituted provider model cannot terminalize as succeeded"
                     )
 
             if row["agent_role"] == "judge":

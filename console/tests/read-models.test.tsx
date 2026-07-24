@@ -975,6 +975,7 @@ describe("v1 read-model decoders", () => {
       provider: "headshot",
       model: "coverage-governor-v1",
       returned_model: null,
+      model_substituted: false,
       upstream_provider: null,
       provider_request_id: null,
       execution_mode: "deterministic",
@@ -1016,7 +1017,11 @@ describe("v1 read-model decoders", () => {
     const hostedMeasured = {
       ...terminal,
       execution_mode: "hosted_advisory",
+      // model and returned_model agree: this fixture is a hosted call that was served the model
+      // it asked for. They previously disagreed, which the backend constraint would have refused.
+      model: "anthropic/claude-opus-4.8",
       returned_model: "anthropic/claude-opus-4.8",
+      model_substituted: false,
       upstream_provider: "Anthropic",
       provider_request_id: "openrouter-request-1",
       configuration_set_sha256: "c".repeat(64),
@@ -1053,7 +1058,22 @@ describe("v1 read-model decoders", () => {
     expect(decodeAgentActivity([hostedUnavailable])).toEqual([hostedUnavailable]);
     expect(decodeAgentActivity([hostedPartial])).toEqual([hostedPartial]);
     expect(decodeAgentActivity([evaluatorMeasured])).toEqual([evaluatorMeasured]);
+
+    // A provider that served something other than the authorized model must survive the
+    // projection — refusing the output is the backend's job, erasing the evidence is nobody's.
+    const substituted = {
+      ...hostedMeasured,
+      status: "failed",
+      error_code: "provider-model-substituted",
+      returned_model: "openai/gpt-5.4",
+      model_substituted: true,
+    };
+    expect(decodeAgentActivity([substituted])).toEqual([substituted]);
+
     for (const malformed of [
+      // The flag must agree with the two identities it claims to summarize, in both directions.
+      { ...substituted, model_substituted: false },
+      { ...hostedMeasured, model_substituted: true },
       { ...running, finished_at: at },
       { ...terminal, output_sha256: null },
       { ...terminal, output_sha256: "not-a-sha256" },

@@ -558,6 +558,7 @@ export interface AgentActivityReadModel extends JsonRecord {
   provider: string;
   model: string;
   returned_model: string | null;
+  model_substituted: boolean;
   upstream_provider: string | null;
   provider_request_id: string | null;
   execution_mode: "deterministic" | "hosted_advisory";

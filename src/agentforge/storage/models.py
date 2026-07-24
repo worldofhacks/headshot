@@ -1596,7 +1596,8 @@ class AgentExecution(Base):
             "AND provider_request_id IS NULL) OR "
             "(returned_model IS NOT NULL AND upstream_provider IS NOT NULL "
             "AND provider_request_id IS NOT NULL)) AND "
-            "(returned_model IS NULL OR returned_model = model)",
+            # An observed substitution is recordable but can never terminalize as succeeded.
+            "(returned_model IS NULL OR returned_model = model OR status <> 'succeeded')",
             name="agent_execution_provider_identity",
         ),
         CheckConstraint(

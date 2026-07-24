@@ -52,6 +52,16 @@ class HostedCompositionError(RuntimeError):
     code = "hosted-composition-failed"
 
 
+class HostedModelSubstitutionError(HostedCompositionError):
+    """The provider served a model other than the authorized one.
+
+    Its own type, because a substitution is a finding rather than a malformed response: the output
+    is still refused, but the observed identity must reach the record instead of being discarded.
+    """
+
+    code = "provider-model-substituted"
+
+
 def require_safe_model_text(label: str, value: object, *, maximum: int) -> str:
     """Accept bounded printable model text only when it contains no raw auth material."""
 
@@ -424,7 +434,6 @@ class HostedRoleRuntime:
             raise HostedCompositionError("provider result lineage differs from authorization")
         if (
             result.requested_model != configuration.model_id
-            or result.returned_model != configuration.model_id
             or not isinstance(result.upstream_provider, str)
             or not result.upstream_provider
             or len(result.upstream_provider) > 64
@@ -432,6 +441,12 @@ class HostedRoleRuntime:
             or not result.request_id
         ):
             raise HostedCompositionError("provider result identity differs from authorization")
+        # A served model that is not the authorized one is still refused — but as its own typed
+        # outcome, so the caller records the substitution instead of discarding the evidence.
+        if result.returned_model != configuration.model_id:
+            raise HostedModelSubstitutionError(
+                "provider served a model other than the authorized one"
+            )
         if any(
             type(value) is not int or value < 0
             for value in (
@@ -476,8 +491,13 @@ class HostedRoleRuntime:
             return None
         configuration = self._roles[role]
         if (
+            # requested_model is ours: if it is wrong we sent the wrong call and the whole
+            # observation is untrustworthy. returned_model is theirs — a divergence is exactly
+            # what this record exists to preserve, so it must not discard the lineage.
             result.requested_model != configuration.model_id
-            or result.returned_model != configuration.model_id
+            or not isinstance(result.returned_model, str)
+            or not result.returned_model
+            or len(result.returned_model) > 160
             or not isinstance(result.upstream_provider, str)
             or not result.upstream_provider
             or len(result.upstream_provider) > 64

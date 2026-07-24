@@ -1835,6 +1835,7 @@ const decodeAgentActivityRecord = (value: unknown): AgentActivityReadModel => {
     "provider",
     "model",
     "returned_model",
+    "model_substituted",
     "upstream_provider",
     "provider_request_id",
     "execution_mode",
@@ -1902,6 +1903,14 @@ const decodeAgentActivityRecord = (value: unknown): AgentActivityReadModel => {
       !== providerIdentity.every((candidate) => candidate === null)
     || hostedAuthority.some((candidate) => candidate === null)
       !== hostedAuthority.every((candidate) => candidate === null)
+  ) {
+    invalid(name);
+  }
+  // The server derives this from the same two identities, so disagreement means the projection
+  // is lying about whether the provider served what was asked for.
+  const substituted = boolean(result, "model_substituted", name);
+  if (
+    substituted !== (result.returned_model !== null && result.returned_model !== result.model)
   ) {
     invalid(name);
   }

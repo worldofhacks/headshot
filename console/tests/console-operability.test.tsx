@@ -138,6 +138,7 @@ const activity = (
   provider: "openrouter",
   model: "anthropic/claude-opus-4.8",
   returned_model: returnedModel,
+  model_substituted: returnedModel !== null && returnedModel !== "anthropic/claude-opus-4.8",
   upstream_provider: "Anthropic",
   provider_request_id: `provider-${executionId}`,
   execution_mode: "hosted_advisory",
