@@ -389,11 +389,13 @@ import base64
 import builtins
 import http.client
 import importlib.resources
+import io
 import json
 import os
 import socket
 import sys
 import urllib.request
+import zipfile
 from pathlib import Path
 
 def denied(*_args, **_kwargs):
@@ -408,50 +410,216 @@ http.client.HTTPSConnection.connect = denied
 sys.path.insert(0, sys.argv[1])
 
 probe_mode = sys.argv[2]
-archive_member_prefix = f"{Path(sys.argv[1]).resolve()}/agentforge/"
+archive_path_spellings = {
+    str(Path(sys.argv[1]).absolute()),
+    str(Path(sys.argv[1]).resolve()),
+}
+archive_path_spellings.update(
+    path.removeprefix("/private")
+    for path in tuple(archive_path_spellings)
+    if path.startswith("/private/")
+)
+archive_member_prefixes = tuple(
+    f"{path}/agentforge/" for path in sorted(archive_path_spellings)
+)
 if probe_mode == "zip":
+    original_resource_files = importlib.resources.files
     original_path_open = Path.open
     original_builtin_open = builtins.open
+    original_io_open = io.open
+    original_os_open = os.open
+    original_zipfile_open = zipfile.ZipFile.open
     filesystem_attempts = []
+    manual_zip_attempts = []
+    resource_files_calls = []
+    resource_reads = []
+    load_in_progress = False
+    traversable_read_depth = 0
+
+    def normalized_path(value):
+        try:
+            candidate = os.fspath(value)
+        except TypeError:
+            return ""
+        if isinstance(candidate, bytes):
+            candidate = os.fsdecode(candidate)
+        return candidate if isinstance(candidate, str) else ""
+
+    def record_filesystem_attempt(api, value):
+        candidate = normalized_path(value)
+        if candidate.startswith(archive_member_prefixes):
+            filesystem_attempts.append((api, candidate))
+            return True
+        return False
 
     def deny_archive_member_path_open(path, *args, **kwargs):
-        candidate = str(path)
-        if candidate.startswith(archive_member_prefix):
-            filesystem_attempts.append(("Path.open", candidate))
+        if record_filesystem_attempt("Path.open", path):
             raise AssertionError(
                 "prompt registry used a Path(__file__) package-filesystem fallback"
             )
         return original_path_open(path, *args, **kwargs)
 
     def deny_archive_member_builtin_open(file, *args, **kwargs):
-        try:
-            candidate = os.fspath(file)
-        except TypeError:
-            candidate = ""
-        if isinstance(candidate, str) and candidate.startswith(archive_member_prefix):
-            filesystem_attempts.append(("builtins.open", candidate))
+        if record_filesystem_attempt("builtins.open", file):
             raise AssertionError(
                 "prompt registry used an open(__file__) package-filesystem fallback"
             )
         return original_builtin_open(file, *args, **kwargs)
 
+    def deny_archive_member_io_open(file, *args, **kwargs):
+        if record_filesystem_attempt("io.open", file):
+            raise AssertionError(
+                "prompt registry used an io.open(__file__) package-filesystem fallback"
+            )
+        return original_io_open(file, *args, **kwargs)
+
+    def deny_archive_member_os_open(file, *args, **kwargs):
+        if record_filesystem_attempt("os.open", file):
+            raise AssertionError(
+                "prompt registry used an os.open(__file__) package-filesystem fallback"
+            )
+        return original_os_open(file, *args, **kwargs)
+
+    def audit_archive_member_open(event, args):
+        if event == "open" and args:
+            record_filesystem_attempt("audit.open", args[0])
+
+    def tracked_zipfile_open(archive, member, *args, **kwargs):
+        member_name = getattr(member, "filename", member)
+        if (
+            load_in_progress
+            and traversable_read_depth == 0
+            and isinstance(member_name, str)
+            and (
+                member_name == "agentforge/agents/prompts/registry.v1.json"
+                or (
+                    member_name.startswith("agentforge/agents/prompts/v1/")
+                    and member_name.endswith(".txt")
+                )
+            )
+        ):
+            manual_zip_attempts.append(member_name)
+        return original_zipfile_open(archive, member, *args, **kwargs)
+
+    class TrackedTraversable:
+        def __init__(self, wrapped, relative=""):
+            self._wrapped = wrapped
+            self._relative = relative
+
+        @property
+        def name(self):
+            return self._wrapped.name
+
+        def is_dir(self):
+            return self._wrapped.is_dir()
+
+        def is_file(self):
+            return self._wrapped.is_file()
+
+        def iterdir(self):
+            for child in self._wrapped.iterdir():
+                relative = "/".join(part for part in (self._relative, child.name) if part)
+                yield TrackedTraversable(child, relative)
+
+        def joinpath(self, *descendants):
+            wrapped = self._wrapped.joinpath(*descendants)
+            suffix = "/".join(str(part).strip("/") for part in descendants)
+            relative = "/".join(part for part in (self._relative, suffix) if part)
+            return TrackedTraversable(wrapped, relative)
+
+        def __truediv__(self, child):
+            return self.joinpath(child)
+
+        def open(self, *args, **kwargs):
+            global traversable_read_depth
+            resource_reads.append(self._relative)
+            traversable_read_depth += 1
+            try:
+                return self._wrapped.open(*args, **kwargs)
+            finally:
+                traversable_read_depth -= 1
+
+        def read_bytes(self):
+            global traversable_read_depth
+            resource_reads.append(self._relative)
+            traversable_read_depth += 1
+            try:
+                return self._wrapped.read_bytes()
+            finally:
+                traversable_read_depth -= 1
+
+        def read_text(self, *args, **kwargs):
+            global traversable_read_depth
+            resource_reads.append(self._relative)
+            traversable_read_depth += 1
+            try:
+                return self._wrapped.read_text(*args, **kwargs)
+            finally:
+                traversable_read_depth -= 1
+
+    def tracked_resource_files(*args, **kwargs):
+        root = original_resource_files(*args, **kwargs)
+        if not load_in_progress:
+            return root
+        anchor = args[0] if args else kwargs.get("anchor", kwargs.get("package"))
+        anchor_name = getattr(anchor, "__name__", anchor)
+        resource_files_calls.append(anchor_name)
+        if anchor_name == "agentforge.agents.prompts":
+            return TrackedTraversable(root)
+        return root
+
     Path.open = deny_archive_member_path_open
     builtins.open = deny_archive_member_builtin_open
+    io.open = deny_archive_member_io_open
+    os.open = deny_archive_member_os_open
+    zipfile.ZipFile.open = tracked_zipfile_open
+    importlib.resources.files = tracked_resource_files
+    sys.addaudithook(audit_archive_member_open)
 
 import agentforge.agents.prompts as prompts
 
 module_path = str(prompts.__file__)
-resource_root = importlib.resources.files(prompts)
+resource_root = (
+    original_resource_files(prompts)
+    if probe_mode == "zip"
+    else importlib.resources.files(prompts)
+)
 if probe_mode == "zip":
-    assert module_path.startswith(archive_member_prefix)
+    assert module_path.startswith(archive_member_prefixes)
     assert not Path(module_path).exists()
     assert type(resource_root).__module__.startswith("zipfile")
     assert resource_root.joinpath("registry.v1.json").is_file()
 
-records = prompts.load_prompt_registry()
+if probe_mode == "zip":
+    resource_files_calls.clear()
+    resource_reads.clear()
+    load_in_progress = True
+try:
+    records = prompts.load_prompt_registry()
+finally:
+    if probe_mode == "zip":
+        load_in_progress = False
 for record in records:
     assert prompts.prompt_for_identity(record.role, record.version, record.sha256) == record
 if probe_mode == "zip":
+    assert "agentforge.agents.prompts" in resource_files_calls, (
+        "load_prompt_registry() did not call importlib.resources.files for its package"
+    )
+    expected_resource_reads = {
+        "registry.v1.json",
+        "v1/orchestrator.txt",
+        "v1/red_team.txt",
+        "v1/judge.txt",
+        "v1/documentation.txt",
+    }
+    assert expected_resource_reads.issubset(set(resource_reads)), (
+        "load_prompt_registry() did not read every authority byte through the traversable: "
+        f"{resource_reads!r}"
+    )
+    assert manual_zip_attempts == [], (
+        "prompt registry bypassed the traversable with manual ZipFile member reads: "
+        f"{manual_zip_attempts!r}"
+    )
     assert filesystem_attempts == [], (
         f"prompt registry attempted package-filesystem access: {filesystem_attempts!r}"
     )
@@ -509,7 +677,8 @@ print(json.dumps({
     zip_payload = json.loads(zip_loaded.stdout)
     assert zip_payload["zip_backed"] is True
     assert zip_payload["resource_backend"].startswith("zipfile")
-    assert zip_payload["module"].startswith(f"{wheel_path}/agentforge/agents/prompts/")
+    zip_archive_path = zip_payload["module"].split("/agentforge/", 1)[0]
+    assert Path(zip_archive_path).resolve() == wheel_path.resolve()
 
     manifest_by_role = {entry["role"]: entry for entry in manifest["prompts"]}
     for probe_payload in (payload, zip_payload):
