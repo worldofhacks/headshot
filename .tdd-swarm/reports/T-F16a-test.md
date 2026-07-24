@@ -19,12 +19,12 @@ Status: `DONE`
 No product code, configuration, catalog artifact, plan, ticket, migration note, runtime fixture, or
 credential source was changed.
 
-## Frozen serialized contract
+## Serialized contract submitted for re-review
 
 The tests define the v2 boundary through existing public serialization functions, avoiding a
 collection-time import of symbols that do not exist yet:
 
-- each enabled v2 surface serializes `surface_policy` and `surface_policy_sha256`;
+- each declared v2 surface serializes `surface_policy` and `surface_policy_sha256`;
 - the policy binds schema/version, adapter profile, per-surface auth/no-auth facts, redirect and
   transport limits, typed operation templates, retry counts, logical/physical maxima, and complete
   fixture descriptors;
@@ -35,6 +35,10 @@ collection-time import of symbols that do not exist yet:
 - v2 multi-surface catalog entries have no target-wide request-shaping profile fallback;
 - legacy one-surface/one-profile chat remains loadable, while mixed target-wide
   `payload_profiles` is denied.
+- the declared scope is the fixed eight-surface set: Week 1 chat/UI/evidence and Week 2
+  chat/UI/evidence/lab/intake;
+- `2.0.0` enables chat/UI/evidence while lab/intake remain disabled, and document-capable `2.1.0`
+  is a distinct version with separately hashed authorization scopes.
 
 The canonical placement table is:
 
@@ -50,12 +54,12 @@ The canonical placement table is:
 
 | Criterion | Frozen RED coverage |
 |---|---|
-| AC-1 | Complete per-surface policy shape; one policy per enabled surface; independent canonical policy SHA-256; missing, duplicate, forged-hash, and target-wide ambiguity refusals |
-| AC-2 | Exact credential-key table; UI `session_id` attack; omitted fields; query/JSON/header/cookie/body alternates; document placement; evidence `auth_mode=none`, `explicit_no_auth=true`, and no credential ref |
-| AC-3 | Exact six-field fixture descriptor; both approved opaque descriptors; missing/extra fields; path/file/HTTP/query locators; duplicate refs; bad digest/length/type; upload without descriptor |
-| AC-4 | Lab `34` logical / `67` physical and intake `2` / `2`; upload retry zero; poll/read retry one; negative, boolean, string-unbounded, infinity, NaN, excess retry, and understated maxima refusals |
-| AC-5 | Exact policy/hash in canonical scope; hostile rehashed policy cannot resolve; evidence cannot inherit target auth; policy drift fails before adapter/credential/fixture construction; no auth/path fallback |
-| AC-6 | Legacy single-profile compatibility; partial target-wide `payload_profiles` rejection; v2 scope downgrade rejection; migration-note hash break, old-approval invalidation, staged activation, and rollback assertions |
+| AC-1 | Catalog -> registry -> scope coverage for all eight final surfaces; Week 1 `/app`; `2.0.0` disabled documents and separately hashed `2.1.0` activation; complete policy shape/hash; missing, duplicate, forged-hash, and target-wide ambiguity refusals |
+| AC-2 | Exact credential-key table; UI `session_id` attack; document-upload `None`/`sid` attacks; placement alternates; isolated evidence auth-triad mutations plus combined authenticated downgrade before credential resolution |
+| AC-3 | Exact six-field fixture descriptor; omission of every field on both document surfaces; absolute/file/relative/traversal/HTTP/query locators; intra- and cross-surface duplicate refs; upload without descriptor |
+| AC-4 | Lab `34` logical / `67` physical and intake `2` / `2`; self-consistent upload/poll/read retry-ceiling attacks; boolean, negative, nonfinite, unbounded, understated, and overstated operation/top-level maxima; valid generic retry `2` control with exact arithmetic |
+| AC-5 | Exact policy/hash in canonical scope; independently rehashed method/path/profile/retry/fixture/credential drift; separate adapter, credential, and fixture boundary probes remain untouched; independent auth and path fallback refusals |
+| AC-6 | Synthetic and legacy single-profile compatibility; otherwise-identical exact `54b3a4d` target-wide `payload_profiles` ambiguity rejection; executable v1 approval invalidation; exact `1.0.0 -> 2.0.0 -> 2.1.0` migration and rollback contract |
 
 ## RED evidence
 
@@ -66,7 +70,8 @@ Final focused command:
   -m pytest tests/test_final_target_surface_policy.py -q --tb=no
 ```
 
-Result: exit `1`; `50` collected, `50` failed, `0` passed, `0` errors.
+Result after test-review repairs: exit `1`; `101` collected, `101` failed, `0` passed, `0`
+collection/setup errors.
 
 The failures are intentional and feature-specific:
 
@@ -75,17 +80,23 @@ The failures are intentional and feature-specific:
 2. baseline `AttackSurfaceDefinition`/serialization rejects `surface_policy` because the canonical
    v2 policy and hash do not exist;
 3. baseline accepts mixed target-wide `payload_profiles`;
-4. the required v2 migration note does not exist.
+4. the old v1 approval cannot yet be compared with a canonical v2 policy-bearing scope;
+5. the required v2 migration note does not exist.
 
 The helpers convert absent-v2 `TypeError`/catalog refusal into explicit pytest assertion failures,
 so collection and fixture setup remain healthy. No test opens a socket, reads a fixture, resolves a
 credential, constructs an adapter, or calls a target.
 
-Test-design attempts stayed within the cap:
+The original test-design attempts stayed within the cap:
 
 1. initial contract: `36/36` intentional RED;
 2. formatted contract confirmation: `36/36` intentional RED;
 3. final adversarial expansion: `50/50` intentional RED.
+
+The independent Test Reviewer then requested six bounded coverage repairs. The repaired contract
+was collected once as a whole (`101/101` intentional RED), followed by a three-test AC-6
+failure-causality sample. That sample confirmed the expected causes: current acceptance of the
+partial target-wide profile set, absent v2 policy support, and the absent migration note.
 
 ## Baseline and static checks
 
@@ -116,7 +127,7 @@ bash scripts/secret_scan.sh
 gitleaks git --pre-commit --staged --redact --verbose --no-banner
 ```
 
-Result: both exit `0`; repository lightweight scan reports `secret scan clean (848 files)`, and
+Result: both exit `0`; repository lightweight scan reports `secret scan clean (849 files)`, and
 gitleaks reports no leaks in the staged test/report diff. Test data contains only opaque
 `secretref://` handles and the two approved non-secret fixture descriptors.
 

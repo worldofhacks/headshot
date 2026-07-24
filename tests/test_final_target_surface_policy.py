@@ -26,18 +26,34 @@ from agentforge.control_plane.serialization import (
 )
 from agentforge.target.adapter_registry import AdapterRegistry
 from agentforge.target.catalog import TargetCatalogError, TrustedTargetCatalog
-from agentforge.target.registry import AuthorizationScopeMismatch, TargetRegistry
+from agentforge.target.registry import (
+    AuthorizationScopeMismatch,
+    SurfaceUnavailableError,
+    TargetRegistry,
+    VersionMismatchError,
+)
 from agentforge.target.spec import AuthorizationScope, DefinitionError, TargetLifecycle
 
 JsonObject = dict[str, Any]
 PolicyMutation = Callable[[JsonObject], None]
 
 _CATALOG_ENV = "AGENTFORGE_LIVE_TARGET_CATALOG_JSON"
-_TARGET_ID = "clinical-copilot-week2"
+_WEEK1_TARGET_ID = "clinical-copilot-week1"
+_WEEK2_TARGET_ID = "clinical-copilot-week2"
 _TARGET_VERSION = "2.0.0"
-_CREDENTIAL_REF = "secretref://production/clinical-copilot-week2/session/generation-20260724a"
+_DOCUMENT_CANDIDATE_VERSION = "2.1.0"
+_WEEK1_CREDENTIAL_REF = "secretref://production/clinical-copilot-week1/session/generation-20260724a"
+_WEEK2_CREDENTIAL_REF = "secretref://production/clinical-copilot-week2/session/generation-20260724a"
+_CREDENTIAL_REF = _WEEK2_CREDENTIAL_REF
 _CORPUS_HASH = "a" * 64
 _RUN_NONCE = "run-t-f16a-000001"
+_PARTIAL_TARGET_WIDE_PROFILES = [
+    "copilot_chat",
+    "copilot_public_get",
+    "copilot_evidence_search",
+    "copilot_document_upload",
+    "copilot_document_read",
+]
 _POLICY_KEYS = {
     "schema",
     "schema_version",
@@ -163,7 +179,7 @@ def _policy(
     }
 
 
-def _chat_policy() -> JsonObject:
+def _chat_policy(*, credential_ref: str = _WEEK2_CREDENTIAL_REF) -> JsonObject:
     return _policy(
         "copilot_chat",
         [
@@ -178,17 +194,22 @@ def _chat_policy() -> JsonObject:
                 retry_count=0,
             )
         ],
+        credential_ref=credential_ref,
     )
 
 
-def _ui_policy() -> JsonObject:
+def _ui_policy(
+    *,
+    relative_path: str = "week2",
+    credential_ref: str = _WEEK2_CREDENTIAL_REF,
+) -> JsonObject:
     return _policy(
         "copilot_public_get",
         [
             _operation(
                 "ui_shell",
                 "GET",
-                "week2",
+                relative_path,
                 request_content_type=None,
                 response_content_types=["text/html"],
                 credential_placement="query",
@@ -196,6 +217,7 @@ def _ui_policy() -> JsonObject:
                 retry_count=0,
             )
         ],
+        credential_ref=credential_ref,
     )
 
 
@@ -319,12 +341,15 @@ def _surface(
     relative_path: str,
     authentication_required: bool,
     policy: JsonObject,
+    target_id: str = _WEEK2_TARGET_ID,
+    version: str = _TARGET_VERSION,
+    enabled: bool = True,
 ) -> JsonObject:
     return {
         "surface_id": surface_id,
-        "version": _TARGET_VERSION,
-        "target_id": _TARGET_ID,
-        "target_version": _TARGET_VERSION,
+        "version": version,
+        "target_id": target_id,
+        "target_version": version,
         "kind": kind,
         "protocol": "https",
         "method": method,
@@ -349,13 +374,17 @@ def _surface(
             },
         ],
         "oracle_refs": ["oracle://agentforge/copilot-surface-v2"],
-        "enabled": True,
+        "enabled": enabled,
         "surface_policy": policy,
         "surface_policy_sha256": _canonical_sha256(policy),
     }
 
 
-def _surface_payloads() -> dict[str, JsonObject]:
+def _surface_payloads(
+    *,
+    version: str = _TARGET_VERSION,
+    documents_enabled: bool = False,
+) -> dict[str, JsonObject]:
     return {
         "chat": _surface(
             "clinical-copilot-week2-chat",
@@ -364,6 +393,7 @@ def _surface_payloads() -> dict[str, JsonObject]:
             relative_path="chat",
             authentication_required=True,
             policy=_chat_policy(),
+            version=version,
         ),
         "ui": _surface(
             "clinical-copilot-week2-ui",
@@ -372,6 +402,7 @@ def _surface_payloads() -> dict[str, JsonObject]:
             relative_path="week2",
             authentication_required=True,
             policy=_ui_policy(),
+            version=version,
         ),
         "evidence": _surface(
             "clinical-copilot-week2-evidence",
@@ -380,6 +411,7 @@ def _surface_payloads() -> dict[str, JsonObject]:
             relative_path="evidence/search",
             authentication_required=False,
             policy=_evidence_policy(),
+            version=version,
         ),
         "lab": _surface(
             "clinical-copilot-week2-lab",
@@ -388,6 +420,8 @@ def _surface_payloads() -> dict[str, JsonObject]:
             relative_path="documents",
             authentication_required=True,
             policy=_lab_policy(),
+            version=version,
+            enabled=documents_enabled,
         ),
         "intake": _surface(
             "clinical-copilot-week2-intake",
@@ -396,23 +430,71 @@ def _surface_payloads() -> dict[str, JsonObject]:
             relative_path="documents",
             authentication_required=True,
             policy=_intake_policy(),
+            version=version,
+            enabled=documents_enabled,
         ),
     }
 
 
-def _target_payload(*, version: str = _TARGET_VERSION) -> JsonObject:
+def _week1_surface_payloads(*, version: str = _TARGET_VERSION) -> dict[str, JsonObject]:
     return {
-        "target_id": _TARGET_ID,
-        "name": "Clinical Co-Pilot Week 2",
+        "chat": _surface(
+            "clinical-copilot-week1-chat",
+            kind="chat",
+            method="POST",
+            relative_path="chat",
+            authentication_required=True,
+            policy=_chat_policy(credential_ref=_WEEK1_CREDENTIAL_REF),
+            target_id=_WEEK1_TARGET_ID,
+            version=version,
+        ),
+        "ui": _surface(
+            "clinical-copilot-week1-ui",
+            kind="custom",
+            method="GET",
+            relative_path="app",
+            authentication_required=True,
+            policy=_ui_policy(
+                relative_path="app",
+                credential_ref=_WEEK1_CREDENTIAL_REF,
+            ),
+            target_id=_WEEK1_TARGET_ID,
+            version=version,
+        ),
+        "evidence": _surface(
+            "clinical-copilot-week1-evidence",
+            kind="rag",
+            method="POST",
+            relative_path="evidence/search",
+            authentication_required=False,
+            policy=_evidence_policy(),
+            target_id=_WEEK1_TARGET_ID,
+            version=version,
+        ),
+    }
+
+
+def _target_payload(
+    *,
+    target_id: str = _WEEK2_TARGET_ID,
+    version: str = _TARGET_VERSION,
+) -> JsonObject:
+    week = "1" if target_id == _WEEK1_TARGET_ID else "2"
+    credential_ref = (
+        _WEEK1_CREDENTIAL_REF if target_id == _WEEK1_TARGET_ID else _WEEK2_CREDENTIAL_REF
+    )
+    return {
+        "target_id": target_id,
+        "name": f"Clinical Co-Pilot Week {week}",
         "version": version,
         "adapter_kind": "openemr",
         "environment": "production",
         "base_url": "https://copilot.example.test",
         "allowlisted_hosts": ["copilot.example.test"],
         "auth_mode": "session",
-        "credential_ref": _CREDENTIAL_REF,
+        "credential_ref": credential_ref,
         "synthetic_data_only": True,
-        "synthetic_data_attestation_ref": "attestation://agentforge/synthetic-week2-v2",
+        "synthetic_data_attestation_ref": f"attestation://agentforge/synthetic-week{week}-v2",
         "canary_refs": ["oracle://agentforge/SYNTH_CANARY_PATIENT_BETA_8C1E"],
         "oracle_refs": ["oracle://agentforge/copilot-chat-refusal-oracle-v1"],
         "safety_caps": {
@@ -428,14 +510,31 @@ def _target_payload(*, version: str = _TARGET_VERSION) -> JsonObject:
     }
 
 
-def _v2_entry() -> JsonObject:
+def _v2_entry(
+    *,
+    target_id: str = _WEEK2_TARGET_ID,
+    version: str = _TARGET_VERSION,
+    documents_enabled: bool = False,
+) -> JsonObject:
+    surfaces = (
+        _week1_surface_payloads(version=version)
+        if target_id == _WEEK1_TARGET_ID
+        else _surface_payloads(version=version, documents_enabled=documents_enabled)
+    )
     return {
-        "target": _target_payload(),
-        "surfaces": list(_surface_payloads().values()),
+        "target": _target_payload(target_id=target_id, version=version),
+        "surfaces": list(surfaces.values()),
         "ownership_authorization_ref": (
             "authorization://agentforge/headshot-owner-synthetic-2026-07-24"
         ),
     }
+
+
+def _v2_entries() -> list[JsonObject]:
+    return [
+        _v2_entry(target_id=_WEEK1_TARGET_ID),
+        _v2_entry(target_id=_WEEK2_TARGET_ID),
+    ]
 
 
 def _parse_canonical_surface(payload: JsonObject) -> Any:
@@ -449,21 +548,42 @@ def _parse_canonical_surface(payload: JsonObject) -> Any:
 
 def _load_canonical_catalog(
     monkeypatch: pytest.MonkeyPatch,
-    entry: JsonObject | None = None,
+    entries: JsonObject | list[JsonObject] | None = None,
 ) -> TrustedTargetCatalog:
-    monkeypatch.setenv(_CATALOG_ENV, json.dumps([entry or _v2_entry()]))
+    if entries is None:
+        payload = _v2_entries()
+    elif isinstance(entries, list):
+        payload = entries
+    else:
+        payload = [entries]
+    monkeypatch.setenv(_CATALOG_ENV, json.dumps(payload))
     try:
         return TrustedTargetCatalog.from_environment("production")
     except Exception as exc:  # noqa: BLE001 - turn absent v2 support into intentional RED
         pytest.fail(f"canonical multi-surface policy catalog is not implemented: {exc!r}")
 
 
-def _target_and_surfaces() -> tuple[Any, dict[str, Any]]:
-    target = target_from_payload(_target_payload())
-    surfaces = {
-        name: _parse_canonical_surface(payload) for name, payload in _surface_payloads().items()
-    }
+def _target_and_surfaces(
+    *,
+    target_id: str = _WEEK2_TARGET_ID,
+    version: str = _TARGET_VERSION,
+    documents_enabled: bool = False,
+) -> tuple[Any, dict[str, Any]]:
+    target = target_from_payload(_target_payload(target_id=target_id, version=version))
+    payloads = (
+        _week1_surface_payloads(version=version)
+        if target_id == _WEEK1_TARGET_ID
+        else _surface_payloads(version=version, documents_enabled=documents_enabled)
+    )
+    surfaces = {name: _parse_canonical_surface(payload) for name, payload in payloads.items()}
     return target, surfaces
+
+
+def _document_candidate() -> tuple[Any, dict[str, Any]]:
+    return _target_and_surfaces(
+        version=_DOCUMENT_CANDIDATE_VERSION,
+        documents_enabled=True,
+    )
 
 
 def _scope(target: Any, surface: Any) -> AuthorizationScope:
@@ -492,6 +612,21 @@ def _ready_registry(target: Any, surfaces: list[Any]) -> TargetRegistry:
     return registry
 
 
+def _resolve_with_side_effect_boundaries(
+    *,
+    registry: TargetRegistry,
+    adapters: AdapterRegistry,
+    scope: AuthorizationScope,
+    credential_resolver: Callable[[str | None], None],
+    fixture_resolver: Callable[[JsonObject], None],
+) -> None:
+    resolved = registry.resolve(scope)
+    credential_resolver(resolved.authorization_scope.credential_ref)
+    for descriptor in surface_payload(resolved.surface)["surface_policy"]["fixture_descriptors"]:
+        fixture_resolver(descriptor)
+    adapters.resolve(scope)
+
+
 def _rehash_surface(payload: JsonObject, mutation: PolicyMutation) -> JsonObject:
     changed = deepcopy(payload)
     mutation(changed["surface_policy"])
@@ -506,6 +641,20 @@ def _set_operation_value(
 ) -> PolicyMutation:
     def mutate(policy: JsonObject) -> None:
         policy["operation_templates"][operation_index][field] = value
+
+    return mutate
+
+
+def _set_retry_and_rederive(operation_index: int, retry_count: int) -> PolicyMutation:
+    def mutate(policy: JsonObject) -> None:
+        policy["operation_templates"][operation_index]["retry_count"] = retry_count
+        policy["maximum_logical_operations"] = sum(
+            operation["maximum_logical_operations"] for operation in policy["operation_templates"]
+        )
+        policy["physical_request_limit"] = sum(
+            operation["maximum_logical_operations"] * (operation["retry_count"] + 1)
+            for operation in policy["operation_templates"]
+        )
 
     return mutate
 
@@ -546,18 +695,7 @@ def _legacy_chat_entry(*, mixed_profiles: bool) -> JsonObject:
         "payload_profile": "copilot_chat",
     }
     if mixed_profiles:
-        evidence = deepcopy(chat)
-        evidence.update(
-            {
-                "surface_id": "legacy-copilot-evidence",
-                "kind": "rag",
-                "relative_path": "evidence/search",
-                "trust_boundary": "anonymous-guideline-retrieval",
-            }
-        )
-        surfaces.append(evidence)
-        policy["allowed_methods"] = ["GET", "POST"]
-        policy["payload_profiles"] = ["copilot_chat", "copilot_evidence_search"]
+        policy["payload_profiles"] = deepcopy(_PARTIAL_TARGET_WIDE_PROFILES)
     return {
         "target": target,
         "surfaces": surfaces,
@@ -566,32 +704,99 @@ def _legacy_chat_entry(*, mixed_profiles: bool) -> JsonObject:
     }
 
 
+def _v1_week2_chat_definitions() -> tuple[Any, Any]:
+    target_payload = _target_payload(version="1.0.0")
+    surface_payload_v1 = deepcopy(_surface_payloads()["chat"])
+    surface_payload_v1["version"] = "1.0.0"
+    surface_payload_v1["target_version"] = "1.0.0"
+    surface_payload_v1.pop("surface_policy")
+    surface_payload_v1.pop("surface_policy_sha256")
+    return (
+        target_from_payload(target_payload),
+        surface_from_payload(surface_payload_v1),
+    )
+
+
 # spec(T-F16a:AC-1)
 def test_spec_t_f16a_ac_1_catalog_resolves_one_complete_policy_per_surface(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     catalog = _load_canonical_catalog(monkeypatch)
-    expected = _surface_payloads()
+    expected_by_target = {
+        _WEEK1_TARGET_ID: _week1_surface_payloads(),
+        _WEEK2_TARGET_ID: _surface_payloads(),
+    }
+    assert sum(len(surfaces) for surfaces in expected_by_target.values()) == 8
 
-    for expected_payload in expected.values():
-        entry, surface = catalog.resolve(
-            target_id=_TARGET_ID,
-            surface_id=expected_payload["surface_id"],
+    for target_id, expected_surfaces in expected_by_target.items():
+        parsed_surfaces = []
+        target = target_from_payload(_target_payload(target_id=target_id))
+        for surface_name, expected_payload in expected_surfaces.items():
+            entry, surface = catalog.resolve(
+                target_id=target_id,
+                surface_id=expected_payload["surface_id"],
+            )
+            parsed_surfaces.append(surface)
+            serialized = surface_payload(surface)
+            policy = serialized["surface_policy"]
+            assert entry.target.target_id == target_id
+            assert set(policy) == _POLICY_KEYS
+            assert policy == expected_payload["surface_policy"]
+            assert serialized["surface_policy_sha256"] == _canonical_sha256(policy)
+            assert all(
+                set(operation) == _OPERATION_KEYS for operation in policy["operation_templates"]
+            )
+            assert policy["maximum_logical_operations"] == sum(
+                operation["maximum_logical_operations"]
+                for operation in policy["operation_templates"]
+            )
+            assert policy["physical_request_limit"] == sum(
+                operation["maximum_logical_operations"] * (operation["retry_count"] + 1)
+                for operation in policy["operation_templates"]
+            )
+            if target_id == _WEEK1_TARGET_ID and surface_name == "ui":
+                assert serialized["relative_path"] == "app"
+                assert policy["operation_templates"][0]["relative_path"] == "app"
+                assert policy["operation_templates"][0]["credential_field_name"] == "sid"
+
+        registry = _ready_registry(target, parsed_surfaces)
+        for surface_name, surface in zip(expected_surfaces, parsed_surfaces, strict=True):
+            scope = _scope(target, surface)
+            if target_id == _WEEK2_TARGET_ID and surface_name in {"lab", "intake"}:
+                with pytest.raises(SurfaceUnavailableError):
+                    registry.resolve(scope)
+            else:
+                assert registry.resolve(scope).authorization_scope == scope
+
+    candidate_catalog = _load_canonical_catalog(
+        monkeypatch,
+        _v2_entry(
+            version=_DOCUMENT_CANDIDATE_VERSION,
+            documents_enabled=True,
+        ),
+    )
+    candidate_target = target_from_payload(_target_payload(version=_DOCUMENT_CANDIDATE_VERSION))
+    candidate_surfaces = []
+    candidate_scopes = {}
+    for name, payload in _surface_payloads(
+        version=_DOCUMENT_CANDIDATE_VERSION,
+        documents_enabled=True,
+    ).items():
+        _, surface = candidate_catalog.resolve(
+            target_id=_WEEK2_TARGET_ID,
+            surface_id=payload["surface_id"],
         )
-        serialized = surface_payload(surface)
-        policy = serialized["surface_policy"]
-        assert entry.target.target_id == _TARGET_ID
-        assert set(policy) == _POLICY_KEYS
-        assert policy == expected_payload["surface_policy"]
-        assert serialized["surface_policy_sha256"] == _canonical_sha256(policy)
-        assert all(set(operation) == _OPERATION_KEYS for operation in policy["operation_templates"])
-        assert policy["maximum_logical_operations"] == sum(
-            operation["maximum_logical_operations"] for operation in policy["operation_templates"]
-        )
-        assert policy["physical_request_limit"] == sum(
-            operation["maximum_logical_operations"] * (operation["retry_count"] + 1)
-            for operation in policy["operation_templates"]
-        )
+        candidate_surfaces.append(surface)
+        candidate_scopes[name] = _scope(candidate_target, surface)
+
+    candidate_registry = _ready_registry(candidate_target, candidate_surfaces)
+    for name in ("lab", "intake"):
+        assert candidate_registry.resolve(candidate_scopes[name]).surface.enabled is True
+
+    v2_target, v2_surfaces = _target_and_surfaces()
+    assert (
+        _scope(v2_target, v2_surfaces["lab"]).scope_hash() != candidate_scopes["lab"].scope_hash()
+    )
 
 
 # spec(T-F16a:AC-1)
@@ -687,6 +892,8 @@ def test_spec_t_f16a_ac_2_exact_surface_credential_key_table_is_canonical() -> N
         ("chat", _set_operation_value(0, "credential_placement", "header")),
         ("chat", _set_operation_value(0, "credential_field_name", None)),
         ("lab", _set_operation_value(0, "credential_placement", "json")),
+        ("lab", _set_operation_value(0, "credential_field_name", None)),
+        ("lab", _set_operation_value(0, "credential_field_name", "sid")),
         ("lab", _set_operation_value(1, "credential_placement", "cookie")),
         ("lab", _set_operation_value(1, "credential_field_name", None)),
         ("evidence", _set_operation_value(0, "credential_placement", "query")),
@@ -698,7 +905,10 @@ def test_spec_t_f16a_ac_2_hostile_credential_placement_changes_hash_and_cannot_r
     surface_name: str,
     mutation: PolicyMutation,
 ) -> None:
-    target, surfaces = _target_and_surfaces()
+    if surface_name in {"lab", "intake"}:
+        target, surfaces = _document_candidate()
+    else:
+        target, surfaces = _target_and_surfaces()
     canonical_surface = surfaces[surface_name]
     registry = _ready_registry(target, [canonical_surface])
     canonical_payload = surface_payload(canonical_surface)
@@ -713,6 +923,54 @@ def test_spec_t_f16a_ac_2_hostile_credential_placement_changes_hash_and_cannot_r
     hostile_scope = _scope(target, hostile_surface)
     with pytest.raises(AuthorizationScopeMismatch):
         registry.resolve(hostile_scope)
+
+
+@pytest.mark.parametrize(
+    ("case", "mutation"),
+    [
+        ("auth-mode", lambda policy: policy.update({"auth_mode": "session"})),
+        ("explicit-no-auth", lambda policy: policy.update({"explicit_no_auth": False})),
+        (
+            "credential-ref",
+            lambda policy: policy.update({"credential_ref": _WEEK2_CREDENTIAL_REF}),
+        ),
+        (
+            "combined-authenticated-downgrade",
+            lambda policy: policy.update(
+                {
+                    "auth_mode": "session",
+                    "explicit_no_auth": False,
+                    "credential_ref": _WEEK2_CREDENTIAL_REF,
+                }
+            ),
+        ),
+    ],
+)
+# spec(T-F16a:AC-2,AC-5)
+def test_spec_t_f16a_ac_2_evidence_auth_triad_drift_is_refused_before_credentials(
+    case: str,
+    mutation: PolicyMutation,
+) -> None:
+    del case
+    target, surfaces = _target_and_surfaces()
+    evidence = surfaces["evidence"]
+    registry = _ready_registry(target, [evidence])
+    canonical = surface_payload(evidence)
+    hostile = _rehash_surface(canonical, mutation)
+    credential_calls = 0
+
+    def credential_resolver(_: str | None) -> None:
+        nonlocal credential_calls
+        credential_calls += 1
+
+    def resolve_with_credential(scope: AuthorizationScope) -> None:
+        resolved = registry.resolve(scope)
+        credential_resolver(resolved.authorization_scope.credential_ref)
+
+    with pytest.raises((DefinitionError, AuthorizationScopeMismatch)):
+        hostile_surface = surface_from_payload(hostile)
+        resolve_with_credential(_scope(target, hostile_surface))
+    assert credential_calls == 0
 
 
 # spec(T-F16a:AC-2,AC-5)
@@ -745,6 +1003,26 @@ def test_spec_t_f16a_ac_3_complete_fixture_descriptor_is_exact_and_hash_bound() 
         assert serialized["surface_policy_sha256"] == _canonical_sha256(policy)
 
 
+@pytest.mark.parametrize("surface_name", ["lab", "intake"])
+@pytest.mark.parametrize("field", sorted(_FIXTURE_KEYS))
+# spec(T-F16a:AC-3)
+def test_spec_t_f16a_ac_3_every_fixture_field_is_required_per_document_surface(
+    surface_name: str,
+    field: str,
+) -> None:
+    canonical = _surface_payloads(
+        version=_DOCUMENT_CANDIDATE_VERSION,
+        documents_enabled=True,
+    )[surface_name]
+    hostile = _rehash_surface(
+        canonical,
+        lambda policy: policy["fixture_descriptors"][0].pop(field),
+    )
+
+    with pytest.raises(DefinitionError):
+        surface_from_payload(hostile)
+
+
 @pytest.mark.parametrize(
     ("case", "mutation"),
     [
@@ -768,6 +1046,18 @@ def test_spec_t_f16a_ac_3_complete_fixture_descriptor_is_exact_and_hash_bound() 
             "file-url",
             lambda policy: policy["fixture_descriptors"][0].update(
                 {"opaque_ref": "file:///private/owner/fixture.pdf"}
+            ),
+        ),
+        (
+            "relative-path",
+            lambda policy: policy["fixture_descriptors"][0].update(
+                {"opaque_ref": "fixtures/clean-pdf-20260724.pdf"}
+            ),
+        ),
+        (
+            "traversal",
+            lambda policy: policy["fixture_descriptors"][0].update(
+                {"opaque_ref": "fixture://clinical-copilot/week2/../../private/fixture.pdf"}
             ),
         ),
         (
@@ -832,6 +1122,25 @@ def test_spec_t_f16a_ac_3_incomplete_mutable_or_duplicate_fixture_is_refused(
         surface_from_payload(hostile)
 
 
+# spec(T-F16a:AC-3)
+def test_spec_t_f16a_ac_3_duplicate_opaque_ref_across_surfaces_is_catalog_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    entry = _v2_entry(
+        version=_DOCUMENT_CANDIDATE_VERSION,
+        documents_enabled=True,
+    )
+    lab, intake = entry["surfaces"][-2:]
+    intake["surface_policy"]["fixture_descriptors"][0]["opaque_ref"] = lab["surface_policy"][
+        "fixture_descriptors"
+    ][0]["opaque_ref"]
+    intake["surface_policy_sha256"] = _canonical_sha256(intake["surface_policy"])
+    monkeypatch.setenv(_CATALOG_ENV, json.dumps([entry]))
+
+    with pytest.raises(TargetCatalogError, match="(?i)(duplicate|opaque|fixture)"):
+        TrustedTargetCatalog.from_environment("production")
+
+
 # spec(T-F16a:AC-4)
 def test_spec_t_f16a_ac_4_retry_inclusive_physical_maximum_is_derived_exactly() -> None:
     lab = surface_payload(_parse_canonical_surface(_surface_payloads()["lab"]))["surface_policy"]
@@ -856,29 +1165,15 @@ def test_spec_t_f16a_ac_4_retry_inclusive_physical_maximum_is_derived_exactly() 
     assert intake["physical_request_limit"] == 2
 
 
-@pytest.mark.parametrize(
-    "mutation",
-    [
-        _set_operation_value(0, "retry_count", -1),
-        _set_operation_value(0, "retry_count", True),
-        _set_operation_value(0, "retry_count", "unbounded"),
-        _set_operation_value(0, "retry_count", float("inf")),
-        _set_operation_value(0, "retry_count", float("nan")),
-        _set_operation_value(0, "retry_count", 1),
-        _set_operation_value(1, "retry_count", 2),
-        lambda policy: policy.update({"maximum_logical_operations": 33}),
-        lambda policy: policy.update({"physical_request_limit": 66}),
-    ],
-)
+@pytest.mark.parametrize("invalid", [-1, True, "unbounded", float("inf"), float("nan")])
 # spec(T-F16a:AC-4)
-def test_spec_t_f16a_ac_4_unbounded_retry_or_understated_maximum_is_refused(
-    mutation: PolicyMutation,
-) -> None:
+def test_spec_t_f16a_ac_4_invalid_retry_scalar_is_refused(invalid: Any) -> None:
+    mutation = _set_operation_value(0, "retry_count", invalid)
     canonical = _surface_payloads()["lab"]
     _parse_canonical_surface(canonical)
     try:
         hostile = _rehash_surface(canonical, mutation)
-    except ValueError:
+    except (TypeError, ValueError):
         hostile = deepcopy(canonical)
         mutation(hostile["surface_policy"])
         hostile["surface_policy_sha256"] = "0" * 64
@@ -887,9 +1182,125 @@ def test_spec_t_f16a_ac_4_unbounded_retry_or_understated_maximum_is_refused(
         surface_from_payload(hostile)
 
 
+@pytest.mark.parametrize(
+    ("operation_index", "retry_count"),
+    [
+        (0, 1),
+        (1, 2),
+        (2, 2),
+        (3, 2),
+        (4, 2),
+    ],
+    ids=["upload", "status-poll", "report-read", "preview-read", "document-readback"],
+)
+# spec(T-F16a:AC-4)
+def test_spec_t_f16a_ac_4_document_operation_retry_ceiling_is_specific(
+    operation_index: int,
+    retry_count: int,
+) -> None:
+    canonical = _surface_payloads(
+        version=_DOCUMENT_CANDIDATE_VERSION,
+        documents_enabled=True,
+    )["lab"]
+    _parse_canonical_surface(canonical)
+    hostile = _rehash_surface(
+        canonical,
+        _set_retry_and_rederive(operation_index, retry_count),
+    )
+
+    with pytest.raises(DefinitionError):
+        surface_from_payload(hostile)
+
+
+@pytest.mark.parametrize(
+    ("level", "field", "value"),
+    [
+        ("operation", "maximum_logical_operations", True),
+        ("operation", "maximum_logical_operations", -1),
+        ("operation", "maximum_logical_operations", float("inf")),
+        ("operation", "maximum_logical_operations", float("nan")),
+        ("operation", "maximum_logical_operations", "unbounded"),
+        ("operation-understated", "maximum_logical_operations", 29),
+        ("operation-overstated", "maximum_logical_operations", 31),
+        ("top-logical", "maximum_logical_operations", True),
+        ("top-logical", "maximum_logical_operations", -1),
+        ("top-logical", "maximum_logical_operations", float("inf")),
+        ("top-logical", "maximum_logical_operations", float("nan")),
+        ("top-logical", "maximum_logical_operations", "unbounded"),
+        ("top-logical-understated", "maximum_logical_operations", 33),
+        ("top-logical-overstated", "maximum_logical_operations", 35),
+        ("top-physical", "physical_request_limit", True),
+        ("top-physical", "physical_request_limit", -1),
+        ("top-physical", "physical_request_limit", float("inf")),
+        ("top-physical", "physical_request_limit", float("nan")),
+        ("top-physical", "physical_request_limit", "unbounded"),
+        ("top-physical-understated", "physical_request_limit", 66),
+        ("top-physical-overstated", "physical_request_limit", 68),
+    ],
+)
+# spec(T-F16a:AC-4)
+def test_spec_t_f16a_ac_4_invalid_or_inexact_logical_and_physical_maxima_are_refused(
+    level: str,
+    field: str,
+    value: Any,
+) -> None:
+    canonical = _surface_payloads()["lab"]
+
+    def mutate(policy: JsonObject) -> None:
+        if level.startswith("operation"):
+            policy["operation_templates"][1][field] = value
+        else:
+            policy[field] = value
+
+    _parse_canonical_surface(canonical)
+    try:
+        hostile = _rehash_surface(canonical, mutate)
+    except ValueError:
+        hostile = deepcopy(canonical)
+        mutate(hostile["surface_policy"])
+        hostile["surface_policy_sha256"] = "0" * 64
+
+    with pytest.raises(DefinitionError):
+        surface_from_payload(hostile)
+
+
+# spec(T-F16a:AC-4)
+def test_spec_t_f16a_ac_4_generic_non_document_retry_two_has_exact_arithmetic() -> None:
+    policy = _policy(
+        "copilot_public_get",
+        [
+            _operation(
+                "generic_read",
+                "GET",
+                "week2",
+                request_content_type=None,
+                response_content_types=["application/json"],
+                credential_placement="query",
+                credential_field_name="sid",
+                retry_count=2,
+                maximum_logical_operations=4,
+            )
+        ],
+    )
+    surface = _surface(
+        "clinical-copilot-week2-generic-read-control",
+        kind="custom",
+        method="GET",
+        relative_path="week2",
+        authentication_required=True,
+        policy=policy,
+    )
+    parsed = _parse_canonical_surface(surface)
+    serialized_policy = surface_payload(parsed)["surface_policy"]
+
+    assert serialized_policy["operation_templates"][0]["retry_count"] == 2
+    assert serialized_policy["maximum_logical_operations"] == 4
+    assert serialized_policy["physical_request_limit"] == 12
+
+
 # spec(T-F16a:AC-1,AC-5)
 def test_spec_t_f16a_ac_5_scope_binds_exact_policy_and_independent_canonical_hash() -> None:
-    target, surfaces = _target_and_surfaces()
+    target, surfaces = _document_candidate()
     scope = _scope(target, surfaces["lab"])
     payload = scope.canonical_payload()
     policy = _lab_policy()
@@ -906,29 +1317,83 @@ def test_spec_t_f16a_ac_5_scope_binds_exact_policy_and_independent_canonical_has
     assert _canonical_sha256(changed_payload) != scope.scope_hash()
 
 
+@pytest.mark.parametrize(
+    ("drift_fact", "mutation"),
+    [
+        ("method", _set_operation_value(2, "method", "POST")),
+        (
+            "path",
+            _set_operation_value(
+                2,
+                "relative_path",
+                "documents/{document_id}/report-v2",
+            ),
+        ),
+        (
+            "adapter-profile",
+            lambda policy: policy.update({"adapter_profile": "copilot_document_read"}),
+        ),
+        ("retry", _set_retry_and_rederive(2, 0)),
+        (
+            "fixture",
+            lambda policy: policy["fixture_descriptors"][0].update(
+                {"workflow_id": "lab-extraction-v2"}
+            ),
+        ),
+        (
+            "credential",
+            lambda policy: policy.update(
+                {
+                    "credential_ref": (
+                        "secretref://production/clinical-copilot-week2/session/generation-hostile"
+                    )
+                }
+            ),
+        ),
+    ],
+)
 # spec(T-F16a:AC-5)
-def test_spec_t_f16a_ac_5_policy_drift_fails_before_resolution_result_construction() -> None:
-    target, surfaces = _target_and_surfaces()
+def test_spec_t_f16a_ac_5_each_policy_drift_fails_before_independent_side_effects(
+    drift_fact: str,
+    mutation: PolicyMutation,
+) -> None:
+    del drift_fact
+    target, surfaces = _document_candidate()
     registry = _ready_registry(target, [surfaces["lab"]])
-    scope = _scope(target, surfaces["lab"])
-    object.__setattr__(scope, "surface_policy_sha256", "0" * 64)
+    canonical = surface_payload(surfaces["lab"])
+    hostile = _rehash_surface(canonical, mutation)
+    hostile_surface = _parse_canonical_surface(hostile)
+    scope = _scope(target, hostile_surface)
     side_effects = {"adapter": 0, "credential": 0, "fixture": 0}
 
-    def adapter_construction_bomb(_: Any) -> Any:
+    def adapter_construction_probe(_: Any) -> object:
         side_effects["adapter"] += 1
-        side_effects["credential"] += 1
-        side_effects["fixture"] += 1
-        raise AssertionError("adapter/credential/fixture resolution ran before policy rejection")
+        return object()
 
-    adapters = AdapterRegistry(registry, {"openemr": adapter_construction_bomb})
+    def credential_resolution_probe(_: str | None) -> None:
+        side_effects["credential"] += 1
+
+    def fixture_resolution_probe(_: JsonObject) -> None:
+        side_effects["fixture"] += 1
+
+    adapters = AdapterRegistry(registry, {"openemr": adapter_construction_probe})
 
     with pytest.raises(AuthorizationScopeMismatch):
-        adapters.resolve(scope)
+        _resolve_with_side_effect_boundaries(
+            registry=registry,
+            adapters=adapters,
+            scope=scope,
+            credential_resolver=credential_resolution_probe,
+            fixture_resolver=fixture_resolution_probe,
+        )
     assert side_effects == {"adapter": 0, "credential": 0, "fixture": 0}
 
 
+@pytest.mark.parametrize("fallback", ["target-auth", "path"])
 # spec(T-F16a:AC-5,AC-6)
-def test_spec_t_f16a_ac_5_v2_scope_cannot_downgrade_to_target_level_auth_or_path() -> None:
+def test_spec_t_f16a_ac_5_v2_scope_cannot_use_target_auth_or_path_fallback(
+    fallback: str,
+) -> None:
     target, surfaces = _target_and_surfaces()
     scope_payload = _scope(target, surfaces["evidence"]).canonical_payload()
 
@@ -938,13 +1403,16 @@ def test_spec_t_f16a_ac_5_v2_scope_cannot_downgrade_to_target_level_auth_or_path
         with pytest.raises(DefinitionError):
             scope_from_payload(downgraded)
 
-    target_level_fallback = deepcopy(scope_payload)
-    target_level_fallback["auth_mode"] = target.auth_mode.value
-    target_level_fallback["credential_ref"] = target.credential_ref
-    target_level_fallback["explicit_no_auth"] = target.explicit_no_auth
-    target_level_fallback["relative_path"] = "chat"
+    downgraded = deepcopy(scope_payload)
+    if fallback == "target-auth":
+        downgraded["auth_mode"] = target.auth_mode.value
+        downgraded["credential_ref"] = target.credential_ref
+        downgraded["explicit_no_auth"] = target.explicit_no_auth
+    else:
+        downgraded["relative_path"] = "chat"
+
     with pytest.raises((DefinitionError, AuthorizationScopeMismatch)):
-        candidate = scope_from_payload(target_level_fallback)
+        candidate = scope_from_payload(downgraded)
         _ready_registry(target, [surfaces["evidence"]]).resolve(candidate)
 
 
@@ -952,7 +1420,17 @@ def test_spec_t_f16a_ac_5_v2_scope_cannot_downgrade_to_target_level_auth_or_path
 def test_spec_t_f16a_ac_6_legacy_single_profile_stays_valid_but_mixed_profile_set_is_denied(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv(_CATALOG_ENV, json.dumps([_legacy_chat_entry(mixed_profiles=False)]))
+    control = _legacy_chat_entry(mixed_profiles=False)
+    monkeypatch.delenv(_CATALOG_ENV, raising=False)
+    local = TrustedTargetCatalog.from_environment("local")
+    synthetic_entry, synthetic_surface = local.resolve(
+        target_id="synthetic-copilot",
+        surface_id="synthetic-chat",
+    )
+    assert synthetic_entry.transport_policy.payload_profiles == ("openemr_turns",)
+    assert synthetic_surface.relative_path == "apis/default/api/copilot/message"
+
+    monkeypatch.setenv(_CATALOG_ENV, json.dumps([control]))
     legacy = TrustedTargetCatalog.from_environment("production")
     entry, surface = legacy.resolve(
         target_id="legacy-copilot",
@@ -961,9 +1439,41 @@ def test_spec_t_f16a_ac_6_legacy_single_profile_stays_valid_but_mixed_profile_se
     assert entry.transport_policy.payload_profile == "copilot_chat"
     assert surface.relative_path == "chat"
 
-    monkeypatch.setenv(_CATALOG_ENV, json.dumps([_legacy_chat_entry(mixed_profiles=True)]))
-    with pytest.raises(TargetCatalogError):
+    partial_target_wide = _legacy_chat_entry(mixed_profiles=True)
+    assert partial_target_wide["target"] == control["target"]
+    assert partial_target_wide["surfaces"] == control["surfaces"]
+    assert partial_target_wide["transport_policy"] == {
+        **control["transport_policy"],
+        "payload_profiles": _PARTIAL_TARGET_WIDE_PROFILES,
+    }
+    monkeypatch.setenv(_CATALOG_ENV, json.dumps([partial_target_wide]))
+    with pytest.raises(
+        TargetCatalogError,
+        match="(?i)(ambig|target-wide|surface-specific|per-surface)",
+    ):
         TrustedTargetCatalog.from_environment("production")
+
+
+# spec(T-F16a:AC-6)
+def test_spec_t_f16a_ac_6_old_v1_approval_cannot_authorize_v2_policy_hash() -> None:
+    old_target, old_surface = _v1_week2_chat_definitions()
+    old_scope = AuthorizationScope.for_definitions(
+        target=old_target,
+        surface=old_surface,
+        corpus_hash=_CORPUS_HASH,
+        caps=old_target.safety_caps,
+        run_nonce=_RUN_NONCE,
+    )
+    new_target, new_surfaces = _target_and_surfaces()
+    new_scope = _scope(new_target, new_surfaces["chat"])
+    registry = _ready_registry(new_target, [new_surfaces["chat"]])
+
+    assert old_scope.target_id == new_scope.target_id
+    assert old_scope.surface_id == new_scope.surface_id
+    assert old_scope.scope_hash() != new_scope.scope_hash()
+    with pytest.raises(VersionMismatchError):
+        registry.resolve(old_scope)
+    assert registry.resolve(new_scope).authorization_scope == new_scope
 
 
 # spec(T-F16a:AC-6)
@@ -971,11 +1481,28 @@ def test_spec_t_f16a_ac_6_migration_declares_hash_break_invalidation_staging_and
     migration = Path("docs/migrations/final-target-surface-policy-v2.md")
     assert migration.is_file(), "the v2 surface-policy migration note is missing"
     text = migration.read_text(encoding="utf-8").lower()
+    normalized = " ".join(text.split())
 
-    assert "v2" in text
-    assert "hash break" in text
-    assert "old approval" in text
-    assert "invalid" in text
-    assert "staged activation" in text
-    assert "rollback" in text
-    assert "legacy" in text and "single-profile" in text
+    for heading in (
+        "## hash break",
+        "## old approval invalidation",
+        "## staged activation",
+        "## rollback",
+        "## legacy compatibility",
+    ):
+        assert heading in text
+    for changed_hash_input in (
+        "surface_policy",
+        "surface_policy_sha256",
+        "scope_hash",
+    ):
+        assert changed_hash_input in text
+
+    assert "1.0.0 -> 2.0.0 -> 2.1.0" in normalized
+    assert "1.0.0 approvals cannot authorize 2.0.0" in normalized
+    assert "2.0.0" in normalized and "document surfaces remain disabled" in normalized
+    assert "2.1.0" in normalized and "document surfaces" in normalized
+    assert normalized.index("2.0.0") < normalized.index("2.1.0")
+    assert "rollback to 2.0.0" in normalized
+    assert "disable document surfaces" in normalized
+    assert "legacy single-profile" in normalized
