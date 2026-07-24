@@ -108,10 +108,14 @@ class TargetRegistry:
                 raise RegistrationError(
                     "a surface must be registered while its target version is in draft"
                 )
-            expected_authentication = target.auth_mode is not AuthMode.NONE
+            expected_authentication = (
+                target.auth_mode is not AuthMode.NONE
+                if surface.surface_policy is None
+                else surface.surface_policy.auth_mode is not AuthMode.NONE
+            )
             if surface.authentication_required is not expected_authentication:
                 raise RegistrationError(
-                    "surface authentication requirement must match the target auth mode"
+                    "surface authentication requirement must match its trusted auth policy"
                 )
             owner = self._surface_owners.get(surface.surface_id)
             if owner is not None and owner != surface.target_id:
@@ -215,18 +219,37 @@ class TargetRegistry:
             if not surface.enabled:
                 raise SurfaceUnavailableError("surface is disabled")
 
+            if surface.surface_policy is None:
+                trusted_auth_mode = target.auth_mode
+                trusted_credential_ref = target.credential_ref
+                trusted_explicit_no_auth = target.explicit_no_auth
+            else:
+                trusted_auth_mode = surface.surface_policy.auth_mode
+                trusted_credential_ref = surface.surface_policy.credential_ref
+                trusted_explicit_no_auth = surface.surface_policy.explicit_no_auth
+
             expected: tuple[tuple[str, object, object], ...] = (
                 ("adapter_kind", scope.adapter_kind, target.adapter_kind),
                 ("environment", scope.environment, target.environment),
                 ("exact_host", scope.exact_host, target.exact_host),
-                ("auth_mode", scope.auth_mode, target.auth_mode),
-                ("credential_ref", scope.credential_ref, target.credential_ref),
-                ("explicit_no_auth", scope.explicit_no_auth, target.explicit_no_auth),
+                ("auth_mode", scope.auth_mode, trusted_auth_mode),
+                ("credential_ref", scope.credential_ref, trusted_credential_ref),
+                (
+                    "explicit_no_auth",
+                    scope.explicit_no_auth,
+                    trusted_explicit_no_auth,
+                ),
                 ("surface target_id", scope.target_id, surface.target_id),
                 ("surface target_version", scope.target_version, surface.target_version),
                 ("protocol", scope.protocol, surface.protocol),
                 ("method", scope.method, surface.method),
                 ("relative_path", scope.relative_path, surface.relative_path),
+                ("surface_policy", scope.surface_policy, surface.surface_policy),
+                (
+                    "surface_policy_sha256",
+                    scope.surface_policy_sha256,
+                    surface.surface_policy_sha256,
+                ),
             )
             for field, supplied, trusted in expected:
                 if supplied != trusted:
