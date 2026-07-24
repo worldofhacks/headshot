@@ -12,6 +12,11 @@ from typing import Any, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 
+from agentforge.control_plane.finding_decisions import (
+    FindingDecisionReasonCode,
+    validate_finding_decision_reason_code,
+)
+
 _LANGFUSE_DELIVERY_STATES = (
     "not_attempted",
     "disabled",
@@ -241,7 +246,19 @@ class FindingHistoryReadModel(_ReadModel):
     decision: str
     actor_user_id: str
     rationale: str
+    reason_code: FindingDecisionReasonCode | None = None
     created_at: datetime.datetime
+
+    @model_validator(mode="after")
+    def validate_decision_reason_code_pair(self) -> Self:
+        # Migration 0005 allowed null, so historical rows remain readable. Any typed
+        # code must obey the same closed decision pairing as a new command.
+        if self.reason_code is not None:
+            validate_finding_decision_reason_code(
+                decision=self.decision,
+                reason_code=self.reason_code,
+            )
+        return self
 
 
 class FindingReadModel(_ReadModel):

@@ -49,6 +49,9 @@ from agentforge.control_plane.errors import (
     RecordConflictError,
     RecordNotFoundError,
 )
+from agentforge.control_plane.finding_decisions import (
+    validate_finding_decision_reason_code,
+)
 from agentforge.control_plane.records import (
     AuditEventRecord,
     AuthorizationDecisionRecord,
@@ -4658,12 +4661,19 @@ class ControlPlaneStore:
     ) -> FindingDecisionRecord:
         if decision == "resolved":
             self._require_permission(principal, FINDINGS_RESOLVE)
+            if reason_code is not None:
+                raise InvalidControlPlaneInput("resolved findings do not accept a review code")
         elif decision in {"approved", "rejected"}:
             self._require_permission(principal, FINDINGS_APPROVE)
+            try:
+                reason_code = validate_finding_decision_reason_code(
+                    decision=decision,
+                    reason_code=reason_code,
+                )
+            except ValueError as exc:
+                raise InvalidControlPlaneInput(str(exc)) from exc
         else:
             raise InvalidControlPlaneInput("finding decision is invalid")
-        if reason_code is not None and _REASON_CODE.fullmatch(reason_code) is None:
-            raise InvalidControlPlaneInput("reason code is invalid")
         safe_rationale = self._sanitize_plaintext_rationale(rationale)
         document = {
             "finding_id": finding_id,

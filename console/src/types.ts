@@ -1,4 +1,5 @@
 import type { JsonRecord } from "./api/contracts";
+import type { FindingDecisionReasonCode } from "./finding-decisions";
 
 export type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
 
@@ -94,6 +95,7 @@ export interface FindingHistoryReadModel extends JsonRecord {
   decision: string;
   actor_user_id: string;
   rationale: string;
+  reason_code: FindingDecisionReasonCode | null;
   created_at: string;
 }
 
