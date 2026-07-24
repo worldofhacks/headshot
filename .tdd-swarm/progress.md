@@ -159,3 +159,44 @@ packet -> presence-only preflight report. No hosted/target calls; no unverified 
    Current status: Model=empty, Budget/AttemptCap/Rate/Timeout=missing, Canary=unavailable -> live NOT ready
    (fail-closed). No hosted/target call made.
 NEXT: report to owner + STOP for explicit bounded live-campaign authorization.
+
+## 2026-07-24 — Phase 0 / final-submission plan created
+- [locked-decision] Production-grade posture retained; base `23490ea` recorded as 1001 Python passed/3
+  skipped, 75 console tests, 4 browser tests, dual CI green.
+- [locked-decision] Created the ten-ticket minimum manifest T-F01..T-F10 with exclusive same-wave scopes,
+  strict RED→test-review→freeze→GREEN→code/security review sequencing, four-slot accounting, traceability,
+  gate mapping, and role prompts. Planning only; no agent dispatch, application/test edit, live traffic,
+  credential action, commit, push, or main merge.
+- [open-question] Execution remains gated by fresh staging SMART lease, exact authorization, distinct
+  Approver, paid provider/model activation, passing Judge calibration, separate load approval, and any
+  true-production isolation/credential choice.
+- [locked-decision] Existing 9×HTTP-200/9×evidence/9×INDETERMINATE/$0.09 run is transport evidence only;
+  no finding/report is fabricated. PRD-32 remains conditional on three genuine independently reproduced
+  findings.
+
+## 2026-07-24 — Phase 0 plan-review repairs complete
+- [locked-decision] Adversarial review findings C-1..C-5 and I-1..I-4 repaired before dispatch. Superseded
+  ten-ticket hybrids were split into 26 single-concern tickets: T-F00, deterministic `a` tickets,
+  separately authorized `b` evidence tickets, and final reconciliation owners.
+- [locked-decision] Wave 0 now owns spec-lint, one local wrapper, coverage policy/baseline-or-approved-
+  non-applicability, import-cycle validation, and frozen negative tests. No code ticket may reach
+  `review-passed` until T-F00 lands.
+- [locked-decision] Regenerated 82 strict prompts (50 code-role, 32 operational-role) with exact inputs,
+  scopes, report paths, literal status contract, three-attempt cap, frozen-test/verifier rule, gate wrapper,
+  no main merge/push, and named authorization boundaries.
+- [locked-decision] Self-check passed: 26 tickets, 82 expected prompts, acyclic strictly earlier-wave
+  dependencies, no same-wave scope collisions, required ticket sections present, prompt contracts complete,
+  and `git diff --check` clean.
+- [locked-decision] Deadline triage is explicit: P0 maximum safe deterministic proof path; P1 external/human
+  evidence and P2 packaging remain honest blockers. Full completion by noon is not promised.
+
+## 2026-07-24 — Final ticket-context repair complete
+- [locked-decision] Closed re-review finding I-1 by adding `## Context` before Acceptance Criteria in all
+  26 final-gap tickets. Each context names its upstream interface/manifest, authoritative requirement and
+  policy/contract hash source, wave boundary, and task class.
+- [locked-decision] Every authorization-bound context treats the owner-supplied authorization artifact as
+  read-only and makes absence/invalidity `BLOCKED` with zero calls. No ticket ID, scope, dependency, AC,
+  prompt path, application/test file, external state, git history, or remote was changed.
+- [locked-decision] Structural self-check and `git diff --check` passed after the repair: 26/26 Context
+  sections are positioned before Acceptance Criteria and contain all required execution fields; the
+  existing 82-prompt/dependency/scope checks remain green.
