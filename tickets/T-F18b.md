@@ -2,8 +2,8 @@
 id: T-F18b
 title: Add bounded collection, retry, filter, and keyboard-selection primitives
 status: backlog
-wave: 1
-depends_on: []
+wave: 37
+depends_on: [T-F16f, T-F17f, T-F19e]
 branch: ticket/T-F18b-console-collection-controls
 file_scopes:
   - src/agentforge/api/schemas.py
@@ -20,6 +20,7 @@ test_scopes:
   - console/tests/api-client.test.ts
   - console/tests/read-models.test.tsx
   - console/tests/adversarial-text.test.tsx
+  - console/tests/browser/collection-controls.spec.ts
 model_hint: capable
 attempts: 0
 traces_to:
@@ -29,12 +30,14 @@ traces_to:
 
 ## Context
 High-volume lists currently use hard-coded SQL limits and the browser has no cursor, filter, or retry
-contract. Row click handlers are not keyboard-operable. This ticket creates the shared, default-deny
-substrate; page tickets bind their own allowlisted filters and stable sort keys.
+contract. Row click handlers are not keyboard-operable. This ticket creates only the shared,
+default-deny page-request/envelope and interaction seam. T-F18o and page-specific tickets own the
+concrete PostgreSQL stable-sort/cursor queries.
 
 ## Acceptance Criteria
-- **AC-1**: Given a collection read, when no page request is supplied, then the server applies a
-  bounded default; limits above 200, malformed cursors, and unknown filters fail before querying.
+- **AC-1**: Given a collection request, when decoded at the API seam, then a bounded default and
+  maximum 200 are enforced; malformed cursors and unknown filters fail before the backend read
+  method is invoked. This criterion does not claim database paging.
 - **AC-2**: Given a ready collection page, when decoded, then it carries an optional opaque next
   cursor, bounded limit, and `has_more`; event-stream integer cursors remain a separate contract.
 - **AC-3**: Given a transient failed/stale/unavailable read, when the operator chooses Retry, then one
@@ -47,7 +50,7 @@ substrate; page tickets bind their own allowlisted filters and stable sort keys.
 
 ## Test Plan
 - Unit: envelope/query/cursor bounds, API URL rejection, retry state, keyboard semantics.
-- Integration: auth executes before paged reads and invalid paging performs no repository query.
+- Integration: auth executes before backend dispatch and invalid paging performs no backend call.
 - E2E: keyboard-select and recoverable retry flow.
 - Eval: none.
 
@@ -60,4 +63,5 @@ substrate; page tickets bind their own allowlisted filters and stable sort keys.
 - [ ] Independent Code and Security reviews have no Critical/Important findings.
 
 ## Out of Scope
-Page-specific SQL/filter semantics, infinite scrolling, or automatic retry storms.
+Database stable-sort/cursor implementation (T-F18o and page tickets), infinite scrolling, or
+automatic retry storms.

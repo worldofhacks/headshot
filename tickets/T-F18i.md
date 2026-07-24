@@ -2,8 +2,8 @@
 id: T-F18i
 title: Unify target, agent, provider, and handoff trace lineage
 status: backlog
-wave: 8
-depends_on: [T-F18b, T-F18h]
+wave: 45
+depends_on: [T-F18b, T-F18h, T-F17f]
 branch: ticket/T-F18i-trace-lineage
 file_scopes:
   - src/agentforge/api/postgres.py
@@ -45,6 +45,8 @@ executions, provider calls, handoffs, and historical summaries.
   fields say `not_observed`/`historical_not_instrumented`; no fake link or request count is inferred.
 - **AC-5**: Given hostile previews or locators, when rendered, then bounded redacted text and hashes
   are shown without credentials or active markup.
+- **AC-6**: Given trace filters and cursor paging, when queried, then PostgreSQL uses a stable
+  started-at/span-kind/durable-ID order and never duplicates or omits rows across pages.
 
 ## Test Plan
 - Integration: complete chain, missing parent, provider call, legacy row, org isolation, paging.

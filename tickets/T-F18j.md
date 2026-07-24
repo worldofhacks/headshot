@@ -2,19 +2,24 @@
 id: T-F18j
 title: Reconcile measured target and provider accounting on Costs
 status: backlog
-wave: 9
-depends_on: [T-F18i]
+wave: 29
+depends_on: [T-F17b, T-F17c]
 branch: ticket/T-F18j-cost-accounting-truth
 file_scopes:
   - src/agentforge/api/postgres.py
   - src/agentforge/api/read_models.py
+  - src/agentforge/api/birdseye.py
   - console/src/types.ts
   - console/src/api/read-models.ts
   - console/src/screens/ObservabilityScreens.tsx
+  - console/src/screens/ConsoleScreens.tsx
+  - console/src/components/Birdseye.tsx
 test_scopes:
   - tests/test_postgres_api_m1d.py
   - tests/test_work_unit_accounting.py
+  - tests/test_birdseye_api.py
   - console/tests/observability.test.ts
+  - console/tests/birdseye.test.tsx
   - console/tests/read-models.test.tsx
   - console/tests/browser/console.spec.ts
 model_hint: capable
@@ -43,17 +48,26 @@ provider accounting while leaving genuinely absent values unknown.
 - **AC-4**: Given mismatched currency, duplicate accounting IDs, negative values, or summary/ledger
   disagreement, when projected, then state is degraded with an explicit delta/reason rather than
   force-balanced.
-- **AC-5**: Given campaign/provider/role/time filters and cursor paging, when used, then totals apply
+- **AC-5**: Given partial usage, timeout-after-send, or mixed known/unknown physical calls, when
+  campaign totals and Birdseye are projected, then known totals remain measured, unknown portions
+  remain `not_observed`, completeness is `partial`, and retries/provider/campaign summaries are not
+  double counted.
+- **AC-6**: Given campaign/provider/role/time filters and cursor paging, when used, then totals apply
   to the selected authoritative scope and filters remain stable.
+- **AC-7**: Given cost cursor paging, when queried, then PostgreSQL applies a stable
+  recorded-at/accounting-ID order and page-local rows plus scoped totals cannot duplicate or omit
+  accounting records.
 
 ## Test Plan
-- Integration: full observed accounting, partial usage, mismatch, duplicate, multi-currency, paging.
+- Integration: full/partial observed accounting, timeout-after-send, mixed known/unknown, mismatch,
+  duplicate, no-double-count, multi-currency, Birdseye/campaign totals, paging.
 - Frontend: conditional unknown labels, reconciliation deltas, filters.
 - Contract: consume T-F17 accounting fields and preserve exact decimals/currency.
 - Eval: none.
 
 ## Definition of Done
-- [ ] T-F17 accounting prerequisite is merged before GREEN integration.
+- [ ] T-F17b/T-F17c provider-lineage prerequisites are merged before GREEN integration; T-F17e
+  deployment capability remains blocked until this ticket passes.
 - [ ] Independent Test Agent records RED and Test Reviewer freezes it.
 - [ ] Separate Implementation Agent reaches GREEN without test edits.
 - [ ] Orchestrator reruns accounting/API/console/typecheck/browser gates.

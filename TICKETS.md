@@ -135,34 +135,43 @@ T-F07a, T-F08, T-F09a/b, T-F12, T-F13, T-F10a/b/c, T-F15, final T-F01b.
 
 ## Console page-truth remediation addendum
 
-Planning source: `docs/planning/console-pages-remediation.md`. T-F18 consumes canonical target and
-provider-lineage contracts from T-F16/T-F17, but owns only console navigation, read projections, and
-human-facing truth. Every feature ticket runs Test RED → independent Test Review → freeze →
-Implementation GREEN → orchestrator gate rerun → independent Code and Security reviews.
+Planning sources: `docs/planning/full-console-remediation.md` and
+`docs/planning/console-pages-remediation.md`. The one global sequence below is mechanical:
+T-F16f owns target/surface fanout; T-F17 owns hosted-agent runtime; T-F19 owns per-tool ScanPlan,
+brokers, fanout, reconciliation, and event producers; T-F18 owns read models and console behavior.
+Do not start RED before every listed dependency completion commit is present. Rebase the combined
+branch after T-F16f/T-F17f and before T-F19a. Shared file scopes serialize by these waves.
 
 | wave | ticket | outcome | dependencies |
 |---:|---|---|---|
-| 1 | T-F18a | Canonical navigation; Resilience replace-redirect | — |
-| 1 | T-F18b | Bounded collection, retry, filter, keyboard primitives | — |
-| 2 | T-F18c | Coverage & Regression truthful projection/page | T-F18a, T-F18b |
-| 3 | T-F18d | Exact ScanPlan Tooling evidence | T-F18b, T-F18c |
-| 4 | T-F18e | Evidence-derived Birdseye and fanout state | T-F18d |
-| 5 | T-F18f | Complete vulnerability-report detail | T-F18b, T-F18e |
-| 6 | T-F18g | Approval preflight/reasons/confirmation | T-F18b, T-F18f |
-| 7 | T-F18h | Canonical target/readiness truth | T-F18g; T-F16 prerequisite |
-| 8 | T-F18i | Unified target/agent/provider trace lineage | T-F18b, T-F18h; T-F17 prerequisite |
-| 9 | T-F18j | Measured cost/token reconciliation | T-F18i; T-F17 prerequisite |
-| 10 | T-F18k | Durable Live selection and targeted SSE refresh | T-F18d/e/g/h/j |
-| 11 | T-F18l | Whole-console route/accessibility/release audit | T-F18a..T-F18k |
+| 29 | T-F18j | Accounting/Birdseye unknown-usage bridge | T-F17b, T-F17c |
+| 30 | T-F17e | Hosted runtime deployment | T-F17d, T-F18j |
+| 31 | T-F17f | Agents/runtime projection | T-F17e |
+| 32 | T-F19a | Versioned persisted Tool ScanPlan | T-F16f, T-F17f |
+| 33 | T-F19b | Offline/repository tool brokers | T-F19a |
+| 34 | T-F19c | Separately authorized passive ZAP | T-F19b |
+| 35 | T-F19d | Per-tool fanout and reconciliation | T-F19c |
+| 36 | T-F19e | Real event producers and polling recovery | T-F19d |
+| 37 | T-F18a, T-F18b | Navigation plus collection seam | T-F16f, T-F17f, T-F19e |
+| 38 | T-F18o | Residual DB pagination | T-F18b, T-F17f, T-F19e |
+| 39 | T-F18c | Coverage & Regression | T-F18a, T-F18o |
+| 40 | T-F18d | Five-state Tooling projection | T-F18c, T-F19e |
+| 41 | T-F18e | Evidence-derived Birdseye | T-F18d, T-F19e |
+| 42 | T-F18f | Complete Findings | T-F18e, T-F18o |
+| 43 | T-F18g | Exhaustive material-command confirmation | T-F18b, T-F18f, T-F17f |
+| 44 | T-F18h | Canonical target/readiness truth | T-F18g, T-F16f |
+| 45 | T-F18i | Unified trace lineage | T-F18b, T-F18h, T-F17f |
+| 46 | T-F18k | Durable Live selection and refresh | T-F18d/e/g/h/i/j, T-F19e |
+| 47 | T-F18m | Configuration plus embedded Audit | T-F18k, T-F18o, T-F17f, T-F19e |
+| 48 | T-F18l | Deterministic route/accessibility manifest | all deterministic predecessors |
+| 49 | T-F18n | Authenticated exact-SHA production evidence | T-F16f, T-F17f, T-F19e, T-F18l |
 
-```text
-{T-F18a,T-F18b} -> T-F18c -> T-F18d -> T-F18e -> T-F18f -> T-F18g
-T-F18g + T-F16 -> T-F18h
-T-F18h + T-F17 -> T-F18i -> T-F18j
-{T-F18d,T-F18e,T-F18g,T-F18h,T-F18j} -> T-F18k
-{T-F18a..T-F18k} -> T-F18l
-```
+T-F18j intentionally lands between T-F17c and T-F17e so unknown hosted usage cannot be coerced to
+zero in the deployment path. T-F18n is operational and uses execute/evidence/security review rather
+than RED/GREEN; it may truthfully remain `BLOCKED` when owner grants or authentication are absent.
 
 [locked-decision] Coverage stays and is renamed **Coverage & Regression**. The standalone
 Resilience page/navigation is removed, while `/resilience` temporarily replace-redirects to
-`/coverage`. Tooling cannot claim all-tools completion without an immutable persisted ScanPlan.
+`/coverage`. Audit remains permission-gated inside Configuration. Tooling cannot claim all-tools
+completion unless installed, configured, generated, executed, and evidenced/adjudicated are
+independently supported for every applicable immutable ScanPlan item.

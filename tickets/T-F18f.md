@@ -2,8 +2,8 @@
 id: T-F18f
 title: Expose complete schema-validated vulnerability reports
 status: backlog
-wave: 5
-depends_on: [T-F18b, T-F18e]
+wave: 42
+depends_on: [T-F18e, T-F18o]
 branch: ticket/T-F18f-vulnerability-report-ui
 file_scopes:
   - src/agentforge/api/postgres.py
@@ -46,6 +46,8 @@ publication and evidence-integrity controls.
   is labeled `normalized scan finding — full report not generated`; missing fields are not invented.
 - **AC-5**: Given critical/draft content, when displayed, then publication/remediation controls remain
   human-gated and the UI never describes the report as published without persisted approval state.
+- **AC-6**: Given finding/report filters and a cursor, when queried, then PostgreSQL returns a bounded
+  stable created-at/finding/report order without duplicate or skipped records.
 
 ## Test Plan
 - Integration: valid report round-trip, corrupt payload/hash/link, org isolation, tool-only finding.

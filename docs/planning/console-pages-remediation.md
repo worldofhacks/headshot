@@ -4,7 +4,8 @@ Status: planner draft for adversarial review
 Planning base: `1ac3ee02be7855b638dd1fa43bb0612a3db5f025`
 Requirements authority: `Week_3_AgentForge.pdf`
 Build posture: production-grade
-Ticket namespace: `T-F18a` through `T-F18l`
+Ticket namespaces: `T-F19a` through `T-F19e` (tool-plan producers) and `T-F18a` through
+`T-F18o` (console consumers and release proof)
 
 ## Outcome
 
@@ -26,14 +27,18 @@ The route and page decisions are:
 | `/resilience` | Remove from navigation and page switch; temporary replace-redirect to `/coverage` | No regression records are deleted |
 | `/tooling` | Keep; rebuild as a target/surface/campaign ScanPlan ledger | Every applicable tool has a persisted state and reason |
 | Birdseye on `/live` | Keep; correct never-run and false-complete states | Health requires fresh evidence; edges require an observed handoff |
+| `/agents` | Keep; consume T-F17f | Configured, staged, and provider-observed prompt/model facts remain separate |
 | `/traces` | Keep; include target requests, agent executions, provider calls, and handoffs | Each row identifies its span kind and lineage |
 | `/costs` | Keep; reconcile measured target and provider accounting | Unknown tokens/cost remain unknown; no inferred tokens-times-rate values |
 | `/targets` | Keep; show canonical targets and enabled-surface readiness | Duplicate aliases and disabled-surface templates block launch |
+| `/config` | Keep; rebuild as deployment/configuration truth | Installed, configured, activated, heartbeat, and execution evidence remain separate |
+| `/audit` API | Keep permission-gated; subsume into Configuration | No separate navigation item; paged append-only history is part of the Config control-plane view |
 | Shared tables/resources | Keep; add retry, cursor pagination, stable filters, and keyboard selection | High-volume views are bounded and accessible |
 
-The Agents page and its OpenRouter prompt/model lineage are owned by the separate `T-F17*` runtime
-plan. Final-target adapter execution is owned by `T-F16*`. This plan consumes those contracts but
-does not duplicate their implementation scopes.
+The Agents page and its OpenRouter prompt/model lineage are owned by T-F17f. Final-target
+surface fanout is owned by T-F16f. Per-tool plan construction, execution fanout, authorization,
+evidence, and event production are separately owned by T-F19a through T-F19e. T-F18 is a consumer
+of those landed contracts and does not duplicate their implementation scopes.
 
 ## Requirements trace
 
@@ -46,6 +51,7 @@ does not duplicate their implementation scopes.
 | OPT-12: pagination, rate limits, auth | Shared cursor/filter/retry controls and bounded collection APIs | T-F18b |
 | LEAD-03: governed tool visibility and retained evidence | Tooling is scoped to exact target/version/surface/campaign/plan/tool | T-F18d |
 | LEAD-05: durable lineage, cost, trends, reappearance | Birdseye, trace, cost, and coverage projections reconcile persisted records | T-F18c, T-F18e, T-F18i, T-F18j |
+| Full page/module inventory | Agents, Configuration, embedded Audit, route registry, and operational proof are explicit | T-F17f, T-F18m, T-F18l, T-F18n |
 
 ## Truth invariants
 
@@ -69,12 +75,28 @@ does not duplicate their implementation scopes.
 11. Unknown, malformed, unauthorized, stale, or unpaged data fails closed and offers a bounded retry.
 12. Canonical navigation replaces invalid routes and `/resilience`; it does not silently render Live
     under a misleading URL.
+13. `installed`, `configured`, `generated`, `executed`, and `evidenced/adjudicated` are independent
+    tool facts. No one fact implies another.
 
-## Scan fanout visibility contract
+## ScanPlan producer and fanout contract
 
-The console does not schedule tools. It consumes the immutable ScanPlan created by the separate
-tool-orchestration workstream. Until that plan exists, Tooling and Birdseye must say
-`blocked: scan_plan_not_persisted`; they must not synthesize an all-tools success state.
+T-F16f owns one authorized target's surface children. It does not own per-tool execution.
+T-F19a through T-F19e close that distinct boundary:
+
+1. T-F19a versions and persists the immutable per-tool ScanPlan, plan-item, event, artifact, candidate
+   review, and reconciliation contracts.
+2. T-F19b inventories pinned installations/configurations and runs the offline generation and
+   exact-release assurance brokers for Garak, PyRIT, Giskard, Promptfoo, Semgrep, pip-audit,
+   npm-audit, Gitleaks, and the Headshot workbench.
+3. T-F19c owns separate two-person authorization and the bounded passive ZAP broker.
+4. T-F19d fans plan items through private Runner workers, binds reviewed case hashes to authorized
+   live attempts, persists artifacts/findings/errors, and reconciles every terminal state.
+5. T-F19e emits persisted campaign, attempt, tool, agent, finding, approval, and component events to
+   the authenticated stream and provides a bounded authoritative polling fallback.
+
+The console consumes that immutable ScanPlan. Until T-F19e is integrated and the selected campaign
+has a plan, Tooling and Birdseye must say `blocked: scan_plan_not_persisted`; they must not synthesize
+an all-tools success state.
 
 Each displayed plan item requires:
 
@@ -91,29 +113,53 @@ tool is present in the plan and reaches a truthful terminal state. Repository as
 exact-release-SHA evidence; offline generators contribute reviewed cases; passive ZAP has its own
 authorization. The console may not imply that those different modes are equivalent.
 
-## Ticket inventory
+For each tool, the plan and console independently record:
 
-| Ticket | Concern | Wave | Key dependency |
-|---|---|---:|---|
-| T-F18a | Navigation, Resilience redirect, URL normalization | 1 | none |
-| T-F18b | Bounded collections, retry, filters, keyboard selection | 1 | none |
-| T-F18c | Coverage & Regression projection and page | 2 | T-F18a, T-F18b |
-| T-F18d | Target/surface/campaign-scoped Tooling evidence | 3 | T-F18b; persisted ScanPlan contract |
-| T-F18e | Birdseye runtime truth and scan-fanout visibility | 4 | T-F18d |
-| T-F18f | Complete vulnerability-report projection and UI | 5 | T-F18b |
-| T-F18g | Approval preflight, reason fidelity, confirmation | 6 | T-F18b |
-| T-F18h | Canonical target identity and enabled-surface launch readiness | 7 | T-F18g; T-F16 canonical catalog |
-| T-F18i | Unified trace lineage and filters | 8 | T-F18b; T-F17 provider lineage |
-| T-F18j | Measured cost/token reconciliation and filters | 9 | T-F18i; T-F17 provider accounting |
-| T-F18k | Stable Live selection and targeted SSE reconciliation | 10 | T-F18d, T-F18e, T-F18g, T-F18h |
-| T-F18l | Full-route browser/accessibility/release proof | 11 | T-F18a..T-F18k |
+- **installed**: pinned binary/package identity and verification source;
+- **configured**: activated configuration hash and required credential-reference readiness;
+- **generated**: candidate/artifact production and independent accepted/rejected review counts;
+- **executed**: broker/process or authorized target-attempt lineage and terminal state;
+- **evidenced/adjudicated**: retained artifact hash, normalized finding/error, Judge/report
+  disposition, and freshness.
 
-The sequence is intentionally conservative. The current backend projection code is concentrated in
-`src/agentforge/api/postgres.py`, while several page contracts share
+Negative tests must prove every combination in which one dimension exists and the next does not.
+
+## Global ticket inventory and merge order
+
+| Global wave | Ticket | Concern | Mechanical dependencies |
+|---:|---|---|---|
+| 29 | T-F18j | Known/partial/not-observed target/provider/Birdseye cost truth | T-F17b, T-F17c |
+| 30 | T-F17e | Hosted capability/deployment gate | T-F17d, T-F18j |
+| 31 | T-F17f | Agents configured-versus-observed UI | T-F17e |
+| 32 | T-F19a | Versioned per-tool ScanPlan/persistence | T-F16f, T-F17f |
+| 33 | T-F19b | Installation/configuration inventory; offline generation/release assurance brokers | T-F19a |
+| 34 | T-F19c | Separate passive-ZAP authorization and broker | T-F19b |
+| 35 | T-F19d | Runner fanout, artifact/finding persistence, reconciliation | T-F19c |
+| 36 | T-F19e | Durable resource-event producers and polling fallback | T-F19d |
+| 37 | T-F18a, T-F18b | Canonical routes; collection request/envelope/interaction seam | T-F16f, T-F17f, T-F19e |
+| 38 | T-F18o | Bounded stable database paging for residual collections | T-F18b, T-F17f, T-F19e |
+| 39 | T-F18c | Coverage & Regression projection/page/paging | T-F18a, T-F18o |
+| 40 | T-F18d | Target/surface/campaign-scoped Tooling evidence | T-F18c, T-F19e |
+| 41 | T-F18e | Birdseye runtime truth and scan-fanout visibility | T-F18d, T-F19e |
+| 42 | T-F18f | Complete vulnerability-report projection/UI/paging | T-F18e, T-F18o |
+| 43 | T-F18g | Command registry, preflight, reason fidelity, confirmation | T-F18b, T-F18f, T-F17f |
+| 44 | T-F18h | Canonical target identity and enabled-surface readiness | T-F18g, T-F16f |
+| 45 | T-F18i | Unified trace lineage and filters | T-F18b, T-F18h, T-F17f |
+| 46 | T-F18k | Stable Live selection and event/poll reconciliation | T-F18d, T-F18e, T-F18g, T-F18h, T-F18i, T-F18j, T-F19e |
+| 47 | T-F18m | Configuration truth and embedded Audit | T-F18k, T-F18o, T-F17f, T-F19e |
+| 48 | T-F18l | Deterministic page registry/accessibility matrix | T-F16f, T-F17f, T-F19e, T-F18a through T-F18k, T-F18m, T-F18o |
+| 49 | T-F18n | Exact-SHA authenticated production evidence | T-F16f, T-F17f, T-F19e, T-F18l |
+
+The integration branch must first contain T-F16f, T-F17f, T-F19e, and
+`docs/planning/full-console-remediation.md`. The T-F18 integration branch is then rebased once onto
+that exact commit before any T-F18 RED dispatch. This is a mechanical base gate, not a prose
+prerequisite.
+
+The sequence is intentionally conservative. `src/agentforge/api/postgres.py`,
 `src/agentforge/api/read_models.py`, `console/src/types.ts`, and
-`console/src/api/read-models.ts`. Tickets that touch those files are serialized rather than
-pretending they can safely merge in parallel. T-F18a and T-F18b are the only same-wave tickets and
-their scopes are disjoint.
+`console/src/api/read-models.ts` are shared by T-F17f and most later tickets. T-F17f lands before
+T-F19a; T-F19a through T-F19e serialize; then T-F18 projection tickets serialize. Only T-F18a and
+T-F18b share wave 37, and their file scopes are disjoint.
 
 ## TDD execution protocol
 
@@ -134,8 +180,9 @@ Every ticket follows the same separation of powers:
 7. Wave integration runs the repository gates, architecture-drift review, secret scan, and affected
    browser tests. Integration failures become new repair tickets; the integrator does not patch.
 
-No ticket may claim a live tool run, provider call, target request, deployment, or human approval
-from fixtures. Those are separately authorized release evidence.
+No implementation ticket may claim a live tool run, provider call, target request, deployment, or
+human approval from fixtures. T-F18n is the separate operational evidence task and remains blocked
+until its external authorities are present.
 
 ## Release gates
 
@@ -156,14 +203,17 @@ The console branch is releasable only when:
 - the exact commit is green in GitHub and GitLab CI, deployed by an authorized owner, and verified
   through an authenticated Headshot Organization browser session.
 
+T-F18l owns only the deterministic registry/accessibility gate. T-F18n owns authenticated production
+evidence after exact-SHA dual CI, owner deployment, Headshot authentication, and all target/runtime/
+tool prerequisites. T-F18n cannot repair code; a deterministic or operational failure files a repair
+ticket and blocks release.
+
 ## External prerequisites and blockers
 
-- `T-F16*` must provide one canonical target identity per final target and enabled, reviewed surface
-  definitions. This plan will not guess which duplicate alias is authoritative.
-- `T-F17*` must persist provider-confirmed model, request, prompt, token, and cost lineage. Trace and
-  cost pages remain `not_observed` until that data exists.
-- Tool-orchestration work must persist the immutable ScanPlan and per-tool execution lineage. This
-  plan fails closed without it; it does not fabricate fanout.
+- T-F16f must land the canonical target surface fanout before T-F19a.
+- T-F17f must land provider-confirmed model, request, prompt, token, cost, and Agents UI truth before
+  T-F19a and every shared projection/UI consumer.
+- T-F19e must land the complete per-tool plan/fanout/event chain before T-F18 RED begins.
 - A distinct Headshot Approver is still required for each live campaign. Console UX cannot waive the
   two-person invariant.
 - Authenticated production browser access is required for the final visual/interaction pass.

@@ -2,8 +2,8 @@
 id: T-F18c
 title: Merge distinct-case coverage and versioned regression truth
 status: backlog
-wave: 2
-depends_on: [T-F18a, T-F18b]
+wave: 39
+depends_on: [T-F18a, T-F18o]
 branch: ticket/T-F18c-coverage-regression
 file_scopes:
   - src/agentforge/api/postgres.py
@@ -47,6 +47,8 @@ right-reason regression validation distinct.
   the browser makes no `/resilience` resource request.
 - **AC-5**: Given missing comparison data or integrity failure, when rendered, then the exact
   unavailable/indeterminate reason is visible and no improving/degrading claim is synthesized.
+- **AC-6**: Given coverage/regression filters and an opaque cursor, when queried, then PostgreSQL
+  applies a stable target/version/as-of/identity order, bounded limit, and no duplicate/omitted rows.
 
 ## Test Plan
 - Unit: decoder rejects attempt-as-case and missing disposition fields.

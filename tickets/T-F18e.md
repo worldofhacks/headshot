@@ -2,8 +2,8 @@
 id: T-F18e
 title: Make Birdseye runtime and handoff state evidence-derived
 status: backlog
-wave: 4
-depends_on: [T-F18d]
+wave: 41
+depends_on: [T-F18d, T-F19e]
 branch: ticket/T-F18e-birdseye-truth
 file_scopes:
   - src/agentforge/api/birdseye.py

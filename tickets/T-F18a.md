@@ -2,8 +2,8 @@
 id: T-F18a
 title: Canonicalize console navigation and retire the Resilience page
 status: backlog
-wave: 1
-depends_on: []
+wave: 37
+depends_on: [T-F16f, T-F17f, T-F19e]
 branch: ticket/T-F18a-console-navigation
 file_scopes:
   - console/src/router.ts
@@ -23,7 +23,8 @@ traces_to:
 ## Context
 Coverage, pass/fail by version, resilience-over-time, and regression state are required, but they do
 not require two competing navigation destinations. The retained destination is `/coverage`, labeled
-`Coverage & Regression`. `/resilience` is a temporary compatibility redirect, not a screen.
+`Coverage & Regression`. `/resilience` is a temporary compatibility redirect, not a screen. RED
+begins only from the integration commit containing T-F16f, T-F17f, and T-F19e.
 
 ## Acceptance Criteria
 - **AC-1**: Given desktop or mobile navigation, when rendered, then exactly one

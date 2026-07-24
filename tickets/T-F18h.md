@@ -2,8 +2,8 @@
 id: T-F18h
 title: Enforce canonical target identity and enabled-surface launch readiness
 status: backlog
-wave: 7
-depends_on: [T-F18g]
+wave: 44
+depends_on: [T-F18g, T-F16f]
 branch: ticket/T-F18h-target-registry-truth
 file_scopes:
   - src/agentforge/api/postgres.py
@@ -21,7 +21,7 @@ attempts: 0
 traces_to:
   - Week_3_AgentForge.pdf live-system hard gate and trust boundaries
   - docs/requirements/REQUIREMENTS_MATRIX.csv PRD-03, PRD-09, LEAD-09
-  - T-F16 canonical final-target catalog contract
+  - T-F16f canonical final-target catalog and surface-fanout contract
 ---
 
 ## Context

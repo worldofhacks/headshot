@@ -2,8 +2,8 @@
 id: T-F18d
 title: Rebuild Tooling around exact ScanPlan execution evidence
 status: backlog
-wave: 3
-depends_on: [T-F18b, T-F18c]
+wave: 40
+depends_on: [T-F18c, T-F19e]
 branch: ticket/T-F18d-tooling-scan-plan
 file_scopes:
   - src/agentforge/api/postgres.py
@@ -36,18 +36,24 @@ closed if it does not exist. This ticket observes fanout; it does not execute to
 - **AC-2**: Given a ScanPlan item, when shown, then status is exactly `planned`, `running`, `complete`,
   `skipped`, `not_applicable`, `blocked`, or `failed`, with applicability/reason, tool/config version,
   authorization mode, process/run identity, and artifact lineage.
-- **AC-3**: Given no persisted ScanPlan, when Tooling loads, then it reports
+- **AC-3**: Given any tool, when projected, then `installed`, `configured`, `generated`, `executed`,
+  and `evidenced/adjudicated` are independent typed facts with authoritative source and freshness;
+  none implies another.
+- **AC-4**: Given no persisted ScanPlan, when Tooling loads, then it reports
   `blocked: scan_plan_not_persisted`; catalog capability and static CI evidence are never presented as
   target execution.
-- **AC-4**: Given all applicable plan items, when the summary is computed, then `complete` requires
+- **AC-5**: Given all applicable plan items, when the summary is computed, then `complete` requires
   every item terminal plus reconciled candidate/live-attempt/physical-request counts; separate
   authorization and not-applicable states remain visible.
-- **AC-5**: Given a target/surface/campaign selector, when data refreshes or pages, then selection is
+- **AC-6**: Given installed-only, configured-only, generated-only, executed-without-artifact, and
+  evidenced-without-adjudication records, when rendered, then each missing next dimension remains
+  visibly false/not observed and the page cannot call the tool complete.
+- **AC-7**: Given a target/surface/campaign selector, when data refreshes or pages, then selection is
   by durable identity, filters remain stable, and freshness/artifact links are bounded and sanitized.
 
 ## Test Plan
-- Integration: cross-scope bleed, no-plan, partial-plan, failed, blocked, and reconciled-complete DB
-  cases.
+- Integration: cross-scope bleed, no-plan, partial-plan, five-dimension negative matrix, failed,
+  blocked, reconciled-complete, and stable paging DB cases.
 - Frontend: status vocabulary, durable selection, capability-versus-evidence labels, pagination.
 - Security: artifact locator allowlist/redaction and organization isolation.
 - Eval: none.
@@ -61,4 +67,4 @@ closed if it does not exist. This ticket observes fanout; it does not execute to
 
 ## Out of Scope
 Tool brokers, scheduling/fanout, provider or target traffic, ZAP authorization, and candidate review.
-Those remain external prerequisites; absence is a truthful blocked state.
+Those are owned by T-F19a through T-F19e; absence is a truthful blocked state.

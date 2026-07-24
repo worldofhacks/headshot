@@ -1,9 +1,9 @@
 ---
 id: T-F18l
-title: Gate every console page with an auditable route and accessibility manifest
+title: Gate every console page with a deterministic route and accessibility manifest
 status: backlog
-wave: 11
-depends_on: [T-F18a, T-F18b, T-F18c, T-F18d, T-F18e, T-F18f, T-F18g, T-F18h, T-F18i, T-F18j, T-F18k]
+wave: 48
+depends_on: [T-F16f, T-F17f, T-F19e, T-F18a, T-F18b, T-F18c, T-F18d, T-F18e, T-F18f, T-F18g, T-F18h, T-F18i, T-F18j, T-F18k, T-F18m, T-F18o]
 branch: ticket/T-F18l-console-release-audit
 file_scopes:
   - console/src/page-registry.ts
@@ -31,7 +31,8 @@ A registry prevents a route from silently escaping review while remaining the na
 ## Acceptance Criteria
 - **AC-1**: Given the production page registry, when checked, then every retained route declares one
   canonical path, title, PRD trace, required permission, data resources, material commands, empty/
-  unavailable/stale/error behavior, and browser scenario; Resilience is redirect-only.
+  unavailable/stale/error behavior, and browser scenario; Agents is bound to T-F17f,
+  Configuration embeds Audit, and Resilience is redirect-only.
 - **AC-2**: Given application navigation and route switching, when built, then both derive from the
   registry and the checker fails on orphaned screen components, paths, resources, or commands.
 - **AC-3**: Given an authenticated Headshot test principal, when Playwright visits every route at
@@ -40,14 +41,14 @@ A registry prevents a route from silently escaping review while remaining the na
 - **AC-4**: Given ready, empty, unavailable, stale, degraded, error, permission-denied, and expired
   command states, when the route matrix runs, then every page renders a truthful recovery path and
   never displays fixture/sample data as live.
-- **AC-5**: Given the exact release SHA, when release evidence is produced, then unit/API/browser/
-  bundle/secret-scan commands, result counts, authenticated production URL checks, and unresolved
-  external blockers are recorded without credentials or target data.
+- **AC-5**: Given a clean local checkout, when the deterministic release matrix runs, then unit/API/
+  browser/bundle/forbidden-language/secret-scan commands and result counts are recorded without
+  credentials, network calls, target data, deployment, or production-authentication claims.
 
 ## Test Plan
 - Unit: registry completeness and orphan detection.
 - E2E: route/state/viewport/keyboard/accessibility matrix.
-- Release: exact-SHA production bundle, forbidden-language, and secret scan.
+- Release: deterministic local bundle, forbidden-language, and secret scan only.
 - Eval: none.
 
 ## Definition of Done
@@ -55,8 +56,8 @@ A registry prevents a route from silently escaping review while remaining the na
 - [ ] Separate Implementation Agent reaches GREEN without changing tests.
 - [ ] Orchestrator runs the complete console and affected Python gate suite from a clean install.
 - [ ] Independent whole-branch Code, Security, accessibility, and architecture-drift reviews pass.
-- [ ] GitHub and GitLab CI are green for the same SHA; owner deployment and authenticated browser
-  verification are recorded separately.
+- [ ] Independent reviewers confirm the deterministic evidence makes no deployment or authenticated
+  production claim; T-F18n owns that separate operational proof.
 
 ## Out of Scope
 Self-approving deployment, performing a live scan, recording credentials, or concealing blockers.

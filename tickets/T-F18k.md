@@ -2,8 +2,8 @@
 id: T-F18k
 title: Stabilize Live selection and target event-driven reconciliation
 status: backlog
-wave: 10
-depends_on: [T-F18d, T-F18e, T-F18g, T-F18h, T-F18j]
+wave: 46
+depends_on: [T-F18d, T-F18e, T-F18g, T-F18h, T-F18i, T-F18j, T-F19e]
 branch: ticket/T-F18k-live-event-reconciliation
 file_scopes:
   - console/src/App.tsx
@@ -33,18 +33,25 @@ Birdseye together. Reconciliation must be durable-ID-based, bounded, and resourc
   explicitly clears selection; it never launches from a stale object.
 - **AC-2**: Given ordered campaign/attempt/tool/agent/finding/approval/component events, when received,
   then a bounded event-to-resource map coalesces refreshes and only invalidates affected projections.
-- **AC-3**: Given burst, reconnect, duplicate, gap, or out-of-order events, when reconciled, then each
+- **AC-3**: Given one real persisted event for every mapped resource class, when T-F19e publishes it,
+  then the authenticated production event route delivers it with ordered cursor and the affected
+  projection is re-read; tool and agent coverage cannot be proved by a hand-constructed browser event.
+- **AC-4**: Given a producer class that is unavailable or an event gap/reconnect, when Live runs, then
+  bounded authenticated polling re-reads the authoritative resource until producer health returns;
+  absence of an event never freezes state indefinitely.
+- **AC-5**: Given burst, reconnect, duplicate, gap, or out-of-order events, when reconciled, then each
   resource has at most one pending refresh, gaps force one authoritative re-read, and cursor
   correctness is preserved.
-- **AC-4**: Given a selected run, when Live renders, then exact target/surface, ScanPlan states,
+- **AC-6**: Given a selected run, when Live renders, then exact target/surface, ScanPlan states,
   logical/physical progress, preflight/approval, agents, costs, caps, and abort state link to the
   authoritative page contracts without duplicating their calculations.
-- **AC-5**: Given an abort/rerun command, when state changes, then confirmation/reason behavior from
+- **AC-7**: Given an abort/rerun command, when state changes, then confirmation/reason behavior from
   T-F18g applies and selection remains consistent with the acknowledged server resource ID.
 
 ## Test Plan
 - Unit: event classification, coalescing, gaps, stable ID resolution.
-- Integration: mocked authenticated SSE plus changed server projections, without optimistic rows.
+- Integration: real persisted T-F19e event for every mapped resource plus changed server projections,
+  producer-unavailable polling fallback, and no optimistic rows.
 - E2E: select campaign, receive partial/final events, preserve correct selected run.
 - Eval: none.
 
@@ -55,4 +62,5 @@ Birdseye together. Reconciliation must be durable-ID-based, bounded, and resourc
 - [ ] Independent Code and Security reviews have no Critical/Important findings.
 
 ## Out of Scope
-Changing event production, campaign scheduling, tool fanout, or target adapters.
+Changing event production, campaign scheduling, tool fanout, or target adapters. Event production is
+owned and frozen by T-F19e before this consumer ticket begins.
