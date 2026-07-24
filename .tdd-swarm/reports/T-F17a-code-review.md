@@ -1,86 +1,80 @@
-# T-F17a GREEN Code and Security Review
+# T-F17a GREEN Code and Security Re-review
 
 Status: `DONE`
 
-Verdict: `CHANGES_REQUIRED`
+Verdict: `PASS`
 
-Reviewed implementation: `7ecff119e1381b3d656a03c34e286657a1a19161`
+Reviewed repair: `ebe4432407f1ab780ac75003fd2dbb6a304d0141`
+
+Prior review: `1e5e21de1fc6b6346be75327fb4f5d3f8d7fb8d8`
 
 Frozen base: `f22609140b7f9e1fe7d53761668bd778b8dfbda6`
 
-## Frozen-test integrity
+## Findings
 
-The frozen tests are unchanged:
+No Critical, Important, or Minor findings.
+
+The narrow repair closes the prior Important secret-family gap. The added expressions in
+`src/agentforge/agents/prompts/__init__.py:28-43` cover GitHub classic/fine-grained tokens, Google
+API keys, environment- and JSON-shaped sensitive assignments including provider keys and sessions,
+raw JWTs, and credential-bearing PostgreSQL URLs. They remain bounded and feed the existing closed
+content check. Public validation still translates failures to the one generic
+`prompt registry validation failed` error without retaining prompt fragments
+(`src/agentforge/agents/prompts/__init__.py:121-148`).
+
+## Independent adversarial verification
+
+A reviewer-owned probe started with the exact package-owned bundle, injected each synthetic secret
+shape into each role, and updated that resource's manifest SHA-256 so digest mismatch could not
+mask secret detection.
+
+All `60/60` role/shape bundles were rejected:
+
+- the eight bypasses from the prior review: GitHub classic, GitHub fine-grained, Google API key,
+  prefixed OpenRouter API-key assignment, target-session assignment, quoted JSON password, raw JWT,
+  and credential-bearing PostgreSQL URL;
+- the previously covered families recorded by that review: OpenRouter provider token, AWS access
+  id, Slack token, Clerk secret, Bearer value, bare API-key assignment, and PEM private-key header;
+- each of the fifteen families was varied across `orchestrator`, `red_team`, `judge`, and
+  `documentation`.
+
+Every failure was exactly `PromptRegistryError("prompt registry validation failed")`. The supplied
+value was absent from `str(error)`, `repr(error)`, cause, and context. No case was accepted and no
+provider, target, credential, environment, or network operation occurred.
+
+## Frozen and package-resource integrity
+
+Frozen tests remain byte-identical:
 
 - `tests/test_agent_prompts.py`
-  - Frozen/current SHA-256: `8e5b003c2160fdee2333e56da6c0e4e505708296f0325de76eb27262a15014bc`
-  - Frozen/current Git blob: `ea8940325146877f22038a8e275b025bcf798cbb`
+  - SHA-256: `8e5b003c2160fdee2333e56da6c0e4e505708296f0325de76eb27262a15014bc`
+  - Git blob: `ea8940325146877f22038a8e275b025bcf798cbb`
 - `tests/test_packaging.py`
-  - Frozen/current SHA-256: `53ad0d07fe7f19d2f7c2cc37edd1f1a56dfeaac2709b7d1c04f2204a6473d5fe`
-  - Frozen/current Git blob: `33a22029da045d05888993545e3b94a87cc04ae1`
+  - SHA-256: `53ad0d07fe7f19d2f7c2cc37edd1f1a56dfeaac2709b7d1c04f2204a6473d5fe`
+  - Git blob: `33a22029da045d05888993545e3b94a87cc04ae1`
 
-The implementation diff contains no test edit.
+The manifest, four prompt resources, and `pyproject.toml` are unchanged from the reviewed
+implementation `7ecff119e1381b3d656a03c34e286657a1a19161`:
 
-## Finding
+- manifest SHA-256:
+  `211751e3419f68306820c5d57197a919cbb6ca0036786e46e916588a01529dc7`;
+- orchestrator prompt SHA-256:
+  `0d851bb22f98921de1e8de42d90cd50fde73603d251b3a38c6591fd6f5a91bb2`;
+- red-team prompt SHA-256:
+  `72310c2141e50bc5da0a85e8e2cad82a16ba2490aa6265efa8dc26790129a776`;
+- Judge prompt SHA-256:
+  `ae95f4b8398410b40c0b9b028aec47b6d7e027965b4f3eea4f5b524e58a29065`;
+- Documentation prompt SHA-256:
+  `4ebc294a0f24c5b7d367b986fd1b644c244d9c1df3dfe8492f5e347fb4247bd1`.
 
-### Important — common provider/session/credential shapes bypass AC-2 validation
-
-The secret detector in `src/agentforge/agents/prompts/__init__.py:20-35` rejects the frozen
-OpenRouter case plus AWS access ids, Slack tokens, Clerk secret keys, Bearer values, bare sensitive
-assignments, and PEM private-key headers. It does not provide the promised general fail-closed
-boundary for secret-shaped prompt resources.
-
-Independent hash-consistent bundle probes were accepted for these synthetic shapes:
-
-- GitHub classic and fine-grained token prefixes;
-- Google API-key prefix;
-- an environment-prefixed `OPENROUTER_API_KEY=<opaque-value>`;
-- `TARGET_SESSION=<opaque-value>`;
-- a quoted JSON `"password":"<opaque-value>"`;
-- a raw JWT; and
-- a credential-bearing PostgreSQL URL.
-
-The environment-prefixed provider key bypasses because the generic assignment pattern begins at a
-word boundary before `api_key`; the underscore before that suffix is also a word character. The
-same pattern omits session names and cannot cross a quoted key's closing quote. The other common
-families have no dedicated pattern.
-
-An altered prompt with one of these values and a correspondingly updated manifest hash passes
-`validate_prompt_bundle()` and can become provider system-message content in T-F17c. This violates
-AC-2 and the ticket's no-provider-key/no-target-session Definition of Done. Add frozen hostile
-cases for the accepted shapes and replace or extend the detector so all fail with the same generic,
-non-disclosing `PromptRegistryError`. Keep the patterns bounded to avoid scanning pathological
-input.
-
-## Verified behavior
-
-- The manifest hashes equal the exact packaged prompt bytes, including trailing newlines:
-  - orchestrator:
-    `0d851bb22f98921de1e8de42d90cd50fde73603d251b3a38c6591fd6f5a91bb2`
-  - red_team:
-    `72310c2141e50bc5da0a85e8e2cad82a16ba2490aa6265efa8dc26790129a776`
-  - judge:
-    `ae95f4b8398410b40c0b9b028aec47b6d7e027965b4f3eea4f5b524e58a29065`
-  - documentation:
-    `4ebc294a0f24c5b7d367b986fd1b644c244d9c1df3dfe8492f5e347fb4247bd1`
-- The role order, version, resource identity, duplicate-key rejection, exact raw-byte hash, UTF-8,
-  size, NUL, trailing-newline, and exact-identity lookup checks are closed and fail generically.
-- `PromptRecord` is frozen/slotted and omits content from `repr`; public validation, load, and
-  lookup errors expose only `prompt registry validation failed`.
-- All four prompts contain their exact required role-specific trust clauses. They contain no
-  credential, target-session value, PHI, URL, runtime template, or environment-specific setting.
-- `load_prompt_registry()` reads the manifest and every prompt only through
-  `importlib.resources.files(__package__)` traversables. There is no environment, database,
-  checkout-relative, `Path`, direct `open`, or manual-ZipFile fallback.
-- The offline installed/direct-wheel test proves byte-identical package-resource access outside
-  the checkout and rejects decoy filesystem and manual archive-member bypasses.
-- `pyproject.toml` includes the manifest and `v1/*.txt` as package data. No dependency changed.
-- The migration note correctly records raw-byte authority, exact identity lookup, T-F17c handoff,
-  wheel verification, and rollback/configuration pairing.
+The repair diff from the prior review contains only
+`src/agentforge/agents/prompts/__init__.py` and the Implementation Agent report. It changes no test,
+manifest, prompt, package-data declaration, dependency, migration, runtime composition, provider,
+target, deployment, or configuration artifact.
 
 ## Independent gates
 
-Focused frozen tests:
+Focused frozen and offline installed/direct-wheel package-resource gate:
 
 ```text
 PIP_NO_INDEX=1 PYTHONPATH=src <venv-python> -m pytest -o addopts='' \
@@ -89,7 +83,7 @@ PIP_NO_INDEX=1 PYTHONPATH=src <venv-python> -m pytest -o addopts='' \
   -q
 ```
 
-Result: `8 passed` in `2.54s`.
+Result: `8 passed` in `1.06s`.
 
 Focused hosted/packaging preservation:
 
@@ -100,7 +94,7 @@ PYTHONPATH=src <venv-python> -m pytest -o addopts='' \
       not spec_T_F17a_AC_4_offline_installed_wheel_preserves_prompt_authority' -q
 ```
 
-Result: `14 passed, 2 deselected`.
+Result: `14 passed, 2 deselected` in `0.09s`.
 
 Full offline-compatible repository suite:
 
@@ -110,16 +104,22 @@ raise SystemExit(pytest.main(["-o", "addopts=", "-q", "-k",
 "not wheel_installed_outside_repo_validates_corpus"]))'
 ```
 
-Result: `1132 passed, 3 skipped, 1 deselected` in `19.28s`.
+Result: `1132 passed, 3 skipped, 1 deselected` in `18.55s`.
 
 Additional gates:
 
-- Ruff check and format check: pass.
-- Diff check from the frozen base: pass.
-- Secret scan: `secret scan clean (853 files)`.
-- Gitleaks: no leaks across 204 commits.
-- No ticket-source TODO/FIXME/debug additions.
-- `.tdd-swarm/run-local-gates.sh` and the in-tree spec-lint remain absent from the frozen T-F00
-  dependency base; the wrapper cannot be represented as passing.
+- Candidate T-F00 spec-lint:
+  `T-F17a maps 4 acceptance criteria across 2 pytest-collected scopes`.
+- Ruff check: pass.
+- Ruff format check: pass.
+- Python compilation: pass.
+- Diff check from both the frozen and repair bases: pass.
+- Secret scan: `secret scan clean (854 files)`.
+- Gitleaks over `1e5e21d..ebe4432`: one commit scanned, no leaks.
+- Package resources load byte-identically through `importlib.resources`; the offline wheel gate
+  rejects checkout/decoy/manual-archive fallback.
 
-Final severity: Critical `0`; Important `1`; Minor `0`.
+The T-F00-owned local-gate wrapper remains absent from this frozen dependency base, so its available
+constituent gates were run directly and are green.
+
+Final severity: Critical `0`; Important `0`; Minor `0`.
