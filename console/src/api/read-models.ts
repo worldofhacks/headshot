@@ -215,12 +215,19 @@ const decodeHostedRun = (value: unknown): HostedRunBindingReadModel => {
   ]) {
     string(result, key, name);
   }
-  number(result, "provider_model_call_limit", name, { integer: true, minimum: 1 });
-  number(result, "provider_max_retries", name, { integer: true, minimum: 0 });
+  const callLimit = number(
+    result,
+    "provider_model_call_limit",
+    name,
+    { integer: true, minimum: 1 },
+  );
+  if (callLimit > 56) invalid(name);
+  const retries = number(result, "provider_max_retries", name, { integer: true, minimum: 0 });
+  if (retries > 1) invalid(name);
   if (number(result, "provider_max_concurrency", name, { integer: true }) !== 1) {
     invalid(name);
   }
-  number(result, "provider_timeout_seconds", name, { minimum: 0 });
+  if (number(result, "provider_timeout_seconds", name, { minimum: 0 }) === 0) invalid(name);
   return result as HostedRunBindingReadModel;
 };
 

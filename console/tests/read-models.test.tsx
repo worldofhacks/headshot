@@ -4,6 +4,8 @@ import { describe, expect, it, vi } from "vitest";
 import { createApiClient } from "../src/api/client";
 import {
   decodeApprovals,
+  decodeApprovalDetail,
+  decodeAgentPrompt,
   decodeAgents,
   decodeAttempts,
   decodeAuditHistory,
@@ -12,12 +14,11 @@ import {
   decodeComponents,
   decodeConfiguration,
   decodeCosts,
-  decodeCoverage,
   decodeEvidence,
   decodeFinding,
   decodeFindings,
   decodePrincipal,
-  decodeResilience,
+  decodeReports,
   decodeTargets,
   decodeTraces,
 } from "../src/api/read-models";
@@ -68,12 +69,65 @@ const finding = {
   evidence_content_hash: "content-1",
   history: [{ decision: "confirmed", actor_user_id: "user-1", rationale: "evidence", created_at: at }],
 };
+const verification = {
+  availability: "ready",
+  reason_code: null,
+  finding_id: "finding-1",
+  campaign_run_id: "run-1",
+  attempt_id: "attempt-1",
+  attack_case: {
+    case_id: "case-1",
+    case_content_sha256: "a".repeat(64),
+    category: "prompt_injection",
+    attack_class: "boundary",
+    owasp_mappings: [{ framework: "OWASP LLM", id: "LLM01" }],
+    oracle_expectation: { kind: "canary" },
+    corpus_reconciliation: "verified",
+  },
+  attack_attempt: { schema_version: "1", input_sequence: ["redacted input"] },
+  input_sequence: ["redacted input"],
+  request_transcript: { method: "POST" },
+  response_transcript: "redacted response",
+  policy_decision_id: "policy-1",
+  executed_at: at,
+  trace_id: "trace-1",
+  judge: {
+    state: "EXPLOIT_CONFIRMED",
+    confidence: 1,
+    reason_codes: ["canary_hit"],
+    confirmation_source: "canary",
+    error_code: null,
+  },
+  report_id: "report-1",
+  minimal_reproduction: ["Submit the redacted input."],
+  reproduction_sha256: "b".repeat(64),
+  regression: {
+    disposition_id: "disposition-1",
+    state: "blocked_pending_human_approval",
+    reason_codes: ["human_approval_required"],
+    reproduction_attempted: true,
+    deterministic_reproduction: true,
+    passes_for_right_reason: true,
+    human_approved: false,
+    admitted: false,
+  },
+  integrity: {
+    stored_content_sha256: "c".repeat(64),
+    finding_link_sha256: "c".repeat(64),
+    recomputed_content_sha256: "c".repeat(64),
+    evidence_record: "verified",
+    finding_link: "verified",
+    observability_reconciliation: "unavailable",
+    observability_detail: "No durable span transcript hash.",
+  },
+  redaction_state: "synthetic_identifiers_redacted",
+};
 
 const validResources: Array<[string, (value: unknown) => unknown, unknown]> = [
   [
     "principal",
     decodePrincipal,
-    { user_id: "user-1", session_id: "session-1", organization_id: "org-1", organization_role: "org:operator", organization_permissions: ["org:console:read"] },
+    { user_id: "user-1", organization_id: "org-1", organization_role: "org:operator", organization_permissions: ["org:console:read"] },
   ],
   [
     "campaigns",
@@ -98,7 +152,7 @@ const validResources: Array<[string, (value: unknown) => unknown, unknown]> = [
   [
     "finding detail and history",
     decodeFinding,
-    finding,
+    { ...finding, verification },
   ],
   [
     "approvals",
@@ -106,14 +160,43 @@ const validResources: Array<[string, (value: unknown) => unknown, unknown]> = [
     [{ ...scope, request_id: "request-1", status: "pending", decision: null, scope_hash: "scope-1", launcher_user_id: "user-1", approver_user_id: null, self_approval_override: false, decided_at: null, expired: false, consumed: false, created_at: at, expires_at: "2026-07-21T00:15:00Z" }],
   ],
   [
-    "coverage",
-    decodeCoverage,
-    [{ target_version: "target-1@1.0.0", verified_attempt_count: 9, total_case_count: 9, category_count: 3, execution_profile: "synthetic", evidence_provenance: "synthetic_offline", classifications: ["boundary", "invariant"], owasp_web: ["A01"], owasp_llm: ["LLM01"], verdict_counts: { INDETERMINATE: 9 }, covered: true, as_of: at }],
+    "approval detail",
+    decodeApprovalDetail,
+    { ...scope, request_id: "request-1", status: "approved", decision: "approved", scope_hash: "scope-1", launcher_user_id: "user-1", approver_user_id: "user-2", self_approval_override: false, decided_at: at, expired: false, consumed: true, created_at: at, expires_at: "2026-07-21T00:15:00Z", campaign_run_id: "run-1", verification_chain: [verification] },
   ],
   [
-    "resilience",
-    decodeResilience,
-    [{ regression_id: "regression-1", version: "1.0.0", status: "passed", recorded_at: at }],
+    "reports",
+    decodeReports,
+    [{
+      schema_version: "1",
+      report_id: "report-1",
+      finding_id: "finding-1",
+      campaign_run_id: "run-1",
+      attempt_id: "attempt-1",
+      source_case_id: "case-1",
+      severity: "high",
+      category: "prompt_injection",
+      description: "A verified synthetic finding.",
+      clinical_impact: "Synthetic clinical scope crossed.",
+      minimal_reproduction: ["Submit the redacted input."],
+      reproduction_sha256: "b".repeat(64),
+      observed_behavior: "Canary observed.",
+      expected_behavior: "Request refused.",
+      recommended_remediation: "Preserve trusted instruction priority.",
+      status: "draft",
+      fix_validation: { state: "not_run", summary: "No fix tested.", evidence_references: [] },
+      evidence_references: [`evidence://sha256/${"c".repeat(64)}`],
+      publication_state: "draft_unpublished",
+      regression: verification.regression,
+      report_integrity: "verified",
+      created_at: at,
+      verification,
+    }],
+  ],
+  [
+    "agent prompt",
+    decodeAgentPrompt,
+    { role: "judge", prompt_version: "1", prompt_sha256: "d".repeat(64), system_prompt: "Evaluate only bound evidence." },
   ],
   [
     "traces",
@@ -157,8 +240,8 @@ const validResources: Array<[string, (value: unknown) => unknown, unknown]> = [
         model: "coverage-governor-v1",
         resolved_model: "coverage-governor-v1",
         upstream_provider: null,
-        prompt_sha256: null,
-        prompt_version: null,
+        prompt_sha256: "d".repeat(64),
+        prompt_version: "1",
         execution_mode: "deterministic",
         activation_state: "active",
         version: 1,
@@ -370,6 +453,21 @@ describe("v1 read-model decoders", () => {
       ...campaign,
       hosted_run: { ...hostedRun, unexpected: true },
     }])).toThrow("Invalid hosted run binding read model");
+  });
+
+  it("decodes the explicit null hosted campaign binding", () => {
+    const campaign = {
+      ...scope,
+      run_id: "run-deterministic-1",
+      authorization_request_id: "request-deterministic-1",
+      state: "queued",
+      scope_hash: "scope-deterministic-1",
+      launcher_user_id: "user-1",
+      attempt_count: 0,
+      created_at: at,
+    };
+
+    expect(decodeCampaigns([campaign])).toEqual([campaign]);
   });
 
   it("fails a malformed ready envelope closed without exposing its payload", async () => {

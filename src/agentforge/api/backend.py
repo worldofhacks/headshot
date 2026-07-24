@@ -70,7 +70,6 @@ class UnavailableApiBackend(ApiBackend):
             return ResourceResult.ready(
                 {
                     "user_id": principal.user_id,
-                    "session_id": principal.session_id,
                     "organization_id": principal.organization_id,
                     "organization_role": principal.organization_role,
                     "organization_permissions": sorted(principal.organization_permissions),

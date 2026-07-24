@@ -216,7 +216,7 @@ describe("Birdseye", () => {
     fireEvent.click(screen.getByRole("button", { name: /Red Team/ }));
     expect(screen.getByText("125.0 ms / 280.0 ms")).toBeTruthy();
     expect(screen.getByText("$0.0400")).toBeTruthy();
-    expect(screen.getByText("exported · 4/4 exported")).toBeTruthy();
+    expect(screen.getByText("exported · 4/4 submitted")).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", {
       name: /Campaign authorization requires a decision/,

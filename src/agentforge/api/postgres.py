@@ -78,9 +78,7 @@ _DISPLAY_SENSITIVE_KEY = re.compile(
     r"(?i)(?:^|_)(?:sid|session_id|patient_id|patient_name|pid|mrn|ssn|"
     r"date_of_birth|birth_date|dob|address|email|phone)(?:$|_)"
 )
-_DISPLAY_SYNTHETIC_IDENTIFIER = re.compile(
-    r"(?i)\bSYNTH-(?:PATIENT|PERSON|SUBJECT)-[A-Z0-9_-]+\b"
-)
+_DISPLAY_SYNTHETIC_IDENTIFIER = re.compile(r"(?i)\bSYNTH-(?:PATIENT|PERSON|SUBJECT)-[A-Z0-9_-]+\b")
 _DISPLAY_SYNTHETIC_CANARY = re.compile(r"(?i)\bSYNTH_CANARY_[A-Z0-9_-]+\b")
 _DISPLAY_LABELED_IDENTIFIER = re.compile(
     r"(?i)\b(?:sid|session[_ -]?id|patient[_ -]?id|mrn|ssn|date[_ -]?of[_ -]?birth|dob)"
@@ -380,9 +378,7 @@ class PostgresApiBackend(ApiBackend):
                 "state": regression_payload.get("state"),
                 "reason_codes": regression_payload.get("reason_codes", []),
                 "reproduction_attempted": regression_payload.get("reproduction_attempted"),
-                "deterministic_reproduction": regression_payload.get(
-                    "deterministic_reproduction"
-                ),
+                "deterministic_reproduction": regression_payload.get("deterministic_reproduction"),
                 "passes_for_right_reason": regression_payload.get("passes_for_right_reason"),
                 "human_approved": regression_payload.get("human_approved"),
                 "admitted": regression_payload.get("admitted"),
@@ -1097,27 +1093,27 @@ class PostgresApiBackend(ApiBackend):
                         elif latest == "resolved":
                             publication_status = "resolved_unpublished"
                         projection = {
-                                "finding_id": source["linked_finding_id"],
-                                "state": "resolved"
-                                if latest == "resolved"
-                                else (
-                                    "documented"
-                                    if source["vuln_report_id"] is not None
-                                    else source["finding_state"]
-                                ),
-                                "severity": source["finding_severity"],
-                                "category": source["finding_category"],
-                                "target_version": source["finding_target_version"],
-                                "publication_status": publication_status,
-                                "evidence_integrity": "verified",
-                                "source_kind": source["source_kind"],
-                                "execution_profile": source["finding_execution_profile"],
-                                "evidence_provenance": source["linked_provenance"],
-                                "campaign_run_id": source["campaign_run_id"],
-                                "attempt_id": source["attempt_id"],
-                                "evidence_content_hash": source["evidence_content_hash"],
-                                "history": history,
-                            }
+                            "finding_id": source["linked_finding_id"],
+                            "state": "resolved"
+                            if latest == "resolved"
+                            else (
+                                "documented"
+                                if source["vuln_report_id"] is not None
+                                else source["finding_state"]
+                            ),
+                            "severity": source["finding_severity"],
+                            "category": source["finding_category"],
+                            "target_version": source["finding_target_version"],
+                            "publication_status": publication_status,
+                            "evidence_integrity": "verified",
+                            "source_kind": source["source_kind"],
+                            "execution_profile": source["finding_execution_profile"],
+                            "evidence_provenance": source["linked_provenance"],
+                            "campaign_run_id": source["campaign_run_id"],
+                            "attempt_id": source["attempt_id"],
+                            "evidence_content_hash": source["evidence_content_hash"],
+                            "history": history,
+                        }
                         if resource == "finding":
                             projection["verification"] = self._verification_projection(source)
                         rows.append(projection)
@@ -1136,23 +1132,23 @@ class PostgresApiBackend(ApiBackend):
                         payload = source["contract_payload"]
                         reproduction = payload.get("reproduction_evidence", {})
                         projection = {
-                                "finding_id": payload["finding_id"],
-                                "state": payload["validation_state"],
-                                "severity": payload["severity"],
-                                "category": reproduction.get("summary", "security tool finding"),
-                                "target_version": payload["target_id"],
-                                "publication_status": payload["human_publication_state"],
-                                "evidence_integrity": "verified",
-                                "source_kind": payload["source_kind"],
-                                "execution_profile": "live"
-                                if payload["scan_provenance"] == "live_target"
-                                else "synthetic",
-                                "evidence_provenance": payload["evidence_provenance"],
-                                "campaign_run_id": None,
-                                "attempt_id": None,
-                                "evidence_content_hash": source["raw_artifact_sha256"],
-                                "history": [],
-                            }
+                            "finding_id": payload["finding_id"],
+                            "state": payload["validation_state"],
+                            "severity": payload["severity"],
+                            "category": reproduction.get("summary", "security tool finding"),
+                            "target_version": payload["target_id"],
+                            "publication_status": payload["human_publication_state"],
+                            "evidence_integrity": "verified",
+                            "source_kind": payload["source_kind"],
+                            "execution_profile": "live"
+                            if payload["scan_provenance"] == "live_target"
+                            else "synthetic",
+                            "evidence_provenance": payload["evidence_provenance"],
+                            "campaign_run_id": None,
+                            "attempt_id": None,
+                            "evidence_content_hash": source["raw_artifact_sha256"],
+                            "history": [],
+                        }
                         if resource == "finding":
                             projection["verification"] = self._unavailable_verification(
                                 payload["finding_id"],
@@ -1209,14 +1205,11 @@ class PostgresApiBackend(ApiBackend):
                             validate_contract("vuln_report", report_payload)
                             if (
                                 report_payload.get("report_id") != source["vuln_report_id"]
-                                or report_payload.get("finding_id")
-                                != source["linked_finding_id"]
+                                or report_payload.get("finding_id") != source["linked_finding_id"]
                                 or report_payload.get("campaign_run_id")
                                 != source["campaign_run_id"]
                                 or report_payload.get("attempt_id") != source["attempt_id"]
-                                or _reproduction_sha256(
-                                    report_payload.get("minimal_reproduction")
-                                )
+                                or _reproduction_sha256(report_payload.get("minimal_reproduction"))
                                 != report_payload.get("reproduction_sha256")
                                 or f"evidence://sha256/{source['evidence_content_hash']}"
                                 not in report_payload.get("evidence_references", [])
@@ -1725,9 +1718,7 @@ class PostgresApiBackend(ApiBackend):
                         "FROM campaign_authorization_requests q "
                         "LEFT JOIN campaign_authorization_decisions d "
                         "ON d.organization_id = q.organization_id AND d.request_id = q.request_id "
-                        "WHERE "
-                        + approval_where
-                        + " ORDER BY q.created_at DESC LIMIT 200",
+                        "WHERE " + approval_where + " ORDER BY q.created_at DESC LIMIT 200",
                         approval_parameters,
                     )
                     if resource == "approval" and rows:
@@ -1786,13 +1777,10 @@ class PostgresApiBackend(ApiBackend):
                             )
                         try:
                             row["verification_chain"] = [
-                                self._verification_projection(item)
-                                for item in verification_rows
+                                self._verification_projection(item) for item in verification_rows
                             ]
                         except EvidenceIntegrityError:
-                            return ResourceResult.unavailable(
-                                "approval_evidence_integrity_failed"
-                            )
+                            return ResourceResult.unavailable("approval_evidence_integrity_failed")
                 elif resource in {"targets", "target"}:
                     where = "d.organization_id = :org"
                     parameters: dict[str, Any] = {"org": principal.organization_id}
