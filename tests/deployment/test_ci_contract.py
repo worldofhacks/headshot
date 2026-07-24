@@ -38,6 +38,12 @@ def test_github_ci_runs_frontend_browser_bundle_and_audit_gates() -> None:
         assert command in workflow
 
 
+def test_github_ci_runs_for_redteam_branches() -> None:
+    workflow = _workflow(".github/workflows/ci.yml")
+    push_section = workflow.split("  push:", maxsplit=1)[1].split("  pull_request:", maxsplit=1)[0]
+    assert '"redteam/**"' in push_section
+
+
 def test_github_ci_runs_in_image_migrations_runtime_and_secret_scan() -> None:
     workflow = _workflow(".github/workflows/ci.yml")
     assert "scripts/verify_runtime_image.sh" in workflow
