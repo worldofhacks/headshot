@@ -64,8 +64,6 @@ _EVAL_SCHEMAS = (
     "ground-truth-slice.v1.json",
     "synthetic-fixture.v1.json",
 )
-_PROMPT_ROLES = ("orchestrator", "red_team", "judge", "documentation")
-_PROMPT_RESOURCES = {role: f"agentforge/agents/prompts/v1/{role}.txt" for role in _PROMPT_ROLES}
 
 # A known-valid Verdict (lifted from the offline ground-truth corpus) — used to prove the
 # packaged contract registry still validates real payloads with the CWD moved away.
@@ -145,7 +143,6 @@ def _venv_python(env_dir: Path) -> Path:
     return env_dir / "bin" / "python"
 
 
-# spec(T-F17a:AC-4)
 def test_wheel_installed_outside_repo_validates_corpus(tmp_path):
     """Definitive proof: an installed wheel validates a corpus with NO repo checkout on disk.
 
@@ -178,24 +175,6 @@ def test_wheel_installed_outside_repo_validates_corpus(tmp_path):
         assert f"agentforge/evals/schemas/{schema_name}" in wheel_names, (
             f"eval schema {schema_name} is not packaged in the wheel"
         )
-    assert "agentforge/agents/prompts/registry.v1.json" in wheel_names, (
-        "the prompt registry manifest is not packaged in the wheel"
-    )
-    for role, resource_name in _PROMPT_RESOURCES.items():
-        assert resource_name in wheel_names, f"{role} system prompt is not packaged in the wheel"
-
-    # Exact build-input bytes, including each trailing newline, must survive wheel packaging.
-    import zipfile
-
-    with zipfile.ZipFile(wheel_path) as archive:
-        packaged_prompt_bytes = {
-            role: archive.read(resource_name) for role, resource_name in _PROMPT_RESOURCES.items()
-        }
-    for role, packaged_bytes in packaged_prompt_bytes.items():
-        build_input = (
-            _REPO_ROOT / "src" / "agentforge" / "agents" / "prompts" / "v1" / f"{role}.txt"
-        ).read_bytes()
-        assert packaged_bytes == build_input
 
     # Fresh venv in a temp dir OUTSIDE the repo, containing only the wheel + jsonschema.
     env_dir = tmp_path / "fresh-venv"
@@ -244,54 +223,6 @@ def test_wheel_installed_outside_repo_validates_corpus(tmp_path):
         f"{duplicate.stdout}\n{duplicate.stderr}"
     )
 
-    # The installed package—not a CWD, repo walk, or environment override—loads the records.
-    import os
-
-    decoy = tmp_path / "decoy-prompts"
-    decoy.mkdir()
-    environment = os.environ.copy()
-    environment.update(
-        {
-            "AGENTFORGE_PROMPTS_DIR": str(decoy),
-            "AGENTFORGE_PROMPT_DIR": str(decoy),
-            "PYTHONNOUSERSITE": "1",
-        }
-    )
-    probe = subprocess.run(
-        [
-            str(venv_python),
-            "-I",
-            "-c",
-            (
-                "import base64,json;"
-                "from agentforge.agents.prompts import load_prompt_registry;"
-                "records=load_prompt_registry();"
-                "print(json.dumps([{"
-                "'role':r.role,'version':r.version,'sha256':r.sha256,"
-                "'content':base64.b64encode(r.content.encode('utf-8')).decode('ascii')"
-                "} for r in records],sort_keys=True))"
-            ),
-        ],
-        capture_output=True,
-        text=True,
-        cwd=str(tmp_path),
-        env=environment,
-    )
-    assert probe.returncode == 0, (
-        f"installed prompt registry failed outside the repo:\n{probe.stdout}\n{probe.stderr}"
-    )
-
-    import base64
-    import hashlib
-
-    records = json.loads(probe.stdout)
-    assert tuple(record["role"] for record in records) == _PROMPT_ROLES
-    for record in records:
-        raw = base64.b64decode(record["content"], validate=True)
-        assert raw == packaged_prompt_bytes[record["role"]]
-        assert record["version"] == "1"
-        assert record["sha256"] == hashlib.sha256(raw).hexdigest()
-
 
 def _wheel_namelist(wheel_path: Path) -> list[str]:
     import zipfile
@@ -330,3 +261,197 @@ def test_schema_name_guard_allows_real_schema_names() -> None:
     assert safe_schema_name("verdict") == "verdict"
     assert safe_schema_name("attack_attempt") == "attack_attempt"
     assert safe_schema_name("attack-case.v1.json") == "attack-case.v1.json"
+
+
+def _build_stdlib_test_wheel(wheel_dir: Path) -> Path:
+    """Build a deterministic pure-Python wheel without a build frontend or network."""
+    import zipfile
+
+    wheel_path = wheel_dir / "agentforge-0.1.0-py3-none-any.whl"
+    source_package = _REPO_ROOT / "src" / "agentforge"
+    dist_info = "agentforge-0.1.0.dist-info"
+    with zipfile.ZipFile(wheel_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for source in sorted(source_package.rglob("*")):
+            if source.is_file() and "__pycache__" not in source.parts:
+                archive.write(source, source.relative_to(source_package.parent).as_posix())
+        archive.writestr(
+            f"{dist_info}/METADATA",
+            "Metadata-Version: 2.1\nName: agentforge\nVersion: 0.1.0\n",
+        )
+        archive.writestr(
+            f"{dist_info}/WHEEL",
+            "Wheel-Version: 1.0\nGenerator: T-F17a-stdlib\n"
+            "Root-Is-Purelib: true\nTag: py3-none-any\n",
+        )
+        archive.writestr(f"{dist_info}/RECORD", "")
+    return wheel_path
+
+
+def _package_data_covers_prompt_resources(resource_names: set[str]) -> bool:
+    import fnmatch
+    import tomllib
+
+    configuration = tomllib.loads((_REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    patterns = (
+        configuration.get("tool", {})
+        .get("setuptools", {})
+        .get("package-data", {})
+        .get("agentforge.agents.prompts", ())
+    )
+    return bool(patterns) and all(
+        any(fnmatch.fnmatchcase(resource_name, pattern) for pattern in patterns)
+        for resource_name in resource_names
+    )
+
+
+# spec(T-F17a:AC-4)
+def test_spec_T_F17a_AC_4_offline_installed_wheel_preserves_prompt_authority(
+    tmp_path: Path,
+) -> None:
+    """Build/install/probe the prompt wheel with indexes disabled and sockets denied."""
+    import base64
+    import hashlib
+    import os
+    import zipfile
+
+    roles = ("orchestrator", "red_team", "judge", "documentation")
+    manifest_name = "agentforge/agents/prompts/registry.v1.json"
+    wheel_resources = {role: f"agentforge/agents/prompts/v1/{role}.txt" for role in roles}
+    wheel_path = _build_stdlib_test_wheel(tmp_path)
+
+    with zipfile.ZipFile(wheel_path) as archive:
+        names = set(archive.namelist())
+        assert manifest_name in names, "the prompt registry manifest is not packaged in the wheel"
+        for role, resource_name in wheel_resources.items():
+            assert resource_name in names, f"{role} system prompt is not packaged in the wheel"
+        manifest_bytes = archive.read(manifest_name)
+        packaged_bytes = {
+            role: archive.read(resource_name) for role, resource_name in wheel_resources.items()
+        }
+
+    relative_resources = {"registry.v1.json", *(f"v1/{role}.txt" for role in roles)}
+    assert _package_data_covers_prompt_resources(relative_resources), (
+        "pyproject.toml does not declare every prompt resource as package data"
+    )
+    for role, raw in packaged_bytes.items():
+        source = _REPO_ROOT / "src" / "agentforge" / "agents" / "prompts" / "v1" / f"{role}.txt"
+        assert raw == source.read_bytes(), f"{role} wheel bytes differ from build input"
+
+    install_root = tmp_path / "installed"
+    pip_environment = os.environ.copy()
+    pip_environment.update(
+        {
+            "PIP_CONFIG_FILE": os.devnull,
+            "PIP_DISABLE_PIP_VERSION_CHECK": "1",
+            "PIP_NO_INDEX": "1",
+            "PIP_REQUIRE_VIRTUALENV": "0",
+        }
+    )
+    install = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pip",
+            "install",
+            "--no-index",
+            "--no-deps",
+            "--disable-pip-version-check",
+            "--target",
+            str(install_root),
+            str(wheel_path),
+        ],
+        capture_output=True,
+        text=True,
+        env=pip_environment,
+    )
+    assert install.returncode == 0, (
+        f"offline local-wheel install failed:\n{install.stdout}\n{install.stderr}"
+    )
+
+    manifest = json.loads(manifest_bytes)
+    decoy_root = tmp_path / "decoy-prompts"
+    decoy_manifest = json.loads(manifest_bytes)
+    by_resource = {entry["resource"]: entry for entry in decoy_manifest["prompts"]}
+    for role, resource_name in wheel_resources.items():
+        relative_name = resource_name.removeprefix("agentforge/agents/prompts/")
+        decoy_raw = b"DECOY-FILESYSTEM-FALLBACK-" + packaged_bytes[role]
+        decoy_path = decoy_root / relative_name
+        decoy_path.parent.mkdir(parents=True, exist_ok=True)
+        decoy_path.write_bytes(decoy_raw)
+        by_resource[relative_name]["sha256"] = hashlib.sha256(decoy_raw).hexdigest()
+    (decoy_root / "registry.v1.json").write_text(
+        json.dumps(decoy_manifest, sort_keys=True, separators=(",", ":")),
+        encoding="utf-8",
+    )
+
+    probe = r"""
+import base64
+import http.client
+import json
+import socket
+import sys
+import urllib.request
+from pathlib import Path
+
+def denied(*_args, **_kwargs):
+    raise AssertionError("installed prompt registry attempted network I/O")
+
+socket.create_connection = denied
+socket.socket.connect = denied
+socket.socket.connect_ex = denied
+urllib.request.urlopen = denied
+http.client.HTTPConnection.connect = denied
+http.client.HTTPSConnection.connect = denied
+sys.path.insert(0, sys.argv[1])
+
+import agentforge.agents.prompts as prompts
+
+records = prompts.load_prompt_registry()
+for record in records:
+    assert prompts.prompt_for_identity(record.role, record.version, record.sha256) == record
+print(json.dumps({
+    "module": str(Path(prompts.__file__).resolve()),
+    "records": [
+        {
+            "role": record.role,
+            "version": record.version,
+            "sha256": record.sha256,
+            "content": base64.b64encode(record.content.encode("utf-8")).decode("ascii"),
+        }
+        for record in records
+    ],
+}, sort_keys=True))
+"""
+    probe_environment = os.environ.copy()
+    probe_environment.update(
+        {
+            "AGENTFORGE_PROMPTS_DIR": str(decoy_root),
+            "AGENTFORGE_PROMPT_DIR": str(decoy_root),
+            "PYTHONNOUSERSITE": "1",
+        }
+    )
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    loaded = subprocess.run(
+        [sys.executable, "-I", "-c", probe, str(install_root)],
+        cwd=outside,
+        env=probe_environment,
+        capture_output=True,
+        text=True,
+    )
+    assert loaded.returncode == 0, (
+        f"installed prompt registry failed outside the repo:\n{loaded.stdout}\n{loaded.stderr}"
+    )
+
+    payload = json.loads(loaded.stdout)
+    assert Path(payload["module"]).is_relative_to(install_root)
+    assert tuple(record["role"] for record in payload["records"]) == roles
+    manifest_by_role = {entry["role"]: entry for entry in manifest["prompts"]}
+    for record in payload["records"]:
+        raw = base64.b64decode(record["content"], validate=True)
+        role = record["role"]
+        assert raw == packaged_bytes[role]
+        assert b"DECOY-FILESYSTEM-FALLBACK" not in raw
+        assert record["version"] == manifest_by_role[role]["version"]
+        assert record["sha256"] == manifest_by_role[role]["sha256"]
+        assert record["sha256"] == hashlib.sha256(raw).hexdigest()
