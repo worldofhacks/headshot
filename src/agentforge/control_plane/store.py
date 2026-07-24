@@ -9,9 +9,12 @@ import re
 import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
+from decimal import Decimal
+from types import SimpleNamespace
 from typing import Any
 
 from sqlalchemy import Connection, Engine, text
+from sqlalchemy.exc import IntegrityError
 
 from agentforge.agents.hosted import (
     HostedConfigurationSet,
@@ -66,6 +69,11 @@ from agentforge.policy.recorder import (
     PERSISTED_EVIDENCE_COLUMNS,
     EvidenceIntegrityError,
     ExecutionRecorder,
+)
+from agentforge.providers.lineage import (
+    ProviderInvocationContextV1,
+    ProviderLogicalContextV1,
+    ProviderTerminalEventV1,
 )
 from agentforge.target.registry import TargetRegistry, TargetRegistryError
 from agentforge.target.spec import (
@@ -608,10 +616,7 @@ class ControlPlaneStore:
                     connection, principal.organization_id, existing["request_id"]
                 )
             database_now = connection.execute(text("SELECT clock_timestamp()")).scalar_one()
-            if (
-                expiry <= database_now
-                or expiry - database_now > _MAX_AUTHORIZATION_LIFETIME
-            ):
+            if expiry <= database_now or expiry - database_now > _MAX_AUTHORIZATION_LIFETIME:
                 raise InvalidControlPlaneInput(
                     "authorization expiry must be future and within 24 hours"
                 )
@@ -1916,7 +1921,8 @@ class ControlPlaneStore:
                 text(
                     "UPDATE agent_executions SET status = :status, output_sha256 = :output_hash, "
                     "input_tokens = :input_tokens, output_tokens = :output_tokens, "
-                    "measured_cost = :cost, error_code = :error, "
+                    "measured_cost = :cost, cost_measurement_state = 'measured', "
+                    "error_code = :error, "
                     "detail = detail || CAST(:detail AS jsonb), finished_at = clock_timestamp(), "
                     "duration_ms = extract(epoch FROM (clock_timestamp() - started_at)) * 1000 "
                     "WHERE execution_id = :execution"
@@ -1957,6 +1963,493 @@ class ControlPlaneStore:
                 actor_user_id=f"agent:{row['agent_role']}",
                 actor_session_id="runner:system",
             )
+
+    # ------------------------------------------------------- provider physical-call lineage
+
+    def begin_physical_attempt(
+        self,
+        logical_context: ProviderLogicalContextV1,
+        sequence: int,
+    ) -> ProviderInvocationContextV1:
+        """Commit immutable physical-call identity before any provider attempt."""
+
+        if not isinstance(logical_context, ProviderLogicalContextV1):
+            raise TypeError("logical provider context is invalid")
+        if (
+            isinstance(sequence, bool)
+            or not isinstance(sequence, int)
+            or not 1 <= sequence <= 2_147_483_647
+        ):
+            raise InvalidControlPlaneInput("physical provider sequence is invalid")
+        identity = (
+            f"provider-call:v1\0{logical_context.organization_id}\0"
+            f"{logical_context.logical_execution_id}\0{sequence}"
+        )
+        digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()
+        started_at = datetime.datetime.now(datetime.UTC)
+        invocation = ProviderInvocationContextV1(
+            invocation_id=digest,
+            organization_id=logical_context.organization_id,
+            campaign_run_id=logical_context.campaign_run_id,
+            campaign_attempt_id=logical_context.campaign_attempt_id,
+            logical_execution_id=logical_context.logical_execution_id,
+            parent_execution_id=logical_context.parent_execution_id,
+            agent_role=logical_context.agent_role,
+            physical_sequence=sequence,
+            idempotency_key=f"provider-call:{digest}",
+            requested_model=logical_context.requested_model,
+            configured_upstream=logical_context.configured_upstream,
+            prompt_version=logical_context.prompt_version,
+            prompt_sha256=logical_context.prompt_sha256,
+            configuration_set_sha256=logical_context.configuration_set_sha256,
+            role_configuration_sha256=logical_context.role_configuration_sha256,
+            generation_policy_sha256=logical_context.generation_policy_sha256,
+            started_at=started_at,
+        )
+        try:
+            with self._engine.begin() as connection:
+                logical = (
+                    connection.execute(
+                        text(
+                            "SELECT campaign_run_id, attempt_id, parent_execution_id, agent_role, "
+                            "model, status FROM agent_executions "
+                            "WHERE organization_id = :org AND execution_id = :execution "
+                            "FOR UPDATE"
+                        ),
+                        {
+                            "org": invocation.organization_id,
+                            "execution": invocation.logical_execution_id,
+                        },
+                    )
+                    .mappings()
+                    .one_or_none()
+                )
+                expected = {
+                    "campaign_run_id": invocation.campaign_run_id,
+                    "attempt_id": invocation.campaign_attempt_id,
+                    "parent_execution_id": invocation.parent_execution_id,
+                    "agent_role": invocation.agent_role,
+                    "model": invocation.requested_model,
+                    "status": "running",
+                }
+                if logical is None or dict(logical) != expected:
+                    raise RecordConflictError(
+                        "physical provider context does not match the logical execution"
+                    )
+                has_open_invocation = connection.execute(
+                    text(
+                        "SELECT EXISTS (SELECT 1 FROM provider_call_invocations i "
+                        "LEFT JOIN provider_call_events e "
+                        "ON e.organization_id = i.organization_id "
+                        "AND e.invocation_id = i.invocation_id "
+                        "WHERE i.organization_id = :org "
+                        "AND i.logical_execution_id = :execution AND e.event_id IS NULL)"
+                    ),
+                    {
+                        "org": invocation.organization_id,
+                        "execution": invocation.logical_execution_id,
+                    },
+                ).scalar_one()
+                if has_open_invocation:
+                    raise RecordConflictError(
+                        "logical agent execution already has an unfinished physical attempt"
+                    )
+                connection.execute(
+                    text(
+                        "INSERT INTO provider_call_invocations "
+                        "(invocation_id, organization_id, campaign_run_id, "
+                        "campaign_attempt_id, logical_execution_id, parent_execution_id, "
+                        "agent_role, physical_sequence, idempotency_key, requested_model, "
+                        "configured_upstream, prompt_version, prompt_sha256, "
+                        "configuration_set_sha256, role_configuration_sha256, "
+                        "generation_policy_sha256, started_at) VALUES "
+                        "(:invocation, :org, :run, :attempt, :execution, :parent, :role, "
+                        ":sequence, :idempotency, :model, :upstream, :prompt_version, "
+                        ":prompt_hash, :configuration_hash, :role_hash, :policy_hash, :started)"
+                    ),
+                    {
+                        "invocation": invocation.invocation_id,
+                        "org": invocation.organization_id,
+                        "run": invocation.campaign_run_id,
+                        "attempt": invocation.campaign_attempt_id,
+                        "execution": invocation.logical_execution_id,
+                        "parent": invocation.parent_execution_id,
+                        "role": invocation.agent_role,
+                        "sequence": invocation.physical_sequence,
+                        "idempotency": invocation.idempotency_key,
+                        "model": invocation.requested_model,
+                        "upstream": invocation.configured_upstream,
+                        "prompt_version": invocation.prompt_version,
+                        "prompt_hash": invocation.prompt_sha256,
+                        "configuration_hash": invocation.configuration_set_sha256,
+                        "role_hash": invocation.role_configuration_sha256,
+                        "policy_hash": invocation.generation_policy_sha256,
+                        "started": invocation.started_at,
+                    },
+                )
+        except IntegrityError as exc:
+            raise RecordConflictError("physical provider attempt is already reserved") from exc
+        return invocation
+
+    def finish_physical_attempt(
+        self,
+        invocation: ProviderInvocationContextV1,
+        event: ProviderTerminalEventV1,
+        *,
+        final: bool,
+    ) -> ProviderTerminalEventV1:
+        """Append terminal facts and, only when final, terminalize logical work atomically."""
+
+        if not isinstance(invocation, ProviderInvocationContextV1):
+            raise TypeError("provider invocation context is invalid")
+        if not isinstance(event, ProviderTerminalEventV1) or not isinstance(final, bool):
+            raise TypeError("provider terminal event is invalid")
+        if (
+            event.invocation_id != invocation.invocation_id
+            or event.physical_sequence != invocation.physical_sequence
+            or event.finished_at < invocation.started_at
+        ):
+            raise RecordConflictError("provider terminal event does not match its invocation")
+        if event.status == "succeeded" and (
+            event.returned_model is None
+            or event.upstream_provider is None
+            or event.provider_request_id is None
+            or event.input_tokens is None
+            or event.output_tokens is None
+            or event.reasoning_tokens is None
+            or event.cost_measurement_state != "measured"
+            or event.returned_model != invocation.requested_model
+            or event.upstream_provider != invocation.configured_upstream
+        ):
+            raise InvalidControlPlaneInput(
+                "successful provider event requires matching complete measured observations"
+            )
+        with self._engine.begin() as connection:
+            durable_invocation = self._provider_invocation_row(
+                connection, invocation.organization_id, invocation.invocation_id
+            )
+            if durable_invocation is None:
+                raise RecordNotFoundError("provider invocation does not exist")
+            self._assert_provider_invocation_identity(durable_invocation, invocation)
+            logical = (
+                connection.execute(
+                    text(
+                        "SELECT status, started_at FROM agent_executions "
+                        "WHERE organization_id = :org AND execution_id = :execution "
+                        "FOR UPDATE"
+                    ),
+                    {
+                        "org": invocation.organization_id,
+                        "execution": invocation.logical_execution_id,
+                    },
+                )
+                .mappings()
+                .one_or_none()
+            )
+            if logical is None:
+                raise RecordNotFoundError("logical agent execution does not exist")
+            existing_record = self._provider_event_record_for_invocation(
+                connection, invocation.organization_id, invocation.invocation_id
+            )
+            if existing_record is not None:
+                existing, recorded_final = existing_record
+                if existing != event or recorded_final is not final:
+                    raise RecordConflictError(
+                        "provider invocation already has different terminal facts"
+                    )
+                if recorded_final and logical["status"] == "running":
+                    raise RecordConflictError(
+                        "final provider event is inconsistent with logical execution"
+                    )
+                return existing
+            elif logical["status"] != "running":
+                raise RecordConflictError("logical agent execution is already terminal")
+            else:
+                duration_ms = Decimal(
+                    str((event.finished_at - invocation.started_at).total_seconds() * 1000)
+                ).quantize(Decimal("0.001"))
+                connection.execute(
+                    text(
+                        "INSERT INTO provider_call_events "
+                        "(event_id, invocation_id, organization_id, campaign_run_id, "
+                        "campaign_attempt_id, logical_execution_id, agent_role, physical_sequence, "
+                        "is_final, status, returned_model, upstream_provider, provider_request_id, "
+                        "input_tokens, output_tokens, reasoning_tokens, cost_measurement_state, "
+                        "measured_cost_usd, error_code, finished_at, duration_ms) VALUES "
+                        "(:event, :invocation, :org, :run, :attempt, :execution, :role, :sequence, "
+                        ":is_final, :status, :returned_model, :upstream, :request_id, "
+                        ":input_tokens, :output_tokens, :reasoning_tokens, :cost_state, :cost, "
+                        ":error, :finished, :duration)"
+                    ),
+                    {
+                        "event": event.event_id,
+                        "invocation": invocation.invocation_id,
+                        "org": invocation.organization_id,
+                        "run": invocation.campaign_run_id,
+                        "attempt": invocation.campaign_attempt_id,
+                        "execution": invocation.logical_execution_id,
+                        "role": invocation.agent_role,
+                        "sequence": invocation.physical_sequence,
+                        "is_final": final,
+                        "status": event.status,
+                        "returned_model": event.returned_model,
+                        "upstream": event.upstream_provider,
+                        "request_id": event.provider_request_id,
+                        "input_tokens": event.input_tokens,
+                        "output_tokens": event.output_tokens,
+                        "reasoning_tokens": event.reasoning_tokens,
+                        "cost_state": event.cost_measurement_state,
+                        "cost": event.measured_cost_usd,
+                        "error": event.error_code,
+                        "finished": event.finished_at,
+                        "duration": duration_ms,
+                    },
+                )
+            if final:
+                open_invocations = connection.execute(
+                    text(
+                        "SELECT count(*) FROM provider_call_invocations i "
+                        "LEFT JOIN provider_call_events e "
+                        "ON e.organization_id = i.organization_id "
+                        "AND e.invocation_id = i.invocation_id "
+                        "WHERE i.organization_id = :org "
+                        "AND i.logical_execution_id = :execution AND e.event_id IS NULL"
+                    ),
+                    {
+                        "org": invocation.organization_id,
+                        "execution": invocation.logical_execution_id,
+                    },
+                ).scalar_one()
+                if open_invocations:
+                    raise RecordConflictError(
+                        "logical agent execution has unfinished physical attempts"
+                    )
+                cost_rows = (
+                    connection.execute(
+                        text(
+                            "SELECT event_id, cost_measurement_state, measured_cost_usd "
+                            "FROM provider_call_events WHERE organization_id = :org "
+                            "AND logical_execution_id = :execution ORDER BY physical_sequence"
+                        ),
+                        {
+                            "org": invocation.organization_id,
+                            "execution": invocation.logical_execution_id,
+                        },
+                    )
+                    .mappings()
+                    .all()
+                )
+                amounts = [
+                    row["measured_cost_usd"]
+                    for row in cost_rows
+                    if row["measured_cost_usd"] is not None
+                ]
+                measured_cost = sum(amounts, Decimal("0")) if amounts else None
+                if measured_cost is not None and measured_cost > Decimal("99999999.999999"):
+                    raise RecordConflictError("logical provider cost exceeds storage precision")
+                states = {row["cost_measurement_state"] for row in cost_rows}
+                if amounts and states == {"measured"}:
+                    cost_state = "measured"
+                elif amounts:
+                    cost_state = "partial"
+                elif "invalid" in states:
+                    cost_state = "invalid"
+                else:
+                    cost_state = "not_observed"
+                succeeded = event.status == "succeeded"
+                logical_duration_ms = Decimal(
+                    str((event.finished_at - logical["started_at"]).total_seconds() * 1000)
+                ).quantize(Decimal("0.001"))
+                if logical_duration_ms < 0:
+                    raise RecordConflictError("provider event predates logical execution")
+                result = connection.execute(
+                    text(
+                        "UPDATE agent_executions SET status = :status, "
+                        "output_sha256 = :output_hash, error_code = :error, "
+                        "finished_at = :finished, duration_ms = :duration, "
+                        "measured_cost = :cost, cost_measurement_state = :cost_state, "
+                        "provider_event_ids = CAST(:event_ids AS jsonb) "
+                        "WHERE organization_id = :org AND execution_id = :execution "
+                        "AND status = 'running'"
+                    ),
+                    {
+                        "status": "succeeded" if succeeded else "failed",
+                        "output_hash": (
+                            self._provider_terminal_output_hash(event) if succeeded else None
+                        ),
+                        "error": None if succeeded else event.error_code,
+                        "finished": event.finished_at,
+                        "duration": logical_duration_ms,
+                        "cost": measured_cost,
+                        "cost_state": cost_state,
+                        "event_ids": canonical_json([row["event_id"] for row in cost_rows]),
+                        "org": invocation.organization_id,
+                        "execution": invocation.logical_execution_id,
+                    },
+                )
+                if result.rowcount != 1:
+                    raise RecordConflictError("logical agent execution is already terminal")
+        return event
+
+    def reconcile_unknown_physical_attempt(
+        self, invocation: ProviderInvocationContextV1
+    ) -> ProviderTerminalEventV1:
+        """Close a committed invocation after a crash without another provider call."""
+
+        if not isinstance(invocation, ProviderInvocationContextV1):
+            raise TypeError("provider invocation context is invalid")
+        with self._engine.connect() as connection:
+            durable = self._provider_invocation_row(
+                connection, invocation.organization_id, invocation.invocation_id
+            )
+            if durable is None:
+                raise RecordNotFoundError("provider invocation does not exist")
+            self._assert_provider_invocation_identity(durable, invocation)
+            existing_record = self._provider_event_record_for_invocation(
+                connection, invocation.organization_id, invocation.invocation_id
+            )
+            if existing_record is not None:
+                return existing_record[0]
+        event = ProviderTerminalEventV1(
+            invocation_id=invocation.invocation_id,
+            physical_sequence=invocation.physical_sequence,
+            status="outcome_unknown",
+            returned_model=None,
+            upstream_provider=None,
+            provider_request_id=None,
+            input_tokens=None,
+            output_tokens=None,
+            reasoning_tokens=None,
+            cost_measurement_state="not_observed",
+            measured_cost_usd=None,
+            error_code="provider_outcome_unknown",
+            finished_at=datetime.datetime.now(datetime.UTC),
+        )
+        try:
+            return self.finish_physical_attempt(invocation, event, final=True)
+        except RecordConflictError:
+            with self._engine.connect() as connection:
+                existing_record = self._provider_event_record_for_invocation(
+                    connection, invocation.organization_id, invocation.invocation_id
+                )
+                if existing_record is not None:
+                    return existing_record[0]
+            raise
+
+    def list_provider_call_events(self, *, organization_id: str) -> tuple[Any, ...]:
+        """Return one pre-authorized caller scope; authentication remains an API responsibility."""
+
+        if not isinstance(organization_id, str) or not organization_id:
+            raise InvalidControlPlaneInput("organization identity is invalid")
+        with self._engine.connect() as connection:
+            rows = (
+                connection.execute(
+                    text(
+                        "SELECT * FROM provider_call_events WHERE organization_id = :org "
+                        "ORDER BY finished_at, physical_sequence, event_id"
+                    ),
+                    {"org": organization_id},
+                )
+                .mappings()
+                .all()
+            )
+        return tuple(SimpleNamespace(**dict(row)) for row in rows)
+
+    @staticmethod
+    def _provider_invocation_row(
+        connection: Connection, organization_id: str, invocation_id: str
+    ) -> Mapping[str, Any] | None:
+        row = (
+            connection.execute(
+                text(
+                    "SELECT * FROM provider_call_invocations "
+                    "WHERE organization_id = :org AND invocation_id = :invocation"
+                ),
+                {"org": organization_id, "invocation": invocation_id},
+            )
+            .mappings()
+            .one_or_none()
+        )
+        return None if row is None else dict(row)
+
+    @staticmethod
+    def _assert_provider_invocation_identity(
+        durable_invocation: Mapping[str, Any],
+        invocation: ProviderInvocationContextV1,
+    ) -> None:
+        expected_invocation = {
+            name: getattr(invocation, name)
+            for name in ProviderInvocationContextV1.__dataclass_fields__
+        }
+        if any(durable_invocation[name] != value for name, value in expected_invocation.items()):
+            raise RecordConflictError("provider invocation identity changed")
+
+    @staticmethod
+    def _provider_terminal_output_hash(event: ProviderTerminalEventV1) -> str:
+        """Content-address the sanitized terminal contract used as this logical output."""
+
+        return content_hash(
+            {
+                "schema_version": 1,
+                "event_id": event.event_id,
+                "invocation_id": event.invocation_id,
+                "physical_sequence": event.physical_sequence,
+                "status": event.status,
+                "returned_model": event.returned_model,
+                "upstream_provider": event.upstream_provider,
+                "provider_request_id": event.provider_request_id,
+                "input_tokens": event.input_tokens,
+                "output_tokens": event.output_tokens,
+                "reasoning_tokens": event.reasoning_tokens,
+                "cost_measurement_state": event.cost_measurement_state,
+                "measured_cost_usd": (
+                    format(event.measured_cost_usd, ".6f")
+                    if event.measured_cost_usd is not None
+                    else None
+                ),
+                "error_code": event.error_code,
+                "finished_at": event.finished_at.astimezone(datetime.UTC).isoformat(
+                    timespec="microseconds"
+                ),
+            }
+        )
+
+    @staticmethod
+    def _provider_event_record_for_invocation(
+        connection: Connection, organization_id: str, invocation_id: str
+    ) -> tuple[ProviderTerminalEventV1, bool] | None:
+        row = (
+            connection.execute(
+                text(
+                    "SELECT * FROM provider_call_events "
+                    "WHERE organization_id = :org AND invocation_id = :invocation"
+                ),
+                {"org": organization_id, "invocation": invocation_id},
+            )
+            .mappings()
+            .one_or_none()
+        )
+        if row is None:
+            return None
+        return (
+            ProviderTerminalEventV1(
+                event_id=row["event_id"],
+                invocation_id=row["invocation_id"],
+                physical_sequence=row["physical_sequence"],
+                status=row["status"],
+                returned_model=row["returned_model"],
+                upstream_provider=row["upstream_provider"],
+                provider_request_id=row["provider_request_id"],
+                input_tokens=row["input_tokens"],
+                output_tokens=row["output_tokens"],
+                reasoning_tokens=row["reasoning_tokens"],
+                cost_measurement_state=row["cost_measurement_state"],
+                measured_cost_usd=row["measured_cost_usd"],
+                error_code=row["error_code"],
+                finished_at=row["finished_at"],
+            ),
+            row["is_final"],
+        )
 
     def record_attempt_outcome(
         self,
