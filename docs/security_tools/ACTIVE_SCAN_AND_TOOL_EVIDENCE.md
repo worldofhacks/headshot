@@ -23,6 +23,11 @@ owner-authorized* grant (see "Status" at the bottom).
 | `auth_matrix.py` | Authenticated-scan matrix (principals × auth modes) | Binds each cell to a credential **marker** (`no-auth` / `cred-sha256:<digest>`), never a raw secret; only `secretref://` / `env:` references accepted; off-scope principals refused; content-addressed. |
 | `tool_runtime.py` | Per-tool **execution evidence** emitter + runtime-state machine | "No fabricated evidence" is structural: `evidenced` needs a real artifact URI + finished time; `running` cannot be finished; `error` must name a code. `derive_tool_runtime_state()` = error > running > evidenced > idle. |
 | `active_preflight.py` | WP-21A **zero-call** readiness proof | Composes all of the above into a structured report (`ok` + per-check pass/fail); never raises; a socket patched to raise proves zero calls. |
+| `workbench_decoder.py` | WP-16C Decoder — real offline encoding transforms | Base64 / ROT13 / ASCII-smuggling (Unicode Tags) / hex / URL, content-addressed; fail-closed on unknown transform / oversize; untrusted candidate input only. |
+
+Shared, review-hardened primitives added to `active_authorization.py`: `content_digest()`
+(collision-resistant, used by OAST + egress) and `path_in_scope()` (one traversal-hardened
+scope matcher used by both discovery and egress — no divergence).
 
 Tests: `tests/security_tools/test_active_scan_authorization.py`, `test_zap_active_profiles.py`,
 `test_scan_egress.py`, `test_oast.py`, `test_api_discovery.py`, `test_auth_matrix.py`,
@@ -98,3 +103,35 @@ before any real execution (WP-21D):**
 
 None of the above can or should run from a sandbox; the code fails closed without the grant, and a
 constructed command / injected-sender / passive result is never counted as active-scan evidence.
+
+---
+
+## Task-by-task status (against the assignment)
+
+- **Task 1 — every-tool scan / hosted generation + two-stage loop.** Hosted Red Team generation is
+  **already implemented and tested** (`agents/red_team/providers.py` `HostedProvider._generate_via_client`,
+  dual-gate auth; `tests/test_red_team_hosted_generation.py`, 9 tests green — the brief's
+  "raises NotImplementedError" ground-truth was stale; no such error exists). The two-stage
+  building blocks are all present: Stage-1 generation without target authority (`mutate()` +
+  providers → proposed input only, no credential/verdict), content-addressing into a NEW corpus
+  requiring fresh authorization (`campaign/tool_profile.py` `build_reviewed_tool_corpus` →
+  `fresh_authorization_required` + `operation_hash` rebinding), and the coordinator's hard-abort on
+  any in-run mutation (`campaign/coordinator.py:390-394`, corpus-hash invariant). **Not added here:**
+  a single named "hosted-variant → review → re-authorize → dispatch" orchestration — deliberately
+  not half-wired into the concurrently-churning `campaign/` tree; every primitive it needs exists.
+- **Task 2 — promote adapter-only capabilities.** The promotion pathway exists and 3 tool bundles
+  (garak / promptfoo / pyrit) are already promoted into the 14-case full-scan corpus
+  (`security_tools/native.py` adapters → `candidates.py` `build_tool_attack_bundle` →
+  `corpus.py` `_REVIEWED_BUNDLES`). **Added here:** the workbench Decoder now produces real
+  content-addressed encoding-bypass candidates (was declarative). **Remaining (documented, not
+  applied):** promoting PyRIT Crescendo/TAP multi-turn, Giskard RAG/agent/GOAT/GCG, extra Garak
+  probe families, and Promptfoo red-team plugins is a per-tool artifact-generation + bundle-pin +
+  catalog scope-move that touches the shared, Codex-churned `corpus.py`; the exact steps are the
+  `native.py`→`candidates.py`→`corpus._REVIEWED_BUNDLES` pathway above.
+- **Task 3 — real active scanning.** Complete as code + offline tests (see the module table).
+- **Task 4 — per-tool execution evidence + runtime state.** Complete (emitter + additive read-model
+  fields + this field spec).
+
+Adversarially reviewed (28-agent workflow): 11 confirmed findings fixed with RED regression tests
+(`tests/security_tools/test_active_scan_hardening.py`) — traversal bypass, spec-URL port bypass,
+hash-collision, empty-auth-matrix preflight gap, metadata deny-list gaps, abort re-check, and more.
