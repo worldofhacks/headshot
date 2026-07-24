@@ -66,7 +66,8 @@ class TransportPolicy:
     # The full set of request-shaping profiles this entry's surfaces use (a target may expose chat,
     # evidence-search, public liveness, document upload, and document-read surfaces at once). When
     # omitted it defaults to the single ``payload_profile`` — so a single-surface catalog entry is
-    # unchanged. The runner requires each surface's scope-derived profile to be a member of this set.
+    # unchanged. The runner requires each surface's scope-derived profile to be a member
+    # of this set.
     payload_profiles: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
@@ -108,7 +109,9 @@ class TransportPolicy:
             raise TargetCatalogError("private-destination policy is invalid")
         if self.payload_profile not in _KNOWN_PAYLOAD_PROFILES:
             raise TargetCatalogError("transport payload profile is invalid")
-        profiles = tuple(self.payload_profiles) if self.payload_profiles else (self.payload_profile,)
+        profiles = (
+            tuple(self.payload_profiles) if self.payload_profiles else (self.payload_profile,)
+        )
         if any(profile not in _KNOWN_PAYLOAD_PROFILES for profile in profiles):
             raise TargetCatalogError("transport payload profile set is invalid")
         if len(set(profiles)) != len(profiles):

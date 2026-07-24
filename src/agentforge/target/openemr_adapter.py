@@ -68,11 +68,13 @@ _PROFILE_OPENEMR_TURNS = "openemr_turns"
 _PROFILE_COPILOT_CHAT = "copilot_chat"
 # Additive profiles for the rest of the Clinical Co-Pilot Bruno surface set:
 #   "copilot_public_get"       — GET liveness/readiness; no credential, no body, no auth header.
-#   "copilot_evidence_search"  — POST anonymous guideline retrieval; body {"query","k"}, no credential.
-#   "copilot_document_upload"  — POST multipart synthetic document; session_id in the FORM, a synthetic
-#                                fixture as the file part, no Authorization header.
-#   "copilot_document_read"    — GET a document sub-resource; the uploaded document_id (and page) are
-#                                substituted into the path and session_id travels in the QUERY.
+#   "copilot_evidence_search"  — POST anonymous guideline retrieval; body
+#                                {"query","k"}, no credential.
+#   "copilot_document_upload"  — POST multipart synthetic document; session_id in the
+#                                FORM, a synthetic fixture as the file part, no auth header.
+#   "copilot_document_read"    — GET a document sub-resource; the uploaded document_id
+#                                (and page) are substituted into the path and session_id
+#                                travels in the QUERY.
 _PROFILE_COPILOT_PUBLIC_GET = "copilot_public_get"
 _PROFILE_COPILOT_EVIDENCE_SEARCH = "copilot_evidence_search"
 _PROFILE_COPILOT_DOCUMENT_UPLOAD = "copilot_document_upload"
@@ -190,8 +192,9 @@ class OpenEmrAdapter(TargetAdapter):
     destination_validator: Callable[[str], None] | None = field(default=None, repr=False)
     telemetry: Any | None = field(default=None, repr=False)
     # Resolves a synthetic-only ``fixture://`` reference to (filename, bytes, content_type) for the
-    # ``copilot_document_upload`` profile. Injected by the trusted composition root; the adapter reads
-    # only synthetic fixtures by reference and never touches an arbitrary local path.
+    # ``copilot_document_upload`` profile. Injected by the trusted composition root;
+    # the adapter reads only synthetic fixtures by reference and never touches an
+    # arbitrary local path.
     fixture_resolver: Callable[[str], tuple[str, bytes, str]] | None = field(
         default=None, repr=False
     )
@@ -409,7 +412,8 @@ class OpenEmrAdapter(TargetAdapter):
         For a document-read surface the path carries the uploaded ``document_id`` (and page) as
         ``{name}`` placeholders. Each is filled from the authorized attempt's ``path_params`` and
         strictly validated — a missing, malformed, or unsafe value (traversal / a second authority /
-        URL-override syntax) is a fail-closed :class:`AdapterError`, never a partially-templated URL.
+        URL-override syntax) is a fail-closed :class:`AdapterError`, never a
+        partially-templated URL.
         """
         path = self.relative_path
         parameters = _relative_path_parameters(path)
@@ -474,15 +478,18 @@ class OpenEmrAdapter(TargetAdapter):
     def _build_request_kwargs(self, request: TargetRequest) -> dict[str, Any]:
         """Shape the outgoing request per the configured payload profile.
 
-        Returns the keyword arguments (``json`` / ``data`` + ``files`` / ``params`` / none) passed to
-        the injected client alongside ``method``/``url``/``headers``/``auth``. Where a credential is
-        required it is REVEALED here — at the send boundary only — into the outgoing structure the
+        Returns keyword arguments (``json`` / ``data`` + ``files`` / ``params`` /
+        none) passed to the injected client alongside
+        ``method``/``url``/``headers``/``auth``. Where a credential is required it is
+        REVEALED here — at the send boundary only — into the outgoing structure the
         client transmits, never into a header string, log, or the adapter's repr.
 
-        * ``openemr_turns``            — ``json={"turns","metadata"}`` (credential in the Bearer header).
+        * ``openemr_turns``            — ``json={"turns","metadata"}``
+                                         (credential in the Bearer header).
         * ``copilot_chat``             — ``json={"session_id","message"}`` (session in the body).
         * ``copilot_public_get``       — no body, no credential (liveness/readiness).
-        * ``copilot_evidence_search``  — ``json={"query","k"}``, no credential (anonymous retrieval).
+        * ``copilot_evidence_search``  — ``json={"query","k"}``, no credential
+                                         (anonymous retrieval).
         * ``copilot_document_upload``  — ``data={"session_id","doc_type"}`` + a synthetic fixture as
                                          ``files={"file": ...}`` (session in the form).
         * ``copilot_document_read``    — ``params={"session_id": ...}`` (session in the query; the
@@ -492,7 +499,9 @@ class OpenEmrAdapter(TargetAdapter):
         if profile == _PROFILE_COPILOT_PUBLIC_GET:
             return {}
         if profile == _PROFILE_COPILOT_EVIDENCE_SEARCH:
-            return {"json": {"query": self._message_from_turns(request), "k": self._search_k(request)}}
+            return {
+                "json": {"query": self._message_from_turns(request), "k": self._search_k(request)}
+            }
         if profile == _PROFILE_COPILOT_CHAT:
             return {
                 "json": {
@@ -532,7 +541,7 @@ class OpenEmrAdapter(TargetAdapter):
 
     @staticmethod
     def _search_k(request: TargetRequest) -> int:
-        """Parse the evidence-search ``k`` (default 5), fail-closed on a non-integer / out-of-range."""
+        """Parse evidence-search ``k`` (default 5), failing closed outside its range."""
         raw = dict(request.metadata or {}).get("k")
         if raw is None:
             return 5

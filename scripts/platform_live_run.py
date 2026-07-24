@@ -3,12 +3,14 @@
 Gateway -> Execution Recorder (Postgres) -> re-read + hash-verify -> Canary Oracle -> Evidence
 Envelope -> independent Judge -> immutable manifests.
 
-This is NOT a hand-rolled scan: it drives ``agentforge.campaign.coordinator.SecureCampaignCoordinator``
-— the platform's own live-campaign sequencer — over the authored M11 seed corpus against the live
-Clinical Co-Pilot. The only things injected are the collaborators the production composition root
-(``agentforge.campaign.__main__``) normally injects (engine / adapter / clock / accounting) PLUS a
-``credential_resolver`` — the exact seam the private Runner fills — that resolves the bound
-``secretref`` to ``Secret(WEEK1_SID)`` read from the environment by reference (never inlined/logged).
+This is NOT a hand-rolled scan: it drives
+``agentforge.campaign.coordinator.SecureCampaignCoordinator`` — the platform's own
+live-campaign sequencer — over the authored M11 seed corpus against the live Clinical
+Co-Pilot. The only things injected are the collaborators the production composition
+root (``agentforge.campaign.__main__``) normally injects (engine / adapter / clock /
+accounting) PLUS a ``credential_resolver`` — the exact seam the private Runner fills —
+that resolves the bound ``secretref`` to ``Secret(WEEK1_SID)`` read from the
+environment by reference (never inlined/logged).
 
 Two-person control: the human owner APPROVED this exact run (interactive approval, 2026-07-24); this
 launcher (the agent) does NOT self-approve. The minted RunAuthorization + the written approval
@@ -21,7 +23,7 @@ import json
 import os
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -73,14 +75,21 @@ def main() -> int:
 
     OUT.mkdir(parents=True, exist_ok=True)
     binding = TargetBinding(
-        target_id=TARGET_ID, host=HOST, adapter_kind=ADAPTER_KIND,
-        credential_ref=CREDENTIAL_REF, auth_mode=AUTH_MODE,
+        target_id=TARGET_ID,
+        host=HOST,
+        adapter_kind=ADAPTER_KIND,
+        credential_ref=CREDENTIAL_REF,
+        auth_mode=AUTH_MODE,
     )
     policy = RunCaps.parse(CAPS)
     seeds = load_seed_attempts(SEEDS_DIR)
     corpus_sha = corpus_sha256(seeds)
     op_hash = operation_hash_for(
-        binding, policy=policy, corpus_id=CORPUS_ID, corpus_sha=corpus_sha, run_nonce=RUN_NONCE,
+        binding,
+        policy=policy,
+        corpus_id=CORPUS_ID,
+        corpus_sha=corpus_sha,
+        run_nonce=RUN_NONCE,
     )
 
     # --- two-person provenance: approver (human owner) != launcher (agent) ---
@@ -92,37 +101,55 @@ def main() -> int:
         "run_nonce": RUN_NONCE,
         "corpus_id": CORPUS_ID,
         "corpus_sha": corpus_sha,
-        "deadline_utc": datetime.fromtimestamp(deadline, tz=timezone.utc).isoformat(),
+        "deadline_utc": datetime.fromtimestamp(deadline, tz=UTC).isoformat(),
         "launcher": "agent (Claude Code) — did NOT self-approve",
         "approver": "human owner — explicit interactive approval 2026-07-24 (approver != launcher)",
-        "note": "Stand-in for the Clerk two-person Approver service (not yet wired). The human owner "
-                "is the distinct approving principal; the agent is the launcher.",
+        "note": (
+            "Stand-in for the Clerk two-person Approver service (not yet wired). "
+            "The human owner is the distinct approving principal; the agent is the launcher."
+        ),
     }
     (OUT / "approval.json").write_text(json.dumps(approval, indent=2))
     authorization = RunAuthorization(operation_hash=op_hash, run_nonce=RUN_NONCE, deadline=deadline)
 
     engine = production_engine(database_url)
     adapter = OpenEmrAdapter(
-        base_url=binding.host_base_url(), payload_profile="copilot_chat",
-        relative_path="chat", timeout_seconds=120.0,
+        base_url=binding.host_base_url(),
+        payload_profile="copilot_chat",
+        relative_path="chat",
+        timeout_seconds=120.0,
     )
     manifests = ManifestStore(root=OUT / "manifests")
     config = RunConfig(
-        binding=binding, authorization=authorization, policy=policy, run_nonce=RUN_NONCE,
-        canary_token=CANARY, environment="production", corpus_id=CORPUS_ID, corpus_sha=corpus_sha,
+        binding=binding,
+        authorization=authorization,
+        policy=policy,
+        run_nonce=RUN_NONCE,
+        canary_token=CANARY,
+        environment="production",
+        corpus_id=CORPUS_ID,
+        corpus_sha=corpus_sha,
         campaign_run_id=CAMPAIGN_RUN_ID,
-        # The Runner's credential-lease seam: resolve the bound secretref to the env SID by reference.
+        # Runner credential-lease seam: resolve the bound secretref to an env SID by reference.
         credential_resolver=lambda ref: Secret(sid),
     )
     coordinator = SecureCampaignCoordinator(
-        config=config, adapter=adapter, engine=engine, manifests=manifests,
-        clock=SystemClock(), accounting=RunAccounting(),
+        config=config,
+        adapter=adapter,
+        engine=engine,
+        manifests=manifests,
+        clock=SystemClock(),
+        accounting=RunAccounting(),
     )
 
-    print(f"PLATFORM LIVE RUN  campaign={CAMPAIGN_RUN_ID}  target={HOST}/chat  cases={len(seeds)}",
-          flush=True)
-    print(f"  op_hash={op_hash}  canary={CANARY}  caps rps={CAPS['target_requests_per_second']}",
-          flush=True)
+    print(
+        f"PLATFORM LIVE RUN  campaign={CAMPAIGN_RUN_ID}  target={HOST}/chat  cases={len(seeds)}",
+        flush=True,
+    )
+    print(
+        f"  op_hash={op_hash}  canary={CANARY}  caps rps={CAPS['target_requests_per_second']}",
+        flush=True,
+    )
 
     rows = []
     # Optional subset (continuation runs): LC_ONLY_CASES=CASE1,CASE2 restricts to those case_refs.
@@ -139,33 +166,45 @@ def main() -> int:
         if dispatched:
             time.sleep(pace_seconds)
         dispatched += 1
-        seed_case = {"case_id": attempt["case_ref"], "input_sequence": list(attempt["input_sequence"])}
+        seed_case = {
+            "case_id": attempt["case_ref"],
+            "input_sequence": list(attempt["input_sequence"]),
+        }
         if "category" in attempt:
             seed_case["category"] = attempt["category"]
         try:
             outcome = coordinator.run_case(seed_case, attempt_id=attempt["case_ref"])
         except (CampaignAbort, AuthorizationError) as exc:
             print(f"  {attempt['case_ref']:16} ABORT {type(exc).__name__}: {exc}", flush=True)
-            rows.append({"case_ref": attempt["case_ref"], "aborted": f"{type(exc).__name__}: {exc}"})
+            rows.append(
+                {"case_ref": attempt["case_ref"], "aborted": f"{type(exc).__name__}: {exc}"}
+            )
             break
         v = outcome.verdict
-        rows.append({
-            "case_ref": attempt["case_ref"],
-            "category": attempt.get("category"),
-            "verdict_state": v.get("state"),
-            "confidence": v.get("confidence"),
-            "reason_codes": list(v.get("reason_codes", [])),
-            "oracle_hit": bool(outcome.oracle_signal.get("hit")),
-            "integrity_ok": outcome.integrity_ok,
-            "http_status": outcome.result.fields.get("http_status")
-            if hasattr(outcome.result, "fields") else None,
-        })
-        print(f"  {attempt['case_ref']:16} judge={v.get('state'):18} "
-              f"oracle_hit={bool(outcome.oracle_signal.get('hit'))} integrity_ok={outcome.integrity_ok}",
-              flush=True)
+        rows.append(
+            {
+                "case_ref": attempt["case_ref"],
+                "category": attempt.get("category"),
+                "verdict_state": v.get("state"),
+                "confidence": v.get("confidence"),
+                "reason_codes": list(v.get("reason_codes", [])),
+                "oracle_hit": bool(outcome.oracle_signal.get("hit")),
+                "integrity_ok": outcome.integrity_ok,
+                "http_status": outcome.result.fields.get("http_status")
+                if hasattr(outcome.result, "fields")
+                else None,
+            }
+        )
+        print(
+            f"  {attempt['case_ref']:16} judge={v.get('state'):18} "
+            f"oracle_hit={bool(outcome.oracle_signal.get('hit'))} "
+            f"integrity_ok={outcome.integrity_ok}",
+            flush=True,
+        )
 
-    finished = datetime.now(timezone.utc).isoformat()
+    finished = datetime.now(UTC).isoformat()
     from collections import Counter
+
     states = Counter(r.get("verdict_state") for r in rows if "verdict_state" in r)
     summary = {
         "run_id": coordinator.run_id,
@@ -189,11 +228,16 @@ def main() -> int:
             "judge": "oracle-precedence-v1 (deterministic; independent) -> Verdict",
             "documentation": "renders ONLY confirmed findings; 0 confirmed -> nothing to draft",
         },
-        "provenance": "human-approved (approver != launcher); credentials by reference; synthetic-only",
+        "provenance": (
+            "human-approved (approver != launcher); credentials by reference; synthetic-only"
+        ),
     }
     (OUT / "summary.json").write_text(json.dumps(summary, indent=2))
-    print(f"\nSUMMARY  verdicts={dict(states)}  exploit_confirmed={summary['exploit_confirmed']}  "
-          f"pending_approvals={summary['pending_human_approvals']}", flush=True)
+    print(
+        f"\nSUMMARY  verdicts={dict(states)}  exploit_confirmed={summary['exploit_confirmed']}  "
+        f"pending_approvals={summary['pending_human_approvals']}",
+        flush=True,
+    )
     print(f"  manifests -> {OUT / 'manifests'}", flush=True)
     return 0
 
