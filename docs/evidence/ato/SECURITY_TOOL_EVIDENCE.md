@@ -1,5 +1,12 @@
 # Security-tool ATO evidence
 
+> **Scope notice — retained security-owner evidence.** This document preserves the dated, branch-
+> scoped scanner/tool results below. It is not rewritten as a scan of the moving release candidate,
+> and it is not evidence for the final deployment. The designated red-team/security-evidence owner
+> controls security-tool execution and the vulnerability conclusions, including reports 004–006; use the
+> [owner-maintained vulnerability index](../../vulnerabilities/README.md). Exact final-commit
+> security-tools and secret-scan results remain unavailable until authoritative GitHub CI completes.
+
 Evidence date: 2026-07-22 (America/New_York)
 
 Branch: `codex/m1d-live-console-railway`

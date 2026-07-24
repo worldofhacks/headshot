@@ -2,7 +2,9 @@
 
 > **TABLETOP SAMPLE - NOT AN ACTUAL HEADSHOT INCIDENT.** All times are relative, no real campaign,
 > person, credential, environment, cost, patient, or deployment is described. This artifact
-> demonstrates the incident process required by the canonical brief.
+> demonstrates the incident process required by the canonical brief. Candidate migrations and
+> controls named below are locally tested design evidence, not a claim that this scenario occurred or
+> that migration `0018` is deployed.
 
 ## Incident summary
 
@@ -44,6 +46,8 @@ execution.
 - Queue at-least-once delivery does not become blind target at-least-once execution.
 - PostgreSQL remains the campaign/evidence authority during the Langfuse outage.
 - Migration `0016` prevents an SDK flush from being mislabeled as verified export.
+- Migration `0018` separates logical agent execution from append-only physical provider
+  invocation/event lineage so unresolved retries cannot be hidden in one logical row.
 - Abort preserves completed evidence and blocks publication, remediation, or regression promotion.
 - Resuming work requires a fresh run nonce and authorization rather than mutating the old scope.
 
@@ -78,6 +82,7 @@ The sample incident owner:
 | Add a staged kill-point drill after target return and before observation commit | High | Zero duplicate target sends; campaign ends degraded/aborted |
 | Add stable cursor pagination and total counts to audit/trace drill-ins | Medium | Operator can enumerate every contributing execution |
 | Define retention/WORM policy for audit and evidence records | Medium | Approved durations and archive restore drill are documented |
+| Add a production database backup/restore drill and bind it to every promoted release | High | Restore to an isolated database succeeds and the compatible rollback image passes readiness before promotion |
 
 ## Lessons
 
@@ -89,6 +94,6 @@ authorization, or retry semantics.
 ## Evidence required if this were real
 
 An actual postmortem would attach the exact release/deployment, migration, redacted campaign/job/
-reservation/agent IDs, queue and lease transitions, request/evidence hashes, Langfuse query result,
-alert timestamps, containment approval, and recovery checks. It would never attach credentials,
-session values, Langfuse keys, or raw clinical/adversarial bodies.
+reservation/agent/provider-event IDs, queue and lease transitions, request/evidence hashes, Langfuse
+query result, alert timestamps, containment approval, and recovery checks. It would never attach
+credentials, session values, Langfuse keys, or raw clinical/adversarial bodies.

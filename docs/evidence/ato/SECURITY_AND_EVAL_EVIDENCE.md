@@ -4,14 +4,14 @@
 
 | Evidence family | What is present | What it proves | What it does not prove |
 |---|---|---|---|
-| Source/platform tests | Unit, contract, auth, migration, queue, policy, runner, console, browser, container, and security-tool suites | Controls are testable and CI has defined gates | The exact final commit passed or is deployed |
+| Source/platform tests | Unit, contract, auth, migration, queue, policy, runner, console, browser, container, and security-tool suites | Controls are testable and CI has defined gates | The moving exact final commit passed or is deployed |
 | Active eval seeds | 9 schema-valid active cases across data exfiltration, prompt injection, and tool misuse | Structured boundary/invariant coverage and OWASP mappings | A final-release live result; active seed records remain `NOT_EXECUTED` |
-| Draft evals and ground truth | 7 draft cases; 30 labels across 6 categories in the inspected corpus | Broader authored coverage and calibration inputs exist | Judge calibration passed or model authority is enabled |
+| Draft evals and ground truth | Security-owner corpus/calibration work exists on its separate branch | A model calibration run met its documented thresholds for the identities it recorded | Final exact-route identity matches, human enablement, or model decision authority |
 | Historical target artifacts | Prior response/manifests under `evals/results/` | The named historical workflow produced retained artifacts | Current deployed four-agent/Langfuse execution |
 | Platform security tools | Pinned Semgrep, pip-audit, npm audit, Gitleaks, Promptfoo, Garak, PyRIT, Giskard, and isolated ZAP evidence | Historical local/CI scanner execution under the recorded scope | An exact final-release scan or an authorized live-origin active scan |
 | Vulnerability reports | Report set and owner-maintained index | The reports exist for review | Independent reproduction, publication approval, or final release linkage unless each report says so |
-| Langfuse live review | Exact deployed release/migration and zero canonical observations | The UI's unavailable state is truthful | End-to-end tracing acceptance |
-| Performance/load | No final report in this source snapshot | Nothing | A 100-case live baseline, throughput, bottleneck, or scale recommendation |
+| Langfuse live review | Exact deployed release/migration predates the candidate | The UI's unavailable state is truthful | Physical-attempt tracing or end-to-end query-back acceptance |
+| Performance/load | No final report or frozen 100-case corpus in this candidate | Nothing | A 100-case live baseline, throughput, bottleneck, or owner-authored bottleneck/recommendation |
 
 ## Fresh local corpus validation
 
@@ -39,6 +39,14 @@ Every active seed currently retains `execution_status: NOT_EXECUTED`. That autho
 authoritative for the seed record and is not overwritten by a historical manifest. Final-release
 results must be separate recorder/Judge records tied to the exact campaign, release, corpus hash, and
 Langfuse reconciliation.
+
+The security owner's latest calibration branch is not a frozen 100-case campaign corpus. Its
+model-Judge run passed the owner's documented agreement/false-negative/false-positive/abstention/ECE
+thresholds for the identities captured there, but `human_approved=false` and
+`runtime_enabled=false`. More importantly, those identities do not exactly match the candidate's
+`google-vertex/global` Judge route and `atlas-cloud/fp8` Red Team route. The release therefore treats
+the model Judge as advisory/fail-closed and gives deterministic oracles decisive precedence. This
+does not block the campaign; it prevents model-only safety claims.
 
 ## Synthetic-data controls
 
@@ -72,7 +80,7 @@ The retained detailed evidence is
 - Garak, PyRIT, and Giskard: bounded offline/native slices only;
 - ZAP: four expected header warnings against an isolated fake fixture, not Headshot or the live
   Clinical Co-Pilot; and
-- live-origin ZAP: blocked pending its own exact authorization.
+- live-origin ZAP: **blocked** until its own exact authorization exists.
 
 The evidence is dated and branch-scoped. It must not be represented as the scan result for the final
 release commit. GitHub CI must rerun the security-tools and secret-scan jobs on the exact release, and
@@ -82,20 +90,25 @@ the resulting run/artifacts must be recorded without credential-bearing output.
 
 The owner-maintained report index is
 [`../../vulnerabilities/README.md`](../../vulnerabilities/README.md). This packet links it without
-restating, changing, or upgrading the reports' conclusions. Publication, remediation, and regression
-admission remain separate human/deterministic gates.
+restating, changing, or upgrading the reports' conclusions, including owner-controlled reports
+004–006. Publication, remediation, and regression admission remain separate human/deterministic
+gates.
 
 ## Langfuse and agent evidence
 
 The implemented source writes every agent execution to PostgreSQL before projecting typed Langfuse
-agent/generation observations. It records parent/run/attempt identity, order, provider/model,
-latency, safe input/output hashes, token fields when supplied, retries/physical attempts, error state,
-provider request identity, and provider-reported/measured cost when available. Missing billing fields
-remain unavailable.
+observations. A role execution is an AGENT; every physical hosted invocation is one child
+`provider.openrouter.attempt` GENERATION. It records parent/run/attempt identity, order, configured
+and observed provider/model endpoint, latency, safe input/output hashes, token fields when supplied,
+physical sequence/retries/errors, provider request/event identity, and provider-reported/measured
+cost when available. The logical hosted-runtime child is metadata-only for token/cost accounting, so
+physical usage is counted once. Missing billing fields remain unavailable.
 
-The current live review records deployed release `23490ea`, schema `0013`, zero canonical agent rows,
-and zero canonical Langfuse observations. Therefore there are no reconciliation totals to report for
-the reviewed `0017` source. Final acceptance requires exact remote query-back using
+The current live review records deployed release `23490ea` and schema `0013`; it predates the
+candidate physical lineage. Therefore there are no reconciliation totals to report for the reviewed
+`0018` source. Staging Langfuse credentials/environment variables have been prepared without
+triggering a deployment, and no key is recorded here. Final acceptance requires exact remote
+query-back using
 `scripts/verify_langfuse_campaign.py`; an SDK flush is not evidence.
 
 ## Fresh selected local tests
@@ -109,20 +122,24 @@ tests/auth/test_config.py
 tests/test_campaign_authorization.py
 tests/test_agent_langfuse_migration.py
 tests/test_hosted_agent_execution_lineage.py
+tests/test_verify_langfuse_campaign.py
 ```
 
-This is targeted local evidence, not a substitute for the complete release suite or authoritative
-GitHub CI.
+The candidate base's full backend run recorded **1,617 passed, 3 skipped** after the exact-route and
+physical-tracing changes. Focused hosted/provider/trace tests also passed. Later integration edits
+make those results historical branch evidence, not a substitute for a fresh complete suite or
+authoritative GitHub CI on the final SHA.
 
 ## Unavailable final evidence
 
 - exact final-commit scanner artifacts and CI URLs;
-- a final authorized campaign ID and 100-case evidence ID;
-- model-Judge calibration identity/threshold result for the final run;
+- a security-owner frozen 100-case corpus hash, final authorized campaign ID, and evidence ID;
+- an exact-runtime-identity model-Judge enablement (the model remains advisory without it);
 - complete ordered deployed agent execution rows;
 - Langfuse expected, observed, missing, extra, token, cost, and error totals;
 - provider billing reconciliation;
 - platform CPU, memory, queue, DB, storage, and end-to-end performance baselines; and
-- an authorized live-load result and owner-supplied bottleneck/recommendation.
+- an authorized live-load result and security-owner-supplied bottleneck/recommendation.
 
-These remain pending rather than being inferred from local tests, old manifests, or simulated data.
+These remain unavailable/blocked rather than being inferred from local tests, old manifests, or
+simulated data.

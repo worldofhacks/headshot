@@ -9,11 +9,12 @@ PostgreSQL is the authoritative audit and evidence store. A reviewer should be a
 3. target, surface, corpus, configuration, prompt/policy, and release hashes;
 4. the queue job, lease, Runner, and physical work-unit reservation;
 5. ordered Orchestrator, Red Team, Judge, and Documentation execution rows and parent IDs;
-6. each physical target request, attempt/retry coordinate, outcome, latency, and safe hashes;
+6. each physical provider invocation/event and target request, attempt/retry coordinate, outcome,
+   latency, exact configured/observed endpoint identity, and safe hashes;
 7. recorder content hash and the Judge's oracle/model decision authority;
 8. finding evidence links, approval decision reason, draft report, and regression disposition;
 9. provider/model/request identity, supplied token fields, retries, errors, and measured cost; and
-10. Langfuse delivery state plus the exact remote query-back timestamp when verified.
+10. Langfuse role/physical delivery state plus the exact remote query-back timestamp when verified.
 
 The durable IDs and hashes may be retained in redacted evidence. Bearer tokens, target sessions,
 provider keys, Langfuse keys, raw hostile transcripts, and real or synthetic clinical bodies must not
@@ -30,14 +31,16 @@ The inspected source graph was checked with:
 
 ```text
 python -m alembic heads
-0017 (head)
+0018 (head)
 ```
 
-The chain is serialized `0001 -> ... -> 0017`; there is exactly one head. Migration notes through
-`0017` are linked from
-[`../../integration/INTEGRATION_PACKET.md`](../../integration/INTEGRATION_PACKET.md).
+The chain is serialized `0001 -> ... -> 0018`; there is exactly one head. Migration notes through
+`0017` are indexed by
+[`../../integration/INTEGRATION_PACKET.md`](../../integration/INTEGRATION_PACKET.md), and the
+`0018` physical provider-call correction is documented in
+[`../../integration/migrations/provider-call-lineage-v1.md`](../../integration/migrations/provider-call-lineage-v1.md).
 
-The current live review records deployment only through `0013`. Applying `0014`-`0017` in staging is
+The current live review records deployment only through `0013`. Applying `0014`-`0018` in staging is
 a release action and must be bound to the exact final commit, backup/recovery posture, and compatible
 rollback image.
 
@@ -45,24 +48,26 @@ rollback image.
 
 | Drill | Expected fail-closed behavior | Existing test/control evidence | Final release evidence |
 |---|---|---|---|
-| Off-allowlist target or near-match host | Zero target dispatch; auditable denial | Policy Gateway/target binding tests | Pending deployed drill |
-| Missing, expired, or scope-mismatched authorization | Zero dispatch | Campaign authorization tests | Pending deployed drill |
-| Same user launches and approves | Generic 403/database rejection; no authorized run | Auth/control-plane tests; migration `0012` | Pending two-user acceptance |
-| Budget/rate/attempt/timeout/physical cap reached | Abort before the next send; preserve completed evidence | Gateway/coordinator tests | Pending final campaign |
-| Target/provider rate limit or timeout | Bounded retry/backoff, queue or abort; no synthetic success | Adapter/gateway/hosted-runtime tests | Pending live observation |
-| Runner crash after reserving a physical coordinate | Reservation stays ambiguous/unobserved; no blind replay | Migration `0014` and reservation tests | Pending staged crash drill |
-| Duplicate job or event | Idempotency/uniqueness prevents duplicate authoritative side effects | Queue/control-plane tests | Pending staged replay drill |
-| Evidence hash mismatch | Judge/coverage fail closed; no confirmed/safe state | Recorder/reconciliation/Judge tests | Pending deployed corruption drill |
-| Judge model unavailable or calibration not enabled | Deterministic oracles remain decisive; model-only authority disabled/advisory | Judge calibration/hosted lineage checks | Final calibration identity pending |
-| Langfuse unavailable or flush succeeds without query-back | PostgreSQL remains authoritative; delivery stays queued/error, never exported | Migration `0016`, verifier tests | Pending exact remote query-back |
-| Database is below packaged head | `/ready` fails and private workers do not consume | Readiness/container migration tests | Pending final staging deployment |
-| Target session expires mid-run | Abort; no silent refresh/rotation; new scope and approval required | Session lease/runbook controls | Pending live drill |
-| Critical finding publication/remediation | Remains blocked until required different human approval | Finding decision/storage tests | Pending final workflow |
+| Off-allowlist target or near-match host | Zero target dispatch; auditable denial | Policy Gateway/target binding tests | Deployed drill unavailable |
+| Missing, expired, or scope-mismatched authorization | Zero dispatch | Campaign authorization tests | Deployed drill unavailable |
+| Same user launches and approves | Generic 403/database rejection; no authorized run | Auth/control-plane tests; migration `0012` | Two-user acceptance unavailable |
+| Budget/rate/attempt/timeout/physical cap reached | Abort before the next send; preserve completed evidence | Gateway/coordinator tests | Final campaign unavailable |
+| Target/provider rate limit or timeout | Bounded retry/backoff, queue or abort; no synthetic success | Adapter/gateway/hosted-runtime tests | Live observation unavailable |
+| Runner crash after reserving a physical coordinate | Reservation stays ambiguous/unobserved; no blind replay | Migration `0014` and reservation tests | Staged crash drill unavailable |
+| Duplicate job or event | Idempotency/uniqueness prevents duplicate authoritative side effects | Queue/control-plane tests | Staged replay drill unavailable |
+| Evidence hash mismatch | Judge/coverage fail closed; no confirmed/safe state | Recorder/reconciliation/Judge tests | Deployed corruption drill unavailable |
+| Provider route/model substitution or physical retry drift | Fail closed; preserve exact configured/observed identity and unresolved call state | Migration `0018`, hosted transport/lineage tests | Staged provider evidence unavailable |
+| Judge model unavailable or identity-drifted | Deterministic oracles remain decisive; model-only authority disabled/advisory | Judge calibration/hosted lineage checks | Exact-route human enablement unavailable |
+| Langfuse unavailable or flush succeeds without query-back | PostgreSQL remains authoritative; delivery stays queued/error, never exported | Migration `0016`/`0018`, verifier tests | Exact remote query-back unavailable |
+| Database is below packaged head | `/ready` fails and private workers do not consume | Readiness/container migration tests | Final staging deployment unavailable |
+| Target session expires mid-run | Abort; no silent refresh/rotation; new scope and approval required | Session lease/runbook controls | Live drill unavailable |
+| Critical finding publication/remediation | Remains blocked until required different human approval | Finding decision/storage tests | Final workflow unavailable |
 
 ## Pre-deploy rollback binding
 
-Before deploying staging or granting production promotion, record all of the following in the release
-evidence:
+Staging deployment must at minimum bind the candidate/image, current and target revisions, compatible
+application rollback, and queue state before migration. Production promotion requires **every** field
+below, including a confirmed database recovery point and named human grant:
 
 | Binding | Required value |
 |---|---|
@@ -76,7 +81,11 @@ evidence:
 | Queue/checkpoint state | Depth, active leases, payload versions, and drain/quiesce result |
 | Human grant | Named approval for production deployment; no self-promotion |
 
-No such completed final binding is present in this packet. Production promotion remains blocked.
+No completed final binding is present in this packet. Railway retains application deployment
+rollback history, but production currently has no confirmed database backup schedule/recovery point
+or tested restore binding, and no human deploy grant has been issued. Those are independent hard
+blockers: an application rollback entry is not a database rollback. Production promotion remains
+blocked.
 
 ## Containment and rollback procedure
 
@@ -91,7 +100,8 @@ No such completed final binding is present in this packet. Production promotion 
 7. If data restoration is necessary, restore the confirmed PITR/backup into a new isolated database,
    validate it, then explicitly rebind services. Never overwrite the only copy first.
 8. Re-run migration identity, `/health`, `/ready`, unauthenticated 401, wrong-scope denial, private
-   ingress, queue/lease, and agent/Langfuse delivery checks.
+   ingress, queue/lease, exact provider identity/physical lineage, and agent/Langfuse query-back
+   checks.
 9. Re-enable schedules and launches only after the incident owner records recovery acceptance.
 
 Migration `0008` once introduced a demo self-approval exception; migration `0012` revoked it. A
@@ -103,5 +113,5 @@ prohibited for a release. See
 
 Successful process health alone is insufficient. Confirm the release commit, database head,
 protected-route behavior, exact authorization denial, private service topology, queue ownership,
-evidence integrity, and observation state. Any incomplete reconciliation remains explicitly
-degraded/unavailable.
+evidence integrity, physical provider lineage, and observation state. Any incomplete reconciliation
+remains explicitly degraded/unavailable.

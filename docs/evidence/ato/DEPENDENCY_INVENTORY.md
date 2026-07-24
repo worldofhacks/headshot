@@ -1,6 +1,7 @@
 # Dependency and version inventory
 
-Inventory baseline: `17019f28c606e9d3a799073f80f2437ee2e98ff6`
+Inventory baseline: release-candidate source inspected through
+`ed41c6e20b7793c656c45aa6d05f8b9a0c476d1b` (final integration SHA unavailable)
 
 This inventory distinguishes an exact pin from a lower-bound constraint. A lower bound is not a
 reproducible resolution.
@@ -13,7 +14,7 @@ reproducible resolution.
 | Python | `>=3.12`; container `3.12.11-slim-bookworm` | Container tag pinned, image digest not pinned | [`../../../pyproject.toml`](../../../pyproject.toml), [`../../../Dockerfile`](../../../Dockerfile) |
 | Node build stage | `22.17.1-bookworm-slim` | Tag pinned, image digest not pinned | [`../../../Dockerfile`](../../../Dockerfile) |
 | PostgreSQL | `16` | Major version only, image digest not pinned | [`../../../compose.yaml`](../../../compose.yaml), GitHub CI |
-| Railway processes | Web, Runner, Scheduler from the same image | Commands pinned in repository; external deployment revision pending | [`../../../railway/`](../../../railway/) |
+| Railway processes | Web, Runner, Scheduler from the same image | Commands pinned in repository; final deployment revision unavailable | [`../../../railway/`](../../../railway/) |
 | OWASP ZAP image | `2.17.0`, Linux AMD64 digest `sha256:c558ee87358911ab17278c70991e856f57793e115d9cd0f88ca475cf82907a1a` | Exact digest | [`../../../security-tools/toolchain.lock.json`](../../../security-tools/toolchain.lock.json) |
 
 ## Python direct dependencies
@@ -82,6 +83,25 @@ The lock also overrides `uuid` to `11.1.1`.
 Exact execution scope and evidence are in
 [`SECURITY_TOOL_EVIDENCE.md`](SECURITY_TOOL_EVIDENCE.md).
 
+## Hosted service and model inventory
+
+These are authorization-bound runtime identities, not package dependencies. Schema v2 also binds the
+role-specific completion-token parameter and rejects fallback/substitution:
+
+| Role | Model | Exact OpenRouter route | Token parameter | Live evidence |
+|---|---|---|---|---|
+| Orchestrator | `anthropic/claude-opus-4.8` | `amazon-bedrock/eu-west-1` | `max_tokens` | Unavailable |
+| Red Team | `qwen/qwen3.5-397b-a17b` | `atlas-cloud/fp8` | `max_tokens` | Unavailable |
+| Judge | `google/gemini-2.5-pro` | `google-vertex/global` | `max_tokens` | Unavailable; model remains advisory |
+| Documentation | `openai/gpt-5.4` | `azure/eu` | `max_completion_tokens` | Unavailable |
+
+The configuration source is
+[`../../../src/agentforge/agents/hosted.py`](../../../src/agentforge/agents/hosted.py); transport and
+returned-identity enforcement are in
+[`../../../src/agentforge/providers/openrouter.py`](../../../src/agentforge/providers/openrouter.py).
+A credential-free catalog check established route viability at one point in time; it is not an
+inference call, deployed identity, or campaign result.
+
 ## Manifest integrity hashes
 
 These SHA-256 values identify the files in the inspected source baseline; they are not substitutes
@@ -102,19 +122,20 @@ The package ships 18 v1 JSON Schemas under
 consumer conformance is exercised by `tests/contract`. Breaking inter-agent changes require a new
 schema version, compatibility analysis, migration note, and updated both-sided tests.
 
-Alembic has one serialized head at `0017` in the inspected source. Migration notes are indexed in
+Alembic has one serialized head at `0018` in the inspected source. Migration notes are indexed in
 [`../../integration/INTEGRATION_PACKET.md`](../../integration/INTEGRATION_PACKET.md). Deployed
 environments remain at `0013` according to the current live review and must not be described as
-running `0014`-`0017`.
+running `0014`-`0018`. The physical-provider lineage/interface note is
+[`../../integration/migrations/provider-call-lineage-v1.md`](../../integration/migrations/provider-call-lineage-v1.md).
 
 ## Architecture-to-manifest reconciliation
 
 - No LangGraph package or Postgres checkpoint dependency is declared in `pyproject.toml`. The current
   source uses its own durable coordinator/queue/runtime composition; any older architecture statement
   that presents LangGraph as an installed runtime is planned/stale, not manifest evidence.
-- No Anthropic or OpenAI SDK is declared. Hosted role calls in this baseline use the OpenRouter
-  transport through `httpx`; provider/model identity must come from the returned response and durable
-  lineage rather than an inferred architecture label.
+- No Anthropic, Google, or OpenAI SDK is declared. Hosted role calls use the shared OpenRouter
+  transport through `httpx`; configured and returned endpoint/model identities plus durable physical
+  invocation/event rows are required. Architecture labels are not runtime evidence.
 - Redis, ClickHouse, and S3 are not application dependencies because this release uses Langfuse
   Cloud. They belong only to a future self-hosted Langfuse topology.
 - GitHub Actions references `actions/checkout@v4`, `actions/setup-python@v5`,
