@@ -25,6 +25,7 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import Any, Protocol
 
 from agentforge.agents.hosted_runtime import HostedCallBounds, HostedExecutionLineage
@@ -32,6 +33,11 @@ from agentforge.agents.red_team.providers import _collect_usable
 
 _GENERATION_SCHEMA_NAME = "red_team_variants"
 _MAX_VARIANTS = 16
+
+# The Red Team per-role measured-spend subcap ceiling. The shared HostedUsageLedger enforces the
+# configured red_team ``limits.max_usd`` on every call; this ceiling is the policy bound the
+# composition root asserts the configuration honors before a live run.
+RED_TEAM_SUBCAP_CEILING_USD = Decimal("1")
 
 
 class _Invoker(Protocol):
@@ -57,6 +63,28 @@ class RedTeamRoleIdentity:
     model: str
     upstream_provider: str
     role_configuration_sha256: str
+
+
+def require_red_team_subcap(
+    configuration: Any, *, ceiling_usd: Decimal = RED_TEAM_SUBCAP_CEILING_USD
+) -> Decimal:
+    """Assert the configuration's Red Team measured-spend subcap is at or below ``ceiling_usd``.
+
+    The shared ledger already enforces the configured red_team ``limits.max_usd`` per call; this is
+    the composition-root policy gate that the configured subcap does not exceed the authorized
+    ceiling (default $1). Returns the effective subcap so a caller can surface remaining budget the
+    same way the other roles do (the shared ledger + agent_executions measured cost).
+    """
+    try:
+        role = next(item for item in configuration.roles if item.role == "red_team")
+        subcap = Decimal(role.limits.max_usd)
+    except (StopIteration, AttributeError, ArithmeticError, TypeError, ValueError) as exc:
+        raise TracedRedTeamGenerationError("red_team role subcap is unavailable") from exc
+    if subcap <= 0 or subcap > ceiling_usd:
+        raise TracedRedTeamGenerationError(
+            f"red_team measured-spend subcap {subcap} exceeds the authorized ceiling {ceiling_usd}"
+        )
+    return subcap
 
 
 def variants_output_schema(count: int) -> dict[str, Any]:
@@ -224,9 +252,11 @@ class TracedHostedRedTeamProvider:
 
 
 __all__ = [
+    "RED_TEAM_SUBCAP_CEILING_USD",
     "RedTeamRoleIdentity",
     "TracedHostedRedTeamProvider",
     "TracedRedTeamGenerationError",
     "build_generation_messages",
+    "require_red_team_subcap",
     "variants_output_schema",
 ]

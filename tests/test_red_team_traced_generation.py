@@ -19,8 +19,11 @@ import pytest
 
 from agentforge.agents.hosted_runtime import HostedCallBounds, HostedExecutionLineage
 from agentforge.agents.red_team.hosted_generation import (
+    RED_TEAM_SUBCAP_CEILING_USD,
     RedTeamRoleIdentity,
     TracedHostedRedTeamProvider,
+    TracedRedTeamGenerationError,
+    require_red_team_subcap,
 )
 from agentforge.agents.red_team.providers import ProviderExhaustedError
 from agentforge.providers.openrouter import (
@@ -192,6 +195,64 @@ def test_short_generation_fails_loudly() -> None:
     transport = _FakeTransport(result=_result(["only-one"]))
     with pytest.raises(ProviderExhaustedError):
         _provider(transport, _FakeLifecycle()).generate(SEED, count=3, category="prompt_injection")
+
+
+def test_traced_provider_is_a_drop_in_for_the_two_stage_mutate_loop() -> None:
+    # The two-stage loop's mutate() calls provider.generate — so a real scan's generation step is a
+    # live, traced qwen invocation, and mutate() wraps the variants into lineage-tagged attempts.
+    from agentforge.agents.red_team.mutation import mutate
+
+    transport = _FakeTransport(result=_result(["cont-a", "cont-b"]))
+    lifecycle = _FakeLifecycle()
+    provider = _provider(transport, lifecycle)
+    attempt = {
+        "case_ref": "AF-M11-PI-001",
+        "input_sequence": ["seed turn one"],
+        "category": "prompt_injection",
+        "mutation_lineage": [],
+    }
+    coverage = {"prompt_injection": 0, "data_exfiltration": 5, "tool_misuse": 3}
+    variants = mutate(attempt, coverage=coverage, count=2, provider=provider)
+
+    assert transport.calls[0]["role"] == "red_team", "generation is a live red_team invocation"
+    assert lifecycle.finished[0]["status"] == "succeeded", "the generation was traced end to end"
+    assert len(variants) == 2
+    assert all(v["case_ref"].startswith("AF-M11-PI-001~m") for v in variants)
+    assert all("mutation_lineage" in v for v in variants)
+
+
+class _StubLimits:
+    def __init__(self, max_usd: Decimal, max_calls: int = 8):
+        self.max_usd = max_usd
+        self.max_calls = max_calls
+
+
+class _StubRole:
+    def __init__(self, role: str, max_usd: Decimal):
+        self.role = role
+        self.limits = _StubLimits(max_usd)
+
+
+class _StubConfig:
+    def __init__(self, red_team_max_usd: Decimal):
+        self.roles = (
+            _StubRole("orchestrator", Decimal("2")),
+            _StubRole("red_team", red_team_max_usd),
+            _StubRole("judge", Decimal("2")),
+            _StubRole("documentation", Decimal("2")),
+        )
+
+
+def test_require_red_team_subcap_accepts_a_cap_at_or_below_one_dollar() -> None:
+    assert Decimal("1") == RED_TEAM_SUBCAP_CEILING_USD
+    # ≤ $1 passes and returns the effective subcap for surfacing.
+    assert require_red_team_subcap(_StubConfig(Decimal("1"))) == Decimal("1")
+    assert require_red_team_subcap(_StubConfig(Decimal("0.50"))) == Decimal("0.50")
+
+
+def test_require_red_team_subcap_rejects_a_cap_above_one_dollar() -> None:
+    with pytest.raises(TracedRedTeamGenerationError, match="subcap"):
+        require_red_team_subcap(_StubConfig(Decimal("1.5")))
 
 
 def test_provider_opens_no_socket(monkeypatch: pytest.MonkeyPatch) -> None:
