@@ -8,7 +8,7 @@ Status: **DONE_WITH_CONCERNS**
 - Branch: `ticket/T-F18a-canonical-console-navigation`
 - Reviewed planning base: `7838a5fc3d0e667913adc38785374e9cd8d1288c`
 - Product-code baseline: `1ac3ee02be7855b638dd1fa43bb0612a3db5f025`
-- Test-review commit repaired: `c8fc2a6aaa06846aab4a7a390a12a70cc9b85df8`
+- Latest test-review commit repaired: `e563063e2f63a72e2f9c15f8a84792f81be854fa`
 
 The five commits from `1ac3ee0` through `7838a5f` change only plans, tickets, prompts, and plan-review
 reports. Product and pre-existing test files are byte-identical across that range. The earlier
@@ -32,15 +32,18 @@ No product source, plan, ticket, deployment, live target, or external service wa
 
 ## Review repairs
 
-1. Removed the independent desktop landmark-name and mobile `aria-current` RED. T-F18l retains the
-   full route/accessibility matrix. T-F18a now checks only destination labels/order, exact
+1. Removed the independent desktop landmark-name, mobile `aria-current`, CSS selectors, and global
+   navigation-order constraints. T-F18l retains the full route/accessibility matrix. T-F18a now
+   scopes through the existing desktop/mobile navigation semantics and checks only exact Coverage
    cardinality, retired-label absence, and activation to `/coverage`.
 2. Added bare, query-only, hash-only, and combined `/resilience` tables. Every case requires one
    `replaceState`, zero `pushState`, unchanged history length, stripped search/hash, Coverage
    rendering, and no second replacement on `popstate`.
 3. Replaced self-generated codec checks with independently authored encoded bookmarks, exact
    route-builder outputs, and App-level assertions that Live, Findings, and Approval entity
-   identities reach the selected screen unchanged without URL rewriting.
+   identities reach the selected screen unchanged without URL rewriting. Fixed authority-shaped,
+   scheme-shaped, and traversal-prefix identity vectors additionally require exact percent-encoded
+   output, same-origin resolution, canonical screen-path containment, and unchanged decoding.
 4. Added a runtime contract that rejects programmatic construction of a `resilience` route; the
    compatibility path is inbound-only.
 5. Completed the invalid-route matrix for every collection-only screen and malformed entities on
@@ -76,7 +79,7 @@ PASS: 10 files, 57 tests
 ```text
 cd console
 npm test -- --run tests/router.test.ts tests/contracts.test.ts --reporter=dot
-RED as intended: 2 files failed; 30 tests failed and 35 passed
+RED as intended: 2 files failed; 30 tests failed and 41 passed
 ```
 
 All failures are assertions against absent T-F18a behavior, with no import, transform, fixture,
@@ -87,7 +90,7 @@ collection, or setup errors:
 | AC-1 | 3 | Desktop/mobile still expose separate `Coverage` and `Resilience` destinations, so the canonical label cannot be found or activated. |
 | AC-2 | 7 | Bare/query/hash/combined compatibility URLs are not replaced, parsing still returns the Resilience screen, and programmatic construction remains possible. |
 | AC-3 | 15 | Invalid URLs are rendered under misleading locations; malformed Findings/Approval identities are accepted as null; every unsupported-screen URL lacks replacement normalization. |
-| AC-4 | 5 | Dot-segment identities can be emitted or accepted as entity routes. Fixed encoded bookmark, exact encoder, same-origin, and App propagation cases remain passing controls. |
+| AC-4 | 5 | Dot-segment identities can be emitted or accepted as entity routes. Fixed encoded bookmark, exact encoder, same-origin, App propagation, and hostile-prefix containment cases remain passing controls. |
 
 ## Intentional local-browser RED
 
@@ -97,8 +100,8 @@ npm run test:browser -- --grep 'T-F18a'
 RED as intended: 3 failed
 ```
 
-- AC-1 reached the rendered local console and failed because the desktop canonical destination
-  count was `0`, expected `1`.
+- AC-1 reached the first semantic desktop navigation landmark and failed because the canonical
+  destination count was `0`, expected `1`.
 - AC-2 directly loaded the compatibility URL and failed because it remained
   `/resilience?window=30d#latest-regression`, expected canonical `/coverage`.
 - AC-3 reached the Live fallback and failed because the URL remained

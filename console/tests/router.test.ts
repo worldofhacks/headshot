@@ -2,6 +2,25 @@ import { describe, expect, it } from "vitest";
 
 import { parseConsoleRoute, routePath } from "../src/router";
 
+const hostileOpaqueIdentityVectors = [
+  {
+    screen: "live",
+    entityId: "//external.example/records",
+    pathname: "/live/%2F%2Fexternal.example%2Frecords",
+  },
+  {
+    screen: "findings",
+    entityId: "https://external.example/steal?next=/config",
+    pathname:
+      "/findings/https%3A%2F%2Fexternal.example%2Fsteal%3Fnext%3D%2Fconfig",
+  },
+  {
+    screen: "approvals",
+    entityId: "../config",
+    pathname: "/approvals/..%2Fconfig",
+  },
+] as const;
+
 describe("canonical console routes", () => {
   it.each([
     ["/live", { screen: "live", entityId: null }],
@@ -72,6 +91,26 @@ describe("canonical console routes", () => {
     const url = new URL(pathname, "https://console.example.test/live");
     expect(url.origin).toBe("https://console.example.test");
   });
+
+  it.each(hostileOpaqueIdentityVectors)(
+    "spec(T-F18a:AC-4) parses hostile-prefix bookmark $pathname as an opaque identity",
+    ({ screen, entityId, pathname }) => {
+      expect(parseConsoleRoute(pathname)).toEqual({ screen, entityId });
+    },
+  );
+
+  it.each(hostileOpaqueIdentityVectors)(
+    "spec(T-F18a:AC-4) contains hostile-prefix $entityId beneath its canonical screen path",
+    ({ screen, entityId, pathname }) => {
+      const emittedPath = routePath({ screen, entityId });
+      const resolved = new URL(emittedPath, "https://console.example.test/live");
+
+      expect(emittedPath).toBe(pathname);
+      expect(resolved.origin).toBe("https://console.example.test");
+      expect(resolved.pathname).toBe(pathname);
+      expect(resolved.pathname.startsWith(`/${screen}/`)).toBe(true);
+    },
+  );
 
   it("spec(T-F18a:AC-2) keeps Resilience inbound-only", () => {
     expect(() =>

@@ -90,29 +90,6 @@ describe("resource envelopes", () => {
   });
 });
 
-const canonicalDesktopLabels = [
-  "Live",
-  "Findings",
-  "Approvals",
-  "Coverage & Regression",
-  "Agents",
-  "Tooling",
-  "Traces",
-  "Costs",
-  "Targets",
-  "Configuration",
-];
-
-function labelsAppearInOrder(container: HTMLElement, labels: string[]): void {
-  const text = container.textContent ?? "";
-  let priorIndex = -1;
-  for (const label of labels) {
-    const index = text.indexOf(label);
-    expect(index).toBeGreaterThan(priorIndex);
-    priorIndex = index;
-  }
-}
-
 beforeEach(() => {
   window.history.replaceState(null, "", "/live");
 });
@@ -122,25 +99,22 @@ afterEach(() => {
 });
 
 describe("canonical console navigation contract", () => {
-  it("spec(T-F18a:AC-1) exposes the canonical desktop labels once and in order", () => {
+  it("spec(T-F18a:AC-1) exposes one canonical desktop destination and no retired destination", () => {
     render(createElement(App));
-    const desktop = document.querySelector<HTMLElement>(".sidebar nav");
+    const [desktop] = screen.getAllByRole("navigation");
 
-    expect(desktop).not.toBeNull();
-    labelsAppearInOrder(desktop!, canonicalDesktopLabels);
     expect(
-      within(desktop!).getAllByText("Coverage & Regression", {
+      within(desktop).getAllByText("Coverage & Regression", {
         exact: true,
       }),
     ).toHaveLength(1);
-    expect(within(desktop!).queryByText("Resilience", { exact: true })).toBeNull();
+    expect(within(desktop).queryByText("Resilience", { exact: true })).toBeNull();
   });
 
   it("spec(T-F18a:AC-1) targets /coverage from the canonical desktop item", () => {
     render(createElement(App));
-    const desktop = document.querySelector<HTMLElement>(".sidebar nav");
-    expect(desktop).not.toBeNull();
-    const coverage = within(desktop!).getByText("Coverage & Regression", {
+    const [desktop] = screen.getAllByRole("navigation");
+    const coverage = within(desktop).getByText("Coverage & Regression", {
       exact: true,
     });
 
@@ -151,31 +125,17 @@ describe("canonical console navigation contract", () => {
 
   it("spec(T-F18a:AC-1) exposes the same retired-page contract in mobile More", () => {
     render(createElement(App));
-    const mobile = document.querySelector<HTMLElement>(".mobile-nav");
-    expect(mobile).not.toBeNull();
+    const mobile = screen.getByRole("navigation", { name: "Mobile navigation" });
 
-    fireEvent.click(within(mobile!).getByText("More", { exact: true }));
+    fireEvent.click(within(mobile).getByText("More", { exact: true }));
 
-    labelsAppearInOrder(mobile!, [
-      "Live",
-      "Findings",
-      "Approvals",
-      "Targets",
-      "More",
-      "Coverage & Regression",
-      "Agents",
-      "Tooling",
-      "Traces",
-      "Costs",
-      "Configuration",
-    ]);
     expect(
-      within(mobile!).getAllByText("Coverage & Regression", {
+      within(mobile).getAllByText("Coverage & Regression", {
         exact: true,
       }),
     ).toHaveLength(1);
-    expect(within(mobile!).queryByText("Resilience", { exact: true })).toBeNull();
-    const coverage = within(mobile!).getByText("Coverage & Regression", { exact: true });
+    expect(within(mobile).queryByText("Resilience", { exact: true })).toBeNull();
+    const coverage = within(mobile).getByText("Coverage & Regression", { exact: true });
 
     fireEvent.click(coverage);
 

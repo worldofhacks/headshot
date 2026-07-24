@@ -20,7 +20,7 @@ test("direct routes and browser history restore authoritative screens", async ({
 
 test("spec(T-F18a:AC-1) desktop and mobile expose one canonical Coverage route", async ({ page }) => {
   await page.goto("/live");
-  const desktop = page.locator(".sidebar nav");
+  const desktop = page.getByRole("navigation").first();
   const desktopCoverage = desktop.getByText("Coverage & Regression", { exact: true });
 
   await expect(desktopCoverage).toHaveCount(1);
@@ -29,7 +29,7 @@ test("spec(T-F18a:AC-1) desktop and mobile expose one canonical Coverage route",
   await expect(page).toHaveURL(/\/coverage$/);
 
   await page.setViewportSize({ width: 390, height: 844 });
-  const mobile = page.locator(".mobile-nav");
+  const mobile = page.getByRole("navigation", { name: "Mobile navigation" });
   await mobile.getByText("More", { exact: true }).click();
   const mobileCoverage = mobile.getByText("Coverage & Regression", { exact: true });
 
