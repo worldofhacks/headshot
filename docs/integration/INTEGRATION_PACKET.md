@@ -1,4 +1,120 @@
-# Integration Packet — MVP Secure Local Spine + M11 Corpus + M5/M8 + Offline E2E
+# Integration Packet
+
+## Current integration addendum - 2026-07-24
+
+Source baseline inspected: `17019f28c606e9d3a799073f80f2437ee2e98ff6`.
+
+This is a source/integration addendum, not a final release attestation. The final commit, identical
+GitHub/GitLab `main` SHAs, authoritative GitHub CI run, Railway deployment IDs, deployed migration,
+authorized campaign, and Langfuse reconciliation remain pending. Historical sections below are
+retained as dated evidence and are not silently upgraded to current-release proof.
+
+### Current interface inventory
+
+- The packaged contract registry contains 18 v1 JSON Schemas:
+  `AttackAttempt`, `AttemptResult`, `CampaignDirective`, typed errors, `EvidenceEnvelope`,
+  `JudgeCalibration`, `OrchestrationSnapshot`, regression admission/disposition/plan/result,
+  security-tool schemas, `Verdict`, and `VulnReport`.
+- The mediated trust boundary remains:
+  `Orchestrator -> Red Team -> Policy Gateway/Recorder -> Judge -> Documentation`. Red Team never
+  produces authoritative evidence and Judge never shares attack-generation authority.
+- Hosted configuration, Langfuse delivery state, and provider/Judge lineage in revisions
+  `0015`-`0017` extend persistence and runtime acceptance; they do not introduce an unversioned
+  alternate inter-agent schema.
+- Commit `17019f2` adds an optional, pattern-constrained `reason_code` to the protected REST finding
+  approve/reject body and forwards it to the existing persisted decision field. This is an additive
+  HTTP control-plane correction, not a breaking inter-agent contract change.
+- The protected event stream remains cursor-based and bounded to 100 events per poll, requires
+  `org:console:read`, validates same-origin browser provenance, and forces re-authentication after at
+  most 30 seconds. Other collection reads still have fixed server windows; stable cursor pagination
+  and total counts remain a documented gap.
+
+### External/API behavior
+
+- Every `/api/v1` route is authenticated and permission-gated. Missing/invalid authentication is 401;
+  wrong Organization, missing permission, or same-person approval is 403; an unavailable verifier or
+  control-plane dependency fails closed.
+- Mutating control-plane requests require a validated `Idempotency-Key` of 16-128 safe characters.
+  Accepted work returns 202, completed work 200, immutable conflict 409, and unavailable work 503.
+- Target and provider call rates are exact run/configuration inputs, not invented platform constants.
+  The physical path enforces budget, call, rate, retry, concurrency, timeout, logical-case, and
+  physical-request limits. Typed rate/transport failures use bounded retry/backoff, then queue/abort.
+- Langfuse uses Runner-only credentials and exact HTTPS/environment configuration. Remote delivery is
+  accepted only after authenticated ID-for-ID query-back.
+- The collection REST projections use fixed server windows and do not yet expose stable cursor
+  pagination/total counts. The SSE audit/event path does expose a validated cursor, 100-event batches,
+  gap detection, and snapshot reconciliation. This limitation remains visible rather than implied
+  complete.
+
+### Migration and compatibility state
+
+`python -m alembic heads` reports exactly one serialized source head at `0017`:
+
+```text
+0001 -> ... -> 0013 -> 0014 -> 0015 -> 0016 -> 0017
+```
+
+| Revision | Integration change | Compatibility/rollback note |
+|---|---|---|
+| `0008` | Historical demo self-approval exception, retired by `0012` | [`migration-notes/0008-godmode-self-approval.md`](migration-notes/0008-godmode-self-approval.md) |
+| `0009` | Draft reports and regression dispositions | [`migration-notes/0009-documentation-regression.md`](migration-notes/0009-documentation-regression.md) |
+| `0010` | Regression replay plans/results/case versions | [`migration-notes/0010-regression-replay.md`](migration-notes/0010-regression-replay.md) |
+| `0011` | Four-role execution ledger and security-tool lineage | [`migration-notes/0011-agent-runtime-observability.md`](migration-notes/0011-agent-runtime-observability.md) |
+| `0012` | Two-role, unconditional different-person authorization | [`migration-notes/0012-two-role-clerk-authorization.md`](migration-notes/0012-two-role-clerk-authorization.md) |
+| `0013` | Private scheduler replay planning | [`migration-notes/0013-scheduler-regression-planning.md`](migration-notes/0013-scheduler-regression-planning.md) |
+| `0014` | Physical work-unit reservations | [`migration-notes/0014-campaign-work-unit-reservations.md`](migration-notes/0014-campaign-work-unit-reservations.md) |
+| `0015` | Atomic append-only hosted configuration sets | [`migration-notes/0015-hosted-configuration-sets.md`](migration-notes/0015-hosted-configuration-sets.md) |
+| `0016` | Multi-observation campaign traces and query-verified Langfuse delivery | [`migration-notes/0016-agent-langfuse-delivery.md`](migration-notes/0016-agent-langfuse-delivery.md) |
+| `0017` | Hosted provider/accounting/Judge authority lineage | [`migration-notes/0017-hosted-agent-execution-lineage.md`](migration-notes/0017-hosted-agent-execution-lineage.md) |
+
+The repository's current live review records staging and production at migration `0013`. Source
+revisions `0014`-`0017` are therefore **not deployed evidence**.
+
+### Current dependency map
+
+```text
+authenticated Web commands
+  -> organization-scoped PostgreSQL requests/decisions/jobs/audit
+  -> private Runner lease + physical work-unit reservation
+  -> Orchestrator verified snapshot
+  -> Red Team typed proposal
+  -> Policy Gateway exact authorization/allowlist/synthetic/caps/abort
+  -> target adapter + Recorder-owned hashed evidence
+  -> independent Judge with deterministic-oracle precedence
+  -> draft-only Documentation / blocked regression disposition
+  -> PostgreSQL read models
+  -> safe-metadata Langfuse projection + explicit remote query-back
+
+private Scheduler
+  -> target-version observation
+  -> idempotent blocked replay plan
+  -> no target/provider credential and no inline execution
+```
+
+PostgreSQL is authoritative. Langfuse observes safe hashes, identity, order, latency, supplied usage,
+cost, retries, and errors; it does not authorize traffic or replace evidence.
+
+### Current local checks
+
+The following passed against the source baseline while this addendum was assembled:
+
+- corpus validation: 16 authored cases (9 active, 7 draft), 30 ground-truth labels, 6 categories,
+  1 fixture;
+- duplicate validation: no duplicate sequence among 9 active cases;
+- selected contract, permission/configuration, campaign-authorization, Langfuse-migration, and hosted
+  agent-lineage tests; and
+- Alembic graph inspection: one head at `0017`.
+
+These targeted checks are not the complete release suite and are not authoritative GitHub CI.
+
+### End-to-end evidence status
+
+[`../evidence/agent-trace.md`](../evidence/agent-trace.md) and `evals/results/` are historical
+artifacts. They predate the final `0016`/`0017` deployed ledger and cannot establish a current
+four-agent Langfuse-reconciled release. The required proof remains one newly authorized campaign on
+the exact staging release, with ordered durable executions, target request lineage, finding/report
+behavior, and exact Langfuse query-back. Until that exists, end-to-end final-release status is
+**pending**.
 
 ## Final integration supplement — 2026-07-22
 
@@ -26,9 +142,12 @@ PostgreSQL verified signals -> Orchestrator -> CampaignDirective -> Red Team -> 
 -> independent Judge -> Documentation draft -> blocked regression disposition -> read models
 ```
 
-Migration `0008` is additive and supplies append-only report/disposition tables. Runner has
-`SELECT/INSERT`, Web has `SELECT`, and Red Team/Judge have no table privilege. The detailed
-compatibility and rollback note is `docs/integration/migration-notes/0008-documentation-regression.md`.
+On that historical branch, the additive report/disposition change was proposed as migration `0008`.
+After serialization, it landed as current revision `0009`; canonical `0008` is the now-retired demo
+self-approval migration. Runner has `SELECT/INSERT`, Web has `SELECT`, and Red Team/Judge have no
+report/disposition table privilege. Current compatibility notes are
+[`migration-notes/0008-godmode-self-approval.md`](migration-notes/0008-godmode-self-approval.md) and
+[`migration-notes/0009-documentation-regression.md`](migration-notes/0009-documentation-regression.md).
 
 Fresh local evidence: 955 Python tests, 71 frontend tests, 4 browser tests, 15 packaged inter-agent
 contracts, clean `0003 -> 0008` and `0008 -> 0007 -> 0008` container migration paths, configured and
