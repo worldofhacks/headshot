@@ -16,6 +16,8 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Final
 
+import pytest
+
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 SWARM_FILES = (
     "run-local-gates.sh",
@@ -29,6 +31,7 @@ TYPECHECK_COMMAND: Final = ".venv/bin/mypy --config-file pyproject.toml src test
 SECRET_SCAN_COMMAND: Final = "bash scripts/secret_scan.sh"
 COVERAGE_ADAPTER: Final = "pytest-cov"
 OUTPUT_LIMIT: Final = 16_384
+APPROVAL_TRUST_PATH: Final = ".tdd-swarm/coverage-approval-trust.json"
 
 
 def _run(command: list[str], *, cwd: Path) -> subprocess.CompletedProcess[str]:
@@ -39,7 +42,9 @@ def _write_ticket(repository: Path) -> None:
     ticket = repository / "tickets" / "T-F00.md"
     ticket.parent.mkdir(parents=True)
     ticket.write_text(
-        "---\nid: T-F00\ntest_scopes:\n"
+        "---\nid: T-F00\nfile_scopes:\n"
+        "  - src/agentforge/alpha.py\n"
+        "test_scopes:\n"
         "  - tests/swarm/test_secondary.py\n"
         "  - tests/swarm/test_fixture.py\n"
         "---\n\n"
@@ -92,6 +97,40 @@ def _approval_paths(repository: Path) -> dict[str, Path]:
     }
 
 
+def _ensure_approval_keypair(repository: Path) -> dict[str, Path]:
+    paths = _approval_paths(repository)
+    if paths["private_key"].exists():
+        return paths
+    subprocess.run(
+        [
+            "openssl",
+            "genpkey",
+            "-algorithm",
+            "ED25519",
+            "-out",
+            str(paths["private_key"]),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    subprocess.run(
+        [
+            "openssl",
+            "pkey",
+            "-in",
+            str(paths["private_key"]),
+            "-pubout",
+            "-out",
+            str(paths["public_key"]),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return paths
+
+
 def _write_signed_approval(
     repository: Path,
     *,
@@ -99,35 +138,7 @@ def _write_signed_approval(
     commit_sha: str | None = None,
     approver_id: str = "owner:headshot",
 ) -> None:
-    paths = _approval_paths(repository)
-    if not paths["private_key"].exists():
-        subprocess.run(
-            [
-                "openssl",
-                "genpkey",
-                "-algorithm",
-                "ED25519",
-                "-out",
-                str(paths["private_key"]),
-            ],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-        subprocess.run(
-            [
-                "openssl",
-                "pkey",
-                "-in",
-                str(paths["private_key"]),
-                "-pubout",
-                "-out",
-                str(paths["public_key"]),
-            ],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
+    paths = _ensure_approval_keypair(repository)
     policy = repository / ".tdd-swarm" / "coverage-policy.md"
     payload = {
         "schema_version": 1,
@@ -196,9 +207,26 @@ def _write_coverage_output(repository: Path, output: str) -> None:
     )
 
 
+def _write_import_checker(repository: Path, output: str) -> None:
+    checker = repository / ".tdd-swarm" / "check-import-cycles.py"
+    checker.write_text(
+        f"#!/usr/bin/env python3\nprint({output!r}, end='')\n",
+        encoding="utf-8",
+    )
+    checker.chmod(0o755)
+    _run(["git", "add", ".tdd-swarm/check-import-cycles.py"], cwd=repository)
+    _run(["git", "commit", "-qm", "fixture import checker output"], cwd=repository)
+
+
 def _install_gate_shims(repository: Path) -> None:
     executable_directory = repository / ".venv" / "bin"
     executable_directory.mkdir(parents=True)
+    interpreter = executable_directory / "python"
+    interpreter.write_text(
+        f'#!/bin/sh\nexec "{sys.executable}" "$@"\n',
+        encoding="utf-8",
+    )
+    interpreter.chmod(0o755)
     ruff = executable_directory / "ruff"
     ruff.write_text(
         "#!/usr/bin/env python3\n"
@@ -466,6 +494,19 @@ def _prepare_fixture(repository: Path) -> str:
     (package / "__init__.py").write_text("", encoding="utf-8")
     (package / "alpha.py").write_text("import agentforge.beta\n", encoding="utf-8")
     (package / "beta.py").write_text("", encoding="utf-8")
+    approval_paths = _ensure_approval_keypair(repository)
+    (repository / APPROVAL_TRUST_PATH).write_text(
+        json.dumps(
+            {
+                "owner:headshot": hashlib.sha256(
+                    approval_paths["public_key"].read_bytes()
+                ).hexdigest()
+            },
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
     return _commit_fixture(repository)
 
 
@@ -1867,3 +1908,481 @@ def test_coverage_approval_record_must_match_commit(tmp_path: Path) -> None:
     output = (result.stdout + result.stderr).lower()
     assert "approval" in output
     assert "commit" in output
+
+
+def test_repository_gate_inventory_and_coverage_policy_are_mechanically_green_capable() -> None:
+    """spec(T-F00:AC-3) spec(T-F00:AC-4) — the real local gate has no manual blockers."""
+    gate_map = (REPOSITORY_ROOT / ".tdd-swarm" / "gates.md").read_text(encoding="utf-8")
+    rows = [
+        [cell.strip() for cell in line.strip().split("|")[1:-1]]
+        for line in gate_map.splitlines()
+        if line.strip().startswith("|")
+    ]
+    blocked = [
+        f"{gate}: {status}"
+        for gate, _, status in rows
+        if gate not in {"gate", "---"} and status != "AVAILABLE"
+    ]
+    policy_fields = {}
+    for line in (
+        (REPOSITORY_ROOT / ".tdd-swarm" / "coverage-policy.md")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    ):
+        if ":" in line and not line.lstrip().startswith("#"):
+            key, value = line.split(":", 1)
+            policy_fields[key.strip()] = value.strip()
+
+    failures = list(blocked)
+    if policy_fields.get("decision") != "executable":
+        failures.append("coverage decision is not executable")
+    if policy_fields.get("coverage-adapter") != COVERAGE_ADAPTER:
+        failures.append("coverage adapter is not the fixed pytest-cov adapter")
+    baseline = policy_fields.get("baseline-base-sha", "")
+    baseline_check = subprocess.run(
+        ["git", "cat-file", "-e", f"{baseline}^{{commit}}"],
+        cwd=REPOSITORY_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if not baseline or baseline_check.returncode != 0:
+        failures.append("coverage baseline is not bound to a repository commit")
+
+    assert not failures, "; ".join(failures)
+
+
+def test_wrapper_terminates_a_silent_pipe_holding_descendant_after_leader_success(
+    tmp_path: Path,
+) -> None:
+    """spec(T-F00:AC-4) — a zero-exit leader cannot leave a live descendant or publish PASS."""
+    base = _prepare_fixture(tmp_path)
+    _write_coverage_output(tmp_path, "coverage=100\n")
+    _write_policy(tmp_path, _executable_policy(base=base, baseline=100))
+    _write_secret_scan(
+        tmp_path,
+        "python3 - <<'PY' &\n"
+        "import os\n"
+        "import time\n"
+        "from pathlib import Path\n"
+        "Path('silent-child.pid').write_text(str(os.getpid()))\n"
+        "time.sleep(30)\n"
+        "PY\n"
+        "exit 0\n",
+    )
+    _write_single_gate_map(tmp_path, "secret-scan", SECRET_SCAN_COMMAND)
+    child_pid: int | None = None
+
+    try:
+        result, _, hit_test_deadline = _run_wrapper_with_test_deadline(
+            tmp_path,
+            base,
+            deadline_seconds=8,
+            extra_environment={"TDD_SWARM_GATE_TIMEOUT_SECONDS": "2.00"},
+        )
+        pid_path = tmp_path / "silent-child.pid"
+        assert pid_path.exists(), result.stdout + result.stderr
+        child_pid = int(pid_path.read_text(encoding="utf-8"))
+
+        assert not hit_test_deadline
+        assert result.returncode != 0
+        assert _poll_until(lambda: not _pid_exists(child_pid), deadline_seconds=2)
+        report_path = tmp_path / ".tdd-swarm" / "reports" / "T-F00-gates.md"
+        if report_path.exists():
+            assert "overall-verdict: PASS" not in report_path.read_text(encoding="utf-8")
+    finally:
+        if child_pid is not None and _pid_exists(child_pid):
+            with contextlib.suppress(ProcessLookupError):
+                os.kill(child_pid, signal.SIGKILL)
+            _poll_until(lambda: not _pid_exists(child_pid), deadline_seconds=2)
+
+
+@pytest.mark.parametrize(
+    "checker_output",
+    [
+        "import graph is acyclic\n",
+        f"sha256={'1' * 64}\nsha256={'2' * 64}\n",
+    ],
+    ids=["missing-digest", "duplicate-digest"],
+)
+def test_wrapper_fails_import_validation_for_noncanonical_success_output(
+    tmp_path: Path,
+    checker_output: str,
+) -> None:
+    """spec(T-F00:AC-2) — successful import analysis emits exactly one canonical digest."""
+    base = _prepare_fixture(tmp_path)
+    _write_import_checker(tmp_path, checker_output)
+    _write_coverage_output(tmp_path, "coverage=100\n")
+    _write_policy(tmp_path, _executable_policy(base=base, baseline=100))
+
+    result = _run_wrapper(tmp_path, base)
+
+    assert result.returncode != 0
+    report = _report(tmp_path)
+    assert "import-validation-status: FAIL" in report
+    assert "import-validation-diagnostic:" in report
+    assert "overall-verdict: FAIL" in report
+
+
+def test_wrapper_rejects_a_nonfinite_coverage_baseline_cleanly(
+    tmp_path: Path,
+) -> None:
+    """spec(T-F00:AC-3) — NaN and infinities are policy errors, never tracebacks."""
+    violations = []
+    for case_name, baseline in (
+        ("nan", "NaN"),
+        ("positive-infinity", "Infinity"),
+        ("negative-infinity", "-Infinity"),
+    ):
+        repository = tmp_path / case_name
+        base = _prepare_fixture(repository)
+        _write_policy(
+            repository,
+            "# Coverage policy\n\n"
+            "decision: executable\n"
+            f"coverage-adapter: {COVERAGE_ADAPTER}\n"
+            f"baseline-base-sha: {base}\n"
+            f"baseline-percent: {baseline}\n",
+        )
+
+        result = _run_wrapper(repository, base)
+        output = result.stdout + result.stderr
+        normalized = output.lower()
+        if result.returncode != 1:
+            violations.append(f"{baseline}: exit {result.returncode}, expected 1")
+        if "traceback" in normalized:
+            violations.append(f"{baseline}: leaked traceback")
+        if "baseline-percent" not in normalized:
+            violations.append(f"{baseline}: missing baseline-percent diagnostic")
+        if "finite" not in normalized and "between 0 and 100" not in normalized:
+            violations.append(f"{baseline}: missing finite-range diagnostic")
+
+    assert not violations, "; ".join(violations)
+
+
+def test_fixed_report_publisher_rejects_a_symlink_in_an_earlier_ancestor(
+    tmp_path: Path,
+) -> None:
+    """spec(T-F00:AC-5) — no ancestor component may redirect publication externally."""
+    publisher = REPOSITORY_ROOT / ".tdd-swarm" / REPORT_PUBLISHER
+    real_parent = tmp_path / "real-parent"
+    report_directory = real_parent / "reports"
+    report_directory.mkdir(parents=True)
+    linked_parent = tmp_path / "linked-parent"
+    linked_parent.symlink_to(real_parent, target_is_directory=True)
+    staged = linked_parent / "reports" / ".T-F00-gates.prepared"
+    destination = linked_parent / "reports" / "T-F00-gates.md"
+    real_stage = report_directory / staged.name
+    real_destination = report_directory / destination.name
+    real_stage.write_text("new report\n", encoding="utf-8")
+    real_destination.write_text("prior report\n", encoding="utf-8")
+
+    result = subprocess.run(
+        [sys.executable, str(publisher), str(staged), str(destination)],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=5,
+    )
+
+    assert result.returncode != 0
+    assert real_destination.read_text(encoding="utf-8") == "prior report\n"
+    assert real_stage.read_text(encoding="utf-8") == "new report\n"
+    assert "symlink" in (result.stdout + result.stderr).lower()
+
+
+def test_wrapper_rejects_caller_selected_approval_key_and_identity(
+    tmp_path: Path,
+) -> None:
+    """spec(T-F00:AC-3) — approval trust comes from a protected anchor, not caller env."""
+    base = _prepare_fixture(tmp_path)
+    _write_policy(tmp_path, _approved_non_applicable_policy())
+    paths = _approval_paths(tmp_path)
+    paths["private_key"].unlink()
+    paths["public_key"].unlink()
+    _write_signed_approval(tmp_path, approver_id="attacker:self-approved")
+
+    result = _run_wrapper(
+        tmp_path,
+        base,
+        extra_environment={"TDD_SWARM_COVERAGE_APPROVER_IDS": "attacker:self-approved"},
+    )
+
+    assert result.returncode != 0
+    output = (result.stdout + result.stderr).lower()
+    assert "trust" in output or "pinned" in output or "fingerprint" in output
+
+
+def test_verified_approval_identity_and_artifact_digests_are_reported(
+    tmp_path: Path,
+) -> None:
+    """spec(T-F00:AC-3) spec(T-F00:AC-5) — waiver evidence names what was verified."""
+    base = _prepare_fixture(tmp_path)
+    _write_policy(tmp_path, _approved_non_applicable_policy())
+    paths = _approval_paths(tmp_path)
+
+    result = _run_wrapper(tmp_path, base)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    report = _report(tmp_path)
+    expected = {
+        "coverage-verified-approver-id": "owner:headshot",
+        "coverage-approval-key-sha256": hashlib.sha256(
+            paths["public_key"].read_bytes()
+        ).hexdigest(),
+        "coverage-approval-record-sha256": hashlib.sha256(paths["record"].read_bytes()).hexdigest(),
+        "coverage-approval-signature-sha256": hashlib.sha256(
+            paths["signature"].read_bytes()
+        ).hexdigest(),
+    }
+    for label, value in expected.items():
+        assert f"{label}: {value}" in report
+
+
+@pytest.mark.parametrize("continuation_exists", [True, False], ids=["write", "delay"])
+def test_production_failpoint_environment_cannot_touch_or_delay_external_paths(
+    tmp_path: Path,
+    continuation_exists: bool,
+) -> None:
+    """spec(T-F00:AC-5) — production environment variables expose no path failpoint."""
+    repository = tmp_path / "repository"
+    base = _prepare_fixture(repository)
+    _write_coverage_output(repository, "coverage=100\n")
+    _write_policy(repository, _executable_policy(base=base, baseline=100))
+    external_ready = tmp_path / "external-ready"
+    external_continue = tmp_path / "external-continue"
+    if continuation_exists:
+        external_continue.write_text("continue\n", encoding="utf-8")
+
+    result, elapsed, hit_test_deadline = _run_wrapper_with_test_deadline(
+        repository,
+        base,
+        deadline_seconds=5,
+        extra_environment={
+            "TDD_SWARM_TEST_FAILPOINT": "before-report-publish",
+            "TDD_SWARM_TEST_FAILPOINT_READY_FILE": str(external_ready),
+            "TDD_SWARM_TEST_FAILPOINT_CONTINUE_FILE": str(external_continue),
+        },
+    )
+
+    assert not hit_test_deadline, "production failpoint input delayed the wrapper"
+    assert elapsed < 5
+    assert not external_ready.exists()
+    assert result.returncode in {0, 1}
+
+
+def test_wrapper_uses_fixed_interpreter_provenance_independent_of_path(
+    tmp_path: Path,
+) -> None:
+    """spec(T-F00:AC-5) — PATH cannot select interpreters and provenance is evidenced."""
+    base = _prepare_fixture(tmp_path)
+    _write_coverage_output(tmp_path, "coverage=100\n")
+    _write_policy(tmp_path, _executable_policy(base=base, baseline=100))
+    poison = tmp_path / "poison-path"
+    poison.mkdir()
+    marker = tmp_path / "path-python-ran"
+    fake_python = poison / "python3"
+    fake_python.write_text(
+        f'#!/bin/sh\nprintf unsafe >> {marker!s}\nexec "{sys.executable!s}" "$@"\n',
+        encoding="utf-8",
+    )
+    fake_python.chmod(0o755)
+
+    result = _run_wrapper(
+        tmp_path,
+        base,
+        extra_environment={"PATH": f"{poison}{os.pathsep}{os.environ['PATH']}"},
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert not marker.exists()
+    report = _report(tmp_path)
+    assert "python-interpreter-sha256:" in report
+    assert "execution-environment-sha256:" in report
+
+
+def test_wrapper_binds_staged_report_content_across_publisher_handoff(
+    tmp_path: Path,
+) -> None:
+    """spec(T-F00:AC-5) — publisher receives and enforces the validated stage digest."""
+    base = _prepare_fixture(tmp_path)
+    _write_coverage_output(tmp_path, "coverage=100\n")
+    _write_policy(tmp_path, _executable_policy(base=base, baseline=100))
+    report_directory = tmp_path / ".tdd-swarm" / "reports"
+    report_directory.mkdir()
+    destination = report_directory / "T-F00-gates.md"
+    prior = b"prior complete report\n"
+    destination.write_bytes(prior)
+    ready = tmp_path / "stage-binding-ready"
+    resume = tmp_path / "stage-binding-continue"
+    process = _start_wrapper_at_failpoint(
+        tmp_path,
+        base,
+        failpoint="before-report-publish",
+        ready_file=ready,
+        continue_file=resume,
+    )
+
+    try:
+        assert _poll_until(lambda: ready.exists() or process.poll() is not None, deadline_seconds=3)
+        assert ready.exists(), "wrapper did not reach the publisher handoff"
+        stages = list(report_directory.glob(".T-F00-gates.*.stage"))
+        assert len(stages) == 1
+        stages[0].write_bytes(b"tampered after validation\n")
+        resume.touch()
+        try:
+            stdout, stderr = process.communicate(timeout=4)
+        except subprocess.TimeoutExpired:
+            stdout, stderr = _terminate_process_group(process)
+            raise AssertionError("wrapper did not leave the publisher handoff") from None
+    finally:
+        if process.poll() is None:
+            _terminate_process_group(process)
+
+    assert process.returncode != 0, stdout + stderr
+    assert destination.read_bytes() == prior
+    assert "digest" in (stdout + stderr).lower() or "changed" in (stdout + stderr).lower()
+
+
+def test_wrapper_encodes_c1_bidi_and_isolate_characters_in_metadata_and_output(
+    tmp_path: Path,
+) -> None:
+    """spec(T-F00:AC-5) — C1, bidi, and isolate controls are visibly encoded everywhere."""
+    base = _prepare_fixture(tmp_path)
+    raw_controls = "\u0085\u202e\u2066"
+    _write_coverage_output(tmp_path, f"coverage=100 {raw_controls}\n")
+    _write_policy(tmp_path, _executable_policy(base=base, baseline=100))
+    _write_single_gate_map(
+        tmp_path,
+        "typecheck",
+        "reason=blocked-\u202e-\u2066",
+        status="BLOCKED",
+    )
+
+    result = _run_wrapper(tmp_path, base)
+
+    assert result.returncode != 0
+    console = result.stdout + result.stderr
+    report = _report(tmp_path)
+    for character in raw_controls:
+        assert character not in console
+        assert character not in report
+    for entity in ("&#x85;", "&#x202E;", "&#x2066;"):
+        assert entity in report
+
+
+@pytest.mark.parametrize("dirty", [False, True], ids=["clean-manifest", "dirty-reject"])
+def test_wrapper_binds_declared_implementation_scopes_and_dirty_state(
+    tmp_path: Path,
+    dirty: bool,
+) -> None:
+    """spec(T-F00:AC-5) — evidence binds file_scopes and rejects local implementation drift."""
+    base = _prepare_fixture(tmp_path)
+    _write_coverage_output(tmp_path, "coverage=100\n")
+    _write_policy(tmp_path, _executable_policy(base=base, baseline=100))
+    implementation = tmp_path / "src" / "agentforge" / "alpha.py"
+    expected_hash = _canonical_test_scope_hash(
+        tmp_path,
+        ("src/agentforge/alpha.py",),
+    )
+    if dirty:
+        implementation.write_text(
+            implementation.read_text(encoding="utf-8") + "# dirty implementation\n",
+            encoding="utf-8",
+        )
+
+    result = _run_wrapper(tmp_path, base)
+
+    if dirty:
+        assert result.returncode != 0
+        output = (result.stdout + result.stderr).lower()
+        assert "alpha.py" in output
+        assert "dirty" in output or "worktree" in output
+        assert not (tmp_path / ".tdd-swarm" / "reports" / "T-F00-gates.md").exists()
+    else:
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert f"implementation-scope-sha256: {expected_hash}" in _report(tmp_path)
+
+
+def test_gate_children_receive_a_minimal_allowlisted_environment(
+    tmp_path: Path,
+) -> None:
+    """spec(T-F00:AC-5) — arbitrary parent credentials are absent from every child."""
+    base = _prepare_fixture(tmp_path)
+    _write_coverage_output(tmp_path, "coverage=100\n")
+    _write_policy(tmp_path, _executable_policy(base=base, baseline=100))
+    _write_secret_scan(
+        tmp_path,
+        "printf 'database=%s\\n' \"${DATABASE_URL-unset}\"\n"
+        "printf 'cookie=%s\\n' \"${HTTP_COOKIE-unset}\"\n",
+    )
+    _write_single_gate_map(tmp_path, "secret-scan", SECRET_SCAN_COMMAND)
+    database_secret = "postgresql://fixture-user:fixture-pass@db.invalid/fixture"
+    cookie_secret = "fixture-session-cookie-value"
+
+    result = _run_wrapper(
+        tmp_path,
+        base,
+        extra_environment={
+            "DATABASE_URL": database_secret,
+            "HTTP_COOKIE": cookie_secret,
+        },
+    )
+
+    console = result.stdout + result.stderr
+    report = _report(tmp_path)
+    assert database_secret not in console
+    assert database_secret not in report
+    assert cookie_secret not in console
+    assert cookie_secret not in report
+    assert "child-environment-policy: minimal-allowlist" in report
+
+
+def test_failed_invocation_quarantines_a_stale_prior_report(
+    tmp_path: Path,
+) -> None:
+    """spec(T-F00:AC-5) — a prior success cannot remain presented as the current run."""
+    base = _prepare_fixture(tmp_path)
+    report_directory = tmp_path / ".tdd-swarm" / "reports"
+    report_directory.mkdir()
+    report_path = report_directory / "T-F00-gates.md"
+    stale = (
+        "# Local gate report — T-F00\n\n"
+        f"ticket: tickets/T-F00.md\nbase: {base}\nhead: {'0' * 40}\n"
+        "overall-verdict: PASS\n"
+    ).encode()
+    report_path.write_bytes(stale)
+
+    result = _run_wrapper(tmp_path, base)
+
+    assert result.returncode != 0
+    assert not report_path.exists() or report_path.read_bytes() != stale
+    assert "stale" in (result.stdout + result.stderr).lower()
+
+
+def test_wrapper_cleans_only_recognizable_owned_orphan_stages(
+    tmp_path: Path,
+) -> None:
+    """spec(T-F00:AC-5) — owned crash debris is removed without deleting lookalike files."""
+    base = _prepare_fixture(tmp_path)
+    _write_coverage_output(tmp_path, "coverage=100\n")
+    _write_policy(tmp_path, _executable_policy(base=base, baseline=100))
+    report_directory = tmp_path / ".tdd-swarm" / "reports"
+    report_directory.mkdir()
+    owned = report_directory / f".T-F00-gates.{'a' * 24}.stage"
+    owned.write_text(
+        "# Local gate report — T-F00\n\n"
+        f"ticket: tickets/T-F00.md\nbase: {base}\nhead: {base}\n"
+        "overall-verdict: FAIL\n",
+        encoding="utf-8",
+    )
+    owned.chmod(0o600)
+    lookalike = report_directory / ".T-F00-gates.user-owned.stage"
+    lookalike.write_text("do not delete\n", encoding="utf-8")
+    lookalike.chmod(0o644)
+
+    result = _run_wrapper(tmp_path, base)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert not owned.exists()
+    assert lookalike.read_text(encoding="utf-8") == "do not delete\n"

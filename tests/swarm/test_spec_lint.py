@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
@@ -58,6 +60,13 @@ def _install_spec_lint(repository: Path) -> Path:
     destination = repository / ".tdd-swarm" / "spec-lint.sh"
     destination.parent.mkdir(parents=True)
     shutil.copy2(SPEC_LINT, destination)
+    interpreter = repository / ".venv" / "bin" / "python"
+    interpreter.parent.mkdir(parents=True)
+    interpreter.write_text(
+        f'#!/bin/sh\nexec "{sys.executable}" "$@"\n',
+        encoding="utf-8",
+    )
+    interpreter.chmod(0o755)
     return destination
 
 
@@ -189,6 +198,77 @@ def test_spec_lint_accepts_a_spec_tag_in_a_test_docstring(tmp_path: Path) -> Non
     result = _invoke_spec_lint(tmp_path, base)
 
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_spec_lint_maps_a_parametrized_id_containing_node_separators(
+    tmp_path: Path,
+) -> None:
+    """spec(T-F00:AC-1) — pytest item metadata, not nodeid splitting, identifies a test."""
+    _install_spec_lint(tmp_path)
+    _write_ticket(tmp_path, criteria=("AC-1",))
+    test_file = _write_test(tmp_path, "")
+    base = _commit_fixture(tmp_path)
+    test_file.write_text(
+        "import pytest\n\n"
+        "@pytest.mark.parametrize('value', [1], ids=['left::right'])\n"
+        "def test_parametrized_mapping(value):\n"
+        '    """spec(T-F00:AC-1)"""\n'
+        "    assert value == 1\n",
+        encoding="utf-8",
+    )
+
+    result = _invoke_spec_lint(tmp_path, base)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_spec_lint_ignores_caller_and_ancestor_interpreter_discovery(
+    tmp_path: Path,
+) -> None:
+    """spec(T-F00:AC-1) — collection uses fixed provenance, never caller/ancestor discovery."""
+    _install_spec_lint(tmp_path)
+    _write_ticket(tmp_path, criteria=("AC-1",))
+    test_file = _write_test(tmp_path, "")
+    base = _commit_fixture(tmp_path)
+    test_file.write_text(
+        'def test_fixed_interpreter_mapping():\n    """spec(T-F00:AC-1)"""\n',
+        encoding="utf-8",
+    )
+    marker = tmp_path / "caller-interpreter-ran"
+    attacker_root = tmp_path / "attacker-cwd"
+    caller_interpreter = attacker_root / ".venv" / "bin" / "python"
+    caller_interpreter.parent.mkdir(parents=True)
+    caller_interpreter.write_text(
+        f'#!/bin/sh\nprintf unsafe > {marker!s}\nexec "{sys.executable!s}" "$@"\n',
+        encoding="utf-8",
+    )
+    caller_interpreter.chmod(0o755)
+    (tmp_path / ".venv" / "bin" / "python").unlink()
+    poison_path = tmp_path / "poison-path"
+    poison_path.mkdir()
+    fake_lsof = poison_path / "lsof"
+    fake_lsof.write_text(
+        f"#!/bin/sh\nprintf 'n%s\\n' '{attacker_root!s}'\n",
+        encoding="utf-8",
+    )
+    fake_lsof.chmod(0o755)
+    environment = os.environ.copy()
+    environment["__PYVENV_LAUNCHER__"] = str(caller_interpreter)
+    environment["PATH"] = f"{poison_path}{os.pathsep}{environment['PATH']}"
+
+    result = subprocess.run(
+        ["bash", ".tdd-swarm/spec-lint.sh", "tickets/T-F00.md", base],
+        cwd=tmp_path,
+        check=False,
+        capture_output=True,
+        text=True,
+        env=environment,
+    )
+
+    assert not marker.exists()
+    if result.returncode != 0:
+        output = (result.stdout + result.stderr).lower()
+        assert "provenance" in output or "pytest collection is unavailable" in output
 
 
 def test_spec_lint_rejects_a_skipped_test_as_an_acceptance_mapping(tmp_path: Path) -> None:
