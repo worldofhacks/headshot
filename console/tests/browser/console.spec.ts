@@ -61,7 +61,27 @@ test("390px navigation exposes every screen without application overflow", async
   await expect(page.getByText("Security posture", { exact: true })).toBeVisible();
 
   await page.getByRole("tab", { name: "Attempt stream" }).click();
-  await expect(page.getByRole("button", { name: "Request rerun authorization" })).toBeEnabled();
+  const rerunButton = page.getByRole("button", { name: "Request rerun authorization" });
+  await expect(rerunButton).toBeEnabled();
+  const rerunRequestPromise = page.waitForRequest((request) =>
+    request.method() === "POST"
+    && new URL(request.url()).pathname === "/api/v1/campaign-authorization-requests"
+  );
+  await rerunButton.click();
+  const rerunRequest = await rerunRequestPromise;
+  expect(rerunRequest.postDataJSON()).toEqual(expect.objectContaining({
+    target_id: "browser-target",
+    corpus_id: "browser-corpus",
+    caps: {
+      budget_usd: 1,
+      max_attempts_per_run: 9,
+      target_requests_per_second: 1,
+      run_timeout_seconds: 900,
+      logical_case_limit: 9,
+      physical_request_limit: 9,
+      target_retries_per_turn: 0,
+    },
+  }));
   const firstEvent = page.locator(".event-record").first();
   await expect(firstEvent).toBeVisible();
   expect((await firstEvent.boundingBox())?.height).toBeGreaterThanOrEqual(36);
