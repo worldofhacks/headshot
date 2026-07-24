@@ -96,6 +96,12 @@ class ActiveScanRule:
         }
 
 
+# Destructive / DoS / crash-risk active-rule classes EXCLUDED by policy. The subset is
+# injection/traversal/SSRF DETECTION only: buffer overflow (30001), format-string (30002), and
+# integer-overflow (30003) send malformed payloads that can crash a fragile target (DoS), and
+# no delete / auth-mutating / flood rule is ever included. Enforced by the assertion below + a test.
+FORBIDDEN_ACTIVE_RULE_IDS = frozenset({"30001", "30002", "30003"})
+
 # The fixed Automation-Framework active-rule subset. Curated for an LLM-facing web/API target and
 # deliberately narrow — high-signal injection/SSRF/traversal classes, never the full destructive
 # active policy. Pinned by digest so the grant authorizes exactly these rules and no others.
@@ -111,6 +117,17 @@ ACTIVE_SCAN_RULE_SUBSET: tuple[ActiveScanRule, ...] = (
     ActiveScanRule("7", "Remote File Inclusion", "A03:2021"),
     ActiveScanRule("90034", "Cloud Metadata Potentially Exposed", "A05:2021"),
 )
+
+
+def _assert_rule_subset_is_non_destructive() -> None:
+    offending = {rule.plugin_id for rule in ACTIVE_SCAN_RULE_SUBSET} & FORBIDDEN_ACTIVE_RULE_IDS
+    if offending:
+        raise AssertionError(
+            f"active-rule subset includes forbidden destructive/DoS rules: {sorted(offending)}"
+        )
+
+
+_assert_rule_subset_is_non_destructive()
 
 
 def active_scan_rule_subset_sha256() -> str:
@@ -262,6 +279,7 @@ def active_scan_argv(
 __all__ = [
     "ACTIVE_SCAN_RULE_SUBSET",
     "ACTIVE_ZAP_IMAGE_SHA256",
+    "FORBIDDEN_ACTIVE_RULE_IDS",
     "ActiveScanRule",
     "active_scan_argv",
     "active_scan_rule_subset_sha256",

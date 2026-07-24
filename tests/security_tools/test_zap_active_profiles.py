@@ -95,6 +95,14 @@ def test_active_rule_subset_digest_is_deterministic_and_covers_high_risk_classes
     assert {"40018", "40012", "90020", "40046"} <= plugin_ids
 
 
+def test_active_rule_subset_excludes_destructive_dos_rules() -> None:
+    from agentforge.security_tools.zap_profiles import FORBIDDEN_ACTIVE_RULE_IDS
+
+    plugin_ids = {rule.plugin_id for rule in ACTIVE_SCAN_RULE_SUBSET}
+    # Buffer/format/integer-overflow (crash/DoS) and any delete/auth-mutating class are excluded.
+    assert plugin_ids.isdisjoint(FORBIDDEN_ACTIVE_RULE_IDS)
+
+
 # --- authorization gate -------------------------------------------------------------------------
 
 

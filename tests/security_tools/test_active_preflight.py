@@ -110,6 +110,16 @@ def test_preflight_makes_zero_calls(monkeypatch: pytest.MonkeyPatch) -> None:
     assert _preflight(scope, _grant(scope)).ok
 
 
+def test_preflight_passes_with_oast_disabled_when_no_callback_domain() -> None:
+    # OAST stays BLOCKED (not attempted) unless the owner provides a callback domain; the scan is
+    # still ready without it, so the oast check passes as "disabled".
+    scope = _scope(callback_domains=())
+    result = _preflight(scope, _grant(scope))
+    assert result.ok, [c for c in result.checks if not c.passed]
+    oast = next(c for c in result.checks if c.name == "oast_private")
+    assert oast.passed and "disabled" in oast.detail.lower()
+
+
 def test_preflight_fails_without_a_grant_but_does_not_raise() -> None:
     result = _preflight(_scope(), None)
     assert result.ok is False

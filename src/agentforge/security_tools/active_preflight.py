@@ -96,6 +96,9 @@ def active_scan_preflight(
         return "pinned rule subset authorized"
 
     def _oast() -> str:
+        if not scope.callback_domains:
+            # OAST stays blocked (never attempted) unless the owner provides a callback domain.
+            return "OAST disabled (no callback domain provided)"
         PrivateOastRegistry(scope)  # raises OastEscape on a public/unauthorized domain
         return "callback domains are private"
 
