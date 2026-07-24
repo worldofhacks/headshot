@@ -24,6 +24,8 @@ owner-authorized* grant (see "Status" at the bottom).
 | `tool_runtime.py` | Per-tool **execution evidence** emitter + runtime-state machine | "No fabricated evidence" is structural: `evidenced` needs a real artifact URI + finished time; `running` cannot be finished; `error` must name a code. `derive_tool_runtime_state()` = error > running > evidenced > idle. |
 | `active_preflight.py` | WP-21A **zero-call** readiness proof | Composes all of the above into a structured report (`ok` + per-check pass/fail); never raises; a socket patched to raise proves zero calls. |
 | `workbench_decoder.py` | WP-16C Decoder — real offline encoding transforms | Base64 / ROT13 / ASCII-smuggling (Unicode Tags) / hex / URL, content-addressed; fail-closed on unknown transform / oversize; untrusted candidate input only. |
+| `scan_sender.py` | The real bounded HTTPS sender (the physical send) | Default-disabled (`AGENTFORGE_ACTIVE_SCAN_ENABLED`); https + exact-origin deny-list re-checked at send; DNS resolved + every IP validated + PINNED (rebinding defense); redirects denied; bounded; SID via sealed `secretref`→`Secret`, never surfaced. Socket layer injected → tested offline. |
+| `active_scan_run.py` | Runnable entrypoint (`python -m …active_scan_run`) | `--print-template` / `--mint` / run one bounded governed scan → preflight → egress+sender → parity ledger + per-tool evidence. Grant-gated + default-disabled. |
 
 Shared, review-hardened primitives added to `active_authorization.py`: `content_digest()`
 (collision-resistant, used by OAST + egress) and `path_in_scope()` (one traversal-hardened
@@ -135,3 +137,108 @@ constructed command / injected-sender / passive result is never counted as activ
 Adversarially reviewed (28-agent workflow): 11 confirmed findings fixed with RED regression tests
 (`tests/security_tools/test_active_scan_hardening.py`) — traversal bypass, spec-URL port bypass,
 hash-collision, empty-auth-matrix preflight gap, metadata deny-list gaps, abort re-check, and more.
+
+---
+
+## Running a real active scan
+
+There are two ways to actually run one. **(A) GOVERNED** is the platform's real path and the only
+one that produces scanner↔permit↔send↔ledger **counts** evidence. **(B) OUT-OF-BAND** is a real ZAP
+active-rule signal you can run locally, but it is **NOT** governed-ledger evidence.
+
+Both are bounded to the SAME rule subset (`FORBIDDEN_ACTIVE_RULE_IDS` — buffer/format/integer
+overflow — excluded; no delete/auth-mutating/flood rules), the exact approved origin, the
+rate/time/request caps, and synthetic data only. The SID resolves ONLY via the sealed
+`secretref://` binding (`AGENTFORGE_CREDENTIAL_BINDINGS_JSON`) — never in an argv, an env dump, or a
+log.
+
+### The grant plan (what the owner authors — no secrets)
+
+```bash
+python -m agentforge.security_tools.active_scan_run --print-template > plan.json
+# fill in plan.json (below), then:
+python -m agentforge.security_tools.active_scan_run --mint --config plan.json   # prints operation_hash
+# paste operation_hash + a deadline into plan.json's "authorization" block (your approval)
+```
+
+Fill-in-the-blanks template (secrets are ONLY `secretref://` handles, never values):
+
+```json
+{
+  "scope": {
+    "origin": "https://<exact-approved-origin>",
+    "http_methods": ["GET", "POST"],
+    "path_patterns": ["/api/<in-scope>", "/api/<in-scope>/*"],
+    "principals": ["synthetic-anon", "synthetic-<role>"],
+    "image_sha256": "c558ee87358911ab17278c70991e856f57793e115d9cd0f88ca475cf82907a1a",
+    "addon_sha256s": ["<addon-sha256-64hex>"],
+    "rule_sha256s": ["0b74332d02d4bf3421cc3b2857ffb6c885bf413c2993477fc97ebc3c3103885f"],
+    "callback_domains": [],
+    "caps": {"max_requests": 50, "requests_per_second": 2.0, "max_duration_seconds": 600.0, "max_findings": 200},
+    "scope_nonce": "<fresh-random-nonce>"
+  },
+  "authorization": {"operation_hash": "<from --mint>", "scope_nonce": "<same nonce>", "deadline": "<epoch-seconds expiry>"},
+  "approved_origin": "https://<exact-approved-origin>",
+  "openapi": {"openapi": "3.0.0", "paths": {"/api/<in-scope>": {"get": {}}}},
+  "auth_matrix_entries": [["synthetic-anon", "none", null], ["synthetic-<role>", "bearer", "secretref://<runner-binding>"]],
+  "credential_ref": null,
+  "auth_header": "Cookie"
+}
+```
+
+**Fields only the OWNER supplies:** `origin` / `approved_origin` (exact approved target),
+`path_patterns` + `http_methods` (what may be probed), `rule_sha256s` (the pinned subset digest
+above), `caps` (request/rate/time bounds), `scope_nonce` (fresh per scan), and
+`authorization.deadline` (expiry). `operation_hash` is computed by `--mint`, not hand-authored.
+
+### (A) GOVERNED — run in the Railway private Runner (the "counts" evidence)
+
+Runs the entrypoint with the real `BoundedHttpsSender`; every physical send crosses a fresh permit
+and lands in the parity ledger, and per-tool evidence is emitted. Never run this from a sandbox.
+
+1. Deploy: the **private** Runner service on Railway (not the public console) with egress to the
+   approved origin only. Confirm `/ready` is green.
+2. Set on the Runner service (secrets in Railway variables, never in the repo/argv):
+   - `AGENTFORGE_ACTIVE_SCAN_ENABLED=1`
+   - `AGENTFORGE_CREDENTIAL_BINDINGS_JSON={"secretref://<runner-binding>":"<ENV_VAR_NAME>"}`
+   - `<ENV_VAR_NAME>=<the synthetic session id>`  (sealed Railway secret; resolved only in-process)
+3. Copy the approved `plan.json` to the Runner.
+4. Run:
+   ```bash
+   python -m agentforge.security_tools.active_scan_run --config plan.json
+   ```
+5. Read the JSON report: `preflight_ok`, the `ledger` (one entry per permitted send —
+   scanner↔permit↔send↔ledger parity), `parity_ok`, and `evidence` (`runtime_state=evidenced`,
+   `executed_attempt_count`). This is the governed-ledger evidence.
+
+Fail-closed: without the enable flag, a valid unexpired in-scope grant, an exact-origin match, and a
+public-unicast DNS answer, it refuses before any send.
+
+### (B) OUT-OF-BAND — pinned ZAP active-rule Docker command (real signal, NOT governed evidence)
+
+Run locally from a networked machine authorized to reach the target. This is a **real ZAP active
+scan** bounded to the same pinned image + rule subset + caps, but it does **NOT** flow through the
+governed permit/ledger, so its output is a **real signal, NOT governed-ledger evidence**. The SID,
+if needed, is provided to ZAP via a replacer config resolved on the running host — never on the argv.
+
+```bash
+# Rules: 40018,40019 (SQLi) 40012,40014 (XSS) 90020 (OS cmd) 90019 (code) 40046 (SSRF) \
+#        6 (path traversal) 7 (RFI) 90034 (cloud metadata). Overflow/DoS rules are OFF.
+docker run --rm \
+  --network=agentforge-zap-isolated --read-only --cap-drop=ALL \
+  --security-opt=no-new-privileges --pids-limit=256 --memory=2g --cpus=2 \
+  ghcr.io/zaproxy/zaproxy@sha256:c558ee87358911ab17278c70991e856f57793e115d9cd0f88ca475cf82907a1a \
+  zap-api-scan.py \
+  -t https://<exact-approved-origin>/api/openapi.json -f openapi \
+  -J active.json -T 10 \
+  -z "-config ascan.policy.default.enabled=false \
+      -config ascan.policy.40018.enabled=true -config ascan.policy.40019.enabled=true \
+      -config ascan.policy.40012.enabled=true -config ascan.policy.40014.enabled=true \
+      -config ascan.policy.90020.enabled=true -config ascan.policy.90019.enabled=true \
+      -config ascan.policy.40046.enabled=true -config ascan.policy.6.enabled=true \
+      -config ascan.policy.7.enabled=true -config ascan.policy.90034.enabled=true"
+```
+
+> The exact argv (identical to the above, with per-rule strength/threshold) is what
+> `zap_profiles.active_scan_argv(scope, grant, ...)` returns under a verified grant — build it from
+> the plan to avoid drift.
