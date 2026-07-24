@@ -1049,7 +1049,11 @@ const decodeAgent = (value: unknown): AgentReadModel => {
     "average_duration_ms",
     "p50_duration_ms",
     "p95_duration_ms",
+    "langfuse_not_attempted_count",
+    "langfuse_disabled_count",
+    "langfuse_queued_count",
     "langfuse_exported_count",
+    "langfuse_error_count",
     "last_activity_at",
     "last_status",
     "last_campaign_run_id",
@@ -1076,7 +1080,11 @@ const decodeAgent = (value: unknown): AgentReadModel => {
     "failed_count",
     "skipped_count",
     "token_observation_count",
+    "langfuse_not_attempted_count",
+    "langfuse_disabled_count",
+    "langfuse_queued_count",
     "langfuse_exported_count",
+    "langfuse_error_count",
   ]) number(result, key, name, { integer: true, minimum: 0 });
   number(result, "measured_cost", name, { minimum: 0 });
   nullableNumber(result, "input_tokens", name);
@@ -1480,7 +1488,14 @@ const decodeBirdseyeNode = (value: unknown): BirdseyeNodeReadModel => {
     "execution_count",
     "measured_cost_usd",
     "currency",
+    "input_tokens",
+    "output_tokens",
+    "token_observation_count",
+    "langfuse_not_attempted_count",
+    "langfuse_disabled_count",
+    "langfuse_queued_count",
     "langfuse_exported_count",
+    "langfuse_error_count",
     "langfuse_status",
     "queue_depth",
     "target_access",
@@ -1533,8 +1548,19 @@ const decodeBirdseyeNode = (value: unknown): BirdseyeNodeReadModel => {
     number(result, "measured_cost_usd", name, { minimum: 0 });
   }
   nullableString(result, "currency", name);
-  if (result.langfuse_exported_count !== null) {
-    number(result, "langfuse_exported_count", name, { integer: true, minimum: 0 });
+  for (const key of [
+    "input_tokens",
+    "output_tokens",
+    "token_observation_count",
+    "langfuse_not_attempted_count",
+    "langfuse_disabled_count",
+    "langfuse_queued_count",
+    "langfuse_exported_count",
+    "langfuse_error_count",
+  ]) {
+    if (result[key] !== null) {
+      number(result, key, name, { integer: true, minimum: 0 });
+    }
   }
   nullableString(result, "langfuse_status", name);
   if (result.queue_depth !== null) {

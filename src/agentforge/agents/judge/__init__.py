@@ -24,6 +24,7 @@ from agentforge.agents.judge.calibration import (
     CalibrationThresholds,
     JudgeIdentity,
 )
+from agentforge.agents.judge.enablement import require_model_judge_enablement
 from agentforge.agents.judge.judge import Judge, is_safe
 
 __all__ = [
@@ -34,4 +35,5 @@ __all__ = [
     "CalibrationInputError",
     "CalibrationThresholds",
     "JudgeIdentity",
+    "require_model_judge_enablement",
 ]

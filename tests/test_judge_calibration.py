@@ -15,6 +15,7 @@ from agentforge.agents.judge.calibration import (
     CalibrationThresholds,
     JudgeIdentity,
 )
+from agentforge.agents.judge.enablement import require_model_judge_enablement
 from agentforge.contracts import is_valid
 
 GROUND_TRUTH = Path(__file__).resolve().parents[1] / "evals" / "ground-truth"
@@ -88,6 +89,7 @@ def test_passing_calibration_still_requires_human_enable_and_exact_identity() ->
     assert enabled["human_approved"] is True
     assert enabled["runtime_enabled"] is True
     assert is_valid("judge_calibration", enabled)
+    assert require_model_judge_enablement(enabled, current_identity=identity) == enabled
 
     drifted = gate.invalidate_if_drift(
         enabled,
@@ -97,6 +99,31 @@ def test_passing_calibration_still_requires_human_enable_and_exact_identity() ->
     assert drifted["runtime_enabled"] is False
     assert drifted["human_approved"] is False
     assert drifted["reason_codes"] == ["identity_drift"]
+    with pytest.raises(CalibrationGateClosed, match="passing calibration"):
+        require_model_judge_enablement(drifted, current_identity=identity)
+
+
+def test_model_judge_enablement_rejects_unapproved_pass_and_identity_drift() -> None:
+    slices = _slices()
+    identity = _identity()
+    result = CalibrationGate(evaluator=_ExpectedVerdictEvaluator(slices)).evaluate(
+        slices=slices,
+        identity=identity,
+    )
+
+    with pytest.raises(CalibrationGateClosed, match="human enablement"):
+        require_model_judge_enablement(result, current_identity=identity)
+
+    enabled = CalibrationGate(evaluator=_ExpectedVerdictEvaluator(slices)).human_enable(
+        result,
+        current_identity=identity,
+        approver_ref="user_security_reviewer",
+    )
+    with pytest.raises(CalibrationGateClosed, match="identity drift"):
+        require_model_judge_enablement(
+            enabled,
+            current_identity=_identity(judge_model_version="changed"),
+        )
 
 
 def test_failed_or_same_evaluator_identity_can_never_be_human_enabled() -> None:

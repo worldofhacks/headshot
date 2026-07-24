@@ -404,7 +404,11 @@ export interface AgentReadModel extends JsonRecord {
   average_duration_ms: number | null;
   p50_duration_ms: number | null;
   p95_duration_ms: number | null;
+  langfuse_not_attempted_count: number;
+  langfuse_disabled_count: number;
+  langfuse_queued_count: number;
   langfuse_exported_count: number;
+  langfuse_error_count: number;
   last_activity_at: string | null;
   last_status: string | null;
   last_campaign_run_id: string | null;
@@ -584,7 +588,14 @@ export interface BirdseyeNodeReadModel extends JsonRecord {
   execution_count: number | null;
   measured_cost_usd: number | null;
   currency: string | null;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  token_observation_count: number | null;
+  langfuse_not_attempted_count: number | null;
+  langfuse_disabled_count: number | null;
+  langfuse_queued_count: number | null;
   langfuse_exported_count: number | null;
+  langfuse_error_count: number | null;
   langfuse_status: string | null;
   queue_depth: number | null;
   target_access: string;

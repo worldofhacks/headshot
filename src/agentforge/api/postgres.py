@@ -513,8 +513,16 @@ class PostgresApiBackend(ApiBackend):
                         "FILTER (WHERE duration_ms IS NOT NULL) AS p50_duration_ms, "
                         "percentile_cont(0.95) WITHIN GROUP (ORDER BY duration_ms) "
                         "FILTER (WHERE duration_ms IS NOT NULL) AS p95_duration_ms, "
+                        "count(*) FILTER (WHERE langfuse_status = 'not_attempted') "
+                        "AS langfuse_not_attempted_count, "
+                        "count(*) FILTER (WHERE langfuse_status = 'disabled') "
+                        "AS langfuse_disabled_count, "
+                        "count(*) FILTER (WHERE langfuse_status = 'queued') "
+                        "AS langfuse_queued_count, "
                         "count(*) FILTER (WHERE langfuse_status = 'exported') "
-                        "AS langfuse_exported_count, max(started_at) AS last_activity_at, "
+                        "AS langfuse_exported_count, "
+                        "count(*) FILTER (WHERE langfuse_status = 'error') "
+                        "AS langfuse_error_count, max(started_at) AS last_activity_at, "
                         "(array_agg(status ORDER BY started_at DESC))[1] AS last_status, "
                         "(array_agg(campaign_run_id ORDER BY started_at DESC))[1] "
                         "AS last_campaign_run_id, "
@@ -615,6 +623,18 @@ class PostgresApiBackend(ApiBackend):
                                 ),
                                 "langfuse_exported_count": int(
                                     stats.get("langfuse_exported_count", 0)
+                                ),
+                                "langfuse_not_attempted_count": int(
+                                    stats.get("langfuse_not_attempted_count", 0)
+                                ),
+                                "langfuse_disabled_count": int(
+                                    stats.get("langfuse_disabled_count", 0)
+                                ),
+                                "langfuse_queued_count": int(
+                                    stats.get("langfuse_queued_count", 0)
+                                ),
+                                "langfuse_error_count": int(
+                                    stats.get("langfuse_error_count", 0)
                                 ),
                                 "last_activity_at": stats.get("last_activity_at"),
                                 "last_status": stats.get("last_status"),

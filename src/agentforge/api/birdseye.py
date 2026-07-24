@@ -728,10 +728,16 @@ def build_birdseye_snapshot(
         connection,
         "SELECT agent_role, count(*) AS execution_count, "
         "coalesce(sum(measured_cost), 0) AS measured_cost, "
+        "sum(input_tokens) AS input_tokens, sum(output_tokens) AS output_tokens, "
+        "count(*) FILTER (WHERE input_tokens IS NOT NULL OR output_tokens IS NOT NULL) "
+        "AS token_observation_count, "
         "percentile_cont(0.5) WITHIN GROUP (ORDER BY duration_ms) "
         "FILTER (WHERE duration_ms IS NOT NULL) AS p50_ms, "
         "percentile_cont(0.95) WITHIN GROUP (ORDER BY duration_ms) "
         "FILTER (WHERE duration_ms IS NOT NULL) AS p95_ms, "
+        "count(*) FILTER (WHERE langfuse_status = 'not_attempted') "
+        "AS export_not_attempted, "
+        "count(*) FILTER (WHERE langfuse_status = 'disabled') AS export_disabled, "
         "count(*) FILTER (WHERE langfuse_status = 'exported') AS export_count, "
         "count(*) FILTER (WHERE langfuse_status = 'queued') AS export_queued, "
         "count(*) FILTER (WHERE langfuse_status = 'error') AS export_errors, "
@@ -794,9 +800,18 @@ def build_birdseye_snapshot(
                 ),
                 "agent_execution_count": int(metrics.get("execution_count", 0)),
                 "agent_measured_cost": float(metrics.get("measured_cost", 0.0)),
+                "agent_input_tokens": metrics.get("input_tokens"),
+                "agent_output_tokens": metrics.get("output_tokens"),
+                "agent_token_observation_count": int(
+                    metrics.get("token_observation_count", 0)
+                ),
                 "agent_p50_ms": metrics.get("p50_ms"),
                 "agent_p95_ms": metrics.get("p95_ms"),
+                "agent_export_not_attempted": int(metrics.get("export_not_attempted", 0)),
+                "agent_export_disabled": int(metrics.get("export_disabled", 0)),
+                "agent_export_queued": int(metrics.get("export_queued", 0)),
                 "agent_export_count": int(metrics.get("export_count", 0)),
+                "agent_export_errors": int(metrics.get("export_errors", 0)),
             }
         )
 
@@ -899,8 +914,45 @@ def build_birdseye_snapshot(
                     if component.get("agent_role") and int(component["agent_execution_count"]) > 0
                     else None
                 ),
+                "input_tokens": (
+                    int(component["agent_input_tokens"])
+                    if component.get("agent_role")
+                    and component.get("agent_input_tokens") is not None
+                    else None
+                ),
+                "output_tokens": (
+                    int(component["agent_output_tokens"])
+                    if component.get("agent_role")
+                    and component.get("agent_output_tokens") is not None
+                    else None
+                ),
+                "token_observation_count": (
+                    int(component["agent_token_observation_count"])
+                    if component.get("agent_role")
+                    else None
+                ),
+                "langfuse_not_attempted_count": (
+                    int(component["agent_export_not_attempted"])
+                    if component.get("agent_role")
+                    else None
+                ),
+                "langfuse_disabled_count": (
+                    int(component["agent_export_disabled"])
+                    if component.get("agent_role")
+                    else None
+                ),
+                "langfuse_queued_count": (
+                    int(component["agent_export_queued"])
+                    if component.get("agent_role")
+                    else None
+                ),
                 "langfuse_exported_count": (
                     int(component["agent_export_count"]) if component.get("agent_role") else None
+                ),
+                "langfuse_error_count": (
+                    int(component["agent_export_errors"])
+                    if component.get("agent_role")
+                    else None
                 ),
                 "langfuse_status": (
                     str(component["agent_langfuse_status"])

@@ -474,7 +474,11 @@ class AgentReadModel(_ReadModel):
     average_duration_ms: float | None = Field(default=None, ge=0)
     p50_duration_ms: float | None = Field(default=None, ge=0)
     p95_duration_ms: float | None = Field(default=None, ge=0)
+    langfuse_not_attempted_count: int = Field(ge=0)
+    langfuse_disabled_count: int = Field(ge=0)
+    langfuse_queued_count: int = Field(ge=0)
     langfuse_exported_count: int = Field(ge=0)
+    langfuse_error_count: int = Field(ge=0)
     last_activity_at: datetime.datetime | None = None
     last_status: str | None = None
     last_campaign_run_id: str | None = None
@@ -665,7 +669,14 @@ class BirdseyeNodeReadModel(_ReadModel):
     execution_count: int | None = Field(default=None, ge=0)
     measured_cost_usd: float | None = Field(default=None, ge=0)
     currency: str | None = None
+    input_tokens: int | None = Field(default=None, ge=0)
+    output_tokens: int | None = Field(default=None, ge=0)
+    token_observation_count: int | None = Field(default=None, ge=0)
+    langfuse_not_attempted_count: int | None = Field(default=None, ge=0)
+    langfuse_disabled_count: int | None = Field(default=None, ge=0)
+    langfuse_queued_count: int | None = Field(default=None, ge=0)
     langfuse_exported_count: int | None = Field(default=None, ge=0)
+    langfuse_error_count: int | None = Field(default=None, ge=0)
     langfuse_status: str | None = None
     queue_depth: int | None = Field(default=None, ge=0)
     target_access: str

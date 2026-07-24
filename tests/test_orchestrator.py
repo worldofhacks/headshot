@@ -121,6 +121,87 @@ def test_budget_and_queue_breakers_halt_without_a_directive() -> None:
         Orchestrator().decide(_snapshot(queue={"depth": 20, "backpressure_threshold": 20}))
 
 
+def test_prolonged_no_signal_spend_halts_after_redirects_have_not_helped() -> None:
+    with pytest.raises(OrchestratorHalt, match="no_signal_spend"):
+        Orchestrator(
+            low_signal_redirect_threshold=2,
+            no_signal_halt_threshold=4,
+            no_signal_spend_ratio=0.20,
+        ).decide(
+            _snapshot(
+                low_signal_streak=4,
+                previous_category="data_exfiltration",
+                budget={"cap_usd": 10.0, "spent_usd": 2.0},
+            )
+        )
+
+
+def test_high_value_verified_signal_survives_the_no_signal_spend_heuristic() -> None:
+    decision = Orchestrator(
+        low_signal_redirect_threshold=2,
+        no_signal_halt_threshold=4,
+        no_signal_spend_ratio=0.20,
+    ).decide(
+        _snapshot(
+            low_signal_streak=4,
+            previous_category="data_exfiltration",
+            budget={"cap_usd": 10.0, "spent_usd": 2.0},
+            findings=[
+                {
+                    "finding_id": "finding-high-1",
+                    "category": "prompt_injection",
+                    "severity": "high",
+                    "status": "documented",
+                    "evidence_verified": True,
+                }
+            ],
+        )
+    )
+
+    assert decision.priority_reason == "unresolved_finding"
+    assert decision.directive["category"] == "prompt_injection"
+
+
+def test_completed_coverage_with_deterministic_anchors_halts_redundant_work() -> None:
+    with pytest.raises(OrchestratorHalt, match="coverage_saturated"):
+        Orchestrator().decide(
+            _snapshot(
+                coverage=[
+                    {
+                        "category": category,
+                        "total_case_count": 3,
+                        "verified_attempt_count": 3,
+                        "deterministic_anchor_count": 1,
+                    }
+                    for category in (
+                        "prompt_injection",
+                        "data_exfiltration",
+                        "tool_misuse",
+                    )
+                ]
+            )
+        )
+
+
+def test_remediated_and_validated_findings_do_not_override_coverage_priority() -> None:
+    decision = Orchestrator().decide(
+        _snapshot(
+            findings=[
+                {
+                    "finding_id": "finding-closed-1",
+                    "category": "tool_misuse",
+                    "severity": "critical",
+                    "status": "validated",
+                    "evidence_verified": True,
+                }
+            ]
+        )
+    )
+
+    assert decision.priority_reason == "coverage_gap"
+    assert decision.directive["category"] == "data_exfiltration"
+
+
 def test_unverified_or_internally_inconsistent_snapshot_fails_closed() -> None:
     with pytest.raises(OrchestrationInputError, match="contract"):
         Orchestrator().decide(_snapshot(signal_provenance="raw_span"))

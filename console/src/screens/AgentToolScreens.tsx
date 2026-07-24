@@ -43,6 +43,21 @@ const deterministicModels: Record<AgentRole, string[]> = {
 const statusTone = (status: string): "success" | "failure" | "queued" =>
   status === "failed" ? "failure" : status === "running" ? "queued" : "success";
 
+const langfuseDelivery = (agent: AgentReadModel): string => {
+  if (agent.execution_count === 0) return "not observed";
+  const states = [
+    ["submitted", agent.langfuse_exported_count],
+    ["queued", agent.langfuse_queued_count],
+    ["error", agent.langfuse_error_count],
+    ["disabled", agent.langfuse_disabled_count],
+    ["not attempted", agent.langfuse_not_attempted_count],
+  ] as const;
+  return states
+    .filter(([, value]) => value > 0)
+    .map(([label, value]) => `${value} ${label}`)
+    .join(" · ");
+};
+
 export function AgentsScreen({
   client,
   principal,
@@ -107,18 +122,22 @@ export function AgentsScreen({
         eyebrow="MULTI-AGENT CONTROL"
         detail="Four separated roles coordinate through typed handoffs. Every invocation below comes from the durable execution ledger."
       />
-      <MetricStrip label="Agent execution summary" values={[
-        { label: "Role boundaries", value: `${records.length}/4`, note: "Orchestrator · Red Team · Judge · Documentation" },
-        { label: "Real executions", value: count(totals.executions), note: `${totals.running} currently running` },
-        { label: "Measured agent cost", value: money(totals.cost), note: "Zero is valid for deterministic local engines" },
-        {
-          label: "Token observations",
-          value: count(totals.observedTokens),
-          note: totals.tokenObservations > 0
-            ? `${totals.tokenObservations} hosted observations`
-            : "Not reported by deterministic engines",
-        },
-      ]} />
+      <ResourceView result={agents.result} emptyLabel="No agent role definitions are available.">
+        {() => (
+          <MetricStrip label="Agent execution summary" values={[
+            { label: "Role boundaries", value: `${records.length}/4`, note: "Orchestrator · Red Team · Judge · Documentation" },
+            { label: "Real executions", value: count(totals.executions), note: `${totals.running} currently running` },
+            { label: "Measured agent cost", value: money(totals.cost), note: "Zero is valid for deterministic local engines" },
+            {
+              label: "Token observations",
+              value: count(totals.observedTokens),
+              note: totals.tokenObservations > 0
+                ? `${totals.tokenObservations} hosted observations`
+                : "Not reported by deterministic engines",
+            },
+          ]} />
+        )}
+      </ResourceView>
 
       <Panel title="Role boundaries" meta="select a role to inspect" eyebrow="LIVE ROLE REGISTRY">
         <ResourceView result={agents.result} emptyLabel="No agent role definitions are available.">
@@ -180,7 +199,8 @@ export function AgentsScreen({
                 <div><dt>Engine</dt><dd className="mono">{selected.active_assignment.provider}/{selected.active_assignment.model}</dd></div>
                 <div><dt>p50 / p95 latency</dt><dd className="mono">{selected.p50_duration_ms === null || selected.p95_duration_ms === null ? "not observed" : `${selected.p50_duration_ms.toFixed(1)} / ${selected.p95_duration_ms.toFixed(1)} ms`}</dd></div>
                 <div><dt>Measured cost</dt><dd className="mono">{money(selected.measured_cost)}</dd></div>
-                <div><dt>Langfuse delivery</dt><dd className="mono">{selected.execution_count > 0 ? `${selected.langfuse_exported_count}/${selected.execution_count} submitted` : "not observed"}</dd></div>
+                <div><dt>Input / output tokens</dt><dd className="mono">{selected.token_observation_count > 0 ? `${count(selected.input_tokens ?? 0)} / ${count(selected.output_tokens ?? 0)} · ${selected.token_observation_count} observation(s)` : "not reported"}</dd></div>
+                <div><dt>Langfuse delivery</dt><dd className="mono">{langfuseDelivery(selected)}</dd></div>
                 <div><dt>Last activity</dt><dd className="mono">{selected.last_activity_at ? time(selected.last_activity_at) : "not yet executed"}</dd></div>
               </dl>
               {selected.staged_assignment && (
@@ -311,6 +331,8 @@ export function AgentsScreen({
                 { key: "parent_execution_id", label: "Parent", mono: true },
                 { key: "model", label: "Engine", mono: true },
                 { key: "duration_ms", label: "Latency ms", mono: true },
+                { key: "input_tokens", label: "Input tokens", mono: true },
+                { key: "output_tokens", label: "Output tokens", mono: true },
                 { key: "measured_cost", label: "Cost USD", mono: true },
                 { key: "trace_id", label: "Trace", mono: true },
                 { key: "langfuse_status", label: "Langfuse", mono: true },
