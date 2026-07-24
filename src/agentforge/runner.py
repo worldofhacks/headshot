@@ -207,14 +207,49 @@ def _exact_job_payload(job: JobRecord, authorized: Any) -> bool:
     )
 
 
-def _scope_payload_profile(*, relative_path: str, method: str, auth_mode: AuthMode) -> str:
-    """Derive request shape only from fields included in the authorization scope hash."""
+# The exact document sub-resource read templates the Co-Pilot exposes (document_id / page are
+# substituted at the dispatch boundary). Kept as a closed set so a scope can never derive a
+# document-read profile for an unlisted path.
+_DOCUMENT_READ_PATHS = frozenset(
+    {
+        "documents/{document_id}/status",
+        "documents/{document_id}/extraction-report",
+        "documents/{document_id}/readback-verification",
+        "documents/{document_id}/pages/{page}",
+    }
+)
 
-    if relative_path != "chat":
-        return "openemr_turns"
-    if method != "POST" or auth_mode is not AuthMode.SESSION:
-        raise DispatchUnavailable("copilot_chat_scope_invalid")
-    return "copilot_chat"
+
+def _scope_payload_profile(*, relative_path: str, method: str, auth_mode: AuthMode) -> str:
+    """Derive request shape only from fields included in the authorization scope hash.
+
+    Every profile is a pure function of the surface's ``(relative_path, method, auth_mode)`` — all
+    three are bound in the persisted operation hash, so an environment change can never alter the
+    request shape after approval. An unrecognized combination fails closed (``DispatchUnavailable``)
+    rather than silently falling through to the bearer profile against the Co-Pilot's session API.
+    """
+
+    if relative_path in ("health", "ready"):
+        if method != "GET":
+            raise DispatchUnavailable("public_get_scope_invalid")
+        return "copilot_public_get"
+    if relative_path == "evidence/search":
+        if method != "POST":
+            raise DispatchUnavailable("evidence_search_scope_invalid")
+        return "copilot_evidence_search"
+    if relative_path == "chat":
+        if method != "POST" or auth_mode is not AuthMode.SESSION:
+            raise DispatchUnavailable("copilot_chat_scope_invalid")
+        return "copilot_chat"
+    if relative_path == "documents":
+        if method != "POST" or auth_mode is not AuthMode.SESSION:
+            raise DispatchUnavailable("document_upload_scope_invalid")
+        return "copilot_document_upload"
+    if relative_path in _DOCUMENT_READ_PATHS:
+        if method != "GET" or auth_mode is not AuthMode.SESSION:
+            raise DispatchUnavailable("document_read_scope_invalid")
+        return "copilot_document_read"
+    return "openemr_turns"
 
 
 def _campaign_session_required_until(authorized: Any, *, now: float) -> datetime.datetime:
@@ -374,10 +409,15 @@ class DurableCampaignRunner:
             except DispatchUnavailable:
                 blockers.append("payload_profile_scope_invalid")
             else:
-                if entry.transport_policy.payload_profile != scope_profile:
+                if scope_profile not in entry.transport_policy.payload_profiles:
                     blockers.append("payload_profile_scope_mismatch")
-            if entry.transport_policy.write_upload_allowed:
-                blockers.append("write_upload_policy_not_mvp_safe")
+                if scope_profile == "copilot_document_upload" and (
+                    not entry.transport_policy.write_upload_allowed
+                    or not entry.transport_policy.allowed_write_resource_refs
+                ):
+                    # A write/upload surface may dispatch only under an explicit write policy with a
+                    # closed set of synthetic write-resource references; otherwise fail closed.
+                    blockers.append("write_upload_policy_missing")
             if scope.execution_profile is ExecutionProfile.SYNTHETIC:
                 if self.environment == "production" or scope.target_id != SYNTHETIC_TARGET_ID:
                     blockers.append("synthetic_profile_refused")
@@ -437,7 +477,8 @@ class DurableCampaignRunner:
             method=prepared.surface.method,
             auth_mode=scope.auth_mode,
         )
-        if policy.payload_profile != payload_profile:
+        allowed_profiles = getattr(policy, "payload_profiles", None) or (policy.payload_profile,)
+        if payload_profile not in allowed_profiles:
             raise DispatchUnavailable("payload_profile_scope_mismatch")
         return OpenEmrAdapter(
             base_url=target.base_url,
@@ -453,6 +494,9 @@ class DurableCampaignRunner:
                 allow_private=policy.allow_private_destination,
             ),
             telemetry=getattr(self, "telemetry", None),
+            # A synthetic-only fixture resolver is required for the copilot_document_upload surface;
+            # injected by the composition root and absent (fail-closed) for read-only surfaces.
+            fixture_resolver=getattr(self, "fixture_resolver", None),
         )
 
     def execute_claimed(self, job: JobRecord) -> None:

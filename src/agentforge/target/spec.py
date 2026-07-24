@@ -24,6 +24,10 @@ _METHOD_RE = re.compile(r"\A[A-Z][A-Z0-9_-]{0,31}\Z")
 _CORPUS_HASH_RE = re.compile(r"\A[a-f0-9]{64}\Z")
 _RUN_NONCE_RE = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9._-]{15,127}\Z")
 _RELATIVE_SEGMENT_RE = re.compile(r"\A[A-Za-z0-9._~-]+\Z")
+# A single path-parameter placeholder segment, e.g. ``{document_id}``. The name grammar is the
+# strict lowercase identifier used elsewhere so a template can never smuggle traversal, a second
+# authority, or URL-override syntax through a parameter name.
+_PATH_PARAM_RE = re.compile(r"\A\{[a-z][a-z0-9_]*\}\Z")
 _FORWARD_TRANSITIONS: dict[TargetLifecycle, TargetLifecycle] = {}
 
 
@@ -235,12 +239,42 @@ def validate_relative_path(value: object) -> str:
     if parts.scheme or parts.netloc or parts.query or parts.fragment:
         raise DefinitionError("relative path must not contain a scheme, host, query, or fragment")
     segments = path.split("/")
-    if any(
-        not segment or segment in {".", ".."} or _RELATIVE_SEGMENT_RE.fullmatch(segment) is None
-        for segment in segments
-    ):
+    if any(not _relative_segment_is_valid(segment) for segment in segments):
         raise DefinitionError("relative path contains empty, traversal, or invalid segments")
+    parameters = [segment[1:-1] for segment in segments if _PATH_PARAM_RE.fullmatch(segment)]
+    if len(set(parameters)) != len(parameters):
+        raise DefinitionError("relative path must not repeat a parameter name")
     return path
+
+
+def _relative_segment_is_valid(segment: str) -> bool:
+    """A path segment is a literal token OR exactly one ``{name}`` parameter placeholder.
+
+    Traversal (``.`` / ``..``), empty, and mixed literal+parameter segments (``x{id}``) are all
+    refused, so a template never resolves to a second authority or a traversal after substitution.
+    """
+
+    if not segment or segment in {".", ".."}:
+        return False
+    return (
+        _RELATIVE_SEGMENT_RE.fullmatch(segment) is not None
+        or _PATH_PARAM_RE.fullmatch(segment) is not None
+    )
+
+
+def relative_path_parameters(value: str) -> tuple[str, ...]:
+    """Ordered names of the ``{param}`` placeholders in a validated relative path.
+
+    Returns ``()`` for a fully static path. The trusted dispatch boundary substitutes exactly
+    these names from the authorized attempt; an unfilled or unknown parameter is a fail-closed
+    dispatch error, never a partially-templated URL sent to the target.
+    """
+
+    return tuple(
+        segment[1:-1]
+        for segment in value.split("/")
+        if _PATH_PARAM_RE.fullmatch(segment) is not None
+    )
 
 
 def _finite_positive(value: object, field: str) -> float:
@@ -627,5 +661,6 @@ __all__ = [
     "TargetDefinition",
     "TargetEnvironment",
     "TargetLifecycle",
+    "relative_path_parameters",
     "validate_relative_path",
 ]
