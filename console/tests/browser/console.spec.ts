@@ -18,6 +18,70 @@ test("direct routes and browser history restore authoritative screens", async ({
   await expect(page.getByRole("heading", { name: "Risk distribution", exact: true })).toBeVisible();
 });
 
+test("spec(T-F18a:AC-1) desktop and mobile expose one canonical Coverage route", async ({ page }) => {
+  await page.goto("/live");
+  const desktop = page.getByRole("navigation", { name: "Primary navigation" });
+  const desktopCoverage = desktop.getByRole("button", {
+    name: "Coverage & Regression",
+    exact: true,
+  });
+
+  await expect(desktopCoverage).toHaveCount(1);
+  await expect(desktop.getByRole("button", { name: "Resilience" })).toHaveCount(0);
+  await desktopCoverage.click();
+  await expect(page).toHaveURL(/\/coverage$/);
+  await expect(desktopCoverage).toHaveAttribute("aria-current", "page");
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  const mobile = page.getByRole("navigation", { name: "Mobile navigation" });
+  await mobile.getByRole("button", { name: "More", exact: true }).click();
+  const mobileCoverage = mobile.getByRole("button", {
+    name: "Coverage & Regression",
+    exact: true,
+  });
+
+  await expect(mobileCoverage).toHaveCount(1);
+  await expect(mobile.getByRole("button", { name: "Resilience" })).toHaveCount(0);
+  await mobileCoverage.click();
+  await expect(page).toHaveURL(/\/coverage$/);
+  await expect(mobileCoverage).toHaveAttribute("aria-current", "page");
+});
+
+test("spec(T-F18a:AC-2) resilience replaces to Coverage without a history loop", async ({ page }) => {
+  await page.goto("/live");
+  await page.evaluate(() => {
+    window.history.pushState(null, "", "/resilience?window=30d#latest-regression");
+    window.dispatchEvent(new PopStateEvent("popstate"));
+  });
+
+  await expect(page).toHaveURL(/\/coverage$/);
+  await expect(page.getByRole("heading", { name: "Coverage", exact: true, level: 1 })).toBeVisible();
+
+  await page.goBack();
+  await expect(page).toHaveURL(/\/live$/);
+  await page.goForward();
+  await expect(page).toHaveURL(/\/coverage$/);
+});
+
+test("spec(T-F18a:AC-3) invalid route families replace-normalize to Live", async ({ page }) => {
+  await page.goto("/live");
+  for (const invalidPath of [
+    "/unknown?next=/findings#fragment",
+    "/findings/%E0%A4%A?next=/findings#fragment",
+    "/live/attempt-1/extra?next=/findings#fragment",
+    "/resilience/extra?next=/findings#fragment",
+    "/coverage/case-1?next=/findings#fragment",
+  ]) {
+    await page.evaluate((path) => {
+      window.history.pushState(null, "", path);
+      window.dispatchEvent(new PopStateEvent("popstate"));
+    }, invalidPath);
+
+    await expect(page).toHaveURL(/\/live$/);
+    await expect(page.getByRole("heading", { name: "Live operations", exact: true })).toBeVisible();
+  }
+});
+
 test("390px navigation exposes every screen without application overflow", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/live");
