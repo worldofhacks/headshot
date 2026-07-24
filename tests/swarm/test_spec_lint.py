@@ -98,6 +98,150 @@ def test_spec_lint_rejects_an_untagged_test_beside_a_tagged_test(tmp_path: Path)
     assert "spec" in output.lower()
 
 
+def test_spec_lint_checks_only_tests_added_since_the_diff_base(tmp_path: Path) -> None:
+    """spec(T-F00:AC-1) — a legacy untagged test is outside this ticket's new-test set."""
+    _install_spec_lint(tmp_path)
+    _write_ticket(tmp_path, criteria=("AC-1",))
+    _write_test(
+        tmp_path,
+        'def test_existing_mapping():\n    """spec(T-F00:AC-1)"""\n\n'
+        "def test_legacy_unmapped_behavior():\n    assert True\n",
+    )
+    base = _commit_fixture(tmp_path)
+
+    result = _invoke_spec_lint(tmp_path, base)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_spec_lint_accepts_a_spec_tag_in_a_test_name(tmp_path: Path) -> None:
+    """spec(T-F00:AC-1) — normalized test-name tags map newly added collected tests."""
+    _install_spec_lint(tmp_path)
+    _write_ticket(tmp_path, criteria=("AC-1",))
+    test_file = _write_test(tmp_path, "")
+    base = _commit_fixture(tmp_path)
+    test_file.write_text(
+        "def test_spec_T_F00_AC_1():\n    assert True\n",
+        encoding="utf-8",
+    )
+
+    result = _invoke_spec_lint(tmp_path, base)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_spec_lint_accepts_a_spec_tag_in_a_test_comment(tmp_path: Path) -> None:
+    """spec(T-F00:AC-1) — source comments are supported tag locations for new tests."""
+    _install_spec_lint(tmp_path)
+    _write_ticket(tmp_path, criteria=("AC-1",))
+    test_file = _write_test(tmp_path, "")
+    base = _commit_fixture(tmp_path)
+    test_file.write_text(
+        "# spec(T-F00:AC-1)\n"
+        "def test_comment_mapped():\n    assert True\n",
+        encoding="utf-8",
+    )
+
+    result = _invoke_spec_lint(tmp_path, base)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_spec_lint_accepts_a_spec_tag_in_a_test_docstring(tmp_path: Path) -> None:
+    """spec(T-F00:AC-1) — function docstrings remain supported tag locations."""
+    _install_spec_lint(tmp_path)
+    _write_ticket(tmp_path, criteria=("AC-1",))
+    test_file = _write_test(tmp_path, "")
+    base = _commit_fixture(tmp_path)
+    test_file.write_text(
+        'def test_docstring_mapped():\n    """spec(T-F00:AC-1)"""\n',
+        encoding="utf-8",
+    )
+
+    result = _invoke_spec_lint(tmp_path, base)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_spec_lint_rejects_a_skipped_test_as_an_acceptance_mapping(tmp_path: Path) -> None:
+    """spec(T-F00:AC-1) — skipped tests cannot satisfy an acceptance criterion."""
+    _install_spec_lint(tmp_path)
+    _write_ticket(tmp_path, criteria=("AC-1",))
+    test_file = _write_test(tmp_path, "")
+    base = _commit_fixture(tmp_path)
+    test_file.write_text(
+        "import pytest\n\n"
+        "@pytest.mark.skip(reason='not executed')\n"
+        "def test_skipped_mapping():\n"
+        '    """spec(T-F00:AC-1)"""\n',
+        encoding="utf-8",
+    )
+
+    result = _invoke_spec_lint(tmp_path, base)
+
+    assert result.returncode == 1
+    assert "test_skipped_mapping" in result.stdout + result.stderr
+
+
+def test_spec_lint_rejects_an_uncollected_test_as_an_acceptance_mapping(tmp_path: Path) -> None:
+    """spec(T-F00:AC-1) — a test disabled from pytest collection cannot map an AC."""
+    _install_spec_lint(tmp_path)
+    _write_ticket(tmp_path, criteria=("AC-1",))
+    test_file = _write_test(tmp_path, "")
+    base = _commit_fixture(tmp_path)
+    test_file.write_text(
+        "def test_uncollected_mapping():\n"
+        '    """spec(T-F00:AC-1)"""\n\n'
+        "test_uncollected_mapping.__test__ = False\n",
+        encoding="utf-8",
+    )
+
+    result = _invoke_spec_lint(tmp_path, base)
+
+    assert result.returncode == 1
+    assert "test_uncollected_mapping" in result.stdout + result.stderr
+
+
+def test_spec_lint_rejects_a_nested_function_as_an_acceptance_mapping(tmp_path: Path) -> None:
+    """spec(T-F00:AC-1) — a nested test-like function has no pytest node id to bind."""
+    _install_spec_lint(tmp_path)
+    _write_ticket(tmp_path, criteria=("AC-1",))
+    test_file = _write_test(tmp_path, "")
+    base = _commit_fixture(tmp_path)
+    test_file.write_text(
+        "def helper():\n"
+        "    def test_nested_mapping():\n"
+        '        """spec(T-F00:AC-1)"""\n',
+        encoding="utf-8",
+    )
+
+    result = _invoke_spec_lint(tmp_path, base)
+
+    assert result.returncode == 1
+    assert "test_nested_mapping" in result.stdout + result.stderr
+
+
+def test_spec_lint_rejects_a_non_test_class_method_as_an_acceptance_mapping(
+    tmp_path: Path,
+) -> None:
+    """spec(T-F00:AC-1) — methods outside Test* classes are not pytest-collected tests."""
+    _install_spec_lint(tmp_path)
+    _write_ticket(tmp_path, criteria=("AC-1",))
+    test_file = _write_test(tmp_path, "")
+    base = _commit_fixture(tmp_path)
+    test_file.write_text(
+        "class Helper:\n"
+        "    def test_non_test_class_mapping(self):\n"
+        '        """spec(T-F00:AC-1)"""\n',
+        encoding="utf-8",
+    )
+
+    result = _invoke_spec_lint(tmp_path, base)
+
+    assert result.returncode == 1
+    assert "test_non_test_class_mapping" in result.stdout + result.stderr
+
+
 def test_spec_lint_rejects_a_test_tagged_to_the_wrong_ticket(tmp_path: Path) -> None:
     """spec(T-F00:AC-1) — a tag for another ticket does not map this ticket's test."""
     _install_spec_lint(tmp_path)
