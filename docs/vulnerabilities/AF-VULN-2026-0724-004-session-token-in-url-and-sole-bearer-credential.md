@@ -24,12 +24,15 @@ SID used **two ways that expose it**:
 1. **In the URL query string.** Every document sub-resource GET carried the credential in the
    query, e.g. `GET /documents/{document_id}/status?session_id=***REDACTED_SESSION***`,
    `.../extraction-report?session_id=…`, `.../pages/1?session_id=…`,
-   `.../readback-verification?session_id=…`. The deployed UI likewise embeds it —
-   `/app?sid=…` (week1) and `/week2?sid=…` (week2). URLs are routinely captured in server/proxy
+   `.../readback-verification?session_id=…`. The deployed UI is *inferred* to embed it similarly at
+   its configured `app_url_path` (`/app` week1, `/week2` week2, per `config/targets.json`) — the UI
+   address-bar form was **not directly captured** in this run. URLs are routinely captured in server/proxy
    access logs, the Railway edge layer (`x-railway-edge` / `x-railway-request-id` headers were
    present on every response), browser history, and the `Referer` header sent to any third-party
    resource the page loads.
-2. **As the only credential.** Every endpoint is transport-`auth: none`; a bare
+2. **As the only credential.** The SID is the sole factor (`auth_mode: session` per
+   `config/targets.json`) — no `Authorization`/`Bearer` header or any second factor appears on any
+   captured request; a bare
    `POST /chat {"session_id": "<SID>"}` returned a **full patient clinical brief** (active/inactive
    conditions, medications, and a long allergy list, `source":"llm"`, `citations[].source_type ==
    "patient_record"`). Possession of the SID alone therefore yields the pinned patient's synthetic
@@ -71,7 +74,8 @@ GET https://agent-production-9f62.up.railway.app/documents/<doc_id>/status?sessi
 
 ## Current status & fix-validation
 Status **open — Medium–High**. Reproducible from the captured live run (credential-scrubbed request
-URLs, `auth:none` on every surface, `POST /chat` clinical brief). No adversarial exploit was
-oracle-confirmed (Judge `INDETERMINATE` across all 15 captured responses; the credential-echo canary
-never fired) — this is a session-management/config weakness, not a prompt-injection success.
+URLs showing `session_id=` in the query, SID as the sole factor with no `Authorization` header on any
+surface, `POST /chat` clinical brief). No adversarial exploit was oracle-confirmed (Judge
+`INDETERMINATE` across all 17 campaign probes; the credential-echo canary never fired) — this is a
+session-management/config weakness, not a prompt-injection success.
 Fix-validation: **not run** (awaiting remediation).
