@@ -1550,6 +1550,7 @@ const decodeTarget = (value: unknown): TargetReadModel => {
       "tool_sources",
       "execution_profile",
       "maximum_caps",
+      "hosted_run",
     ], "campaign template");
     for (const key of [
       "target_id",
@@ -1563,6 +1564,9 @@ const decodeTarget = (value: unknown): TargetReadModel => {
     stringArray(template, "tool_sources", "campaign template");
     literal(template, "execution_profile", ["synthetic", "live"], "campaign template");
     template.maximum_caps = decodeCaps(template.maximum_caps);
+    template.hosted_run = template.hosted_run === null
+      ? null
+      : decodeHostedRun(template.hosted_run);
   }
   timestamp(result, "created_at", name);
   return result as TargetReadModel;

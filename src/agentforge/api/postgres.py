@@ -21,6 +21,7 @@ from agentforge.agents.hosted import (
     preflight_hosted_configuration_set,
 )
 from agentforge.agents.hosted_policy import (
+    DEFAULT_HOSTED_GENERATION_POLICY,
     HostedGenerationPolicyError,
     resolve_hosted_generation_policy,
 )
@@ -789,6 +790,62 @@ class PostgresApiBackend(ApiBackend):
         self._hosted_provider_bindings_verified = hosted_provider_bindings_verified
         self._corpus = corpus
         self._target_catalog = target_catalog or TrustedTargetCatalog.from_environment(environment)
+
+    @staticmethod
+    def _target_session_generation(target_payload: Mapping[str, Any]) -> str:
+        """Return only the non-secret immutable generation bound to a target credential."""
+
+        credential_reference = target_payload.get("credential_ref")
+        if credential_reference is None and target_payload.get("auth_mode") == "none":
+            return "no-auth"
+        if not isinstance(credential_reference, str):
+            raise ValueError("target credential generation is unavailable")
+        parsed = urlsplit(credential_reference)
+        segments = tuple(segment for segment in parsed.path.split("/") if segment)
+        if parsed.scheme != "secretref" or not segments:
+            raise ValueError("target credential generation is invalid")
+        return segments[-1]
+
+    def _latest_hosted_run_binding(
+        self,
+        connection: Any,
+        *,
+        organization_id: str,
+        target_payload: Mapping[str, Any],
+    ) -> dict[str, object] | None:
+        """Project the latest atomic set into a secret-free, server-derived run binding."""
+
+        row = (
+            connection.execute(
+                text(
+                    "SELECT configuration_sha256, payload FROM hosted_configuration_sets "
+                    "WHERE organization_id = :org "
+                    "ORDER BY created_at DESC, configuration_sha256 DESC LIMIT 1"
+                ),
+                {"org": organization_id},
+            )
+            .mappings()
+            .one_or_none()
+        )
+        if row is None:
+            return None
+        configuration = HostedConfigurationSet.from_payload(dict(row["payload"]))
+        if configuration.configuration_sha256 != row["configuration_sha256"]:
+            raise ValueError("hosted configuration-set integrity check failed")
+        policy = DEFAULT_HOSTED_GENERATION_POLICY
+        binding = HostedRunBinding(
+            configuration_set_sha256=configuration.configuration_sha256,
+            generation_policy_sha256=policy.policy_sha256,
+            session_generation=self._target_session_generation(target_payload),
+            provider_model_call_limit=configuration.global_limits.max_calls,
+            provider_model_spend_limit_usd=format(configuration.global_limits.max_usd, "f"),
+            provider_max_retries=configuration.global_limits.max_retries,
+            provider_max_concurrency=configuration.global_limits.max_concurrency,
+            provider_timeout_seconds=max(
+                float(role.bounds.timeout_seconds) for role in policy.roles
+            ),
+        )
+        return binding.canonical_payload()
 
     def _attack_case_evidence(self, source: Mapping[str, Any]) -> dict[str, Any]:
         case_id = str(source.get("case_id") or "unavailable")
@@ -3348,6 +3405,11 @@ class PostgresApiBackend(ApiBackend):
                                 if row["target_id"] == SYNTHETIC_TARGET_ID
                                 else "live",
                                 "maximum_caps": row["safety_caps"],
+                                "hosted_run": self._latest_hosted_run_binding(
+                                    connection,
+                                    organization_id=principal.organization_id,
+                                    target_payload=payload,
+                                ),
                             }
                 elif resource == "target_catalog":
                     rows = self._target_catalog_projection(
@@ -3470,6 +3532,37 @@ class PostgresApiBackend(ApiBackend):
                     )
                     if payload.get("execution_profile") != expected_profile:
                         raise ApiConflict("campaign execution profile differs from trusted target")
+                submitted_hosted_run = payload.get("hosted_run")
+                if submitted_hosted_run is not None:
+                    with self._engine.connect() as connection:
+                        target_payload = connection.execute(
+                            text(
+                                "SELECT payload FROM target_definitions "
+                                "WHERE organization_id = :org AND target_id = :target "
+                                "AND version = :version"
+                            ),
+                            {
+                                "org": principal.organization_id,
+                                "target": str(payload["target_id"]),
+                                "version": str(payload["target_version"]),
+                            },
+                        ).scalar_one_or_none()
+                        expected_hosted_run = (
+                            self._latest_hosted_run_binding(
+                                connection,
+                                organization_id=principal.organization_id,
+                                target_payload=dict(target_payload),
+                            )
+                            if target_payload is not None
+                            else None
+                        )
+                    if (
+                        expected_hosted_run is None
+                        or dict(submitted_hosted_run) != expected_hosted_run
+                    ):
+                        raise ApiConflict(
+                            "hosted campaign binding differs from the server-owned active set"
+                        )
                 caps = SafetyCaps(**dict(payload["caps"]))
                 scope = self._store.build_scope(
                     principal=principal,

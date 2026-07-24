@@ -33,6 +33,17 @@ const browserScope = {
   hosted_run: null,
 } as const;
 
+const browserHostedRun = {
+  configuration_set_sha256: "a".repeat(64),
+  generation_policy_sha256: "b".repeat(64),
+  session_generation: "generation-browser-test",
+  provider_model_call_limit: 56,
+  provider_model_spend_limit_usd: "5",
+  provider_max_retries: 1,
+  provider_max_concurrency: 1,
+  provider_timeout_seconds: 180,
+} as const;
+
 const browserCoverage = [
   {
     target_version: "browser-target@v1",
@@ -1318,6 +1329,7 @@ const browserFixture = (): Plugin => ({
               tool_sources: [],
               execution_profile: "live",
               maximum_caps: browserScope.caps,
+              hosted_run: browserHostedRun,
             },
             created_at: "2026-07-22T00:00:00Z",
           }],

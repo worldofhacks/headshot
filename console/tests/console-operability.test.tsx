@@ -71,6 +71,16 @@ const target = (enabled: boolean) => ({
 
 const configurationHash = "a".repeat(64);
 const generationPolicyHash = "b".repeat(64);
+const hostedRun = {
+  configuration_set_sha256: configurationHash,
+  generation_policy_sha256: generationPolicyHash,
+  session_generation: "week3-authorization",
+  provider_model_call_limit: 56,
+  provider_model_spend_limit_usd: "5",
+  provider_max_retries: 1,
+  provider_max_concurrency: 1,
+  provider_timeout_seconds: 180,
+} as const;
 
 const approval = {
   target_id: "target-1",
@@ -100,16 +110,7 @@ const approval = {
   },
   run_nonce: "run-nonce",
   execution_profile: "live",
-  hosted_run: {
-    configuration_set_sha256: configurationHash,
-    generation_policy_sha256: generationPolicyHash,
-    session_generation: "week3-authorization",
-    provider_model_call_limit: 8,
-    provider_model_spend_limit_usd: "7.500000",
-    provider_max_retries: 1,
-    provider_max_concurrency: 1,
-    provider_timeout_seconds: 45,
-  },
+  hosted_run: hostedRun,
   request_id: "approval-1",
   scope_hash: "scope-hash",
   launcher_user_id: "operator-1",
@@ -359,6 +360,71 @@ describe("target console operability", () => {
       .toHaveLength(2));
     expect(screen.queryByText("https://")).toBeNull();
   });
+
+  it("binds the server-derived atomic hosted set without browser model or secret authority", async () => {
+    const launchPrincipal: Principal = {
+      ...principal,
+      organization_permissions: [
+        ...principal.organization_permissions,
+        PERMISSIONS.campaignLaunch,
+      ],
+    };
+    const campaignTarget = {
+      ...target(true),
+      campaign_template: {
+        target_id: "target-1",
+        target_version: "1.0.0",
+        surface_id: "chat",
+        surface_version: "1.0.0",
+        corpus_id: "week-3",
+        corpus_hash: "c".repeat(64),
+        case_count: 2,
+        tool_sources: [],
+        execution_profile: "live" as const,
+        maximum_caps: target(true).safety_caps,
+        hosted_run: hostedRun,
+      },
+    };
+    const command = vi.fn(async () => ({
+      status: "completed" as const,
+      acknowledgement_id: "authorization-1",
+      resource_id: "authorization-1",
+    }));
+    const client = {
+      read: vi.fn(async (path: string) => path === "target-catalog"
+        ? { state: "empty" as const, data: [] }
+        : { state: "ready" as const, data: [campaignTarget] }),
+      command,
+    } as unknown as ApiClient;
+
+    render(
+      <TargetsScreen
+        client={client}
+        principal={launchPrincipal}
+        entityId={null}
+        getToken={async () => "session"}
+      />,
+    );
+
+    fireEvent.click(await screen.findByText("Registered target"));
+    expect(await screen.findByText(/activates the latest staged four-role set/i)).toBeTruthy();
+    const authorize = screen.getByRole("button", {
+      name: "Request exact campaign authorization",
+    });
+    expect((authorize as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(authorize);
+
+    await waitFor(() => expect(command).toHaveBeenCalledTimes(1));
+    const [path, payload] = command.mock.calls[0] as [string, Record<string, unknown>];
+    expect(path).toBe("campaign-authorization-requests");
+    expect(payload).toEqual(expect.objectContaining({
+      target_id: "target-1",
+      corpus_hash: "c".repeat(64),
+      hosted_run: hostedRun,
+    }));
+    expect(JSON.stringify(payload)).not.toContain("credential_reference");
+    expect(JSON.stringify(payload)).not.toContain("model_id");
+  });
 });
 
 describe("approval execution visibility", () => {
@@ -406,7 +472,7 @@ describe("approval execution visibility", () => {
     expect(await screen.findByText("Exact hosted four-role binding")).toBeTruthy();
     expect(screen.getByText(configurationHash)).toBeTruthy();
     expect(screen.getByText(generationPolicyHash)).toBeTruthy();
-    expect(screen.getByText("$7.500000")).toBeTruthy();
+    expect(screen.getByText("$5")).toBeTruthy();
     expect(screen.queryByText("Approval rate")).toBeNull();
 
     const scopedPanel = await screen.findByRole("heading", {

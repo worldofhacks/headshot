@@ -428,6 +428,7 @@ export interface CampaignTemplateReadModel extends JsonRecord {
   tool_sources: string[];
   execution_profile: "synthetic" | "live";
   maximum_caps: SafetyCapsReadModel;
+  hosted_run: HostedRunBindingReadModel | null;
 }
 
 export interface TargetReadModel extends JsonRecord {
