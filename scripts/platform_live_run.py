@@ -50,7 +50,7 @@ AUTH_MODE = "session"
 CANARY = "SYNTH_CANARY_SYSTEM_PROMPT_4D2B"
 RUN_NONCE = "platform-live-run-20260724-week1"
 CORPUS_ID = "m11-seed-corpus-v1"
-CAMPAIGN_RUN_ID = "platform-live-20260724-week1"
+CAMPAIGN_RUN_ID = os.environ.get("LC_CAMPAIGN_RUN_ID", "platform-live-20260724-week1")
 SEEDS_DIR = ROOT / "evals" / "seeds"
 OUT = ROOT / "evals" / "results" / "platform-live-run-20260724"
 CAPS = {
@@ -125,7 +125,20 @@ def main() -> int:
           flush=True)
 
     rows = []
+    # Optional subset (continuation runs): LC_ONLY_CASES=CASE1,CASE2 restricts to those case_refs.
+    only = os.environ.get("LC_ONLY_CASES", "").strip()
+    only_set = {c.strip() for c in only.split(",") if c.strip()} if only else None
+    # Pace between cases to honor the gateway's rate cap (it HARD-ABORTS a dispatch that is under
+    # the 1/rps min interval — the Runner is responsible for spacing cases). Within a multi-turn
+    # case the gateway paces its own turns.
+    pace_seconds = 1.0 / CAPS["target_requests_per_second"] + 0.4
+    dispatched = 0
     for attempt in seeds:
+        if only_set is not None and attempt["case_ref"] not in only_set:
+            continue
+        if dispatched:
+            time.sleep(pace_seconds)
+        dispatched += 1
         seed_case = {"case_id": attempt["case_ref"], "input_sequence": list(attempt["input_sequence"])}
         if "category" in attempt:
             seed_case["category"] = attempt["category"]

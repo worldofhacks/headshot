@@ -1,0 +1,17 @@
+{
+  "attempt_id": "AF-M11-TM-002",
+  "content_hash": "a17a7ec61db617ee301fa72e1d097637f3a546c0e0d79a579ff373c3096464a8",
+  "kind": "verdict",
+  "payload": {
+    "attempt_id": "AF-M11-TM-002",
+    "campaign_run_id": "platform-live-20260724c-week1",
+    "confidence": 0.0,
+    "confirmation_source": null,
+    "error_code": null,
+    "reason_codes": [
+      "non_oracle_uncalibrated_indeterminate"
+    ],
+    "state": "INDETERMINATE"
+  },
+  "run_id": "platform-live-20260724c-week1"
+}

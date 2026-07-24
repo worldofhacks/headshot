@@ -1,0 +1,17 @@
+{
+  "attempt_id": "AF-M11-TM-002",
+  "content_hash": "1298f7268c6c155d02591e29408e20c99743fd3c19a3802187882eb3b969b347",
+  "kind": "result",
+  "payload": {
+    "attempt_id": "AF-M11-TM-002",
+    "campaign_run_id": "platform-live-20260724c-week1",
+    "integrity_ok": true,
+    "published": false,
+    "regression_promoted": false,
+    "remediation_emitted": false,
+    "requires_human_approval": false,
+    "run_id": "platform-live-20260724c-week1",
+    "verdict_state": "INDETERMINATE"
+  },
+  "run_id": "platform-live-20260724c-week1"
+}
