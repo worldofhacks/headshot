@@ -64,6 +64,8 @@ _EVAL_SCHEMAS = (
     "ground-truth-slice.v1.json",
     "synthetic-fixture.v1.json",
 )
+_PROMPT_ROLES = ("orchestrator", "red_team", "judge", "documentation")
+_PROMPT_RESOURCES = {role: f"agentforge/agents/prompts/v1/{role}.txt" for role in _PROMPT_ROLES}
 
 # A known-valid Verdict (lifted from the offline ground-truth corpus) — used to prove the
 # packaged contract registry still validates real payloads with the CWD moved away.
@@ -143,6 +145,7 @@ def _venv_python(env_dir: Path) -> Path:
     return env_dir / "bin" / "python"
 
 
+# spec(T-F17a:AC-4)
 def test_wheel_installed_outside_repo_validates_corpus(tmp_path):
     """Definitive proof: an installed wheel validates a corpus with NO repo checkout on disk.
 
@@ -175,6 +178,24 @@ def test_wheel_installed_outside_repo_validates_corpus(tmp_path):
         assert f"agentforge/evals/schemas/{schema_name}" in wheel_names, (
             f"eval schema {schema_name} is not packaged in the wheel"
         )
+    assert "agentforge/agents/prompts/registry.v1.json" in wheel_names, (
+        "the prompt registry manifest is not packaged in the wheel"
+    )
+    for role, resource_name in _PROMPT_RESOURCES.items():
+        assert resource_name in wheel_names, f"{role} system prompt is not packaged in the wheel"
+
+    # Exact build-input bytes, including each trailing newline, must survive wheel packaging.
+    import zipfile
+
+    with zipfile.ZipFile(wheel_path) as archive:
+        packaged_prompt_bytes = {
+            role: archive.read(resource_name) for role, resource_name in _PROMPT_RESOURCES.items()
+        }
+    for role, packaged_bytes in packaged_prompt_bytes.items():
+        build_input = (
+            _REPO_ROOT / "src" / "agentforge" / "agents" / "prompts" / "v1" / f"{role}.txt"
+        ).read_bytes()
+        assert packaged_bytes == build_input
 
     # Fresh venv in a temp dir OUTSIDE the repo, containing only the wheel + jsonschema.
     env_dir = tmp_path / "fresh-venv"
@@ -222,6 +243,54 @@ def test_wheel_installed_outside_repo_validates_corpus(tmp_path):
         f"detect-duplicate-sequence failed from an installed wheel:\n"
         f"{duplicate.stdout}\n{duplicate.stderr}"
     )
+
+    # The installed package—not a CWD, repo walk, or environment override—loads the records.
+    import os
+
+    decoy = tmp_path / "decoy-prompts"
+    decoy.mkdir()
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "AGENTFORGE_PROMPTS_DIR": str(decoy),
+            "AGENTFORGE_PROMPT_DIR": str(decoy),
+            "PYTHONNOUSERSITE": "1",
+        }
+    )
+    probe = subprocess.run(
+        [
+            str(venv_python),
+            "-I",
+            "-c",
+            (
+                "import base64,json;"
+                "from agentforge.agents.prompts import load_prompt_registry;"
+                "records=load_prompt_registry();"
+                "print(json.dumps([{"
+                "'role':r.role,'version':r.version,'sha256':r.sha256,"
+                "'content':base64.b64encode(r.content.encode('utf-8')).decode('ascii')"
+                "} for r in records],sort_keys=True))"
+            ),
+        ],
+        capture_output=True,
+        text=True,
+        cwd=str(tmp_path),
+        env=environment,
+    )
+    assert probe.returncode == 0, (
+        f"installed prompt registry failed outside the repo:\n{probe.stdout}\n{probe.stderr}"
+    )
+
+    import base64
+    import hashlib
+
+    records = json.loads(probe.stdout)
+    assert tuple(record["role"] for record in records) == _PROMPT_ROLES
+    for record in records:
+        raw = base64.b64decode(record["content"], validate=True)
+        assert raw == packaged_prompt_bytes[record["role"]]
+        assert record["version"] == "1"
+        assert record["sha256"] == hashlib.sha256(raw).hexdigest()
 
 
 def _wheel_namelist(wheel_path: Path) -> list[str]:
