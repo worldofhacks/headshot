@@ -38,6 +38,12 @@ def _write_test(repository: Path, body: str) -> Path:
     return test_file
 
 
+def _write_conftest(repository: Path, body: str) -> Path:
+    conftest = repository / "conftest.py"
+    conftest.write_text(body, encoding="utf-8")
+    return conftest
+
+
 def _commit_fixture(repository: Path) -> str:
     _run(["git", "init", "-q"], cwd=repository)
     _run(["git", "config", "user.email", "swarm@example.test"], cwd=repository)
@@ -147,6 +153,29 @@ def test_spec_lint_accepts_a_spec_tag_in_a_test_comment(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stdout + result.stderr
 
 
+def test_spec_lint_rejects_an_untagged_sibling_of_a_comment_mapped_test(
+    tmp_path: Path,
+) -> None:
+    """spec(T-F00:AC-1) — a comment tag applies only to its collected test node."""
+    _install_spec_lint(tmp_path)
+    _write_ticket(tmp_path, criteria=("AC-1",))
+    test_file = _write_test(tmp_path, "")
+    base = _commit_fixture(tmp_path)
+    test_file.write_text(
+        "# spec(T-F00:AC-1)\n"
+        "def test_comment_mapped():\n    assert True\n\n"
+        "def test_untagged_sibling():\n    assert True\n",
+        encoding="utf-8",
+    )
+
+    result = _invoke_spec_lint(tmp_path, base)
+
+    output = result.stdout + result.stderr
+    assert result.returncode == 1
+    assert "test_untagged_sibling" in output
+    assert "test_comment_mapped" not in output
+
+
 def test_spec_lint_accepts_a_spec_tag_in_a_test_docstring(tmp_path: Path) -> None:
     """spec(T-F00:AC-1) — function docstrings remain supported tag locations."""
     _install_spec_lint(tmp_path)
@@ -181,6 +210,69 @@ def test_spec_lint_rejects_a_skipped_test_as_an_acceptance_mapping(tmp_path: Pat
 
     assert result.returncode == 1
     assert "test_skipped_mapping" in result.stdout + result.stderr
+
+
+def test_spec_lint_rejects_a_mapping_excluded_by_pytest_collect_ignore(tmp_path: Path) -> None:
+    """spec(T-F00:AC-1) — collection configuration can make a tagged source test invalid."""
+    _install_spec_lint(tmp_path)
+    _write_ticket(tmp_path, criteria=("AC-1",))
+    test_file = _write_test(tmp_path, "")
+    base = _commit_fixture(tmp_path)
+    _write_conftest(tmp_path, 'collect_ignore = ["tests/swarm/test_ticket.py"]\n')
+    test_file.write_text(
+        'def test_collect_ignore_mapping():\n    """spec(T-F00:AC-1)"""\n',
+        encoding="utf-8",
+    )
+
+    result = _invoke_spec_lint(tmp_path, base)
+
+    assert result.returncode == 1
+    assert "test_collect_ignore_mapping" in result.stdout + result.stderr
+
+
+def test_spec_lint_rejects_a_module_level_runtime_skip_as_an_acceptance_mapping(
+    tmp_path: Path,
+) -> None:
+    """spec(T-F00:AC-1) — a dynamic module skip prevents a mapped node from executing."""
+    _install_spec_lint(tmp_path)
+    _write_ticket(tmp_path, criteria=("AC-1",))
+    test_file = _write_test(tmp_path, "")
+    base = _commit_fixture(tmp_path)
+    test_file.write_text(
+        "import pytest\n\n"
+        "pytest.skip('dynamic module skip', allow_module_level=True)\n\n"
+        "def test_module_skip_mapping():\n"
+        '    """spec(T-F00:AC-1)"""\n',
+        encoding="utf-8",
+    )
+
+    result = _invoke_spec_lint(tmp_path, base)
+
+    assert result.returncode == 1
+    assert "test_module_skip_mapping" in result.stdout + result.stderr
+
+
+def test_spec_lint_rejects_a_tagged_test_file_that_fails_pytest_collection(
+    tmp_path: Path,
+) -> None:
+    """spec(T-F00:AC-1) — a source tag cannot map an AC when pytest cannot collect its file."""
+    _install_spec_lint(tmp_path)
+    _write_ticket(tmp_path, criteria=("AC-1",))
+    test_file = _write_test(tmp_path, "")
+    base = _commit_fixture(tmp_path)
+    test_file.write_text(
+        "raise RuntimeError('collection failure fixture')\n\n"
+        "def test_collection_failure_mapping():\n"
+        '    """spec(T-F00:AC-1)"""\n',
+        encoding="utf-8",
+    )
+
+    result = _invoke_spec_lint(tmp_path, base)
+
+    output = result.stdout + result.stderr
+    assert result.returncode == 1
+    assert "test_collection_failure_mapping" in output
+    assert "collection" in output.lower()
 
 
 def test_spec_lint_rejects_an_uncollected_test_as_an_acceptance_mapping(tmp_path: Path) -> None:
