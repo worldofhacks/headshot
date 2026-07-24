@@ -183,6 +183,7 @@ class CampaignTemplateReadModel(_ReadModel):
     tool_sources: tuple[str, ...]
     execution_profile: Literal["synthetic", "live"]
     maximum_caps: SafetyCapsReadModel
+    hosted_run: HostedRunBindingReadModel | None
 
 
 class TargetReadModel(_ReadModel):
@@ -202,6 +203,18 @@ class TargetReadModel(_ReadModel):
     surfaces: list[SurfaceReadModel]
     campaign_template: CampaignTemplateReadModel | None = None
     created_at: datetime.datetime
+
+
+class TargetCatalogEntryReadModel(_ReadModel):
+    """Safe selectable identity for one immutable server-owned catalog bundle."""
+
+    target_id: str
+    version: str
+    name: str
+    environment: Literal["local", "staging", "production"]
+    synthetic_data_only: Literal[True]
+    surface_count: int = Field(gt=0)
+    registration_state: Literal["available", "registered", "conflict"]
 
 
 class AuditReadModel(_ReadModel):
@@ -397,6 +410,7 @@ class TraceReadModel(_ReadModel):
     attempt_id: str | None
     operation: str
     provider: str
+    model: str | None = None
     agent_role: Literal["orchestrator", "red_team", "judge", "documentation"] | None = None
     execution_mode: Literal["deterministic", "hosted_advisory"] | None = None
     returned_model: str | None = None
@@ -472,6 +486,7 @@ class TraceReadModel(_ReadModel):
         if self.agent_role is None and any(
             value is not None
             for value in (
+                self.model,
                 *provider_identity,
                 self.configuration_set_sha256,
                 self.role_configuration_sha256,
@@ -485,6 +500,8 @@ class TraceReadModel(_ReadModel):
             )
         ):
             raise ValueError("non-agent traces cannot contain hosted agent lineage")
+        if self.agent_role is not None and self.model is None:
+            raise ValueError("agent traces require the requested model")
         if self.decision_authority == "model" and self.judge_calibration_state != "enabled":
             raise ValueError("model authority requires an enabled Judge calibration")
         if (self.langfuse_status == "exported") != (self.langfuse_verified_at is not None):
@@ -512,23 +529,27 @@ class TraceReadModel(_ReadModel):
 class AgentBudgetReadModel(_ReadModel):
     """One role's campaign-scoped subcap plus the shared provider kill switch."""
 
-    status: Literal["staged_pending_authorization", "active", "unavailable"]
+    status: Literal["staged_pending_authorization", "active", "historical", "unavailable"]
     campaign_run_id: str | None = None
     configuration_set_sha256: str | None = None
     role_usd_cap: float | None = Field(default=None, ge=0)
     role_usd_spent: float = Field(ge=0)
+    role_unresolved_usd_exposure: float = Field(ge=0)
     role_usd_remaining: float | None = Field(default=None, ge=0)
     role_usd_overrun: float = Field(ge=0)
     role_call_cap: int | None = Field(default=None, ge=1)
     role_physical_calls: int = Field(ge=0)
+    role_unresolved_physical_calls: int = Field(ge=0)
     role_calls_remaining: int | None = Field(default=None, ge=0)
     role_call_overrun: int = Field(ge=0)
     global_usd_cap: float | None = Field(default=None, ge=0)
     global_usd_spent: float = Field(ge=0)
+    global_unresolved_usd_exposure: float = Field(ge=0)
     global_usd_remaining: float | None = Field(default=None, ge=0)
     global_usd_overrun: float = Field(ge=0)
     global_call_cap: int | None = Field(default=None, ge=1)
     global_physical_calls: int = Field(ge=0)
+    global_unresolved_physical_calls: int = Field(ge=0)
     global_calls_remaining: int | None = Field(default=None, ge=0)
     global_call_overrun: int = Field(ge=0)
 
@@ -553,12 +574,16 @@ class AgentBudgetReadModel(_ReadModel):
                 value != 0
                 for value in (
                     self.role_usd_spent,
+                    self.role_unresolved_usd_exposure,
                     self.role_usd_overrun,
                     self.role_physical_calls,
+                    self.role_unresolved_physical_calls,
                     self.role_call_overrun,
                     self.global_usd_spent,
+                    self.global_unresolved_usd_exposure,
                     self.global_usd_overrun,
                     self.global_physical_calls,
+                    self.global_unresolved_physical_calls,
                     self.global_call_overrun,
                 )
             ):
@@ -568,8 +593,8 @@ class AgentBudgetReadModel(_ReadModel):
             raise ValueError("hosted budget requires complete role and global cap reconciliation")
         if self.configuration_set_sha256 is None:
             raise ValueError("hosted budget requires its configuration-set identity")
-        if self.status == "active" and self.campaign_run_id is None:
-            raise ValueError("active hosted budget requires its campaign identity")
+        if self.status in {"active", "historical"} and self.campaign_run_id is None:
+            raise ValueError("campaign-scoped hosted budget requires its campaign identity")
         if self.status == "staged_pending_authorization" and self.campaign_run_id is not None:
             raise ValueError("staged hosted budget cannot claim campaign activity")
         assert self.role_usd_cap is not None
@@ -582,27 +607,35 @@ class AgentBudgetReadModel(_ReadModel):
         assert self.global_calls_remaining is not None
         if (
             abs(
-                (self.role_usd_spent + self.role_usd_remaining)
+                (self.role_usd_spent + self.role_unresolved_usd_exposure + self.role_usd_remaining)
                 - (self.role_usd_cap + self.role_usd_overrun)
             )
             > 0.000001
         ):
             raise ValueError("role provider spend does not reconcile to its subcap")
         if (
-            self.role_physical_calls + self.role_calls_remaining
+            self.role_physical_calls
+            + self.role_unresolved_physical_calls
+            + self.role_calls_remaining
             != self.role_call_cap + self.role_call_overrun
         ):
             raise ValueError("role provider calls do not reconcile to their subcap")
         if (
             abs(
-                (self.global_usd_spent + self.global_usd_remaining)
+                (
+                    self.global_usd_spent
+                    + self.global_unresolved_usd_exposure
+                    + self.global_usd_remaining
+                )
                 - (self.global_usd_cap + self.global_usd_overrun)
             )
             > 0.000001
         ):
             raise ValueError("global provider spend does not reconcile to its kill switch")
         if (
-            self.global_physical_calls + self.global_calls_remaining
+            self.global_physical_calls
+            + self.global_unresolved_physical_calls
+            + self.global_calls_remaining
             != self.global_call_cap + self.global_call_overrun
         ):
             raise ValueError("global provider calls do not reconcile to their kill switch")
@@ -1303,6 +1336,7 @@ _LIST_ADAPTERS = {
     "attempts": TypeAdapter(list[AttemptReadModel]),
     "approvals": TypeAdapter(list[ApprovalReadModel]),
     "targets": TypeAdapter(list[TargetReadModel]),
+    "target_catalog": TypeAdapter(list[TargetCatalogEntryReadModel]),
     "audit": TypeAdapter(list[AuditReadModel]),
     "findings": TypeAdapter(list[FindingReadModel]),
     "reports": TypeAdapter(list[ReportReadModel]),
@@ -1373,6 +1407,7 @@ __all__ = [
     "ReportReadModel",
     "ResilienceReadModel",
     "SurfaceReadModel",
+    "TargetCatalogEntryReadModel",
     "TargetReadModel",
     "ToolScopeReadModel",
     "TraceReadModel",

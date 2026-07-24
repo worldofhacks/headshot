@@ -214,6 +214,28 @@ export interface ApprovalDetailReadModel extends ApprovalReadModel {
   verification_chain: FindingVerificationReadModel[];
 }
 
+export interface CoverageReadModel extends JsonRecord {
+  target_version: string;
+  verified_attempt_count: number;
+  total_case_count: number;
+  category_count: number;
+  execution_profile: "synthetic" | "live";
+  evidence_provenance: string;
+  classifications: string[];
+  owasp_web: string[];
+  owasp_llm: string[];
+  verdict_counts: JsonRecord;
+  covered: boolean;
+  as_of: string;
+}
+
+export interface ResilienceReadModel extends JsonRecord {
+  regression_id: string;
+  version: string;
+  status: string;
+  recorded_at: string;
+}
+
 export interface ReportReadModel extends JsonRecord {
   schema_version: "1";
   report_id: string;
@@ -250,23 +272,27 @@ export type JudgeCalibrationState =
 export type JudgeDecisionAuthority = "oracle" | "model" | "none";
 
 export interface AgentBudgetReadModel extends JsonRecord {
-  status: "staged_pending_authorization" | "active" | "unavailable";
+  status: "staged_pending_authorization" | "active" | "historical" | "unavailable";
   campaign_run_id: string | null;
   configuration_set_sha256: string | null;
   role_usd_cap: number | null;
   role_usd_spent: number;
+  role_unresolved_usd_exposure: number;
   role_usd_remaining: number | null;
   role_usd_overrun: number;
   role_call_cap: number | null;
   role_physical_calls: number;
+  role_unresolved_physical_calls: number;
   role_calls_remaining: number | null;
   role_call_overrun: number;
   global_usd_cap: number | null;
   global_usd_spent: number;
+  global_unresolved_usd_exposure: number;
   global_usd_remaining: number | null;
   global_usd_overrun: number;
   global_call_cap: number | null;
   global_physical_calls: number;
+  global_unresolved_physical_calls: number;
   global_calls_remaining: number | null;
   global_call_overrun: number;
 }
@@ -293,6 +319,7 @@ export interface TraceReadModel extends JsonRecord {
   attempt_id: string | null;
   operation: string;
   provider: string;
+  model: string | null;
   agent_role: "orchestrator" | "red_team" | "judge" | "documentation" | null;
   execution_mode: "deterministic" | "hosted_advisory" | null;
   returned_model: string | null;
@@ -401,6 +428,7 @@ export interface CampaignTemplateReadModel extends JsonRecord {
   tool_sources: string[];
   execution_profile: "synthetic" | "live";
   maximum_caps: SafetyCapsReadModel;
+  hosted_run: HostedRunBindingReadModel | null;
 }
 
 export interface TargetReadModel extends JsonRecord {
@@ -420,6 +448,16 @@ export interface TargetReadModel extends JsonRecord {
   surfaces: AttackSurfaceReadModel[];
   campaign_template: CampaignTemplateReadModel | null;
   created_at: string;
+}
+
+export interface TargetCatalogEntryReadModel extends JsonRecord {
+  target_id: string;
+  version: string;
+  name: string;
+  environment: "local" | "staging" | "production";
+  synthetic_data_only: true;
+  surface_count: number;
+  registration_state: "available" | "registered" | "conflict";
 }
 
 export interface ConfigurationReadModel extends JsonRecord {

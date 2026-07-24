@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import copy
 import datetime
 import ipaddress
 import os
@@ -41,12 +42,12 @@ from agentforge.agents.judge.calibration_runtime import (
     JudgeCalibrationStatus,
     load_judge_calibration_status,
 )
-from agentforge.agents.judge.envelope import EvidenceEnvelopeBuilder
 from agentforge.agents.judge.hosted import (
     HostedEvaluator,
     JudgeReconciliation,
     reconcile_judge_assessment,
 )
+from agentforge.agents.judge.judge import Judge
 from agentforge.agents.orchestrator import HostedPlanner, Orchestrator, OrchestratorHalt
 from agentforge.agents.red_team import SeedReplayRedTeam
 from agentforge.campaign.authorization import RunAuthorization
@@ -138,6 +139,13 @@ class _HostedInvocationContext:
     ground_truth_verdict: Mapping[str, Any] | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class _HostedJudgeAttemptContext:
+    attempt_id: str
+    expected_safe_behavior: str
+    parent_execution_id: str
+
+
 def _evaluator_calibration_state(status: JudgeCalibrationStatus) -> str:
     """Map the durable five-state status to the evaluator's four authority states."""
 
@@ -156,24 +164,14 @@ def _reconcile_runner_evaluator(
     deterministic_verdict: Mapping[str, Any],
     calibration: JudgeCalibrationStatus,
 ) -> JudgeReconciliation:
-    """Preserve the coordinator's already-written ground-truth verdict and manifest.
+    """Apply the exact externally calibrated authority state at the pre-manifest seam."""
 
-    The live model still runs and its agreement is persisted. Model authority cannot be promoted
-    here until the coordinator owner provides a pre-manifest adjudication seam; otherwise the
-    database outcome could disagree with immutable evidence.
-    """
-
-    reconciliation = reconcile_judge_assessment(
+    return reconcile_judge_assessment(
         assessment=assessment,
         deterministic_verdict=deterministic_verdict,
         calibration_state=_evaluator_calibration_state(calibration),
-        model_authority_allowed=False,
+        model_authority_allowed=calibration.model_authoritative,
     )
-    if reconciliation.model_decisive or dict(reconciliation.effective_verdict) != dict(
-        deterministic_verdict
-    ):
-        raise DispatchUnavailable("hosted_evaluator_pre_manifest_authority_refused")
-    return reconciliation
 
 
 def _sanitize_hosted_transcript(
@@ -266,6 +264,7 @@ class _DurableHostedExecutionLifecycle:
         self._calibration = calibration
         self._context: _HostedInvocationContext | None = None
         self._execution_context: dict[str, _HostedInvocationContext] = {}
+        self._judge_reconciliations: dict[str, JudgeReconciliation] = {}
 
     @contextlib.contextmanager
     def invocation(
@@ -374,6 +373,7 @@ class _DurableHostedExecutionLifecycle:
             raise DispatchUnavailable("hosted_execution_context_missing")
         oracle_agreement: bool | None = None
         decision_authority: str | None = None
+        reconciliation: JudgeReconciliation | None = None
         detail = dict(context.detail)
         if status == "succeeded" and context.role == "judge":
             if lineage is None or context.ground_truth_verdict is None:
@@ -389,6 +389,7 @@ class _DurableHostedExecutionLifecycle:
                 {
                     "calibration_state": self._calibration.state,
                     "decision_authority": decision_authority,
+                    "decision_authority_basis": reconciliation.decision_authority,
                     "model_state": output_payload.get("state"),
                     "ground_truth_state": context.ground_truth_verdict.get("state"),
                     "oracle_agreement": oracle_agreement,
@@ -425,6 +426,8 @@ class _DurableHostedExecutionLifecycle:
         elif failed_physical_attempts is not None:
             terminal["physical_attempts"] = failed_physical_attempts
         self._store.finish_hosted_agent_execution(**terminal)
+        if reconciliation is not None:
+            self._judge_reconciliations[execution_id] = reconciliation
         with contextlib.suppress(Exception):
             self._telemetry.finish_agent(
                 execution_id=execution_id,
@@ -435,6 +438,117 @@ class _DurableHostedExecutionLifecycle:
             self._telemetry.flush()
         with contextlib.suppress(Exception):
             self._telemetry.heartbeat()
+
+    def take_judge_reconciliation(self, *, execution_id: str) -> JudgeReconciliation:
+        """Consume the exact authority decision already written with a hosted Judge execution."""
+
+        try:
+            return self._judge_reconciliations.pop(execution_id)
+        except KeyError as exc:
+            raise DispatchUnavailable("hosted_judge_reconciliation_missing") from exc
+
+
+class _PreManifestHostedJudge:
+    """Coordinator-injected Judge that reconciles Gemini before immutable manifests are written."""
+
+    def __init__(
+        self,
+        *,
+        deterministic_judge: Judge,
+        hosted_evaluator: HostedEvaluator,
+        lifecycle: _DurableHostedExecutionLifecycle,
+        calibration: JudgeCalibrationStatus,
+        target_credential_resolver: Callable[[], Secret | None],
+        execution_recorder: Callable[[str, str], None],
+    ) -> None:
+        self._deterministic_judge = deterministic_judge
+        self._hosted_evaluator = hosted_evaluator
+        self._lifecycle = lifecycle
+        self._calibration = calibration
+        self._target_credential_resolver = target_credential_resolver
+        self._execution_recorder = execution_recorder
+        self._attempt_context: _HostedJudgeAttemptContext | None = None
+
+    @contextlib.contextmanager
+    def attempt(
+        self,
+        *,
+        attempt_id: str,
+        expected_safe_behavior: str,
+        parent_execution_id: str,
+    ) -> Iterator[None]:
+        """Bind only the current authorized case context to the coordinator callback."""
+
+        if self._attempt_context is not None:
+            raise DispatchUnavailable("hosted_judge_attempt_context_overlap")
+        if not all(
+            isinstance(value, str) and value
+            for value in (attempt_id, expected_safe_behavior, parent_execution_id)
+        ):
+            raise DispatchUnavailable("hosted_judge_attempt_context_invalid")
+        self._attempt_context = _HostedJudgeAttemptContext(
+            attempt_id=attempt_id,
+            expected_safe_behavior=expected_safe_behavior,
+            parent_execution_id=parent_execution_id,
+        )
+        try:
+            yield
+        finally:
+            self._attempt_context = None
+
+    def evaluate(
+        self,
+        envelope: Mapping[str, Any],
+        *,
+        integrity_ok: bool = True,
+    ) -> dict[str, Any]:
+        """Run code ground truth first, then reconcile an independent hosted assessment."""
+
+        context = self._attempt_context
+        if context is None:
+            raise DispatchUnavailable("hosted_judge_attempt_context_missing")
+        deterministic_verdict = self._deterministic_judge.evaluate(
+            envelope,
+            integrity_ok=integrity_ok,
+        )
+        if deterministic_verdict.get("attempt_id") != context.attempt_id:
+            raise DispatchUnavailable("hosted_judge_attempt_identity_mismatch")
+
+        # An integrity or evidence-contract error is already the decisive fail-closed disposition.
+        # Sending unverified/malformed evidence to a provider would violate the hosted evidence
+        # boundary, so this exceptional path remains deterministic and network-free.
+        if deterministic_verdict.get("state") == "ERROR":
+            return dict(deterministic_verdict)
+
+        provider_envelope = copy.deepcopy(dict(envelope))
+        hostile = provider_envelope.get("hostile")
+        trusted = provider_envelope.get("trusted")
+        if not isinstance(hostile, dict) or not isinstance(trusted, dict):
+            raise DispatchUnavailable("hosted_evaluator_evidence_invalid")
+        hostile["transcript"] = _sanitize_hosted_transcript(
+            hostile.get("transcript"),
+            target_credential=self._target_credential_resolver(),
+        )
+        trusted["expected_safe_behavior"] = context.expected_safe_behavior
+
+        with self._lifecycle.invocation(
+            role="judge",
+            attempt_id=context.attempt_id,
+            detail={"phase": "live_pre_manifest_evaluation"},
+            ground_truth_verdict=deterministic_verdict,
+        ):
+            result = self._hosted_evaluator.evaluate(
+                provider_envelope,
+                integrity_ok=True,
+                sanitized=True,
+                judge_calibration_id=self._calibration.calibration_id,
+                parent_execution_id=context.parent_execution_id,
+            )
+        reconciliation = self._lifecycle.take_judge_reconciliation(
+            execution_id=result.execution_id,
+        )
+        self._execution_recorder(context.attempt_id, result.execution_id)
+        return dict(reconciliation.effective_verdict)
 
 
 def _persisted_identity(job: Any) -> tuple[str, str]:
@@ -1561,6 +1675,23 @@ class DurableCampaignRunner:
         )
         current_red_team_execution: str | None = None
         judge_executions: dict[str, str] = {}
+        pre_manifest_hosted_judge: _PreManifestHostedJudge | None = None
+        if (
+            hosted_evaluator is not None
+            and hosted_lifecycle is not None
+            and prepared.hosted is not None
+        ):
+            pre_manifest_hosted_judge = _PreManifestHostedJudge(
+                deterministic_judge=Judge(),
+                hosted_evaluator=hosted_evaluator,
+                lifecycle=hosted_lifecycle,
+                calibration=prepared.hosted.calibration,
+                target_credential_resolver=lambda: credential_lease.resolve(scope.credential_ref),
+                execution_recorder=lambda attempt_id, execution_id: judge_executions.__setitem__(
+                    attempt_id,
+                    execution_id,
+                ),
+            )
 
         def start_coordinator_agent_execution(**values: Any) -> str:
             execution_id = self._start_agent_execution(
@@ -1615,64 +1746,33 @@ class DurableCampaignRunner:
             manifests=self.manifests,
             clock=self.clock,
             accounting=accounting,
+            judge=pre_manifest_hosted_judge or Judge(),
         )
         while True:
             case, proposal, attempt, current_red_team_execution = work
             dispatch_payload = verified_case_payload(case)
-            outcome = coordinator.run_case(
-                dispatch_payload,
-                attack_attempt=proposal,
-                attempt_id=attempt.attempt_id,
-                red_team_execution_id=current_red_team_execution,
-            )
+            if pre_manifest_hosted_judge is None:
+                outcome = coordinator.run_case(
+                    dispatch_payload,
+                    attack_attempt=proposal,
+                    attempt_id=attempt.attempt_id,
+                    red_team_execution_id=current_red_team_execution,
+                )
+            else:
+                with pre_manifest_hosted_judge.attempt(
+                    attempt_id=attempt.attempt_id,
+                    expected_safe_behavior=str(dispatch_payload["expected_safe_behavior"]),
+                    parent_execution_id=current_red_team_execution,
+                ):
+                    outcome = coordinator.run_case(
+                        dispatch_payload,
+                        attack_attempt=proposal,
+                        attempt_id=attempt.attempt_id,
+                        red_team_execution_id=current_red_team_execution,
+                    )
             if not outcome.integrity_ok:
                 raise CampaignAbort("evidence integrity failed", code="evidence_integrity_failed")
             effective_verdict = outcome.verdict
-            if hosted_evaluator is not None and hosted_lifecycle is not None:
-                response_transcript = outcome.result.fields.get("response_transcript")
-                if not isinstance(response_transcript, str):
-                    raise CampaignAbort(
-                        "persisted evaluator transcript is unavailable",
-                        code="evaluator_evidence_unavailable",
-                    )
-                response_transcript = _sanitize_hosted_transcript(
-                    response_transcript,
-                    target_credential=credential_lease.resolve(scope.credential_ref),
-                )
-                envelope = EvidenceEnvelopeBuilder().build(
-                    campaign_run_id=outcome.result.campaign_run_id,
-                    attempt_id=outcome.result.attempt_id,
-                    transcript=response_transcript,
-                    oracle_results=(outcome.oracle_signal,),
-                    canary_hits=(),
-                    policy_decision="allow",
-                    campaign_id=outcome.result.fields.get("campaign_id"),
-                    expected_safe_behavior=str(dispatch_payload["expected_safe_behavior"]),
-                    ground_truth_ref=case.content_hash,
-                )
-                with hosted_lifecycle.invocation(
-                    role="judge",
-                    attempt_id=attempt.attempt_id,
-                    detail={
-                        "phase": "live_evaluation",
-                        "evidence_content_hash": outcome.result.content_hash,
-                    },
-                    ground_truth_verdict=outcome.verdict,
-                ):
-                    evaluator_result = hosted_evaluator.evaluate(
-                        envelope,
-                        integrity_ok=True,
-                        sanitized=True,
-                        judge_calibration_id=prepared.hosted.calibration.calibration_id,
-                        parent_execution_id=current_red_team_execution,
-                    )
-                judge_executions[attempt.attempt_id] = evaluator_result.execution_id
-                reconciliation = _reconcile_runner_evaluator(
-                    assessment=evaluator_result.assessment,
-                    deterministic_verdict=outcome.verdict,
-                    calibration=prepared.hosted.calibration,
-                )
-                effective_verdict = dict(reconciliation.effective_verdict)
             finding_id = self.store.record_attempt_outcome(
                 run_id=authorized.run.run_id,
                 attempt_id=attempt.attempt_id,

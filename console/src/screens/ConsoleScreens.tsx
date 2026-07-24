@@ -20,6 +20,7 @@ import {
   decodeFinding,
   decodeFindings,
   decodeReports,
+  decodeTargetCatalog,
   decodeTargets,
 } from "../api/read-models";
 import { AdversarialText } from "../components/AdversarialText";
@@ -67,6 +68,7 @@ import {
   type FindingReadModel,
   type FindingVerificationReadModel,
   type ReportReadModel,
+  type TargetCatalogEntryReadModel,
   type TargetReadModel,
 } from "../types";
 import { CostsScreen, TracesScreen } from "./ObservabilityScreens";
@@ -282,7 +284,7 @@ export function LiveScreen({ client, principal, entityId, getToken }: ScreenProp
   // A persisted campaign is an immutable historical scope. A rerun must use the current
   // server-prepared target/corpus template, bounded by both that target and the prior run's
   // operator-selected budget/rate/timeout. A fresh nonce prevents authorization replay.
-  const preparedScope = effectiveCampaign && rerunTemplate
+  const preparedScope = effectiveCampaign && rerunTemplate && rerunTemplate.hosted_run
     && rerunTemplate.maximum_caps.max_attempts_per_run >= rerunTemplate.case_count
     ? {
         target_id: rerunTemplate.target_id,
@@ -308,6 +310,7 @@ export function LiveScreen({ client, principal, entityId, getToken }: ScreenProp
           ),
         },
         run_nonce: rerunNonce,
+        hosted_run: rerunTemplate.hosted_run,
         expires_in_seconds: 900,
       }
     : null;
@@ -1316,7 +1319,8 @@ function TargetManagement({
       && parsedCaps.target_requests_per_second <= template.maximum_caps.target_requests_per_second
       && parsedCaps.run_timeout_seconds <= template.maximum_caps.run_timeout_seconds
     : false;
-  const requestPayload = template && fullScanFitsTarget && capsValid && capsWithinTarget
+  const requestPayload = template && template.hosted_run
+    && fullScanFitsTarget && capsValid && capsWithinTarget
     && runNonce.trim().length >= 16
     ? {
         target_id: template.target_id,
@@ -1328,6 +1332,7 @@ function TargetManagement({
         execution_profile: template.execution_profile,
         caps: parsedCaps,
         run_nonce: runNonce.trim(),
+        hosted_run: template.hosted_run,
         expires_in_seconds: 900,
       }
     : null;
@@ -1410,11 +1415,6 @@ function TargetManagement({
           recovery control here.
         </p>
       </div>
-      <StateNotice
-        state="unavailable"
-        reason="trusted_target_authoring_catalog_missing"
-        detail="Target and surface authoring remains closed until the server exposes a reviewed catalog. The browser never supplies target URLs, adapters, or credential references as authority."
-      />
       {template && (
         <div className="evidence-stack">
           <p className="field-label">Exact campaign authorization request</p>
@@ -1439,6 +1439,32 @@ function TargetManagement({
               "maximum_caps",
             ]}
           />
+          {template.hosted_run ? (
+            <>
+              <StateNotice
+                state="ready"
+                detail="This request activates the latest staged four-role set only for the exact target, corpus, caps, and credential generation below. A distinct approver must still approve it."
+              />
+              <RecordDetails
+                data={template.hosted_run}
+                preferredKeys={[
+                  "configuration_set_sha256",
+                  "generation_policy_sha256",
+                  "session_generation",
+                  "provider_model_call_limit",
+                  "provider_model_spend_limit_usd",
+                  "provider_max_retries",
+                  "provider_max_concurrency",
+                  "provider_timeout_seconds",
+                ]}
+              />
+            </>
+          ) : (
+            <StateNotice
+              state="degraded"
+              detail="No server-owned atomic four-role configuration set is staged. Campaign authorization cannot activate hosted roles."
+            />
+          )}
           <div className="panel-grid">
             <label className="form-field">
               <span>Run nonce (16+ characters)</span>
@@ -1469,7 +1495,9 @@ function TargetManagement({
             allowed={Boolean(requestPayload) && hasPermission(principal, PERMISSIONS.campaignLaunch)}
             unavailableReason={requestPayload
               ? PERMISSIONS.campaignLaunch
-              : "a complete full-scan cap envelope and valid nonce"}
+              : template.hosted_run
+                ? "a complete full-scan cap envelope and valid nonce"
+                : "a staged server-owned four-role configuration set"}
             onAcknowledged={() => {
               // Roll a fresh unused nonce after each accepted request so the next campaign
               // can be requested immediately without a replayed-nonce rejection.
@@ -1484,13 +1512,24 @@ function TargetManagement({
 }
 
 export function TargetsScreen({ client, principal }: ScreenProps) {
+  const catalog = useResource<TargetCatalogEntryReadModel[]>(
+    client,
+    RESOURCE_PATHS.targetCatalog,
+    decodeTargetCatalog,
+  );
   const targets = useResource<TargetReadModel[]>(
     client,
     RESOURCE_PATHS.targets,
     decodeTargets,
   );
   const [selectedIdentity, setSelectedIdentity] = useState<string | null>(null);
+  const [catalogIdentity, setCatalogIdentity] = useState("");
   const records = targets.result.data ?? [];
+  const catalogRecords = catalog.result.data ?? [];
+  const selectedCatalog = catalogRecords.find(
+    (entry) => `${entry.target_id}\n${entry.version}` === catalogIdentity,
+  ) ?? null;
+  const canManageTargets = hasPermission(principal, PERMISSIONS.targetsManage);
   const selected = selectedIdentity
     ? records.find(
         (target) => `${target.target_id}\n${target.version}` === selectedIdentity,
@@ -1506,6 +1545,79 @@ export function TargetsScreen({ client, principal }: ScreenProps) {
         title="Targets"
         detail="Only persisted immutable target and attack-surface versions may be selected for dispatch."
       />
+      <Panel
+        title="Trusted target catalog"
+        meta="server-owned registration"
+        eyebrow="CONTROL PLANE"
+      >
+        <ResourceView
+          result={catalog.result}
+          emptyLabel="No reviewed target versions are available in the server catalog."
+        >
+          {(data) => (
+            <div className="evidence-stack">
+              <label className="form-field">
+                <span>Reviewed target version</span>
+                <select
+                  aria-label="Reviewed target version"
+                  value={catalogIdentity}
+                  onChange={(event) => setCatalogIdentity(event.currentTarget.value)}
+                >
+                  <option value="">Select an exact catalog entry</option>
+                  {data.map((entry) => (
+                    <option
+                      key={`${entry.target_id}:${entry.version}`}
+                      value={`${entry.target_id}\n${entry.version}`}
+                    >
+                      {entry.name} · {entry.target_id}@{entry.version} · {entry.registration_state}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              {selectedCatalog && (
+                <EvidenceGrid values={[
+                  { label: "Target", value: selectedCatalog.target_id },
+                  { label: "Version", value: selectedCatalog.version },
+                  { label: "Environment", value: selectedCatalog.environment },
+                  { label: "Surfaces", value: count(selectedCatalog.surface_count) },
+                  { label: "Registration", value: selectedCatalog.registration_state },
+                ]} />
+              )}
+              <CommandButton
+                client={client}
+                path={COMMAND_PATHS.createTarget}
+                payload={selectedCatalog
+                  ? {
+                      target_id: selectedCatalog.target_id,
+                      version: selectedCatalog.version,
+                    }
+                  : {}}
+                label="Register exact catalog target"
+                allowed={Boolean(
+                  canManageTargets
+                  && selectedCatalog?.registration_state === "available",
+                )}
+                unavailableReason={!canManageTargets
+                  ? PERMISSIONS.targetsManage
+                  : selectedCatalog?.registration_state === "registered"
+                    ? "an unregistered catalog target"
+                    : selectedCatalog?.registration_state === "conflict"
+                      ? "manual resolution of the persisted immutable-state conflict"
+                      : "an exact reviewed target version"}
+                onAcknowledged={() => {
+                  catalog.refresh();
+                  targets.refresh();
+                }}
+              />
+              <p className="data-note">
+                The browser submits only the selected target ID and version. URLs, hosts,
+                adapters, credentials, authorization references, and surface definitions remain
+                server-owned.
+              </p>
+            </div>
+          )}
+        </ResourceView>
+      </Panel>
       {records.length > 0 && (
         <>
           <MetricStrip label="Target summary" values={[
@@ -1552,12 +1664,6 @@ export function TargetsScreen({ client, principal }: ScreenProps) {
             />
           )}
         </ResourceView>
-        <div className="command-row">
-          <MissingCommand
-            label="Create target from trusted catalog"
-            dependency="a server-projected reviewed target catalog (browser URLs and credentials are never accepted)"
-          />
-        </div>
       </Panel>
       {selected && (
         <TargetManagement

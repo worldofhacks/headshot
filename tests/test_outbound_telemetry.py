@@ -874,3 +874,46 @@ def test_repeated_children_keep_native_parentage_until_campaign_release(
     telemetry.release_campaign(run_id)
     assert not telemetry._agent_observation_ids
     assert not telemetry._agent_campaign_ids
+
+
+def test_agent_projection_refuses_an_orphaned_langfuse_child(
+    migrated_db: Engine,
+) -> None:
+    _organization_id, run_id = _seed_campaign(migrated_db, suffix="orphaned-agent-parent")
+    store = ControlPlaneStore(migrated_db, environment="staging")
+    parent = store.start_agent_execution(
+        run_id=run_id,
+        agent_role="orchestrator",
+        input_payload={"cycle": 0},
+    )
+    store.finish_agent_execution(
+        execution_id=parent,
+        status="succeeded",
+        output_payload={"selected": "authorized-case"},
+    )
+    child = store.start_agent_execution(
+        run_id=run_id,
+        agent_role="judge",
+        parent_execution_id=parent,
+        input_payload={"attempt_id": "attempt-orphaned-parent"},
+    )
+    # This represents a worker restart: the durable parent exists, but this telemetry process
+    # never opened its Langfuse observation and therefore cannot safely invent native parentage.
+    telemetry = OutboundHttpTelemetry(migrated_db, environment="staging")
+    langfuse = _Langfuse()
+    telemetry.langfuse = langfuse  # type: ignore[assignment]
+
+    opened = telemetry.begin_agent(
+        execution_id=child,
+        input_payload={"attempt_id": "attempt-orphaned-parent"},
+    )
+
+    assert opened is False
+    assert langfuse.agent_started == []
+    assert child not in telemetry._agent_handles
+    with migrated_db.connect() as connection:
+        status = connection.execute(
+            text("SELECT langfuse_status FROM agent_executions WHERE execution_id = :execution_id"),
+            {"execution_id": child},
+        ).scalar_one()
+    assert status == "error"

@@ -71,6 +71,16 @@ const target = (enabled: boolean) => ({
 
 const configurationHash = "a".repeat(64);
 const generationPolicyHash = "b".repeat(64);
+const hostedRun = {
+  configuration_set_sha256: configurationHash,
+  generation_policy_sha256: generationPolicyHash,
+  session_generation: "week3-authorization",
+  provider_model_call_limit: 56,
+  provider_model_spend_limit_usd: "5",
+  provider_max_retries: 1,
+  provider_max_concurrency: 1,
+  provider_timeout_seconds: 180,
+} as const;
 
 const approval = {
   target_id: "target-1",
@@ -100,16 +110,7 @@ const approval = {
   },
   run_nonce: "run-nonce",
   execution_profile: "live",
-  hosted_run: {
-    configuration_set_sha256: configurationHash,
-    generation_policy_sha256: generationPolicyHash,
-    session_generation: "week3-authorization",
-    provider_model_call_limit: 8,
-    provider_model_spend_limit_usd: "7.500000",
-    provider_max_retries: 1,
-    provider_max_concurrency: 1,
-    provider_timeout_seconds: 45,
-  },
+  hosted_run: hostedRun,
   request_id: "approval-1",
   scope_hash: "scope-hash",
   launcher_user_id: "operator-1",
@@ -224,18 +225,22 @@ const agentCost = {
     configuration_set_sha256: configurationHash,
     role_usd_cap: 4,
     role_usd_spent: 0.04,
+    role_unresolved_usd_exposure: 0,
     role_usd_remaining: 3.96,
     role_usd_overrun: 0,
     role_call_cap: 10,
     role_physical_calls: 2,
+    role_unresolved_physical_calls: 0,
     role_calls_remaining: 8,
     role_call_overrun: 0,
     global_usd_cap: 10,
     global_usd_spent: 0.04,
+    global_unresolved_usd_exposure: 0,
     global_usd_remaining: 9.96,
     global_usd_overrun: 0,
     global_call_cap: 56,
     global_physical_calls: 2,
+    global_unresolved_physical_calls: 0,
     global_calls_remaining: 54,
     global_call_overrun: 0,
   },
@@ -263,10 +268,23 @@ describe("target console operability", () => {
       };
     });
     const client = {
-      read: vi.fn(async () => ({
-        state: "ready" as const,
-        data: [target(enabled)],
-      })),
+      read: vi.fn(async (path: string) => path === "target-catalog"
+        ? {
+            state: "ready" as const,
+            data: [{
+              target_id: "target-1",
+              version: "1.0.0",
+              name: "Registered target",
+              environment: "staging",
+              synthetic_data_only: true,
+              surface_count: 1,
+              registration_state: "registered",
+            }],
+          }
+        : {
+            state: "ready" as const,
+            data: [target(enabled)],
+          }),
       command,
     } as unknown as ApiClient;
 
@@ -288,9 +306,124 @@ describe("target console operability", () => {
     const enable = await screen.findByRole("button", { name: "Enable surface" });
     expect((enable as HTMLButtonElement).disabled).toBe(true);
     expect((screen.getByRole("button", {
-      name: "Create target from trusted catalog",
+      name: "Register exact catalog target",
     }) as HTMLButtonElement).disabled).toBe(true);
-    expect(screen.getByText(/browser never supplies target URLs/i)).toBeTruthy();
+    expect(screen.getByText(/browser submits only the selected target ID and version/i)).toBeTruthy();
+  });
+
+  it("registers only the exact selected server-owned catalog identity", async () => {
+    let registrationState: "available" | "registered" = "available";
+    const command = vi.fn(async (path: string, payload: object) => {
+      expect(path).toBe("targets");
+      expect(payload).toEqual({ target_id: "target-2", version: "2.0.0" });
+      registrationState = "registered";
+      return {
+        status: "completed" as const,
+        acknowledgement_id: "2.0.0",
+        resource_id: "target-2",
+      };
+    });
+    const read = vi.fn(async (path: string) => path === "target-catalog"
+      ? {
+          state: "ready" as const,
+          data: [{
+            target_id: "target-2",
+            version: "2.0.0",
+            name: "Reviewed target",
+            environment: "staging",
+            synthetic_data_only: true,
+            surface_count: 2,
+            registration_state: registrationState,
+          }],
+        }
+      : { state: "empty" as const, data: [] });
+    const client = { read, command } as unknown as ApiClient;
+
+    render(
+      <TargetsScreen
+        client={client}
+        principal={principal}
+        entityId={null}
+        getToken={async () => "session"}
+      />,
+    );
+
+    fireEvent.change(await screen.findByLabelText("Reviewed target version"), {
+      target: { value: "target-2\n2.0.0" },
+    });
+    const register = screen.getByRole("button", { name: "Register exact catalog target" });
+    expect((register as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(register);
+
+    await waitFor(() => expect(command).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(read.mock.calls.filter(([path]) => path === "target-catalog"))
+      .toHaveLength(2));
+    expect(screen.queryByText("https://")).toBeNull();
+  });
+
+  it("binds the server-derived atomic hosted set without browser model or secret authority", async () => {
+    const launchPrincipal: Principal = {
+      ...principal,
+      organization_permissions: [
+        ...principal.organization_permissions,
+        PERMISSIONS.campaignLaunch,
+      ],
+    };
+    const campaignTarget = {
+      ...target(true),
+      campaign_template: {
+        target_id: "target-1",
+        target_version: "1.0.0",
+        surface_id: "chat",
+        surface_version: "1.0.0",
+        corpus_id: "week-3",
+        corpus_hash: "c".repeat(64),
+        case_count: 2,
+        tool_sources: [],
+        execution_profile: "live" as const,
+        maximum_caps: target(true).safety_caps,
+        hosted_run: hostedRun,
+      },
+    };
+    const command = vi.fn(async () => ({
+      status: "completed" as const,
+      acknowledgement_id: "authorization-1",
+      resource_id: "authorization-1",
+    }));
+    const client = {
+      read: vi.fn(async (path: string) => path === "target-catalog"
+        ? { state: "empty" as const, data: [] }
+        : { state: "ready" as const, data: [campaignTarget] }),
+      command,
+    } as unknown as ApiClient;
+
+    render(
+      <TargetsScreen
+        client={client}
+        principal={launchPrincipal}
+        entityId={null}
+        getToken={async () => "session"}
+      />,
+    );
+
+    fireEvent.click(await screen.findByText("Registered target"));
+    expect(await screen.findByText(/activates the latest staged four-role set/i)).toBeTruthy();
+    const authorize = screen.getByRole("button", {
+      name: "Request exact campaign authorization",
+    });
+    expect((authorize as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(authorize);
+
+    await waitFor(() => expect(command).toHaveBeenCalledTimes(1));
+    const [path, payload] = command.mock.calls[0] as [string, Record<string, unknown>];
+    expect(path).toBe("campaign-authorization-requests");
+    expect(payload).toEqual(expect.objectContaining({
+      target_id: "target-1",
+      corpus_hash: "c".repeat(64),
+      hosted_run: hostedRun,
+    }));
+    expect(JSON.stringify(payload)).not.toContain("credential_reference");
+    expect(JSON.stringify(payload)).not.toContain("model_id");
   });
 });
 
@@ -339,7 +472,7 @@ describe("approval execution visibility", () => {
     expect(await screen.findByText("Exact hosted four-role binding")).toBeTruthy();
     expect(screen.getByText(configurationHash)).toBeTruthy();
     expect(screen.getByText(generationPolicyHash)).toBeTruthy();
-    expect(screen.getByText("$7.500000")).toBeTruthy();
+    expect(screen.getByText("$5")).toBeTruthy();
     expect(screen.queryByText("Approval rate")).toBeNull();
 
     const scopedPanel = await screen.findByRole("heading", {

@@ -33,6 +33,49 @@ const browserScope = {
   hosted_run: null,
 } as const;
 
+const browserHostedRun = {
+  configuration_set_sha256: "a".repeat(64),
+  generation_policy_sha256: "b".repeat(64),
+  session_generation: "generation-browser-test",
+  provider_model_call_limit: 56,
+  provider_model_spend_limit_usd: "5",
+  provider_max_retries: 1,
+  provider_max_concurrency: 1,
+  provider_timeout_seconds: 180,
+} as const;
+
+const browserCoverage = [
+  {
+    target_version: "browser-target@v1",
+    verified_attempt_count: 9,
+    total_case_count: 9,
+    category_count: 3,
+    execution_profile: "live",
+    evidence_provenance: "live_target",
+    classifications: ["boundary", "invariant", "regression"],
+    owasp_web: ["A01:2021", "A05:2021"],
+    owasp_llm: ["LLM01:2025", "LLM06:2025"],
+    verdict_counts: { NO_EXPLOIT_OBSERVED: 6, EXPLOIT_CONFIRMED: 3 },
+    covered: true,
+    as_of: "2026-07-22T00:24:00Z",
+  },
+] as const;
+
+const browserRegression = [
+  {
+    regression_id: "regression-prompt-injection",
+    version: "v1",
+    status: "NO_EXPLOIT_OBSERVED",
+    recorded_at: "2026-07-22T00:22:00Z",
+  },
+  {
+    regression_id: "regression-data-exfiltration",
+    version: "v1",
+    status: "EXPLOIT_CONFIRMED",
+    recorded_at: "2026-07-22T00:23:00Z",
+  },
+] as const;
+
 const browserBirdseye = {
   campaign: {
     run_id: "browser-campaign-gamma",
@@ -517,18 +560,22 @@ const browserUnavailableProviderBudget = {
   configuration_set_sha256: null,
   role_usd_cap: null,
   role_usd_spent: 0,
+  role_unresolved_usd_exposure: 0,
   role_usd_remaining: null,
   role_usd_overrun: 0,
   role_call_cap: null,
   role_physical_calls: 0,
+  role_unresolved_physical_calls: 0,
   role_calls_remaining: null,
   role_call_overrun: 0,
   global_usd_cap: null,
   global_usd_spent: 0,
+  global_unresolved_usd_exposure: 0,
   global_usd_remaining: null,
   global_usd_overrun: 0,
   global_call_cap: null,
   global_physical_calls: 0,
+  global_unresolved_physical_calls: 0,
   global_calls_remaining: null,
   global_call_overrun: 0,
 };
@@ -864,6 +911,7 @@ const browserFixture = (): Plugin => ({
               attempt_id: `browser-attempt-${index}`,
               operation: "target.http",
               provider: "openemr",
+              model: null,
               agent_role: null,
               execution_mode: null,
               returned_model: null,
@@ -914,7 +962,8 @@ const browserFixture = (): Plugin => ({
               campaign_id: execution.campaign_run_id,
               attempt_id: execution.attempt_id,
               operation: `agent.${execution.agent_role}`,
-              provider: `${execution.provider}/${execution.model}`,
+              provider: execution.provider,
+              model: execution.model,
               agent_role: execution.agent_role,
               execution_mode: execution.execution_mode,
               returned_model: execution.returned_model,
@@ -1153,6 +1202,14 @@ const browserFixture = (): Plugin => ({
           : { state: "empty", data: null }));
         return;
       }
+      if (path === "/api/v1/coverage") {
+        response.end(JSON.stringify({ state: "ready", data: browserCoverage }));
+        return;
+      }
+      if (path === "/api/v1/resilience") {
+        response.end(JSON.stringify({ state: "ready", data: browserRegression }));
+        return;
+      }
       if (path === "/api/v1/configuration") {
         response.end(JSON.stringify({
           state: "ready",
@@ -1212,6 +1269,21 @@ const browserFixture = (): Plugin => ({
         }));
         return;
       }
+      if (path === "/api/v1/target-catalog") {
+        response.end(JSON.stringify({
+          state: "ready",
+          data: [{
+            target_id: "browser-target",
+            version: "v1",
+            name: "Browser Test Target",
+            environment: "staging",
+            synthetic_data_only: true,
+            surface_count: 1,
+            registration_state: "registered",
+          }],
+        }));
+        return;
+      }
       if (path === "/api/v1/targets") {
         response.end(JSON.stringify({
           state: "ready",
@@ -1257,6 +1329,7 @@ const browserFixture = (): Plugin => ({
               tool_sources: [],
               execution_profile: "live",
               maximum_caps: browserScope.caps,
+              hosted_run: browserHostedRun,
             },
             created_at: "2026-07-22T00:00:00Z",
           }],

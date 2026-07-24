@@ -10,6 +10,7 @@ import {
   decodeTooling,
 } from "../api/read-models";
 import { AdversarialText } from "../components/AdversarialText";
+import { AgentBudgetSummary } from "../components/AgentBudgetSummary";
 import {
   count,
   MetricStrip,
@@ -28,6 +29,7 @@ import {
   LIVE_RESOURCE_POLL_INTERVAL_MS,
   useResource,
 } from "../hooks/useResource";
+import { navigateTo } from "../router";
 import {
   PERMISSIONS,
   type AgentActivityReadModel,
@@ -175,6 +177,14 @@ export function AgentsScreen({
       0,
     ),
     physicalCalls: records.reduce((sum, agent) => sum + agent.physical_call_count, 0),
+    unresolvedUsdExposure: records.reduce(
+      (sum, agent) => sum + agent.provider_budget.role_unresolved_usd_exposure,
+      0,
+    ),
+    unresolvedPhysicalCalls: records.reduce(
+      (sum, agent) => sum + agent.provider_budget.role_unresolved_physical_calls,
+      0,
+    ),
     tokenObservations: records.reduce((sum, agent) => sum + agent.token_observation_count, 0),
     incompleteAccounting: records.filter(
       (agent) => ["partial", "unavailable"].includes(agent.accounting_status),
@@ -182,6 +192,11 @@ export function AgentsScreen({
   }), [records]);
   const selectedActivity = activities.filter((row) => row.agent_role === selectedRole);
   const canConfigure = principal.organization_permissions.includes(PERMISSIONS.configManage);
+  const hostedSetAvailable = records.some(
+    (agent) =>
+      agent.staged_assignment !== null
+      || agent.active_assignment.execution_mode === "hosted_advisory",
+  );
   const normalizedRationale = rationale.trim();
   const deterministicActivationReady =
     canConfigure
@@ -219,7 +234,9 @@ export function AgentsScreen({
               value: totals.incompleteAccounting > 0 ? `${money(totals.cost)} known` : money(totals.cost),
               note: totals.incompleteAccounting > 0
                 ? `${totals.incompleteAccounting} role(s) have incomplete provider accounting`
-                : `${totals.physicalCalls} provider call(s) with complete accounting`,
+                : totals.unresolvedUsdExposure > 0 || totals.unresolvedPhysicalCalls > 0
+                  ? `${money(totals.unresolvedUsdExposure)} and ${count(totals.unresolvedPhysicalCalls)} call(s) unresolved`
+                  : `${totals.physicalCalls} provider call(s) with complete accounting`,
             },
             {
               label: "Token observations",
@@ -303,23 +320,7 @@ export function AgentsScreen({
                 <div><dt>Last Langfuse query-back</dt><dd className="mono">{selected.last_langfuse_verified_at ? time(selected.last_langfuse_verified_at) : "not yet observed remotely"}</dd></div>
                 <div><dt>Last activity</dt><dd className="mono">{selected.last_activity_at ? time(selected.last_activity_at) : "not yet executed"}</dd></div>
               </dl>
-              <div className="evidence-stack">
-                <p className="field-label">Provider budget guard</p>
-                {selected.provider_budget.status === "unavailable" ? (
-                  <StateNotice
-                    state="unavailable"
-                    detail="No authorized hosted subcap is active or staged for this role."
-                  />
-                ) : (
-                  <dl className="agent-ledger-summary">
-                    <div><dt>Budget state</dt><dd className="mono">{selected.provider_budget.status.replaceAll("_", " ")}</dd></div>
-                    <div><dt>Role USD remaining</dt><dd className="mono">{money(selected.provider_budget.role_usd_remaining ?? 0)} / {money(selected.provider_budget.role_usd_cap ?? 0)}</dd></div>
-                    <div><dt>Role calls remaining</dt><dd className="mono">{count(selected.provider_budget.role_calls_remaining ?? 0)} / {count(selected.provider_budget.role_call_cap ?? 0)}</dd></div>
-                    <div><dt>Global USD remaining</dt><dd className="mono">{money(selected.provider_budget.global_usd_remaining ?? 0)} / {money(selected.provider_budget.global_usd_cap ?? 0)}</dd></div>
-                    <div><dt>Global calls remaining</dt><dd className="mono">{count(selected.provider_budget.global_calls_remaining ?? 0)} / {count(selected.provider_budget.global_call_cap ?? 0)}</dd></div>
-                  </dl>
-                )}
-              </div>
+              <AgentBudgetSummary budget={selected.provider_budget} />
               {selected.judge_calibration && (
                 <div className="evidence-stack">
                   <p className="field-label">Evaluator calibration and authority</p>
@@ -447,12 +448,23 @@ export function AgentsScreen({
                 agents.refresh();
               }}
             />
+            <button
+              type="button"
+              className="button button-primary"
+              disabled={!hostedSetAvailable}
+              title={hostedSetAvailable
+                ? undefined
+                : "A server-owned atomic four-role set must be staged first"}
+              onClick={() => navigateTo({ screen: "targets", entityId: null })}
+            >
+              Open four-role authorization
+            </button>
           </div>
           <p className="data-note">
             This per-role control can only restore a reviewed, server-owned deterministic engine.
-            Hosted assignments remain an immutable four-role configuration set and become active
-            only through an exact human-authorized campaign binding; this control cannot create
-            partial hosted authority.
+            A staged hosted set becomes active only through the exact target/corpus authorization
+            on Targets and a distinct human approval. The browser cannot select role models,
+            provider credentials, or partial hosted authority.
           </p>
         </Panel>
       </div>

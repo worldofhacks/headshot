@@ -15,11 +15,14 @@ import {
   decodeComponents,
   decodeConfiguration,
   decodeCosts,
+  decodeCoverage,
   decodeEvidence,
   decodeFinding,
   decodeFindings,
   decodePrincipal,
   decodeReports,
+  decodeResilience,
+  decodeTargetCatalog,
   decodeTargets,
   decodeTooling,
   decodeTraces,
@@ -64,18 +67,22 @@ const unavailableProviderBudget = {
   configuration_set_sha256: null,
   role_usd_cap: null,
   role_usd_spent: 0,
+  role_unresolved_usd_exposure: 0,
   role_usd_remaining: null,
   role_usd_overrun: 0,
   role_call_cap: null,
   role_physical_calls: 0,
+  role_unresolved_physical_calls: 0,
   role_calls_remaining: null,
   role_call_overrun: 0,
   global_usd_cap: null,
   global_usd_spent: 0,
+  global_unresolved_usd_exposure: 0,
   global_usd_remaining: null,
   global_usd_overrun: 0,
   global_call_cap: null,
   global_physical_calls: 0,
+  global_unresolved_physical_calls: 0,
   global_calls_remaining: null,
   global_call_overrun: 0,
 };
@@ -196,6 +203,34 @@ const validResources: Array<[string, (value: unknown) => unknown, unknown]> = [
     { ...scope, request_id: "request-1", status: "approved", decision: "approved", scope_hash: "scope-1", launcher_user_id: "user-1", approver_user_id: "user-2", self_approval_override: false, decided_at: at, expired: false, consumed: true, created_at: at, expires_at: "2026-07-21T00:15:00Z", campaign_run_id: "run-1", verification_chain: [verification] },
   ],
   [
+    "coverage",
+    decodeCoverage,
+    [{
+      target_version: "target-1@1.0.0",
+      verified_attempt_count: 9,
+      total_case_count: 9,
+      category_count: 3,
+      execution_profile: "synthetic",
+      evidence_provenance: "synthetic_offline",
+      classifications: ["boundary", "invariant", "regression"],
+      owasp_web: ["A01:2021"],
+      owasp_llm: ["LLM01:2025"],
+      verdict_counts: { NO_EXPLOIT_OBSERVED: 8, EXPLOIT_CONFIRMED: 1 },
+      covered: true,
+      as_of: at,
+    }],
+  ],
+  [
+    "resilience",
+    decodeResilience,
+    [{
+      regression_id: "regression-1",
+      version: "1.0.0",
+      status: "NO_EXPLOIT_OBSERVED",
+      recorded_at: at,
+    }],
+  ],
+  [
     "reports",
     decodeReports,
     [{
@@ -232,7 +267,7 @@ const validResources: Array<[string, (value: unknown) => unknown, unknown]> = [
   [
     "traces",
     decodeTraces,
-    [{ request_id: "request-1", execution_id: null, parent_execution_id: null, trace_id: "trace-1", campaign_id: "run-1", attempt_id: "attempt-1", operation: "target.http", provider: "openemr", agent_role: null, execution_mode: null, returned_model: null, upstream_provider: null, provider_request_id: null, configuration_set_sha256: null, role_configuration_sha256: null, generation_policy_sha256: null, physical_attempts: null, method: "POST", destination_host: "target.invalid", relative_path: "chat", status: "succeeded", status_code: 200, error_code: null, started_at: at, finished_at: "2026-07-21T00:00:00.012Z", duration_ms: 12.5, request_bytes: 25, response_bytes: 50, measured_cost: 0.01, accounting_status: "measured", currency: "USD", input_tokens: null, output_tokens: null, reasoning_tokens: null, judge_calibration_id: null, judge_calibration_state: null, oracle_agreement: null, decision_authority: null, p50_duration_ms: null, p95_duration_ms: null, langfuse_status: "queued", langfuse_verified_at: null, request_preview: '{"turns":["synthetic"]}', response_preview: '{"answer":"safe"}', request_sha256: "a".repeat(64), response_sha256: "b".repeat(64), inspection_flags: [], inspection_owasp_mappings: [] }],
+    [{ request_id: "request-1", execution_id: null, parent_execution_id: null, trace_id: "trace-1", campaign_id: "run-1", attempt_id: "attempt-1", operation: "target.http", provider: "openemr", model: null, agent_role: null, execution_mode: null, returned_model: null, upstream_provider: null, provider_request_id: null, configuration_set_sha256: null, role_configuration_sha256: null, generation_policy_sha256: null, physical_attempts: null, method: "POST", destination_host: "target.invalid", relative_path: "chat", status: "succeeded", status_code: 200, error_code: null, started_at: at, finished_at: "2026-07-21T00:00:00.012Z", duration_ms: 12.5, request_bytes: 25, response_bytes: 50, measured_cost: 0.01, accounting_status: "measured", currency: "USD", input_tokens: null, output_tokens: null, reasoning_tokens: null, judge_calibration_id: null, judge_calibration_state: null, oracle_agreement: null, decision_authority: null, p50_duration_ms: null, p95_duration_ms: null, langfuse_status: "queued", langfuse_verified_at: null, request_preview: '{"turns":["synthetic"]}', response_preview: '{"answer":"safe"}', request_sha256: "a".repeat(64), response_sha256: "b".repeat(64), inspection_flags: [], inspection_owasp_mappings: [] }],
   ],
   [
     "costs",
@@ -243,6 +278,19 @@ const validResources: Array<[string, (value: unknown) => unknown, unknown]> = [
     "targets and surfaces",
     decodeTargets,
     [{ target_id: "target-1", name: "Registered target", version: "1.0.0", content_hash: "target-hash", lifecycle: "ready", environment: "staging", adapter_kind: "openemr", base_url: "https://target.invalid", auth_mode: "bearer", credential_configured: true, synthetic_data_only: true, safety_caps: caps, allowed_lifecycle_transitions: ["disabled"], campaign_template: null, created_at: at, surfaces: [{ surface_id: "surface-1", version: "1.0.0", target_version: "1.0.0", content_hash: "surface-hash", kind: "chat", protocol: "https", method: "POST", relative_path: "api", trust_boundary: "external-target", authentication_required: true, risk: "high", owasp_mappings: [], oracle_refs: [], enabled: true, created_at: at }] }],
+  ],
+  [
+    "trusted target catalog",
+    decodeTargetCatalog,
+    [{
+      target_id: "target-1",
+      version: "1.0.0",
+      name: "Reviewed target",
+      environment: "staging",
+      synthetic_data_only: true,
+      surface_count: 2,
+      registration_state: "available",
+    }],
   ],
   [
     "configuration",
@@ -543,6 +591,46 @@ describe("v1 read-model decoders", () => {
     expect(decodeFindings([unverifiedToolFinding])).toEqual([unverifiedToolFinding]);
   });
 
+  it("keeps coverage and regression projections exact-keyed", () => {
+    const coverage = arrayFixtureRecord("coverage");
+    const resilience = arrayFixtureRecord("resilience");
+
+    expect(decodeCoverage([coverage])).toEqual([coverage]);
+    expect(decodeResilience([resilience])).toEqual([resilience]);
+    expect(() => decodeCoverage([{ ...coverage, unexpected: true }]))
+      .toThrow("Invalid coverage read model");
+    expect(() => decodeCoverage([{
+      ...coverage,
+      verdict_counts: { NO_EXPLOIT_OBSERVED: -1 },
+    }])).toThrow("Invalid coverage read model");
+    expect(() => decodeResilience([{ ...resilience, unexpected: true }]))
+      .toThrow("Invalid resilience read model");
+  });
+
+  it("rejects browser authority fields in the trusted target catalog projection", () => {
+    const entry = {
+      target_id: "target-1",
+      version: "1.0.0",
+      name: "Reviewed target",
+      environment: "staging",
+      synthetic_data_only: true,
+      surface_count: 1,
+      registration_state: "available",
+    };
+
+    expect(decodeTargetCatalog([entry])).toEqual([entry]);
+    for (const field of [
+      "base_url",
+      "allowlisted_hosts",
+      "adapter_kind",
+      "credential_ref",
+      "ownership_authorization_ref",
+    ]) {
+      expect(() => decodeTargetCatalog([{ ...entry, [field]: "forbidden" }]))
+        .toThrow("Invalid target catalog entry read model");
+    }
+  });
+
   it.each([
     ["verified without a hash", { evidence_integrity: "verified", evidence_content_hash: null }],
     ["verified with a short hash", { evidence_integrity: "verified", evidence_content_hash: "abc" }],
@@ -606,6 +694,53 @@ describe("v1 read-model decoders", () => {
     };
 
     expect(decodeCampaigns([campaign])).toEqual([campaign]);
+  });
+
+  it("decodes only a secret-free server-derived hosted target template", () => {
+    const target = arrayFixtureRecord("targets and surfaces");
+    const hostedRun = {
+      configuration_set_sha256: "a".repeat(64),
+      generation_policy_sha256: "b".repeat(64),
+      session_generation: "generation-1",
+      provider_model_call_limit: 56,
+      provider_model_spend_limit_usd: "5",
+      provider_max_retries: 1,
+      provider_max_concurrency: 1,
+      provider_timeout_seconds: 180,
+    };
+    const campaignTemplate = {
+      target_id: "target-1",
+      target_version: "1.0.0",
+      surface_id: "surface-1",
+      surface_version: "1.0.0",
+      corpus_id: "m11-seed-corpus-v1",
+      corpus_hash: "c".repeat(64),
+      case_count: 2,
+      tool_sources: [],
+      execution_profile: "live",
+      maximum_caps: caps,
+      hosted_run: hostedRun,
+    };
+
+    expect(decodeTargets([{ ...target, campaign_template: campaignTemplate }]))
+      .toEqual([{ ...target, campaign_template: campaignTemplate }]);
+    expect(decodeTargets([{
+      ...target,
+      campaign_template: { ...campaignTemplate, hosted_run: null },
+    }])).toEqual([{
+      ...target,
+      campaign_template: { ...campaignTemplate, hosted_run: null },
+    }]);
+    expect(() => decodeTargets([{
+      ...target,
+      campaign_template: {
+        ...campaignTemplate,
+        hosted_run: {
+          ...hostedRun,
+          credential_reference: "secretref://staging/openrouter/generation-1",
+        },
+      },
+    }])).toThrow("Invalid hosted run binding read model");
   });
 
   it("fails a malformed ready envelope closed without exposing its payload", async () => {
@@ -724,6 +859,7 @@ describe("v1 read-model decoders", () => {
       ...physical,
       request_id: null,
       execution_id: "execution-1",
+      model: "full-scan-corpus-v1",
       agent_role: "red_team",
       execution_mode: "deterministic",
       method: null,
@@ -825,19 +961,23 @@ describe("v1 read-model decoders", () => {
       configuration_set_sha256: "c".repeat(64),
       role_usd_cap: 4,
       role_usd_spent: 0.25,
-      role_usd_remaining: 3.75,
+      role_unresolved_usd_exposure: 0.5,
+      role_usd_remaining: 3.25,
       role_usd_overrun: 0,
       role_call_cap: 10,
       role_physical_calls: 1,
-      role_calls_remaining: 9,
+      role_unresolved_physical_calls: 2,
+      role_calls_remaining: 7,
       role_call_overrun: 0,
       global_usd_cap: 10,
       global_usd_spent: 0.25,
-      global_usd_remaining: 9.75,
+      global_unresolved_usd_exposure: 0.5,
+      global_usd_remaining: 9.25,
       global_usd_overrun: 0,
       global_call_cap: 56,
       global_physical_calls: 1,
-      global_calls_remaining: 55,
+      global_unresolved_physical_calls: 2,
+      global_calls_remaining: 53,
       global_call_overrun: 0,
     };
     const calibration = {
@@ -874,6 +1014,13 @@ describe("v1 read-model decoders", () => {
     };
 
     expect(decodeAgents([judge])).toEqual([judge]);
+    expect(decodeAgents([{
+      ...judge,
+      provider_budget: { ...budget, status: "historical" },
+    }])).toEqual([{
+      ...judge,
+      provider_budget: { ...budget, status: "historical" },
+    }]);
     expect(() => decodeAgents([{
       ...judge,
       judge_calibration: {
@@ -887,6 +1034,19 @@ describe("v1 read-model decoders", () => {
         ...budget,
         role_usd_remaining: 3.5,
       },
+    }])).toThrow("Invalid agent budget read model");
+    expect(() => decodeAgents([{
+      ...judge,
+      provider_budget: {
+        ...budget,
+        role_unresolved_physical_calls: 1,
+      },
+    }])).toThrow("Invalid agent budget read model");
+    const missingExposure: Record<string, unknown> = { ...budget };
+    delete missingExposure.global_unresolved_usd_exposure;
+    expect(() => decodeAgents([{
+      ...judge,
+      provider_budget: missingExposure,
     }])).toThrow("Invalid agent budget read model");
   });
 
