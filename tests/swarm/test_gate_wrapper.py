@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import ast
 import hashlib
+import json
+import os
 import shutil
 import subprocess
+import time
 from pathlib import Path
 from typing import Final
 
@@ -64,6 +67,18 @@ def _write_policy(repository: Path, content: str) -> Path:
     policy = repository / ".tdd-swarm" / "coverage-policy.md"
     policy.parent.mkdir(parents=True, exist_ok=True)
     policy.write_text(content, encoding="utf-8")
+    if "decision: non-applicable" in content and (repository / ".git").exists():
+        approval = repository.parent / f".{repository.name}-coverage-approval.json"
+        approval.write_text(
+            json.dumps(
+                {
+                    "policy_sha256": hashlib.sha256(policy.read_bytes()).hexdigest(),
+                    "commit_sha": _run(["git", "rev-parse", "HEAD"], cwd=repository).stdout.strip(),
+                    "approver_id": "owner:headshot",
+                }
+            ),
+            encoding="utf-8",
+        )
     return policy
 
 
@@ -114,14 +129,49 @@ def _commit_head_change(repository: Path) -> str:
     return _run(["git", "rev-parse", "HEAD"], cwd=repository).stdout.strip()
 
 
-def _run_wrapper(repository: Path, base: str) -> subprocess.CompletedProcess[str]:
+def _run_wrapper(
+    repository: Path,
+    base: str,
+    *,
+    extra_environment: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
+    environment = os.environ.copy()
+    approval = repository.parent / f".{repository.name}-coverage-approval.json"
+    if approval.exists():
+        environment["TDD_SWARM_COVERAGE_APPROVAL_FILE"] = str(approval)
+    if extra_environment:
+        environment.update(extra_environment)
     return subprocess.run(
         ["bash", ".tdd-swarm/run-local-gates.sh", "tickets/T-F00.md", base],
         cwd=repository,
         check=False,
         capture_output=True,
         text=True,
+        env=environment,
+        timeout=8,
     )
+
+
+def _write_single_gate_map(
+    repository: Path, gate: str, command: str, status: str = "AVAILABLE"
+) -> None:
+    (repository / ".tdd-swarm" / "gates.md").write_text(
+        "# Fixture gate mapping\n\n"
+        "| gate | exact command | current status |\n"
+        "|---|---|---|\n"
+        f"| {gate} | {command} | {status} |\n",
+        encoding="utf-8",
+    )
+
+
+def _write_secret_scan(repository: Path, body: str) -> None:
+    script = repository / "scripts" / "secret_scan.sh"
+    script.parent.mkdir(parents=True, exist_ok=True)
+    script.write_text("#!/usr/bin/env bash\nset -euo pipefail\n" + body, encoding="utf-8")
+
+
+def _report(repository: Path) -> str:
+    return (repository / ".tdd-swarm" / "reports" / "T-F00-gates.md").read_text(encoding="utf-8")
 
 
 def _prepare_fixture(repository: Path) -> str:
@@ -315,3 +365,358 @@ def test_wrapper_writes_a_hash_bound_report_when_all_gates_are_green(tmp_path: P
     _assert_report_row(report, "typecheck", TYPECHECK_COMMAND, 0, "typecheck-after")
     assert f"coverage-policy-sha256: {hashlib.sha256(policy.read_bytes()).hexdigest()}" in report
     assert f"import-graph-sha256: {expected_import_hash}" in report
+
+
+def test_wrapper_rejects_an_arbitrary_gate_executable_without_running_it(tmp_path: Path) -> None:
+    """spec(T-F00:AC-4) — gate rows select fixed IDs/argv, never arbitrary executables."""
+    base = _prepare_fixture(tmp_path)
+    _write_policy(tmp_path, _approved_non_applicable_policy())
+    marker = tmp_path / "arbitrary-executable-ran"
+    command = (
+        "python3 -c 'from pathlib import Path; "
+        'Path("arbitrary-executable-ran").write_text("unsafe")\''
+    )
+    _write_single_gate_map(tmp_path, "format", command)
+
+    result = _run_wrapper(tmp_path, base)
+
+    assert result.returncode != 0
+    assert not marker.exists()
+    assert "allowlist" in (result.stdout + result.stderr).lower()
+
+
+def test_wrapper_rejects_an_explicit_shell_gate_without_running_it(tmp_path: Path) -> None:
+    """spec(T-F00:AC-4) — shell interpreters cannot be selected as gate commands."""
+    base = _prepare_fixture(tmp_path)
+    _write_policy(tmp_path, _approved_non_applicable_policy())
+    marker = tmp_path / "shell-ran"
+    _write_single_gate_map(tmp_path, "lint", "sh -c 'printf unsafe > shell-ran'")
+
+    result = _run_wrapper(tmp_path, base)
+
+    assert result.returncode != 0
+    assert not marker.exists()
+    assert "shell" in (result.stdout + result.stderr).lower()
+
+
+def test_wrapper_rejects_an_arbitrary_coverage_command_without_running_it(tmp_path: Path) -> None:
+    """spec(T-F00:AC-3) — coverage uses a fixed adapter rather than policy-supplied code."""
+    base = _prepare_fixture(tmp_path)
+    marker = tmp_path / "coverage-shell-ran"
+    _write_policy(
+        tmp_path,
+        "# Coverage policy\n\n"
+        "decision: executable\n"
+        "coverage-command: sh -c 'printf coverage=100; touch coverage-shell-ran'\n"
+        f"baseline-base-sha: {base}\n"
+        "baseline-percent: 99\n",
+    )
+
+    result = _run_wrapper(tmp_path, base)
+
+    assert result.returncode != 0
+    assert not marker.exists()
+    assert "coverage" in (result.stdout + result.stderr).lower()
+
+
+def test_repository_gate_map_enumerates_every_tier_one_gate_and_skip_reason() -> None:
+    """spec(T-F00:AC-4) — every Tier-1 gate is executable or explicitly non-green with a reason."""
+    gate_map = (REPOSITORY_ROOT / ".tdd-swarm" / "gates.md").read_text(encoding="utf-8")
+    rows = {
+        cells[0].lower(): cells
+        for line in gate_map.splitlines()
+        if line.strip().startswith("|")
+        and len(cells := [cell.strip() for cell in line.strip().split("|")[1:-1]]) == 3
+        and cells[0].lower() not in {"gate", "---"}
+    }
+    required = {
+        "format",
+        "lint",
+        "typecheck",
+        "unit",
+        "new-tests",
+        "coverage",
+        "no-todos",
+        "no-debug-logging",
+        "docs",
+        "reachability",
+        "spec-lint",
+    }
+
+    assert required <= rows.keys(), f"missing Tier-1 gates: {sorted(required - rows.keys())}"
+    for gate in required:
+        command, status = rows[gate][1:]
+        if status != "AVAILABLE":
+            assert status in {"SKIPPED", "BLOCKED"}
+            assert command.startswith("reason=") and len(command) > len("reason=")
+
+
+def test_wrapper_retains_a_skipped_gate_reason_and_cannot_report_green(tmp_path: Path) -> None:
+    """spec(T-F00:AC-4) — a declared non-runnable local gate is visible and non-green."""
+    base = _prepare_fixture(tmp_path)
+    _write_policy(tmp_path, _approved_non_applicable_policy())
+    _write_secret_scan(tmp_path, "printf 'secret-scan-ok\\n'\n")
+    (tmp_path / ".tdd-swarm" / "gates.md").write_text(
+        "# Fixture gate mapping\n\n"
+        "| gate | exact command | current status |\n"
+        "|---|---|---|\n"
+        "| secret-scan | bash scripts/secret_scan.sh | AVAILABLE |\n"
+        "| typecheck | reason=no configured type checker | SKIPPED |\n",
+        encoding="utf-8",
+    )
+
+    result = _run_wrapper(tmp_path, base)
+
+    assert result.returncode != 0
+    report = _report(tmp_path)
+    assert "typecheck" in report
+    assert "SKIPPED" in report
+    assert "no configured type checker" in report
+    assert "overall-verdict: FAIL" in report
+
+
+def test_wrapper_deadline_kills_the_entire_gate_process_group(tmp_path: Path) -> None:
+    """spec(T-F00:AC-4) — deadline expiry terminates descendants and records a failed gate."""
+    base = _prepare_fixture(tmp_path)
+    _write_policy(tmp_path, _approved_non_applicable_policy())
+    _write_secret_scan(
+        tmp_path,
+        "python3 - <<'PY' &\n"
+        "import time\nfrom pathlib import Path\n"
+        "time.sleep(0.8)\nPath('orphan-marker').write_text('alive')\n"
+        "PY\n"
+        "printf '%s' \"$!\" > child.pid\n"
+        "sleep 2\n",
+    )
+    _write_single_gate_map(tmp_path, "secret-scan", "bash scripts/secret_scan.sh")
+
+    started = time.monotonic()
+    result = _run_wrapper(
+        tmp_path,
+        base,
+        extra_environment={"TDD_SWARM_GATE_TIMEOUT_SECONDS": "0.20"},
+    )
+    elapsed = time.monotonic() - started
+
+    assert result.returncode != 0
+    assert elapsed < 1.5
+    time.sleep(0.9)
+    assert not (tmp_path / "orphan-marker").exists()
+    assert "timeout" in _report(tmp_path).lower()
+
+
+def test_wrapper_fails_and_bounds_a_noisy_gate(tmp_path: Path) -> None:
+    """spec(T-F00:AC-4) — output over budget stops the gate and stays bounded in evidence."""
+    base = _prepare_fixture(tmp_path)
+    _write_policy(tmp_path, _approved_non_applicable_policy())
+    _write_secret_scan(tmp_path, "python3 -c \"print('x' * 262144)\"\n")
+    _write_single_gate_map(tmp_path, "secret-scan", "bash scripts/secret_scan.sh")
+
+    result = _run_wrapper(tmp_path, base)
+
+    assert result.returncode != 0
+    report = _report(tmp_path)
+    assert len(report.encode()) < 32_768
+    assert "truncated" in report.lower() or "output limit" in report.lower()
+    assert "overall-verdict: FAIL" in report
+
+
+def test_wrapper_redacts_console_and_report_output_and_records_a_digest(tmp_path: Path) -> None:
+    """spec(T-F00:AC-5) — sensitive output is redacted before emission but remains digest-bound."""
+    base = _prepare_fixture(tmp_path)
+    _write_policy(tmp_path, _approved_non_applicable_policy())
+    secret = "AKIAIOSFODNN7EXAMPLE"
+    raw = f"credential={secret}\n"
+    _write_secret_scan(tmp_path, "printf 'credential=%s\\n' \"$FIXTURE_SECRET\"\n")
+    _write_single_gate_map(tmp_path, "secret-scan", "bash scripts/secret_scan.sh")
+
+    result = _run_wrapper(
+        tmp_path,
+        base,
+        extra_environment={"FIXTURE_SECRET": secret},
+    )
+
+    console = result.stdout + result.stderr
+    report = _report(tmp_path)
+    assert secret not in console
+    assert secret not in report
+    assert "[REDACTED]" in console
+    assert "[REDACTED]" in report
+    assert f"output-sha256: {hashlib.sha256(raw.encode()).hexdigest()}" in report
+
+
+def test_wrapper_rejects_a_symlinked_report_directory_without_external_write(
+    tmp_path: Path,
+) -> None:
+    """spec(T-F00:AC-5) — report parent symlinks are rejected before publication."""
+    base = _prepare_fixture(tmp_path)
+    _write_policy(tmp_path, _approved_non_applicable_policy())
+    outside = tmp_path.parent / f"{tmp_path.name}-outside-reports"
+    outside.mkdir()
+    (tmp_path / ".tdd-swarm" / "reports").symlink_to(outside, target_is_directory=True)
+
+    result = _run_wrapper(tmp_path, base)
+
+    assert result.returncode != 0
+    assert not (outside / "T-F00-gates.md").exists()
+    assert "symlink" in (result.stdout + result.stderr).lower()
+
+
+def test_wrapper_rejects_a_symlinked_report_destination_without_clobbering_target(
+    tmp_path: Path,
+) -> None:
+    """spec(T-F00:AC-5) — no-follow atomic publication preserves a symlink target."""
+    base = _prepare_fixture(tmp_path)
+    _write_policy(tmp_path, _approved_non_applicable_policy())
+    outside = tmp_path.parent / f"{tmp_path.name}-outside-report.md"
+    outside.write_text("sentinel\n", encoding="utf-8")
+    report_directory = tmp_path / ".tdd-swarm" / "reports"
+    report_directory.mkdir()
+    (report_directory / "T-F00-gates.md").symlink_to(outside)
+
+    result = _run_wrapper(tmp_path, base)
+
+    assert result.returncode != 0
+    assert outside.read_text(encoding="utf-8") == "sentinel\n"
+    assert "symlink" in (result.stdout + result.stderr).lower()
+
+
+def test_wrapper_rejects_a_diff_base_that_is_not_an_ancestor_of_head(tmp_path: Path) -> None:
+    """spec(T-F00:AC-5) — report base must be an ancestor of the tested HEAD."""
+    _prepare_fixture(tmp_path)
+    _write_policy(tmp_path, _approved_non_applicable_policy())
+    tree = _run(["git", "rev-parse", "HEAD^{tree}"], cwd=tmp_path).stdout.strip()
+    unrelated = subprocess.run(
+        ["git", "commit-tree", tree],
+        cwd=tmp_path,
+        input="unrelated base\n",
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+    result = _run_wrapper(tmp_path, unrelated)
+
+    assert result.returncode != 0
+    assert "ancestor" in (result.stdout + result.stderr).lower()
+
+
+def test_wrapper_rejects_a_dirty_tracked_tested_tree(tmp_path: Path) -> None:
+    """spec(T-F00:AC-5) — frozen tests and gate inputs must match committed HEAD bytes."""
+    base = _prepare_fixture(tmp_path)
+    _write_policy(tmp_path, _approved_non_applicable_policy())
+    test_file = tmp_path / "tests" / "swarm" / "test_fixture.py"
+    test_file.write_text(test_file.read_text(encoding="utf-8") + "\n# weakened locally\n")
+
+    result = _run_wrapper(tmp_path, base)
+
+    assert result.returncode != 0
+    output = (result.stdout + result.stderr).lower()
+    assert "dirty" in output or "worktree" in output
+    assert "test_fixture.py" in output
+
+
+def test_wrapper_rechecks_head_after_gate_commands_before_publishing(tmp_path: Path) -> None:
+    """spec(T-F00:AC-5) — a gate that moves HEAD invalidates the entire evidence report."""
+    base = _prepare_fixture(tmp_path)
+    (tmp_path / "head-marker.txt").write_text("before\n", encoding="utf-8")
+    _write_secret_scan(
+        tmp_path,
+        "printf 'after\\n' >> head-marker.txt\n"
+        "git add head-marker.txt\n"
+        "git commit -qm 'gate moved head'\n",
+    )
+    _write_single_gate_map(tmp_path, "secret-scan", "bash scripts/secret_scan.sh")
+    _run(["git", "add", "."], cwd=tmp_path)
+    _run(["git", "commit", "-qm", "prepare fixed gate"], cwd=tmp_path)
+    _write_policy(tmp_path, _approved_non_applicable_policy())
+    starting_head = _run(["git", "rev-parse", "HEAD"], cwd=tmp_path).stdout.strip()
+
+    result = _run_wrapper(tmp_path, base)
+
+    assert _run(["git", "rev-parse", "HEAD"], cwd=tmp_path).stdout.strip() != starting_head
+    assert result.returncode != 0
+    assert "head" in (result.stdout + result.stderr).lower()
+    assert not (tmp_path / ".tdd-swarm" / "reports" / "T-F00-gates.md").exists()
+
+
+def test_report_hashes_every_input_and_declared_test_scope(tmp_path: Path) -> None:
+    """spec(T-F00:AC-5) — evidence hashes the ticket, gate map, tools, and frozen test bytes."""
+    base = _prepare_fixture(tmp_path)
+    _write_policy(tmp_path, _approved_non_applicable_policy())
+
+    result = _run_wrapper(tmp_path, base)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    report = _report(tmp_path)
+    required_hashes = {
+        "ticket-sha256",
+        "gate-map-sha256",
+        "wrapper-sha256",
+        "spec-lint-sha256",
+        "import-cycle-tool-sha256",
+        "test-scope-sha256",
+    }
+    assert all(f"{label}:" in report for label in required_hashes)
+
+
+def test_coverage_semantic_failure_is_explicit_in_report_and_overall_verdict(
+    tmp_path: Path,
+) -> None:
+    """spec(T-F00:AC-3) — validation has its own failed status, diagnostic, and FAIL verdict."""
+    base = _prepare_fixture(tmp_path)
+    _write_policy(
+        tmp_path,
+        "# Coverage policy\n\n"
+        "decision: executable\n"
+        "coverage-command: printf 'not-a-coverage-result\\n'\n"
+        f"baseline-base-sha: {base}\n"
+        "baseline-percent: 90\n",
+    )
+
+    result = _run_wrapper(tmp_path, base)
+
+    assert result.returncode != 0
+    report = _report(tmp_path)
+    assert "coverage-validation-status: FAIL" in report
+    assert "exactly one coverage=<percent>" in report
+    assert "overall-verdict: FAIL" in report
+
+
+def test_free_text_coverage_approver_is_not_authorization(tmp_path: Path) -> None:
+    """spec(T-F00:AC-3) — a waiver without an independent approval record fails closed."""
+    base = _prepare_fixture(tmp_path)
+    _write_policy(tmp_path, _approved_non_applicable_policy())
+    approval = tmp_path.parent / f".{tmp_path.name}-coverage-approval.json"
+    approval.unlink()
+
+    result = _run_wrapper(tmp_path, base)
+
+    assert result.returncode != 0
+    output = (result.stdout + result.stderr).lower()
+    assert "approval" in output
+    assert "policy" in output
+
+
+def test_coverage_approval_record_must_match_policy_hash_and_commit(tmp_path: Path) -> None:
+    """spec(T-F00:AC-3) — owner approval is cryptographically bound to policy and HEAD."""
+    base = _prepare_fixture(tmp_path)
+    _write_policy(tmp_path, _approved_non_applicable_policy())
+    approval = tmp_path.parent / f".{tmp_path.name}-coverage-approval.json"
+    approval.write_text(
+        json.dumps(
+            {
+                "policy_sha256": "0" * 64,
+                "commit_sha": "1" * 40,
+                "approver_id": "owner:headshot",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = _run_wrapper(tmp_path, base)
+
+    assert result.returncode != 0
+    output = (result.stdout + result.stderr).lower()
+    assert "approval" in output
+    assert "hash" in output or "commit" in output
