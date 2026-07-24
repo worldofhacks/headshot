@@ -9,7 +9,15 @@ is governed separately by `coverage-policy.md`. A command must use an explicit
 |---|---|---|
 | format | .venv/bin/ruff format --check . | AVAILABLE |
 | lint | .venv/bin/ruff check . | AVAILABLE |
+| typecheck | reason=.venv/bin/mypy is not installed in the approved local toolchain | BLOCKED |
 | unit | .venv/bin/pytest | AVAILABLE |
+| new-tests | reason=the wrapper runs the base-aware spec-lint intrinsically with trusted ticket and base arguments | BLOCKED |
+| coverage | reason=coverage is governed by coverage-policy.md and currently lacks an external signed owner approval or executable baseline | BLOCKED |
+| no-todos | reason=no protected repository command has been approved for this diff-scoped check | BLOCKED |
+| no-debug-logging | reason=no protected repository command has been approved for this diff-scoped check | BLOCKED |
+| docs | reason=the documentation applicability check still requires reviewer judgment | BLOCKED |
+| reachability | reason=the reachability check still requires reviewer judgment | BLOCKED |
+| spec-lint | reason=the wrapper runs the base-aware spec-lint intrinsically with trusted ticket and base arguments | BLOCKED |
 | secret-scan | bash scripts/secret_scan.sh | AVAILABLE |
 
 Repository-only checks that need Docker, pinned CI scanners, browser dependencies,
