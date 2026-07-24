@@ -20,6 +20,7 @@ import {
   decodeFinding,
   decodeFindings,
   decodeReports,
+  decodeTargetCatalog,
   decodeTargets,
 } from "../api/read-models";
 import { AdversarialText } from "../components/AdversarialText";
@@ -67,6 +68,7 @@ import {
   type FindingReadModel,
   type FindingVerificationReadModel,
   type ReportReadModel,
+  type TargetCatalogEntryReadModel,
   type TargetReadModel,
 } from "../types";
 import { CostsScreen, TracesScreen } from "./ObservabilityScreens";
@@ -1410,11 +1412,6 @@ function TargetManagement({
           recovery control here.
         </p>
       </div>
-      <StateNotice
-        state="unavailable"
-        reason="trusted_target_authoring_catalog_missing"
-        detail="Target and surface authoring remains closed until the server exposes a reviewed catalog. The browser never supplies target URLs, adapters, or credential references as authority."
-      />
       {template && (
         <div className="evidence-stack">
           <p className="field-label">Exact campaign authorization request</p>
@@ -1484,13 +1481,24 @@ function TargetManagement({
 }
 
 export function TargetsScreen({ client, principal }: ScreenProps) {
+  const catalog = useResource<TargetCatalogEntryReadModel[]>(
+    client,
+    RESOURCE_PATHS.targetCatalog,
+    decodeTargetCatalog,
+  );
   const targets = useResource<TargetReadModel[]>(
     client,
     RESOURCE_PATHS.targets,
     decodeTargets,
   );
   const [selectedIdentity, setSelectedIdentity] = useState<string | null>(null);
+  const [catalogIdentity, setCatalogIdentity] = useState("");
   const records = targets.result.data ?? [];
+  const catalogRecords = catalog.result.data ?? [];
+  const selectedCatalog = catalogRecords.find(
+    (entry) => `${entry.target_id}\n${entry.version}` === catalogIdentity,
+  ) ?? null;
+  const canManageTargets = hasPermission(principal, PERMISSIONS.targetsManage);
   const selected = selectedIdentity
     ? records.find(
         (target) => `${target.target_id}\n${target.version}` === selectedIdentity,
@@ -1506,6 +1514,79 @@ export function TargetsScreen({ client, principal }: ScreenProps) {
         title="Targets"
         detail="Only persisted immutable target and attack-surface versions may be selected for dispatch."
       />
+      <Panel
+        title="Trusted target catalog"
+        meta="server-owned registration"
+        eyebrow="CONTROL PLANE"
+      >
+        <ResourceView
+          result={catalog.result}
+          emptyLabel="No reviewed target versions are available in the server catalog."
+        >
+          {(data) => (
+            <div className="evidence-stack">
+              <label className="form-field">
+                <span>Reviewed target version</span>
+                <select
+                  aria-label="Reviewed target version"
+                  value={catalogIdentity}
+                  onChange={(event) => setCatalogIdentity(event.currentTarget.value)}
+                >
+                  <option value="">Select an exact catalog entry</option>
+                  {data.map((entry) => (
+                    <option
+                      key={`${entry.target_id}:${entry.version}`}
+                      value={`${entry.target_id}\n${entry.version}`}
+                    >
+                      {entry.name} · {entry.target_id}@{entry.version} · {entry.registration_state}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              {selectedCatalog && (
+                <EvidenceGrid values={[
+                  { label: "Target", value: selectedCatalog.target_id },
+                  { label: "Version", value: selectedCatalog.version },
+                  { label: "Environment", value: selectedCatalog.environment },
+                  { label: "Surfaces", value: count(selectedCatalog.surface_count) },
+                  { label: "Registration", value: selectedCatalog.registration_state },
+                ]} />
+              )}
+              <CommandButton
+                client={client}
+                path={COMMAND_PATHS.createTarget}
+                payload={selectedCatalog
+                  ? {
+                      target_id: selectedCatalog.target_id,
+                      version: selectedCatalog.version,
+                    }
+                  : {}}
+                label="Register exact catalog target"
+                allowed={Boolean(
+                  canManageTargets
+                  && selectedCatalog?.registration_state === "available",
+                )}
+                unavailableReason={!canManageTargets
+                  ? PERMISSIONS.targetsManage
+                  : selectedCatalog?.registration_state === "registered"
+                    ? "an unregistered catalog target"
+                    : selectedCatalog?.registration_state === "conflict"
+                      ? "manual resolution of the persisted immutable-state conflict"
+                      : "an exact reviewed target version"}
+                onAcknowledged={() => {
+                  catalog.refresh();
+                  targets.refresh();
+                }}
+              />
+              <p className="data-note">
+                The browser submits only the selected target ID and version. URLs, hosts,
+                adapters, credentials, authorization references, and surface definitions remain
+                server-owned.
+              </p>
+            </div>
+          )}
+        </ResourceView>
+      </Panel>
       {records.length > 0 && (
         <>
           <MetricStrip label="Target summary" values={[
@@ -1552,12 +1633,6 @@ export function TargetsScreen({ client, principal }: ScreenProps) {
             />
           )}
         </ResourceView>
-        <div className="command-row">
-          <MissingCommand
-            label="Create target from trusted catalog"
-            dependency="a server-projected reviewed target catalog (browser URLs and credentials are never accepted)"
-          />
-        </div>
       </Panel>
       {selected && (
         <TargetManagement

@@ -38,6 +38,7 @@ import type {
   ReportReadModel,
   ResilienceReadModel,
   SafetyCapsReadModel,
+  TargetCatalogEntryReadModel,
   TargetReadModel,
   ToolScopeReadModel,
   TraceReadModel,
@@ -1565,6 +1566,29 @@ const decodeTarget = (value: unknown): TargetReadModel => {
 
 export const decodeTargets: ReadModelDecoder<TargetReadModel[]> = (value) =>
   records(value, "targets", decodeTarget);
+
+const decodeTargetCatalogEntry = (value: unknown): TargetCatalogEntryReadModel => {
+  const name = "target catalog entry";
+  const result = record(value, name);
+  exactKeys(result, [
+    "target_id",
+    "version",
+    "name",
+    "environment",
+    "synthetic_data_only",
+    "surface_count",
+    "registration_state",
+  ], name);
+  for (const key of ["target_id", "version", "name"]) string(result, key, name);
+  literal(result, "environment", ["local", "staging", "production"], name);
+  if (result.synthetic_data_only !== true) invalid(name);
+  number(result, "surface_count", name, { integer: true, minimum: 1 });
+  literal(result, "registration_state", ["available", "registered", "conflict"], name);
+  return result as TargetCatalogEntryReadModel;
+};
+
+export const decodeTargetCatalog: ReadModelDecoder<TargetCatalogEntryReadModel[]> = (value) =>
+  records(value, "target catalog", decodeTargetCatalogEntry);
 
 export const decodeConfiguration: ReadModelDecoder<ConfigurationReadModel> = (value) => {
   const name = "configuration";

@@ -5,7 +5,6 @@ from __future__ import annotations
 import datetime
 import hashlib
 import json
-import os
 import re
 from collections import Counter
 from collections.abc import Mapping
@@ -43,6 +42,11 @@ from agentforge.control_plane.errors import (
     RecordConflictError,
     RecordNotFoundError,
 )
+from agentforge.control_plane.serialization import (
+    content_hash,
+    surface_payload,
+    target_payload,
+)
 from agentforge.correlation import campaign_trace_id
 from agentforge.migration_config import normalize_psycopg_url
 from agentforge.policy.recorder import (
@@ -57,7 +61,11 @@ from agentforge.security_tools.workbench import (
     inspect_sanitized_exchange,
     security_workbench_records,
 )
-from agentforge.target.catalog import SYNTHETIC_TARGET_ID, TrustedTargetCatalog
+from agentforge.target.catalog import (
+    SYNTHETIC_TARGET_ID,
+    TargetCatalogError,
+    TrustedTargetCatalog,
+)
 from agentforge.target.spec import (
     AttackSurfaceDefinition,
     HostedRunBinding,
@@ -771,6 +779,7 @@ class PostgresApiBackend(ApiBackend):
         hosted_runtime_available: bool = False,
         hosted_provider_bindings_verified: bool = False,
         corpus: AuthoredCorpus | None = None,
+        target_catalog: TrustedTargetCatalog | None = None,
     ) -> None:
         self._engine = engine
         self._store = ControlPlaneStore(engine, environment=environment)
@@ -779,6 +788,7 @@ class PostgresApiBackend(ApiBackend):
         self._hosted_runtime_available = hosted_runtime_available
         self._hosted_provider_bindings_verified = hosted_provider_bindings_verified
         self._corpus = corpus
+        self._target_catalog = target_catalog or TrustedTargetCatalog.from_environment(environment)
 
     def _attack_case_evidence(self, source: Mapping[str, Any]) -> dict[str, Any]:
         case_id = str(source.get("case_id") or "unavailable")
@@ -999,6 +1009,85 @@ class PostgresApiBackend(ApiBackend):
             "integrity": None,
             "redaction_state": "synthetic_identifiers_redacted",
         }
+
+    def _target_catalog_projection(
+        self,
+        connection: Any,
+        *,
+        organization_id: str,
+    ) -> list[dict[str, Any]]:
+        """Project only non-authoritative catalog identity and registration state."""
+
+        result: list[dict[str, Any]] = []
+        for entry in self._target_catalog.entries:
+            target = entry.target
+            target_row = (
+                connection.execute(
+                    text(
+                        "SELECT d.content_hash, "
+                        "(SELECT e.to_lifecycle FROM target_lifecycle_events e "
+                        " WHERE e.organization_id = d.organization_id "
+                        " AND e.target_id = d.target_id AND e.target_version = d.version "
+                        " ORDER BY e.id DESC LIMIT 1) AS lifecycle "
+                        "FROM target_definitions d "
+                        "WHERE d.organization_id = :org AND d.target_id = :target_id "
+                        "AND d.version = :version"
+                    ),
+                    {
+                        "org": organization_id,
+                        "target_id": target.target_id,
+                        "version": target.version,
+                    },
+                )
+                .mappings()
+                .one_or_none()
+            )
+            registration_state = "available"
+            if target_row is not None:
+                surface_rows = _rows(
+                    connection,
+                    "SELECT s.surface_id, s.version, s.content_hash "
+                    "FROM attack_surface_definitions s "
+                    "WHERE s.organization_id = :org AND s.target_id = :target_id "
+                    "AND s.target_version = :version",
+                    {
+                        "org": organization_id,
+                        "target_id": target.target_id,
+                        "version": target.version,
+                    },
+                )
+                expected_surfaces = {
+                    (surface.surface_id, surface.version): content_hash(surface_payload(surface))
+                    for surface in entry.surfaces
+                }
+                actual_surfaces = {
+                    (str(row["surface_id"]), str(row["version"])): str(row["content_hash"])
+                    for row in surface_rows
+                }
+                registration_state = (
+                    "registered"
+                    if target_row["content_hash"] == content_hash(target_payload(target))
+                    and target_row["lifecycle"]
+                    in {
+                        TargetLifecycle.READY.value,
+                        TargetLifecycle.DISABLED.value,
+                        TargetLifecycle.ARCHIVED.value,
+                    }
+                    and actual_surfaces == expected_surfaces
+                    else "conflict"
+                )
+            result.append(
+                {
+                    "target_id": target.target_id,
+                    "version": target.version,
+                    "name": target.name,
+                    "environment": target.environment.value,
+                    "synthetic_data_only": target.synthetic_data_only,
+                    "surface_count": len(entry.surfaces),
+                    "registration_state": registration_state,
+                }
+            )
+        return result
 
     def read(self, resource, principal, *, identifiers=None):
         identifiers = dict(identifiers or {})
@@ -3256,6 +3345,11 @@ class PostgresApiBackend(ApiBackend):
                                 else "live",
                                 "maximum_caps": row["safety_caps"],
                             }
+                elif resource == "target_catalog":
+                    rows = self._target_catalog_projection(
+                        connection,
+                        organization_id=principal.organization_id,
+                    )
                 elif resource == "audit":
                     rows = _rows(
                         connection,
@@ -3325,11 +3419,19 @@ class PostgresApiBackend(ApiBackend):
     def command(self, command, principal, payload, *, idempotency_key, identifiers=None):
         identifiers = dict(identifiers or {})
         try:
-            if command in {"create_target", "revise_target"}:
-                # Browser-supplied hosts, adapters, and credential references cannot create
-                # server authority. The immutable store primitive remains available to a later
-                # reviewed server-side catalog/provisioning workflow, but the public command
-                # stays closed until that trusted source exists.
+            if command == "create_target":
+                entry = self._target_catalog.register(
+                    self._store,
+                    principal=principal,
+                    target_id=str(payload["target_id"]),
+                    version=str(payload["version"]),
+                    idempotency_key=idempotency_key,
+                )
+                return CommandResult.completed(
+                    entry.target.version,
+                    resource_id=entry.target.target_id,
+                )
+            if command == "revise_target":
                 return CommandResult.unavailable("trusted_target_authoring_catalog_missing")
             if command == "change_target_lifecycle":
                 target = self._store.transition_target(
@@ -3483,7 +3585,13 @@ class PostgresApiBackend(ApiBackend):
             raise AuthorizationError() from exc
         except (IdempotencyConflictError, RecordConflictError, RecordNotFoundError) as exc:
             raise ApiConflict("immutable control-plane conflict") from exc
-        except (InvalidControlPlaneInput, ValueError, KeyError, TypeError) as exc:
+        except (
+            InvalidControlPlaneInput,
+            TargetCatalogError,
+            ValueError,
+            KeyError,
+            TypeError,
+        ) as exc:
             raise ApiConflict("invalid control-plane command") from exc
         except ControlPlaneError as exc:
             raise ApiBackendUnavailable("control-plane command unavailable") from exc
@@ -3845,13 +3953,6 @@ def build_postgres_backend(
         return UnavailableApiBackend()
     engine = create_engine(normalize_psycopg_url(database_url), pool_pre_ping=True, future=True)
     corpus = resolve_workload()
-    required_org = os.environ.get("CLERK_REQUIRED_ORG_ID")
-    if required_org:
-        catalog = TrustedTargetCatalog.from_environment(environment)
-        catalog.synchronize(
-            ControlPlaneStore(engine, environment=environment),
-            organization_id=required_org,
-        )
     return PostgresApiBackend(
         engine,
         environment=environment,

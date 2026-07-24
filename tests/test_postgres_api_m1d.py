@@ -1485,17 +1485,59 @@ def test_target_projection_is_org_scoped_and_never_returns_credential_reference(
     assert "secretref://" not in response.text
 
 
-def test_browser_target_and_surface_authoring_remain_unavailable_without_trusted_catalog(
+def test_browser_registers_only_an_exact_server_owned_catalog_bundle(
     migrated_db: Engine,
 ) -> None:
     _clean(migrated_db)
     manager = _principal(LAUNCHER_ID, "org:console:read", "org:targets:manage")
     client = TestClient(_app(migrated_db, manager))
 
-    target = client.post(
+    catalog = client.get("/api/v1/target-catalog")
+    assert catalog.status_code == 200
+    assert catalog.json()["state"] == "ready"
+    assert catalog.json()["data"] == [
+        {
+            "target_id": "synthetic-copilot",
+            "version": "1.1.0",
+            "name": "Deterministic offline Clinical Co-Pilot rehearsal",
+            "environment": "staging",
+            "synthetic_data_only": True,
+            "surface_count": 1,
+            "registration_state": "available",
+        }
+    ]
+    for forbidden in (
+        "synthetic.invalid",
+        "openemr",
+        "authorization://",
+        "oracle://",
+        "secretref://",
+        "base_url",
+        "allowlisted_hosts",
+        "adapter_kind",
+        "credential_ref",
+    ):
+        assert forbidden not in catalog.text
+
+    browser_authority = client.post(
         "/api/v1/targets",
         json=_target_payload(),
         headers=_headers("browser-target-authoring-0001"),
+    )
+    target = client.post(
+        "/api/v1/targets",
+        json={"target_id": "synthetic-copilot", "version": "1.1.0"},
+        headers=_headers("catalog-target-registration-0001"),
+    )
+    repeated = client.post(
+        "/api/v1/targets",
+        json={"target_id": "synthetic-copilot", "version": "1.1.0"},
+        headers=_headers("catalog-target-registration-0001"),
+    )
+    duplicate_selection = client.post(
+        "/api/v1/targets",
+        json={"target_id": "synthetic-copilot", "version": "1.1.0"},
+        headers=_headers("catalog-target-registration-0002"),
     )
     surface = client.post(
         "/api/v1/targets/copilot-api/surfaces",
@@ -1503,15 +1545,38 @@ def test_browser_target_and_surface_authoring_remain_unavailable_without_trusted
         headers=_headers("browser-surface-authoring-0001"),
     )
 
-    assert target.status_code == 503
-    assert target.json()["reason_code"] == "trusted_target_authoring_catalog_missing"
+    assert browser_authority.status_code == 422
+    assert target.status_code == 200
+    assert target.json() == {
+        "status": "completed",
+        "acknowledgement_id": "1.1.0",
+        "resource_id": "synthetic-copilot",
+    }
+    assert repeated.json() == target.json()
+    assert duplicate_selection.status_code == 409
     assert surface.status_code == 503
     assert surface.json()["reason_code"] == "trusted_surface_authoring_catalog_missing"
+    registered = client.get("/api/v1/target-catalog")
+    assert registered.json()["data"][0]["registration_state"] == "registered"
     with migrated_db.connect() as connection:
-        assert connection.execute(text("SELECT count(*) FROM target_definitions")).scalar_one() == 0
+        assert connection.execute(text("SELECT count(*) FROM target_definitions")).scalar_one() == 1
         assert (
             connection.execute(text("SELECT count(*) FROM attack_surface_definitions")).scalar_one()
-            == 0
+            == 1
+        )
+        assert (
+            connection.execute(
+                text("SELECT to_lifecycle FROM target_lifecycle_events ORDER BY id DESC LIMIT 1")
+            ).scalar_one()
+            == "ready"
+        )
+        assert (
+            connection.execute(
+                text(
+                    "SELECT actor_user_id FROM audit_events WHERE event_type = 'target.registered'"
+                )
+            ).scalar_one()
+            == LAUNCHER_ID
         )
 
 

@@ -267,10 +267,23 @@ describe("target console operability", () => {
       };
     });
     const client = {
-      read: vi.fn(async () => ({
-        state: "ready" as const,
-        data: [target(enabled)],
-      })),
+      read: vi.fn(async (path: string) => path === "target-catalog"
+        ? {
+            state: "ready" as const,
+            data: [{
+              target_id: "target-1",
+              version: "1.0.0",
+              name: "Registered target",
+              environment: "staging",
+              synthetic_data_only: true,
+              surface_count: 1,
+              registration_state: "registered",
+            }],
+          }
+        : {
+            state: "ready" as const,
+            data: [target(enabled)],
+          }),
       command,
     } as unknown as ApiClient;
 
@@ -292,9 +305,59 @@ describe("target console operability", () => {
     const enable = await screen.findByRole("button", { name: "Enable surface" });
     expect((enable as HTMLButtonElement).disabled).toBe(true);
     expect((screen.getByRole("button", {
-      name: "Create target from trusted catalog",
+      name: "Register exact catalog target",
     }) as HTMLButtonElement).disabled).toBe(true);
-    expect(screen.getByText(/browser never supplies target URLs/i)).toBeTruthy();
+    expect(screen.getByText(/browser submits only the selected target ID and version/i)).toBeTruthy();
+  });
+
+  it("registers only the exact selected server-owned catalog identity", async () => {
+    let registrationState: "available" | "registered" = "available";
+    const command = vi.fn(async (path: string, payload: object) => {
+      expect(path).toBe("targets");
+      expect(payload).toEqual({ target_id: "target-2", version: "2.0.0" });
+      registrationState = "registered";
+      return {
+        status: "completed" as const,
+        acknowledgement_id: "2.0.0",
+        resource_id: "target-2",
+      };
+    });
+    const read = vi.fn(async (path: string) => path === "target-catalog"
+      ? {
+          state: "ready" as const,
+          data: [{
+            target_id: "target-2",
+            version: "2.0.0",
+            name: "Reviewed target",
+            environment: "staging",
+            synthetic_data_only: true,
+            surface_count: 2,
+            registration_state: registrationState,
+          }],
+        }
+      : { state: "empty" as const, data: [] });
+    const client = { read, command } as unknown as ApiClient;
+
+    render(
+      <TargetsScreen
+        client={client}
+        principal={principal}
+        entityId={null}
+        getToken={async () => "session"}
+      />,
+    );
+
+    fireEvent.change(await screen.findByLabelText("Reviewed target version"), {
+      target: { value: "target-2\n2.0.0" },
+    });
+    const register = screen.getByRole("button", { name: "Register exact catalog target" });
+    expect((register as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(register);
+
+    await waitFor(() => expect(command).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(read.mock.calls.filter(([path]) => path === "target-catalog"))
+      .toHaveLength(2));
+    expect(screen.queryByText("https://")).toBeNull();
   });
 });
 

@@ -448,6 +448,16 @@ export interface TargetReadModel extends JsonRecord {
   created_at: string;
 }
 
+export interface TargetCatalogEntryReadModel extends JsonRecord {
+  target_id: string;
+  version: string;
+  name: string;
+  environment: "local" | "staging" | "production";
+  synthetic_data_only: true;
+  surface_count: number;
+  registration_state: "available" | "registered" | "conflict";
+}
+
 export interface ConfigurationReadModel extends JsonRecord {
   snapshot_id: string;
   version: number;
