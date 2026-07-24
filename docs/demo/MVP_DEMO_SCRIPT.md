@@ -6,108 +6,139 @@
 
 **Staging shell:** <https://web-staging-8e30.up.railway.app>
 
-This is a recording checklist, not evidence that the newest code is deployed. Do not record against
-the currently audited older release (`23490ea`, schema `0013`). Replace no values by hand: show the
-identities and measurements returned by the final UI/API and linked evidence.
+This is an executable recording checklist, not evidence that the newest code is deployed. The currently
+audited Railway release is still `23490ea` at database revision `0013`; the moving candidate has one
+source migration head at `0018`. Do not record the candidate narrative against the older release, use
+fake/demo authentication, substitute a default corpus, or fill any evidence field by hand.
 
-## Before recording
+## Before recording: create the real evidence
 
-Stop rather than record if any prerequisite is missing:
+Stop if any prerequisite is missing:
 
-1. GitHub Actions is green for the exact commit shown by Railway Web, Runner, and Scheduler.
-2. Railway reports the same source commit and the database reports the single packaged Alembic head.
-3. The normal Web/API workflow has a persisted, unexpired exact-scope authorization for the security
-   owner's frozen corpus hash and Judge/configuration identity.
-4. The target, allowlist, synthetic-data assertion/attestation, budget, logical and physical request
-   caps, rate, timeout, retry policy, nonce, and abort control are visible and correct.
-5. A distinct Operator and Approver are available. Never show passwords, bearer/session values,
-   organization IDs, target SIDs, provider credentials, or Langfuse keys.
-6. The campaign has completed and `scripts/verify_langfuse_campaign.py` has reconciled PostgreSQL with
-   Langfuse Cloud. Keep only the redacted query-back artifact.
-7. The demo-video URL is not yet present in this repository; attach the actual URL after recording.
+1. Save the final release, push its identical commit to GitHub and the GitLab mirror, and wait for
+   authoritative GitHub Actions to pass. Deploy that exact saved release to **staging** and migrate its
+   database through the single `0018` head. Confirm Railway Web, Runner, and Scheduler expose the same
+   commit; only Web may be public.
+2. Load the security owner's exact **frozen 100-case corpus**. Record its corpus ID and SHA-256; do not
+   generate, expand, or substitute a corpus for the demo.
+3. Stage the exact configuration and verify its immutable identities:
+
+   | Role | Requested model | Exact upstream route |
+   |---|---|---|
+   | Orchestrator | `anthropic/claude-opus-4.8` | `amazon-bedrock/eu-west-1` |
+   | Red Team | `qwen/qwen3.5-397b-a17b` | `atlas-cloud/fp8` |
+   | Judge | `google/gemini-2.5-pro` | `google-vertex/global` |
+   | Documentation | `openai/gpt-5.4` | `azure/eu` |
+
+4. Through the normal UI/API, sign in to the exact Headshot Organization as a real Operator. On
+   **Targets**, click **Request exact campaign authorization** only after checking the exact
+   target/surface/version, literal destination and allowlist, synthetic-data assertion and attestation,
+   corpus hash, configuration/Judge identity, budget, logical and physical request caps, zero target
+   retries, rate, timeout, expiry, nonce, and abort control.
+5. Sign in separately as a different real Approver. On **Approvals**, inspect the operation hash and click
+   **Approve exact scope**. Return as the Operator and click **Launch approved campaign**. Authentication
+   and role labels alone never authorize target traffic.
+6. Let that exact campaign finish. Do not replace failures or delayed UI state with fixtures. Run
+   `scripts/verify_langfuse_campaign.py` against the campaign and retain only its redacted query-back
+   artifact. PostgreSQL and Langfuse must reconcile before recording.
+7. Have the actual demo-video and social-post URLs ready for the submission index after publication. No
+   such URLs are currently available in the repository; never invent them.
+
+Never show passwords, bearer/session values, Organization IDs, target SIDs, provider credentials, secret
+references that reveal account structure, or Langfuse keys.
 
 ## 0:00–0:30 — Release and trust boundary
 
 **Open:** release/status view, then **Targets**.
 
-Show the exact commit, migration revision, environment, public Web URL, and the authorized external
-target. State the values visible on screen.
+Show the final commit, migration `0018`, staging environment, public Web URL, private-service status, and
+the authorized external target. Read the actual values on screen.
 
 > “Headshot is a Railway-hosted adversarial evaluation control plane. Only Web is public; Runner,
-> Scheduler, and PostgreSQL are private. The target is external, and a healthy target does not
-> authorize a campaign.”
+> Scheduler, and PostgreSQL are private. The target is external, and target health or a signed-in user
+> does not authorize a campaign.”
 
-## 0:30–1:15 — Exact authorization
+## 0:30–1:10 — Exact human authorization
 
-**Open:** the completed campaign's authorization detail.
+**Open:** **Approvals** and select the completed campaign's authorization.
 
-Show the target/surface versions, literal host/allowlist, synthetic-only controls, frozen corpus ID and
-SHA-256, hosted configuration/Judge identity, caps, rate, timeout, nonce, operation hash, and distinct
-launcher/approver IDs in redacted form.
+Show the target and surface versions, literal allowlisted host, synthetic-only controls, frozen 100-case
+corpus ID/SHA-256, hosted configuration and Judge identities, caps, rate, timeout/expiry, nonce, operation
+hash, and distinct launcher/approver identities in redacted form.
 
-> “Authentication permits a user to request an operation; it never authorizes target traffic. This
-> immutable operation hash binds every dispatch-relevant value. A different Approver authorized this
-> exact scope, and the Runner rechecked it before execution.”
+> “A real Operator requested this immutable scope and a different real Approver authorized it. The
+> operation hash binds every dispatch-relevant value. The Runner rechecked the exact grant before every
+> physical target request.”
 
-Do not repeat the approval live unless a separate campaign is explicitly authorized for the recording.
+Do not reenact an approval with the same identity or create a second run unless that second operation has
+its own explicit authorization.
 
-## 1:15–2:15 — Real ordered execution
+## 1:10–2:15 — Ordered four-agent execution
 
-**Open:** **Live** or **Birdseye** for the authorized run.
+**Open:** **Live → Birdseye**, then select one attempt with complete lineage.
 
-Show persisted events in order:
+Show persisted events in exact order:
 
-1. Orchestrator execution;
-2. Red Team case selection/generation lineage;
-3. trusted Policy Gateway and recorded physical target request;
-4. independent Judge verdict with deterministic-oracle status;
-5. Documentation execution only where a finding produced a draft report.
+1. Orchestrator — requested `anthropic/claude-opus-4.8`, route
+   `amazon-bedrock/eu-west-1`;
+2. Red Team — requested `qwen/qwen3.5-397b-a17b`, route `atlas-cloud/fp8`;
+3. the trusted Policy Gateway and physical target request for the byte-exact frozen seed;
+4. Judge — requested `google/gemini-2.5-pro`, route `google-vertex/global`, with its deterministic
+   oracle/canary fields;
+5. Documentation — requested `openai/gpt-5.4`, route `azure/eu`, only if the Judge produced a validated
+   finding eligible for a draft report.
 
-> “These are persisted executions, not optimistic UI nodes. PostgreSQL records role order, parent
-> campaign/run/attempt IDs, provider and returned model, latency, usage, retries, errors, and actual
-> cost where the provider supplied it. Deterministic evidence remains decisive; an uncalibrated model
-> assessment is advisory and does not block the campaign.”
+> “These are persisted executions, not optimistic UI nodes. The hosted Red Team made one real traced
+> generation for this frozen seed, but its output was unreviewed. Headshot stored only its hash and
+> quarantine disposition, discarded the generated text, and dispatched the byte-exact authorized seed.
+> A provider, trace, or budget failure would have stopped the run before target dispatch.”
 
-If the hosted Red Team was not part of the final composed run, say so. Do not call a deterministic
-seed-selection execution a hosted generation.
+> “The owner’s calibration passed its documented thresholds for different captured provider identities,
+> but it is not human-enabled and does not match these exact routes. This model Judge is therefore
+> advisory. Deterministic-oracle precedence is decisive, and a calibration mismatch does not block the
+> campaign.”
 
-## 2:15–3:00 — Findings, reports, and regression status
+If Documentation did not run because there was no validated finding, show that conditional state. Do not
+invent a Documentation event to make the diagram look complete.
 
-**Open:** **Findings**, one evidence chain, and the linked draft report.
+## 2:15–3:00 — Evidence, findings, and reports
 
-Show the attempt/result/verdict/finding/report lineage and human publication state. Use only synthetic,
-redacted evidence.
+**Open:** **Coverage & Regression**, **Findings**, and one evidence chain.
 
-> “The Red Team cannot author evidence or judge itself. The recorder's content-addressed result feeds
-> the independent Judge. Documentation drafts only from validated findings, and critical publication
-> remains human-gated.”
+Show the attempt/result/verdict/finding/report lineage and publication state. Read the actual campaign
+case, physical-request, verdict, finding, and draft-report totals.
 
-State the actual campaign totals and verdict states. Do not present scanner-only, simulated,
-`NOT_EXECUTED`, `INDETERMINATE`, or `ERROR` rows as confirmed exploits. Describe regression as planned,
-admitted, replayed, or live-verified exactly as the stored state shows.
+> “The Red Team cannot author evidence or judge itself. The recorder’s content-addressed result feeds
+> the independent Judge. Documentation consumes validated findings only, and critical publication and
+> remediation remain separately human-gated.”
+
+Use only synthetic, redacted evidence. Never present scanner-only, simulated, `NOT_EXECUTED`,
+`INDETERMINATE`, or `ERROR` rows as confirmed exploits. Describe regression as planned, admitted,
+replayed, or live-verified only when the stored state supports that word. Link the owner-maintained
+[`../vulnerabilities/README.md`](../vulnerabilities/README.md) without changing its conclusions.
 
 ## 3:00–4:00 — Langfuse and cost reconciliation
 
-**Open:** **Traces/Agents** and **Costs**, then the redacted query-back summary.
+**Open:** **Traces**, **Agents**, **Costs**, and the redacted query-back artifact.
 
-Show the shared campaign trace, native agent/generation parentage, same-attempt target-request child,
-provider/model identity, tokens, latency, retries, errors, and cost. Reconcile the displayed Langfuse
-counts and totals to PostgreSQL.
+Show the campaign trace; AGENT observations; one `provider.openrouter.attempt` GENERATION for every
+physical provider invocation; same-attempt target request; configured and returned provider/model;
+latency; input/output tokens; retries; errors; and actual cost where supplied. Show parent
+campaign/run/attempt IDs in redacted form and reconcile role/call/token/cost totals to PostgreSQL.
 
-> “PostgreSQL is the system of record. An SDK flush is not proof of delivery; Headshot marks export
-> verified only after paged Langfuse query-back reconciles the exact observations. Missing usage or
-> provider-estimated cost remains visibly missing or estimated.”
+> “PostgreSQL is the system of record. An SDK flush is not delivery proof. Headshot marks observations
+> verified only after paged Langfuse Cloud query-back matches the durable execution and provider-event
+> ledgers. Missing usage remains missing, and provider-estimated values remain labeled estimated.”
 
-Read the actual campaign cost and timing from the verified evidence. Do not reuse the obsolete
-“nine cents” or “321 seconds” narration.
+Read actual totals from the reconciled artifact. Do not reuse historical “nine cents,” “321 seconds,”
+or any local/simulated measurement.
 
 ## 4:00–4:30 — Close
 
-> “This run demonstrates one bounded, synthetic-only, separately authorized campaign through the real
-> UI/API, private execution plane, independent deterministic-oracle-first Judge, persisted evidence,
-> gated reporting, and Langfuse query-back. The submission distinguishes source implementation from
-> what this exact release and campaign proved.”
+> “This exact staging release completed one bounded, synthetic-only, separately authorized frozen
+> 100-case campaign through the real UI/API. It proves ordered four-agent lineage, deterministic-first
+> judging, persisted evidence, gated reporting, and Langfuse query-back for this release and no other.”
 
-End on the submission index, which must contain the actual repository, deployed app, threat model,
-users, architecture, frozen corpus/results, vulnerability index, cost analysis, demo, and social-post
-links. If either publication URL is unavailable, leave it explicitly pending; never invent one.
+End on the submission index with real links to the repository, deployed app, threat model, users,
+architecture, frozen corpus/results, vulnerability index, cost analysis, demo, and social post. If either
+publication URL is unavailable, leave it explicitly pending.

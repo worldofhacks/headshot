@@ -14,9 +14,10 @@ context for what an exploit puts at risk.)
 All human users enter through **Clerk** and must be invited into the exact required **Headshot**
 Organization for the environment. Personal accounts and user-created organizations are disabled. MFA is
 mandatory for every member, with TOTP plus backup codes preferred; SMS is not the only factor. Clerk and
-backend authorization are implemented and offline-tested. The older deployed release returns `401` for
-protected routes, but exact live Headshot membership, role assignments, MFA, and the two-real-user workflow
-have not yet been verified. The newest candidate implementation is not deployed.
+backend authorization are implemented and offline-tested. That source-level result is not a live identity
+claim: exact Headshot Organization membership, custom permission assignment, MFA, and the two-real-user
+Operator/Approver workflow have not been verified in Railway. The older deployed release returns `401` for
+protected routes, but the newest candidate remains undeployed.
 
 The backend authorizes the following custom organization permissions from verified Clerk session claims.
 Frontend role labels and client-supplied roles/permissions are display data only and create no authority.
@@ -82,12 +83,31 @@ authorization to operate.
 
 The PRD's north star — *"adapting as attackers adapt, without a human in the loop for every step"* —
 makes autonomous operation a stated requirement. In the candidate source, the Orchestrator reads
-persisted signals, the Runner selects only already-authorized corpus cases, the independent Judge applies
-deterministic-oracle precedence, and Documentation drafts reports only for findings. The hosted Red Team
-generation component exists and is tested, but it is not yet wired into the Runner's
-reviewed-candidate/fresh-authorization loop; full adaptive live operation must not be inferred from the
-four-role ledger. Humans stay in the loop for live authorization and publication/remediation gates, not
-for every internal step.
+persisted signals and orders work. For each selected frozen seed, the hosted Red Team performs one real,
+traced generation. Because that model output has not been reviewed or included in the authorization-bound
+corpus, the Runner records only its hash and disposition, quarantines and discards the text, and dispatches
+the byte-exact authorized seed. The independent Judge then applies deterministic-oracle precedence, and
+Documentation runs only for a validated finding that can produce a draft report. This gives the durable
+lineage **Orchestrator → Red Team → Judge → Documentation** without letting unreviewed generation widen a
+campaign. Full adaptive mutation still requires review, a new corpus hash, and fresh authorization.
+
+The candidate pins each hosted role to one exact OpenRouter model/route pair: Orchestrator
+`anthropic/claude-opus-4.8` via `amazon-bedrock/eu-west-1`; Red Team
+`qwen/qwen3.5-397b-a17b` via `atlas-cloud/fp8`; Judge `google/gemini-2.5-pro` via
+`google-vertex/global`; and Documentation `openai/gpt-5.4` via `azure/eu`. The latest owner calibration
+passed its documented thresholds for different captured provider identities, but it is neither
+human-enabled nor identity-compatible with these exact routes. The model Judge therefore remains
+fail-closed/advisory; deterministic oracles are decisive, and that status does not block a campaign.
+
+Every role execution and physical provider attempt is persisted in PostgreSQL before external projection.
+Langfuse is accepted as reconciled evidence only after query-back matches the campaign/run/attempt
+parentage, role order, configured and returned provider/model, latency, token fields, retries, errors, and
+actual cost where supplied. Missing provider values stay marked missing or estimated.
+
+The implementation/deployment distinction matters to every user: candidate source has one migration head
+at `0018`, while the currently audited GitHub/GitLab `main` and Railway release remain `23490ea` with
+database revision `0013`. No user should treat the four-role or Langfuse behavior above as live-verified
+until the exact candidate is deployed to staging and one authorized campaign is reconciled.
 
 That machine user is not a Clerk user. Agents use service identity, per-agent database roles, provider
 credentials, and target-scoped credential bindings. Human session tokens are never workload credentials,
@@ -101,8 +121,8 @@ The PRD demands this justification, and it is defensible line by line:
 
 1. **Attacks mutate; static suites rot.** "Defenses built around a small number of known examples
    rarely hold as attackers adapt." A human-maintained payload list becomes stale. A governed generator
-   can propose variants from partial results, but every changed corpus hash needs review and fresh
-   authorization before dispatch. That complete feedback loop remains a release gap.
+   can propose variants from partial results, but an in-flight campaign may dispatch only its byte-exact
+   frozen corpus. Every changed corpus hash needs review and fresh authorization before dispatch.
 2. **Continuous ≠ occasional, and humans are the bottleneck.** The goal is *continuous* stress
    testing across every target version. A human in the loop for every prompt caps throughput at
    human speed; the value is precisely in the runs that happen while no one is watching.
