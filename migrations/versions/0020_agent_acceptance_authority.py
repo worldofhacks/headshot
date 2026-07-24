@@ -116,6 +116,63 @@ def _acceptance_attempt_guard() -> str:
     )
 
 
+def _acceptance_execution_guard() -> str:
+    return (
+        "CREATE OR REPLACE FUNCTION m1d_validate_agent_acceptance_execution() "
+        "RETURNS trigger LANGUAGE plpgsql AS $$ "
+        "DECLARE parent_run_kind text; expected_attempt text; observed_parent_role text; BEGIN "
+        "SELECT run_kind, acceptance_attempt_id INTO parent_run_kind, expected_attempt "
+        "FROM campaign_runs WHERE organization_id = NEW.organization_id "
+        "AND run_id = NEW.campaign_run_id FOR SHARE; "
+        "IF parent_run_kind = 'agent_acceptance' THEN "
+        "IF NEW.agent_role NOT IN ('orchestrator','judge','documentation') "
+        "OR NEW.attempt_id IS DISTINCT FROM expected_attempt THEN "
+        "RAISE EXCEPTION 'agent acceptance execution is outside its role or attempt authority' "
+        "USING ERRCODE = '42501'; END IF; "
+        "IF TG_OP = 'UPDATE' AND ("
+        "NEW.organization_id IS DISTINCT FROM OLD.organization_id "
+        "OR NEW.campaign_run_id IS DISTINCT FROM OLD.campaign_run_id "
+        "OR NEW.attempt_id IS DISTINCT FROM OLD.attempt_id "
+        "OR NEW.agent_role IS DISTINCT FROM OLD.agent_role "
+        "OR NEW.parent_execution_id IS DISTINCT FROM OLD.parent_execution_id) THEN "
+        "RAISE EXCEPTION 'agent acceptance execution identity is immutable' "
+        "USING ERRCODE = '55000'; END IF; "
+        "IF NEW.agent_role = 'orchestrator' THEN "
+        "IF NEW.parent_execution_id IS NOT NULL THEN "
+        "RAISE EXCEPTION 'agent acceptance planner must be the lineage root' "
+        "USING ERRCODE = '23514'; END IF; "
+        "ELSIF NEW.parent_execution_id IS NULL THEN "
+        "RAISE EXCEPTION 'agent acceptance child requires its exact parent' "
+        "USING ERRCODE = '23514'; "
+        "ELSE "
+        "SELECT agent_role INTO observed_parent_role FROM agent_executions "
+        "WHERE organization_id = NEW.organization_id "
+        "AND campaign_run_id = NEW.campaign_run_id "
+        "AND attempt_id = NEW.attempt_id "
+        "AND execution_id = NEW.parent_execution_id; "
+        "IF (NEW.agent_role = 'judge' "
+        "AND observed_parent_role IS DISTINCT FROM 'orchestrator') "
+        "OR (NEW.agent_role = 'documentation' "
+        "AND observed_parent_role IS DISTINCT FROM 'judge') THEN "
+        "RAISE EXCEPTION 'agent acceptance child requires its exact parent' "
+        "USING ERRCODE = '23514'; END IF; "
+        "END IF; "
+        "IF NEW.agent_role = 'judge' THEN "
+        "IF NEW.judge_calibration_state IS DISTINCT FROM 'failed' "
+        "OR NEW.judge_calibration_id IS NULL THEN "
+        "RAISE EXCEPTION 'agent acceptance Judge must remain failed-calibration advisory' "
+        "USING ERRCODE = '42501'; END IF; "
+        "IF NEW.status = 'succeeded' "
+        "AND (NEW.decision_authority IS DISTINCT FROM 'oracle' "
+        "OR NEW.oracle_agreement IS NULL) THEN "
+        "RAISE EXCEPTION "
+        "'agent acceptance Judge requires explicit oracle reconciliation' "
+        "USING ERRCODE = '42501'; END IF; "
+        "END IF; "
+        "END IF; RETURN NEW; END $$"
+    )
+
+
 def upgrade() -> None:
     op.add_column(
         "campaign_runs",
@@ -322,6 +379,12 @@ def upgrade() -> None:
         "BEFORE INSERT ON campaign_attempts FOR EACH ROW "
         "EXECUTE FUNCTION m1d_validate_agent_acceptance_attempt()"
     )
+    op.execute(_acceptance_execution_guard())
+    op.execute(
+        "CREATE TRIGGER trg_agent_acceptance_execution_guard "
+        "BEFORE INSERT OR UPDATE ON agent_executions FOR EACH ROW "
+        "EXECUTE FUNCTION m1d_validate_agent_acceptance_execution()"
+    )
 
 
 def downgrade() -> None:
@@ -333,6 +396,8 @@ def downgrade() -> None:
         "'cannot downgrade 0020 while immutable agent acceptance lineage exists' "
         "USING ERRCODE = '55000'; END IF; END $$"
     )
+    op.execute("DROP TRIGGER trg_agent_acceptance_execution_guard ON agent_executions")
+    op.execute("DROP FUNCTION m1d_validate_agent_acceptance_execution()")
     op.execute("DROP TRIGGER trg_campaign_attempt_agent_acceptance ON campaign_attempts")
     op.execute("DROP FUNCTION m1d_validate_agent_acceptance_attempt()")
     op.execute(_legacy_campaign_run_trigger())

@@ -152,6 +152,58 @@ def _insert_acceptance(
     return resolved_run_id
 
 
+def _insert_agent_execution(
+    engine: Engine,
+    *,
+    run_id: str,
+    configuration_sha256: str,
+    role: str,
+    parent_execution_id: str | None,
+    attempt_id: str | None,
+) -> str:
+    execution_id = uuid.uuid4().hex
+    models = {
+        "orchestrator": "anthropic/claude-opus-4.8",
+        "red_team": "qwen/qwen3-235b-a22b",
+        "judge": "google/gemini-2.5-pro",
+        "documentation": "openai/gpt-5.4",
+    }
+    judge_calibration_id = f"JC-{'3' * 64}" if role == "judge" else None
+    judge_calibration_state = "failed" if role == "judge" else None
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO agent_executions "
+                "(execution_id, organization_id, campaign_run_id, attempt_id, "
+                "parent_execution_id, agent_role, provider, model, execution_mode, "
+                "configuration_version, input_sha256, trace_id, configuration_set_sha256, "
+                "role_configuration_sha256, generation_policy_sha256, "
+                "judge_calibration_id, judge_calibration_state) VALUES "
+                "(:execution, :org, :run, :attempt, :parent, :role, 'openrouter', "
+                ":model, 'hosted_advisory', 1, :input_hash, :trace_id, "
+                ":configuration, :role_configuration, :generation_policy, "
+                ":calibration, :calibration_state)"
+            ),
+            {
+                "execution": execution_id,
+                "org": _ORGANIZATION_ID,
+                "run": run_id,
+                "attempt": attempt_id,
+                "parent": parent_execution_id,
+                "role": role,
+                "model": models[role],
+                "input_hash": "1" * 64,
+                "trace_id": uuid.uuid4().hex,
+                "configuration": configuration_sha256,
+                "role_configuration": "2" * 64,
+                "generation_policy": _GENERATION_POLICY_SHA256,
+                "calibration": judge_calibration_id,
+                "calibration_state": judge_calibration_state,
+            },
+        )
+    return execution_id
+
+
 def _seed_authorized_campaign(engine: Engine, suffix: str) -> str:
     run_id = f"campaign-{suffix}"
     request_id = f"request-{suffix}"
@@ -404,6 +456,119 @@ def test_agent_acceptance_requires_one_exact_synthetic_attempt(
                 "org": _ORGANIZATION_ID,
                 "run": run_id,
                 "attempt": "f" * 64,
+            },
+        )
+
+
+def test_database_guards_acceptance_execution_attempt_parentage_and_judge(
+    migrated_db: Engine,
+) -> None:
+    configuration_sha256 = uuid.uuid4().hex + uuid.uuid4().hex
+    _seed_hosted_configuration(
+        migrated_db,
+        configuration_sha256=configuration_sha256,
+    )
+    run_id = _insert_acceptance(
+        migrated_db,
+        configuration_sha256=configuration_sha256,
+    )
+    attempt_id = _acceptance_attempt_id(run_id)
+
+    with pytest.raises(DBAPIError, match="outside its role or attempt authority"):
+        _insert_agent_execution(
+            migrated_db,
+            run_id=run_id,
+            configuration_sha256=configuration_sha256,
+            role="orchestrator",
+            parent_execution_id=None,
+            attempt_id=None,
+        )
+    with pytest.raises(DBAPIError, match="outside its role or attempt authority"):
+        _insert_agent_execution(
+            migrated_db,
+            run_id=run_id,
+            configuration_sha256=configuration_sha256,
+            role="red_team",
+            parent_execution_id=None,
+            attempt_id=attempt_id,
+        )
+
+    orchestrator_id = _insert_agent_execution(
+        migrated_db,
+        run_id=run_id,
+        configuration_sha256=configuration_sha256,
+        role="orchestrator",
+        parent_execution_id=None,
+        attempt_id=attempt_id,
+    )
+    with pytest.raises(DBAPIError, match="requires its exact parent"):
+        _insert_agent_execution(
+            migrated_db,
+            run_id=run_id,
+            configuration_sha256=configuration_sha256,
+            role="judge",
+            parent_execution_id=None,
+            attempt_id=attempt_id,
+        )
+    judge_id = _insert_agent_execution(
+        migrated_db,
+        run_id=run_id,
+        configuration_sha256=configuration_sha256,
+        role="judge",
+        parent_execution_id=orchestrator_id,
+        attempt_id=attempt_id,
+    )
+    with pytest.raises(DBAPIError, match="requires its exact parent"):
+        _insert_agent_execution(
+            migrated_db,
+            run_id=run_id,
+            configuration_sha256=configuration_sha256,
+            role="documentation",
+            parent_execution_id=orchestrator_id,
+            attempt_id=attempt_id,
+        )
+    _insert_agent_execution(
+        migrated_db,
+        run_id=run_id,
+        configuration_sha256=configuration_sha256,
+        role="documentation",
+        parent_execution_id=judge_id,
+        attempt_id=attempt_id,
+    )
+
+    with (
+        pytest.raises(DBAPIError, match="must remain failed-calibration advisory"),
+        migrated_db.begin() as connection,
+    ):
+        connection.execute(
+            text(
+                "UPDATE agent_executions SET judge_calibration_state = 'passed' "
+                "WHERE organization_id = :org AND execution_id = :execution"
+            ),
+            {
+                "org": _ORGANIZATION_ID,
+                "execution": judge_id,
+            },
+        )
+
+    with (
+        pytest.raises(DBAPIError, match="requires explicit oracle reconciliation"),
+        migrated_db.begin() as connection,
+    ):
+        connection.execute(
+            text(
+                "UPDATE agent_executions SET status = 'succeeded', "
+                "output_sha256 = :output_hash, returned_model = model, "
+                "upstream_provider = 'Google', provider_request_id = 'provider-request', "
+                "input_tokens = 1, output_tokens = 1, reasoning_tokens = 0, "
+                "physical_attempts = 1, finished_at = clock_timestamp(), duration_ms = 1, "
+                "decision_authority = 'none', oracle_agreement = TRUE "
+                "WHERE organization_id = :org AND execution_id = :execution"
+            ),
+            {
+                "org": _ORGANIZATION_ID,
+                "execution": judge_id,
+                "output_hash": "4" * 64,
             },
         )
 
