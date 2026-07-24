@@ -75,3 +75,23 @@ remember to compare the pair.
 Sequencing note: `0019` depends on `0018_provider_call_lineage`, which is the still-open
 `codex/integration-provider-lineage-0018` work. `0018` must land first. The number was chosen
 specifically to avoid a second double-numbering incident.
+
+**Scope, stated precisely.** What is complete is the *logical* record: the row is writable, the
+store refuses to terminalize it as succeeded, the runtime preserves the lineage instead of
+discarding it, and the read model and console surface it. What is **not** wired is the *physical*
+half. `provider_call_events` already carries `model_mismatch` as a first-class terminal status with
+a bijective status/error-code map, but nothing emits those rows yet — there is no production caller
+of the provider-call lineage methods outside `control_plane/store.py`. Connecting the physical
+recorder to the hosted runtime is T-F17c. Until it lands, a substitution is provable from
+`agent_executions` alone (`model` vs `returned_model`, plus the `provider-model-substituted` error
+code), not from a per-attempt physical event.
+
+Two properties worth keeping when that wiring happens, both verified against a migrated database:
+
+- A substituted row cannot be laundered into a success. A direct
+  `UPDATE agent_executions SET status='succeeded'` is refused by the relaxed constraint, and
+  setting `returned_model = model` first and then succeeding is refused by
+  `agent_execution_terminal_shape` (a succeeded row cannot carry an `error_code`). The guarantee is
+  enforced in the database, not only in the store API.
+- The refused call's measured cost is preserved rather than dropped with its output, so a
+  substitution still shows up in spend.
