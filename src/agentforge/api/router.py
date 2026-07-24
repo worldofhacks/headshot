@@ -109,6 +109,7 @@ class AbortInput(_StrictModel):
 class FindingDecisionInput(_StrictModel):
     decision: Literal["approved", "rejected"]
     rationale: str = Field(min_length=1, max_length=2000)
+    reason_code: str | None = Field(default=None, pattern=r"^[a-z][a-z0-9_-]{0,63}$")
 
 
 class FindingResolveInput(_StrictModel):
