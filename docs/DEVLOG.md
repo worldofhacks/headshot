@@ -80,3 +80,22 @@ Append-only project record. Newest entries appear at the bottom.
   proof, and a distinct-Approver-authorized live campaign.
 - Stage: Integration branch; no merge, deployment, live campaign, publication, or remediation
   authorized by this entry.
+
+## [2026-07-24] Pre-release source/deployment reconciliation   ·   type: evidence correction
+- What: Re-audited candidate source `eac2968`, both `main` remotes, Railway identity, the Alembic
+  graph, hosted-role composition, durable queue/state, and Langfuse delivery/query-back behavior.
+- Result: Candidate source has one migration head at `0017`; GitHub `main`, GitLab `main`, and the
+  observed Railway release were still `23490ea` with schema `0013`. The candidate Runner composes
+  hosted Orchestrator, Judge, and Documentation roles; traced hosted Red Team generation exists and
+  is tested but is not wired into campaign candidate selection. The staging Langfuse baseline
+  contained zero Headshot observations. GitHub Actions is the release CI authority; GitLab remains an
+  exact passive mirror and its pipeline availability is not a release gate.
+- Documentation: Reconciled the README, architecture, threat model, users, demo script, and
+  requirements matrix so implemented, tested, deployed, live-verified, unavailable, and blocked
+  states are not conflated.
+- Remaining: Integrate the security owner's frozen corpus/Judge evidence, deploy one exact commit,
+  apply the sole migration head, obtain GitHub CI proof, run a separately authorized synthetic
+  campaign, query Langfuse back, and attach final cost/performance/demo/social evidence. Exact Clerk
+  role/MFA/two-user proof remains pending but does not substitute for campaign authorization.
+- Stage: Final integration candidate. No deployment, target request, campaign, Langfuse export
+  verification, production promotion, publication, or remediation was performed by this entry.
