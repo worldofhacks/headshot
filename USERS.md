@@ -14,7 +14,9 @@ context for what an exploit puts at risk.)
 All human users enter through **Clerk** and must be invited into the exact required **Headshot**
 Organization for the environment. Personal accounts and user-created organizations are disabled. MFA is
 mandatory for every member, with TOTP plus backup codes preferred; SMS is not the only factor. Clerk and
-authenticated Railway integration are selected/planned and are not yet claimed deployed.
+backend authorization are implemented and offline-tested. The older deployed release returns `401` for
+protected routes, but exact live Headshot membership, role assignments, MFA, and the two-real-user workflow
+have not yet been verified. The newest candidate implementation is not deployed.
 
 The backend authorizes the following custom organization permissions from verified Clerk session claims.
 Frontend role labels and client-supplied roles/permissions are display data only and create no authority.
@@ -35,14 +37,16 @@ itself: the Policy Gateway must still validate exact target authorization, envir
 target-scoped credentials, synthetic-data-only status, budget/rate caps, timeout/monitoring, and hard abort.
 
 ### 1.1 AI Security Engineer / Red-Teamer (primary operator)
+
 Owns the security posture of an LLM application wired into clinical workflows. Today they test by
 hand: craft a prompt, try it, eyeball the response, maybe save the good ones in a doc.
 
-**Workflows the platform gives them**
+#### Workflows the platform gives them
+
 - **Author + seed** attack cases across categories (injection, PHI exfiltration, state corruption,
   tool misuse, DoS, identity/role) — tagged boundary/invariant/regression and mapped to OWASP.
 - As an authenticated **Operator**, request/launch a campaign against an allowlisted target under budget
-  + rate caps, with synthetic data only and a hard abort. Launch permission does not bypass the separate
+  and rate caps, with synthetic data only and a hard abort. Launch permission does not bypass the separate
   campaign authorization gate.
 - As a **different authenticated Approver**, independently authorize the operation and approve or deny
   publication of critical reports and remediation. The launcher can never approve their own operation.
@@ -53,6 +57,7 @@ hand: craft a prompt, try it, eyeball the response, maybe save the good ones in 
 and silently regress, and coverage is invisible.
 
 ### 1.2 Application / Platform Security Team (consumer of output)
+
 Consumes the Documentation Agent's vulnerability reports and the triage report. They need each
 finding to be reproducible, actionable, and usable by an engineer *who was not present when the
 exploit was found* — a unique ID, clinical impact, a minimal reproducible sequence, observed vs
@@ -62,6 +67,7 @@ expected, and a remediation.
 regression harness now guards it.
 
 ### 1.3 Hospital CISO / Compliance & Risk (the trust authority)
+
 Does not operate the platform; *decides whether to trust it* with continuous testing of systems
 physicians depend on. Consumes trust boundaries, the human-approval model, deploy/rollback, cost
 governance, the ATO-style evidence packet, and the AI-use disclosure (where AI was used, what was
@@ -73,11 +79,15 @@ authorization to operate.
 ---
 
 ## 2. The system as its own operator (why "autonomous" is a user requirement, not a flourish)
+
 The PRD's north star — *"adapting as attackers adapt, without a human in the loop for every step"* —
-makes autonomous operation a stated requirement. The Orchestrator is effectively a machine user: it
-reads the system's own state and decides what to test next, so that overnight and continuous runs
-produce learning, not just noise. The human stays in the loop for **judgment gates** (approve
-critical findings, approve remediation), not for **every step**.
+makes autonomous operation a stated requirement. In the candidate source, the Orchestrator reads
+persisted signals, the Runner selects only already-authorized corpus cases, the independent Judge applies
+deterministic-oracle precedence, and Documentation drafts reports only for findings. The hosted Red Team
+generation component exists and is tested, but it is not yet wired into the Runner's
+reviewed-candidate/fresh-authorization loop; full adaptive live operation must not be inferred from the
+four-role ledger. Humans stay in the loop for live authorization and publication/remediation gates, not
+for every internal step.
 
 That machine user is not a Clerk user. Agents use service identity, per-agent database roles, provider
 credentials, and target-scoped credential bindings. Human session tokens are never workload credentials,
@@ -90,9 +100,9 @@ and an agent cannot acquire a human permission by emitting role or permission te
 The PRD demands this justification, and it is defensible line by line:
 
 1. **Attacks mutate; static suites rot.** "Defenses built around a small number of known examples
-   rarely hold as attackers adapt." A human-maintained payload list is outdated the day after it's
-   written. An agent that takes a *partial* success and autonomously generates ten variants to find
-   the one that breaks through is doing work a static runner structurally cannot.
+   rarely hold as attackers adapt." A human-maintained payload list becomes stale. A governed generator
+   can propose variants from partial results, but every changed corpus hash needs review and fresh
+   authorization before dispatch. That complete feedback loop remains a release gap.
 2. **Continuous ≠ occasional, and humans are the bottleneck.** The goal is *continuous* stress
    testing across every target version. A human in the loop for every prompt caps throughput at
    human speed; the value is precisely in the runs that happen while no one is watching.
@@ -109,6 +119,7 @@ The PRD demands this justification, and it is defensible line by line:
    property you get from multi-agent structure, not from one bigger prompt.
 
 ## 4. Where automation deliberately stops (so it stays trustworthy)
+
 Automation earns trust by knowing its limits. AgentForge stops for a distinct authenticated Approver
 before **authorizing a live operation**, before **publishing a critical-severity finding**, and before
 **any remediation** — because "an agent that confidently
