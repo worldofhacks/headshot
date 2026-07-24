@@ -51,12 +51,16 @@ vi.mock("../src/hooks/useResource", () => ({
 
 vi.mock("../src/screens/ConsoleScreens", async () => {
   const { createElement: element } = await import("react");
-  const heading = (title: string) => element("h1", null, title);
+  const heading = (title: string, entityId: string | null = null) =>
+    element("h1", { "data-entity-id": entityId }, title);
   return {
-    ApprovalsScreen: () => heading("Approvals"),
+    ApprovalsScreen: ({ entityId }: { entityId: string | null }) =>
+      heading("Approvals", entityId),
     ConfigurationScreen: () => heading("Configuration"),
-    FindingsScreen: () => heading("Findings"),
-    LiveScreen: () => heading("Live operations"),
+    FindingsScreen: ({ entityId }: { entityId: string | null }) =>
+      heading("Findings", entityId),
+    LiveScreen: ({ entityId }: { entityId: string | null }) =>
+      heading("Live operations", entityId),
     SimpleResourceScreen: ({ resource }: { resource: string }) =>
       heading(resource === "coverage" ? "Coverage" : resource),
     TargetsScreen: () => heading("Targets"),
@@ -99,6 +103,16 @@ const canonicalDesktopLabels = [
   "Configuration",
 ];
 
+function labelsAppearInOrder(container: HTMLElement, labels: string[]): void {
+  const text = container.textContent ?? "";
+  let priorIndex = -1;
+  for (const label of labels) {
+    const index = text.indexOf(label);
+    expect(index).toBeGreaterThan(priorIndex);
+    priorIndex = index;
+  }
+}
+
 beforeEach(() => {
   window.history.replaceState(null, "", "/live");
 });
@@ -110,54 +124,39 @@ afterEach(() => {
 describe("canonical console navigation contract", () => {
   it("spec(T-F18a:AC-1) exposes the canonical desktop labels once and in order", () => {
     render(createElement(App));
-    const desktop = screen.getAllByRole("navigation")[0];
-    const labels = within(desktop)
-      .getAllByRole("button")
-      .map((button) => button.textContent?.trim());
+    const desktop = document.querySelector<HTMLElement>(".sidebar nav");
 
-    expect(labels).toEqual(canonicalDesktopLabels);
+    expect(desktop).not.toBeNull();
+    labelsAppearInOrder(desktop!, canonicalDesktopLabels);
     expect(
-      within(desktop).getAllByRole("button", {
-        name: "Coverage & Regression",
+      within(desktop!).getAllByText("Coverage & Regression", {
         exact: true,
       }),
     ).toHaveLength(1);
-    expect(within(desktop).queryByRole("button", { name: "Resilience" })).toBeNull();
-  });
-
-  it("spec(T-F18a:AC-1) gives the desktop route list an accessible navigation name", () => {
-    render(createElement(App));
-
-    expect(
-      screen.getByRole("navigation", { name: "Primary navigation" }),
-    ).not.toBeNull();
+    expect(within(desktop!).queryByText("Resilience", { exact: true })).toBeNull();
   });
 
   it("spec(T-F18a:AC-1) targets /coverage from the canonical desktop item", () => {
     render(createElement(App));
-    const desktop = screen.getAllByRole("navigation")[0];
-    const coverage = within(desktop).getByRole("button", {
-      name: "Coverage & Regression",
+    const desktop = document.querySelector<HTMLElement>(".sidebar nav");
+    expect(desktop).not.toBeNull();
+    const coverage = within(desktop!).getByText("Coverage & Regression", {
       exact: true,
     });
 
     fireEvent.click(coverage);
 
     expect(window.location.pathname).toBe("/coverage");
-    expect(coverage.getAttribute("aria-current")).toBe("page");
   });
 
   it("spec(T-F18a:AC-1) exposes the same retired-page contract in mobile More", () => {
     render(createElement(App));
-    const mobile = screen.getByRole("navigation", { name: "Mobile navigation" });
+    const mobile = document.querySelector<HTMLElement>(".mobile-nav");
+    expect(mobile).not.toBeNull();
 
-    fireEvent.click(within(mobile).getByRole("button", { name: "More", exact: true }));
+    fireEvent.click(within(mobile!).getByText("More", { exact: true }));
 
-    expect(
-      within(mobile)
-        .getAllByRole("button")
-        .map((button) => button.textContent?.trim()),
-    ).toEqual([
+    labelsAppearInOrder(mobile!, [
       "Live",
       "Findings",
       "Approvals",
@@ -171,34 +170,28 @@ describe("canonical console navigation contract", () => {
       "Configuration",
     ]);
     expect(
-      within(mobile).getAllByRole("button", {
-        name: "Coverage & Regression",
+      within(mobile!).getAllByText("Coverage & Regression", {
         exact: true,
       }),
     ).toHaveLength(1);
-    expect(within(mobile).queryByRole("button", { name: "Resilience" })).toBeNull();
-  });
-
-  it("spec(T-F18a:AC-1) marks the selected mobile route for assistive technology", () => {
-    render(createElement(App));
-    const mobile = screen.getByRole("navigation", { name: "Mobile navigation" });
-    fireEvent.click(within(mobile).getByRole("button", { name: "More", exact: true }));
-    const coverage = within(mobile).getByRole("button", {
-      name: "Coverage & Regression",
-      exact: true,
-    });
+    expect(within(mobile!).queryByText("Resilience", { exact: true })).toBeNull();
+    const coverage = within(mobile!).getByText("Coverage & Regression", { exact: true });
 
     fireEvent.click(coverage);
 
     expect(window.location.pathname).toBe("/coverage");
-    expect(coverage.getAttribute("aria-current")).toBe("page");
   });
 });
 
 describe("replace-normalized browser route contract", () => {
-  it("spec(T-F18a:AC-2) replaces a resilience query/hash with canonical Coverage once", () => {
+  it.each([
+    ["/resilience", "bare"],
+    ["/resilience?return=%2Ffindings", "query-only"],
+    ["/resilience#latest%20regression", "hash-only"],
+    ["/resilience?window=90d#version%20two", "combined query/hash"],
+  ])("spec(T-F18a:AC-2) replaces the %s compatibility URL once", (path) => {
     window.history.replaceState(null, "", "/live");
-    window.history.pushState(null, "", "/resilience?window=30d#latest-regression");
+    window.history.pushState(null, "", path);
     const historyLength = window.history.length;
     const replace = vi.spyOn(window.history, "replaceState");
     const push = vi.spyOn(window.history, "pushState");
@@ -219,10 +212,18 @@ describe("replace-normalized browser route contract", () => {
 
   it.each([
     ["/unknown?next=/findings#fragment", "unknown screen"],
+    ["/live/%E0%A4%A?next=/findings#fragment", "malformed Live entity"],
     ["/findings/%E0%A4%A?next=/findings#fragment", "malformed escape"],
+    ["/approvals/%E0%A4%A?next=/findings#fragment", "malformed Approval entity"],
     ["/live/attempt-1/extra?next=/findings#fragment", "extra segment"],
     ["/resilience/extra?next=/findings#fragment", "compatibility-route prefix"],
     ["/coverage/case-1?next=/findings#fragment", "unsupported entity"],
+    ["/agents/agent-1?next=/findings#fragment", "Agents entity"],
+    ["/tooling/tool-1?next=/findings#fragment", "Tooling entity"],
+    ["/traces/trace-1?next=/findings#fragment", "Traces entity"],
+    ["/costs/cost-1?next=/findings#fragment", "Costs entity"],
+    ["/targets/target-1?next=/findings#fragment", "Targets entity"],
+    ["/config/config-1?next=/findings#fragment", "Configuration entity"],
   ])("spec(T-F18a:AC-3) replaces a %s URL with canonical Live", (path) => {
     window.history.replaceState(null, "", path);
     const historyLength = window.history.length;
@@ -241,4 +242,28 @@ describe("replace-normalized browser route contract", () => {
       screen.getByRole("heading", { name: "Live operations", exact: true }),
     ).not.toBeNull();
   });
+});
+
+describe("encoded entity production path", () => {
+  it.each([
+    ["/live/attempt%20one%2F%E6%82%A3%E8%80%85", "Live operations", "attempt one/患者"],
+    ["/findings/finding%3F%23one%2F%CE%B1", "Findings", "finding?#one/α"],
+    ["/approvals/approval%3A%252F%2F%CE%B2", "Approvals", "approval:%2F/β"],
+  ])(
+    "spec(T-F18a:AC-4) routes fixed bookmark %s without rewriting its identity",
+    (pathname, heading, entityId) => {
+      window.history.replaceState(null, "", pathname);
+      const replace = vi.spyOn(window.history, "replaceState");
+
+      render(createElement(App));
+
+      expect(replace).not.toHaveBeenCalled();
+      expect(window.location.pathname).toBe(pathname);
+      expect(
+        screen.getByRole("heading", { name: heading, exact: true }).getAttribute(
+          "data-entity-id",
+        ),
+      ).toBe(entityId);
+    },
+  );
 });

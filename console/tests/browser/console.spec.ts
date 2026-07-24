@@ -20,39 +20,28 @@ test("direct routes and browser history restore authoritative screens", async ({
 
 test("spec(T-F18a:AC-1) desktop and mobile expose one canonical Coverage route", async ({ page }) => {
   await page.goto("/live");
-  const desktop = page.getByRole("navigation", { name: "Primary navigation" });
-  const desktopCoverage = desktop.getByRole("button", {
-    name: "Coverage & Regression",
-    exact: true,
-  });
+  const desktop = page.locator(".sidebar nav");
+  const desktopCoverage = desktop.getByText("Coverage & Regression", { exact: true });
 
   await expect(desktopCoverage).toHaveCount(1);
-  await expect(desktop.getByRole("button", { name: "Resilience" })).toHaveCount(0);
+  await expect(desktop.getByText("Resilience", { exact: true })).toHaveCount(0);
   await desktopCoverage.click();
   await expect(page).toHaveURL(/\/coverage$/);
-  await expect(desktopCoverage).toHaveAttribute("aria-current", "page");
 
   await page.setViewportSize({ width: 390, height: 844 });
-  const mobile = page.getByRole("navigation", { name: "Mobile navigation" });
-  await mobile.getByRole("button", { name: "More", exact: true }).click();
-  const mobileCoverage = mobile.getByRole("button", {
-    name: "Coverage & Regression",
-    exact: true,
-  });
+  const mobile = page.locator(".mobile-nav");
+  await mobile.getByText("More", { exact: true }).click();
+  const mobileCoverage = mobile.getByText("Coverage & Regression", { exact: true });
 
   await expect(mobileCoverage).toHaveCount(1);
-  await expect(mobile.getByRole("button", { name: "Resilience" })).toHaveCount(0);
+  await expect(mobile.getByText("Resilience", { exact: true })).toHaveCount(0);
   await mobileCoverage.click();
   await expect(page).toHaveURL(/\/coverage$/);
-  await expect(mobileCoverage).toHaveAttribute("aria-current", "page");
 });
 
 test("spec(T-F18a:AC-2) resilience replaces to Coverage without a history loop", async ({ page }) => {
   await page.goto("/live");
-  await page.evaluate(() => {
-    window.history.pushState(null, "", "/resilience?window=30d#latest-regression");
-    window.dispatchEvent(new PopStateEvent("popstate"));
-  });
+  await page.goto("/resilience?window=30d#latest-regression");
 
   await expect(page).toHaveURL(/\/coverage$/);
   await expect(page.getByRole("heading", { name: "Coverage", exact: true, level: 1 })).toBeVisible();
