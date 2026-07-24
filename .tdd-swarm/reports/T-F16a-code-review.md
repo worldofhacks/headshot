@@ -1,100 +1,140 @@
-# T-F16a Code and Security Review
+# T-F16a Code and Security Re-review
 
-Status: `DONE`
+Status: `DONE_WITH_CONCERNS`
 
-Reviewed GREEN commit: `993bb19b9c0cacd69e3dde6e3d4ec27bb210b820`
+Reviewed repair commit: `1899c6ae16cf26b6dec0c6e1d012b06358172633`
 
-SPEC verdict: **CHANGES_REQUIRED**
+SPEC verdict: **PASS**
 
-CODE/SECURITY verdict: **CHANGES_REQUIRED**
+CODE/SECURITY verdict: **PASS**
 
-The committed implementation is not review-passed. Two independently reproduced Important
-fail-closed gaps remain. This report is anchored to the commit above; uncommitted product repairs
-that appeared later in the shared worktree were excluded from the verdict and were not edited or
-staged by this reviewer.
+The two Important findings from review commit
+`0dc935e2bda0b6c93bb97d7e1d54e66ef3584ddf` are closed. No Critical, Important, or
+Minor correctness finding remains in the repaired implementation.
 
-## Findings
+## Prior finding closure
 
-### Important — schema-v2 definitions can omit the policy and regain target-level auth
+### Schema-v2 definitions can no longer omit policy through a v1 surface version
 
-`AttackSurfaceDefinition` and `AuthorizationScope` accept `surface_policy=None` without considering
-their target/surface major version (`src/agentforge/target/spec.py:1056-1059,1156-1159`).
-`AuthorizationScope.for_definitions` then deliberately copies target-level auth for that shape
-(`src/agentforge/target/spec.py:1204-1208`), and registry registration/resolution repeats the same
-fallback (`src/agentforge/target/registry.py:111-115,222-229`).
+Policy enforcement now keys on the target version, not the independently supplied surface version:
 
-An in-memory reproduction built a `2.0.0` chat surface from the canonical fixture, removed
-`surface_policy` plus its hash, registered and readied it, built a scope, and successfully resolved
-it with target-level `session` auth:
+- `AttackSurfaceDefinition` rejects a missing policy for a schema-v2 target
+  (`src/agentforge/target/spec.py:127-130,1081-1086`).
+- `AuthorizationScope` and `AuthorizationScope.for_definitions` reject the same downgrade before
+  scope construction (`src/agentforge/target/spec.py:1183-1191,1234-1242`).
+- Registry registration rejects a missing policy using `surface.target_version`, and resolution
+  checks both the supplied scope and trusted registered surface
+  (`src/agentforge/target/registry.py:68-69,104-114,206-232`).
+- Target-level auth fallback remains reachable only for the pre-v2 compatibility shape.
 
-```text
-v2_missing_policy_resolved True session
-```
-
-The environment catalog rejects this shape, but the domain and registry boundary that AC-5
-explicitly requires to reject target-level fallback does not. Legacy fallback is therefore keyed
-only by field absence, not by the AC-6 legacy version boundary. Any trusted store/provisioning path
-that supplies definitions directly can create v2 authority without the canonical policy/hash.
-
-Required change: require a policy and canonical policy hash for every schema-v2 target/surface
-definition and scope at construction, registration, and resolution. Keep target-auth fallback only
-for the explicitly compatible pre-v2 single-profile chat/synthetic contract.
-
-### Important — self-consistent document-policy understatements are accepted
-
-The policy validator proves only that top-level totals equal the operations it was given
-(`src/agentforge/target/spec.py:764-782`). For document policies it requires merely some upload
-operation and a subset of document classes (`src/agentforge/target/spec.py:807-814`;
-`src/agentforge/target/catalog.py:191-197`); it never requires the complete lab/intake workflow or
-the locked per-operation logical maxima.
-
-Two independently rehashed policies were accepted:
+An independent reproduction took the canonical `2.0.0` chat surface, changed only its surface
+version to `1.0.0`, removed `surface_policy` and its hash, and parsed it through the public
+serialization boundary. It failed with `DefinitionError`:
 
 ```text
-truncated_document_policy_accepted ['upload'] 1
-self_consistent_understated_lab_accepted 33 65
+V2_TARGET_V1_SURFACE_POLICYLESS REJECTED DefinitionError
 ```
 
-The first removed every lab poll/read operation and reduced the physical reservation from `67` to
-`1`. The second reduced the status-poll maximum from `30` to `29`, recomputed internally consistent
-top-level totals, and was accepted at logical `33` / physical `65`. Both violate AC-1/AC-4 and the
-locked `34` logical / `67` physical lab contract
-(`docs/planning/final-target-adapters.md:61-75`). Arithmetic consistency is insufficient when the
-declared operation set or operation maximum is itself incomplete.
+A second probe constructed the equivalent valid pre-v2 object, forged only its target version to
+`2.0.0` after construction, and passed it to `TargetRegistry.register_surface`. The independent
+registry guard rejected it:
 
-Required change: validate the complete canonical document workflow shape and its per-operation
-logical maxima before hashing or catalog admission: lab must bind upload `1`, status poll `30`, and
-report/preview/readback `1` each; intake must bind upload plus duplicate-check `1` each. Then derive
-and require the exact `34/67` and `2/2` totals.
+```text
+FORGED_V2_TARGET_V1_SURFACE_REJECTED_AT_REGISTRY
+```
 
-## Frozen-test and scope integrity
+The prior route to target-level `session` auth and the target credential reference is therefore
+closed at the domain and registry boundaries.
 
-- GREEN is directly based on final test-review commit
-  `e392cacac40cfd9f6a1bcda28e7857fe76e5d974`.
-- `tests/test_final_target_surface_policy.py` remains byte-identical to frozen commit
+### Document workflows now bind complete operations and exact per-operation maxima
+
+`SurfacePolicy` declares two complete operation contracts and compares both the operation set and
+each `(maximum_logical_operations, retry_count)` tuple
+(`src/agentforge/target/spec.py:688-700,824-843`). Catalog admission separately permits only those
+two complete document sets (`src/agentforge/target/catalog.py:53-60,197-204`).
+
+Independent canonical parsing produced:
+
+```text
+LAB_CONTRACT {
+  'upload': (1, 0),
+  'status_poll': (30, 1),
+  'report': (1, 1),
+  'preview': (1, 1),
+  'readback': (1, 1)
+} 34 67
+
+INTAKE_CONTRACT {
+  'upload': (1, 0),
+  'duplicate_check': (1, 0)
+} 2 2
+```
+
+Independently rehashed hostile policies were rejected with `DefinitionError`:
+
+```text
+LAB_UPLOAD_ONLY REJECTED
+LAB_SELF_CONSISTENT_33_65 REJECTED
+INTAKE_UPLOAD_ONLY_1_1 REJECTED
+INTAKE_RETRY_DRIFT_2_3 REJECTED
+```
+
+Arithmetic consistency can no longer hide an incomplete operation set or understated
+per-operation maximum.
+
+## Frozen-test integrity
+
+- Frozen test commit:
   `295e9ccd0b8e1d2c13ad1ccfd8074e762461860f`.
-- Recomputed test SHA-256:
+- Recomputed/current SHA-256:
   `fdf129e50018a13d7e69e74d9eb9f08821daba1312dc5bf84d7492583890145e`.
 - Recomputed/current Git blob:
   `af6df0ff25e4e53aa0b6aca691d6494ff1d1e501`.
-- `git diff 295e9cc..993bb19 -- tests` is empty.
-- Commit `993bb19` changes only the five implementation-owned source/migration paths and the
-  implementation report.
+- `git diff 295e9cc..1899c6a -- tests` is empty.
+- The repair commit changes only `spec.py`, `catalog.py`, `registry.py`, and the implementation
+  report. It does not change tests, transport adapters, fixtures, credential sources, deployment,
+  or dependencies.
 
 ## Independent verification
 
-- Focused frozen, target compatibility, and contract suites: `233 passed`.
-- A full backend invocation returned `1228 passed, 3 skipped`, but concurrent uncommitted repair
-  edits appeared in the shared worktree during that run, so it is recorded only as regression
-  context; the pre-repair focused run above is the authoritative exact-candidate evidence.
-- Scoped Ruff check: pass.
-- Scoped Ruff format check: pass; four Python files already formatted.
-- `git diff --check e392cac..993bb19`: pass.
-- Repository lightweight secret scan: `secret scan clean (851 files)`.
-- No dependency, lockfile, network client, credential/fixture read, adapter construction, target
-  call, or deployment change exists in the committed implementation diff.
+Focused frozen contract:
 
-The prompt-mandated `.tdd-swarm/run-local-gates.sh` remains absent at this branch and therefore
-cannot satisfy the ticket's wrapper gate; direct mapped tests/static checks above were run instead.
-Regardless of that infrastructure concern, the two Important findings independently require
-implementation repair and re-review before T-F16a can pass.
+```text
+PYTHONPATH=src python -m pytest -o addopts='' \
+  tests/test_final_target_surface_policy.py -q
+```
+
+Result: `103 passed`.
+
+Target, registry, adapter-registry, and contract regressions:
+
+```text
+PYTHONPATH=src python -m pytest -o addopts='' \
+  tests/target/test_relative_path_parameters.py \
+  tests/target/test_target_spec.py \
+  tests/target/test_target_registry.py \
+  tests/target/test_adapter_registry.py \
+  tests/contract -q
+```
+
+Result: `160 passed`.
+
+- Scoped Ruff check: pass.
+- Scoped Ruff format check: pass; all four implementation Python files already formatted.
+- `git diff --check e392cac..1899c6a`: pass.
+- Credential guard: pass.
+- Secret scan: `secret scan clean (852 files)`.
+- Full-history gitleaks scan: no leaks found.
+- No network, credential read, fixture-byte read, adapter construction, target call, deployment, or
+  external service action was performed during this review.
+
+## Infrastructure concern
+
+The prompt-mandated `.tdd-swarm/run-local-gates.sh` remains absent at this dependency base because
+T-F00 is not integrated. The wrapper therefore cannot be represented as passing. This is the
+previously recorded infrastructure concern; every available mapped correctness/static gate above
+passes, and it does not reopen either implementation finding.
+
+Final verdict: T-F16a's repaired implementation is **PASS** for specification compliance, code
+quality, and the reviewed security boundaries. It may proceed to its separate security-review and
+integration gates subject to the T-F00 wrapper prerequisite.
