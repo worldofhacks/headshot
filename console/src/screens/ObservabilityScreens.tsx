@@ -217,7 +217,8 @@ function TraceDetails({ trace }: { trace: TraceReadModel }) {
         <div><dt>Latency</dt><dd className="mono">{trace.duration_ms === null ? "Running" : duration(trace.duration_ms)}</dd></div>
         <div><dt>HTTP status</dt><dd className="mono">{isAgent ? "Not applicable" : trace.status_code ?? "—"}</dd></div>
         <div><dt>Measured cost</dt><dd className="mono">{traceCostValue(trace)}</dd></div>
-        {isAgent && <div><dt>Requested model</dt><dd className="mono">{trace.provider}</dd></div>}
+        {isAgent && <div><dt>Provider</dt><dd className="mono">{trace.provider}</dd></div>}
+        {isAgent && <div><dt>Requested model</dt><dd className="mono">{trace.model}</dd></div>}
         {isAgent && <div><dt>Provider-served model</dt><dd className="mono">{trace.returned_model ?? "unavailable"}</dd></div>}
         {isAgent && <div><dt>Provider-served upstream</dt><dd className="mono">{trace.upstream_provider ?? "unavailable"}</dd></div>}
         {isAgent && <div><dt>Provider request</dt><dd className="mono">{trace.provider_request_id ?? "unavailable"}</dd></div>}

@@ -1133,6 +1133,7 @@ const decodeTrace = (value: unknown): TraceReadModel => {
     "attempt_id",
     "operation",
     "provider",
+    "model",
     "agent_role",
     "execution_mode",
     "returned_model",
@@ -1196,6 +1197,7 @@ const decodeTrace = (value: unknown): TraceReadModel => {
     "execution_id",
     "parent_execution_id",
     "attempt_id",
+    "model",
     "returned_model",
     "upstream_provider",
     "provider_request_id",
@@ -1298,6 +1300,7 @@ const decodeTrace = (value: unknown): TraceReadModel => {
   if (
     result.agent_role === null
     && [
+      result.model,
       ...providerIdentity,
       result.configuration_set_sha256,
       result.role_configuration_sha256,
@@ -1312,6 +1315,7 @@ const decodeTrace = (value: unknown): TraceReadModel => {
   ) {
     invalid(name);
   }
+  if (result.agent_role !== null && result.model === null) invalid(name);
   if (decisionAuthority === "model" && calibrationState !== "enabled") invalid(name);
   if ((result.langfuse_status === "exported") !== (langfuseVerifiedAt !== null)) invalid(name);
   stringArray(result, "inspection_flags", name);

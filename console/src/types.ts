@@ -319,6 +319,7 @@ export interface TraceReadModel extends JsonRecord {
   attempt_id: string | null;
   operation: string;
   provider: string;
+  model: string | null;
   agent_role: "orchestrator" | "red_team" | "judge" | "documentation" | null;
   execution_mode: "deterministic" | "hosted_advisory" | null;
   returned_model: string | null;

@@ -409,6 +409,7 @@ class TraceReadModel(_ReadModel):
     attempt_id: str | None
     operation: str
     provider: str
+    model: str | None = None
     agent_role: Literal["orchestrator", "red_team", "judge", "documentation"] | None = None
     execution_mode: Literal["deterministic", "hosted_advisory"] | None = None
     returned_model: str | None = None
@@ -484,6 +485,7 @@ class TraceReadModel(_ReadModel):
         if self.agent_role is None and any(
             value is not None
             for value in (
+                self.model,
                 *provider_identity,
                 self.configuration_set_sha256,
                 self.role_configuration_sha256,
@@ -497,6 +499,8 @@ class TraceReadModel(_ReadModel):
             )
         ):
             raise ValueError("non-agent traces cannot contain hosted agent lineage")
+        if self.agent_role is not None and self.model is None:
+            raise ValueError("agent traces require the requested model")
         if self.decision_authority == "model" and self.judge_calibration_state != "enabled":
             raise ValueError("model authority requires an enabled Judge calibration")
         if (self.langfuse_status == "exported") != (self.langfuse_verified_at is not None):

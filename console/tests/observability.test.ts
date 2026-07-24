@@ -12,6 +12,7 @@ const trace = (overrides: Partial<TraceReadModel> = {}): TraceReadModel => ({
   attempt_id: "attempt-1",
   operation: "target.http",
   provider: "openemr",
+  model: null,
   agent_role: null,
   execution_mode: null,
   returned_model: null,
