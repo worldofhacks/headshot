@@ -211,6 +211,33 @@ def test_spec_lint_rejects_a_skipped_test_as_an_acceptance_mapping(tmp_path: Pat
     assert "test_skipped_mapping" in result.stdout + result.stderr
 
 
+def test_spec_lint_rejects_a_test_dynamically_skipped_by_a_collection_hook(
+    tmp_path: Path,
+) -> None:
+    """spec(T-F00:AC-1) — runtime item markers determine whether a collected node executes."""
+    _install_spec_lint(tmp_path)
+    _write_ticket(tmp_path, criteria=("AC-1",))
+    test_file = _write_test(tmp_path, "")
+    base = _commit_fixture(tmp_path)
+    _write_conftest(
+        tmp_path,
+        "import pytest\n\n"
+        "def pytest_collection_modifyitems(items):\n"
+        "    for item in items:\n"
+        "        if item.name == 'test_hook_skipped_mapping':\n"
+        "            item.add_marker(pytest.mark.skip(reason='runtime hook skip'))\n",
+    )
+    test_file.write_text(
+        'def test_hook_skipped_mapping():\n    """spec(T-F00:AC-1)"""\n',
+        encoding="utf-8",
+    )
+
+    result = _invoke_spec_lint(tmp_path, base)
+
+    assert result.returncode == 1
+    assert "test_hook_skipped_mapping" in result.stdout + result.stderr
+
+
 def test_spec_lint_rejects_a_mapping_excluded_by_pytest_collect_ignore(tmp_path: Path) -> None:
     """spec(T-F00:AC-1) — collection configuration can make a tagged source test invalid."""
     _install_spec_lint(tmp_path)
