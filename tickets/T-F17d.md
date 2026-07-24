@@ -12,8 +12,13 @@ file_scopes:
   - src/agentforge/campaign/hosted_mutation.py
   - src/agentforge/policy/gateway.py
   - src/agentforge/contracts/registry.py
+  - src/agentforge/contracts/v1/orchestration_snapshot.json
+  - contracts/v1/orchestration_snapshot.json
+  - src/agentforge/contracts/v1/hosted_orchestration_decision.json
+  - contracts/v1/hosted_orchestration_decision.json
   - src/agentforge/contracts/v1/hosted_mutation_envelope.json
   - contracts/v1/hosted_mutation_envelope.json
+  - docs/integration/migrations/hosted-orchestration-contracts-v1.md
   - docs/integration/migrations/hosted-target-evaluator-v1.md
 test_scopes:
   - tests/test_runner_hosted_runtime.py
@@ -39,20 +44,24 @@ path are authoritative.
 ## Acceptance Criteria
 - **AC-1**: Given an authorized campaign with `scope.hosted_run`, when a claimed job passes
   preflight, then the Runner loads the exact organization-scoped staged configuration, verifies all
-  prompt/model/policy/cap/session hashes, resolves four distinct Runner-only credential references,
-  and constructs one shared-ledger `HostedFourRoleRuntime`.
+  prompt/model/policy/profile/call/token/spend/time/session hashes, resolves four distinct
+  Runner-only credential references, and constructs one shared-ledger `HostedFourRoleRuntime`.
 - **AC-2**: Given a hosted campaign with any missing/mismatched binding, prompt, credential,
   configuration, queue lease, target/session generation, cap, or two-person authorization, when
   preflight runs, then it records a bounded blocker and performs zero provider and target calls.
 - **AC-3**: Given one authorized case, when the hosted runtime executes, then role order is
   Orchestrator selection -> Red Team mutation envelope -> one final T-F16 per-surface trusted target
   evaluator -> Judge -> conditional Documentation, with pre-created parent-linked logical
-  invocation contexts and no role sharing attack-generation/Judge context.
+  contexts, a Runner-owned per-attempt physical-context factory for each logical call, and no role
+  sharing attack-generation/Judge context.
 - **AC-4**: Given a fresh secret-free coverage/cost/regression snapshot and authorized candidate
-  set, when Orchestrator responds, then only a current in-set `select` or bounded `halt` is accepted,
-  drives the next action, and persists snapshot/candidate/decision/signal hashes; no-priority,
-  stale-snapshot, unauthorized-selection, cost-without-signal, and regression-trigger behavior is
-  deterministic.
+  set, when Orchestrator responds, then package/root mirrors of upgraded
+  `OrchestrationSnapshotV1` bind organization/campaign, scan-plan id/revision/hash, candidate
+  ids/parent seed hashes, coverage/OWASP/findings/regression/signal/unknown-cost state, remaining
+  provider/target/input/output/reasoning/time caps, and issued/expiry timestamps. Package/root
+  mirrors of `HostedOrchestrationDecisionV1` accept only a strict tagged union of current in-set
+  `select(candidate_id, reason_codes)` or bounded `halt(reason_code)`; it drives the next action and
+  persists snapshot/candidate/decision/signal hashes.
 - **AC-5**: Given hosted Red Team output, when target evaluation occurs, then a content-addressed
   `HostedMutationEnvelopeV1` binds parent seed, selected candidate, policy, exact mutable pointers
   and allowed replace/prefix/suffix/closed-token transforms, byte/turn/string/physical bounds, and
@@ -76,9 +85,14 @@ path are authoritative.
   100 Orchestrator, 100 Red Team, 100 Judge, and `F` eligible Documentation calls, no retries or
   unmatched invocations, `physical_count=300+F`, and 100 terminal target/verdict records; any halt,
   unknown outcome, missing case, or mismatch is partial and cannot be labeled hosted-100 complete.
+- **AC-11**: Given contract packaging and conformance, when the wheel/root mirrors and registry are
+  checked, then the orchestration snapshot and hosted decision schemas are versioned, byte-equal,
+  strict, and migration-documented; legacy `campaign_directive.json` remains compatible and is not
+  overloaded with hosted select/halt semantics.
 
 ## Test Plan
-- Unit: hosted/deterministic branch selection and zero-I/O preflight blockers.
+- Unit: hosted/deterministic branch selection, zero-I/O preflight blockers, strict snapshot and
+  select/halt contract conformance, mirror equality, and legacy directive compatibility.
 - Integration: real final T-F16f API/queue/store/Runner and two-target per-surface Policy Gateway
   against fake provider/target; selection/halt, mutation negatives, exact role order, one target
   exit, parent lineage, oracle precedence, 100-case reconciliation, and failure recovery.

@@ -118,14 +118,17 @@ system messages before network I/O.
 
 ### Durable provider-call lineage
 
-[locked-decision] Logical activity remains in `agent_executions`. Before reservation or network
-I/O, the Runner transactionally creates the logical execution and an immutable
-`ProviderInvocationContextV1`/`provider_call_invocation` containing organization, campaign, campaign
-attempt, logical execution id, parent logical execution id, role, physical sequence, idempotency
-key, and all bound configuration/prompt/policy hashes. The transport receives that context; it
-cannot invent or repair identity after a response. Composite organization/execution foreign keys
-and unique `(organization_id, logical_execution_id, physical_sequence)` prevent cross-org or
-duplicate attribution.
+[locked-decision] Logical activity remains in `agent_executions`. The Runner first creates one
+logical execution and passes the transport a Runner-owned
+`begin_physical_attempt(logical_context, sequence)` factory. Immediately before **every** usage
+reservation or network attempt, including a transport-internal retry, that factory transactionally
+commits a new immutable `ProviderInvocationContextV1`/`provider_call_invocation` containing
+organization, campaign, campaign attempt, logical execution id, parent logical execution id, role,
+physical sequence, idempotency key, and all bound configuration/prompt/policy hashes. The transport
+cannot reuse one physical context for a retry, invent identity after a response, or reserve/send
+before the factory succeeds. Composite organization/execution foreign keys and unique
+`(organization_id, logical_execution_id, physical_sequence)` prevent cross-org or duplicate
+attribution.
 
 [locked-decision] A new append-only `provider_call_events` relation records exactly one terminal
 fact per committed physical invocation:
@@ -139,14 +142,15 @@ fact per committed physical invocation:
 - physical status, sanitized typed error code, start/finish timestamps, and duration.
 
 [locked-decision] Failed calls never manufacture a provider identity, token count, or zero cost.
-Transient retry attempts remain individually visible. The store writes the terminal provider event
-and logical terminalization in one transaction. Replaying the same canonical terminalization is
-idempotent; changed facts conflict. A crash after send with no durable response is reconciled as
-`outcome_unknown` and is never retried. Recovery can terminalize a committed invocation but cannot
-create an unreserved physical sequence. Raw provider bodies, messages, prompt text, credentials,
-target sessions, hostile evidence, and exception strings are never stored. Database grants permit
-only the private Runner to insert and authenticated Web/Runner roles to read;
-UPDATE/DELETE/TRUNCATE are rejected.
+Transient retry attempts remain individually visible. Each physical terminal event commits
+atomically with its own pre-call invocation. A retryable non-final physical event leaves the logical
+execution `running`; only final success or terminal failure atomically commits the final physical
+event and terminalizes the logical execution. Exact replay is idempotent and changed facts conflict.
+A crash after send with no durable response is reconciled as `outcome_unknown` and is never retried.
+Recovery can terminalize a committed invocation but cannot create an unreserved physical sequence.
+Raw provider bodies, messages, prompt text, credentials, target sessions, hostile evidence, and
+exception strings are never stored. Database grants permit only the private Runner to insert and
+authenticated Web/Runner roles to read; UPDATE/DELETE/TRUNCATE are rejected.
 
 ### Canonical cost measurement
 
@@ -160,10 +164,11 @@ cannot be added again.
 [locked-decision] Every Costs, Birdseye, campaign-total, report, and Agents projection returns
 `known_sum`, `measured_count`, and `unknown_count`. Mixed evidence renders a partial known subtotal
 plus the unknown count; it never presents a complete total. T-F18j, based on accepted T-F17b/c,
-owns the shared Costs/Birdseye/campaign consumer migration and must include
-`src/agentforge/api/birdseye.py`. T-F17e production promotion mechanically depends on the accepted
-T-F18j commit. Partial usage, timeout-after-send, mixed known/unknown, and no-double-count tests are
-deployment blockers.
+owns only the backend PostgreSQL/read-model/Birdseye/campaign consumer migration and must include
+`src/agentforge/api/birdseye.py`; it owns no console code. T-F17e production promotion mechanically
+depends on the accepted T-F18j commit. Partial usage, timeout-after-send, mixed known/unknown, and
+no-double-count backend tests are deployment blockers. The later full Costs UI belongs to T-F18p
+after T-F18j, T-F17f, T-F18b/T-F18o, and T-F18i.
 
 ### Hosted Runner path
 
@@ -186,15 +191,21 @@ there is no deterministic fallback.
 
 #### Coverage-driven Orchestrator
 
-[locked-decision] The deterministic coordinator creates an immutable, secret-free
-`OrchestrationSnapshotV1` and authorized candidate set before each selection. The content-addressed
-snapshot binds organization/campaign/scan-plan revision, remaining candidate ids and parent seed
-hashes, boundary/invariant/regression and OWASP gaps, open finding severities, regression history,
-recent signal, known/unknown cost state, remaining provider/target/token/time caps, and expiry.
-The hosted Orchestrator returns exactly `select(candidate_id, reason_codes)` or
-`halt(reason_code)`. Runner rejects stale snapshots, a candidate not in the set, exhausted caps,
-and changed hashes before later I/O; it persists the snapshot, candidate-set, decision, and
+[locked-decision] The deterministic coordinator creates an immutable, secret-free, versioned
+`OrchestrationSnapshotV1` and authorized candidate set before each selection. T-F17d owns both
+package and root/public mirrors of the upgraded `orchestration_snapshot.json`. Its
+content-addressed schema binds organization/campaign, scan-plan id/revision/hash, each remaining
+candidate id and parent seed hash, boundary/invariant/regression and OWASP gaps, open finding
+severities, regression history, recent signal, known/unknown cost state, remaining provider/target/
+input-token/output-token/reasoning-token/time caps, and issued/expiry timestamps.
+
+[locked-decision] T-F17d also owns both mirrors of a new
+`HostedOrchestrationDecisionV1` schema. It is a strict tagged union of exactly
+`select(candidate_id, reason_codes)` or `halt(reason_code)` and does not overload the legacy
+`campaign_directive.json`. Runner rejects stale snapshots, a candidate not in the set, exhausted
+caps, and changed hashes before later I/O; it persists the snapshot, candidate-set, decision, and
 signal-state hashes. Selection drives the next case, so the role is operational, not advisory.
+Schema registry/conformance tests and an additive contract-migration note freeze both versions.
 No-priority, stale-snapshot, unauthorized-selection, cost-without-signal, and regression-trigger
 tests are mandatory.
 
@@ -220,14 +231,43 @@ undeclared transforms, and host/method/path/query/header/credential changes fail
 
 #### Exact 100-case hosted profile
 
-[locked-decision] The Week 3 100-case baseline is an explicitly authorized hosted profile, not a
-deterministic run relabeled as hosted. It fixes `N=100`, provider retries `R=0`, and at most one
-Documentation call per case. Preflight reserves the hard physical maximum
-`P_max = N × (Orchestrator + Red Team + Judge + Documentation_max) × (1 + R) = 400`.
-Actual provider calls must reconcile to `P_actual = 300 + F`, where `F` is the number of cases
-whose verified verdict requires Documentation (`0 <= F <= 100`). The platform ceiling is 400 for
-this profile; the old 56-call ceiling cannot admit it. A provider failure makes that case/run
-partial and is not hidden by retry.
+[locked-decision] The Week 3 100-case baseline is the explicit, scope-hashed
+`hosted-100-v1` profile, not a deterministic run relabeled as hosted. `HostedRunBinding`, its API
+input/read models, and canonical serialization carry that profile id. The expanded ceiling is
+admissible only when `profile_id=hosted-100-v1`, `scope.caps.logical_case_limit=100`, all four exact
+locked roles/models are present, and every equation below matches the staged configuration and
+authorization. Every other hosted profile retains the legacy ceiling of 56 calls and USD 5.
+
+[locked-decision] Let `N=100`, provider retries `R=0`, role call maxima
+`C_orchestrator=C_red_team=C_judge=C_documentation=100`, and at most one Documentation call per
+case. Preflight reserves the hard physical maximum
+`P_max = (Σ_role C_role) × (1 + R) = 400`. Actual provider calls reconcile to
+`P_actual = 300 + F`, where `F` is the number of cases whose verified verdict requires
+Documentation (`0 <= F <= 100`). A provider failure makes that case/run partial and is not hidden
+by retry.
+
+[locked-decision] For each token kind `k ∈ {input, output, reasoning}`, the profile reservation is
+`T_k,max = Σ_role role.limits.max_k_tokens`; every role cap and the global staged limit must equal
+the corresponding term/sum. With exact Decimal configuration prices, each role cash reservation is
+`B_role = (I_role×p_input + O_role×p_output + Q_role×p_reasoning) / 1_000_000`, and
+`B_100 = Σ_role B_role`. Each role `max_usd`, the global `max_usd`, and the scope-hashed
+`provider_model_spend_limit_usd` must equal those canonical Decimal values; no token-times-price
+estimate may be reported later as measured cost.
+
+[locked-decision] Time is bounded before authorization:
+`T_provider,max = P_max × scope.hosted_run.provider_timeout_seconds`. That value plus the final
+T-F16 target-request time reservation and bounded Runner overhead must be no greater than
+`scope.caps.run_timeout_seconds`, and the authorization expiry must cover that full timeout. The API
+continues to cap each provider timeout at 300 seconds and authorization at 3,600 seconds, so any
+configuration whose derived total cannot fit those ceilings is rejected rather than silently
+raising time. `R=0` and concurrency `=1` are exact in the role limits, global limits,
+`HostedRunBinding`, API input, read model, and Runner preflight.
+
+[locked-decision] T-F17c owns the cross-layer authorization repair: hosted configuration limits,
+`HostedRunBinding` domain validation and serialization, API input/read models, PostgreSQL
+authorization/preflight projection, and focused configuration/target/API tests. All layers accept
+400 and the formula-derived token/spend/time reservations only for exact `hosted-100-v1`, reject
+profile/cap/hash mismatch, and preserve legacy limits otherwise.
 
 [locked-decision] A report or UI may claim `hosted_100_case_complete` only when the ledger proves
 100 terminal Orchestrator, 100 Red Team, and 100 Judge calls; Documentation count equals eligible
@@ -282,7 +322,7 @@ The Agents screen must show:
 | 26 | T-F17b | append-only provider-call lineage contract and persistence | T-F00 |
 | 27 | T-F17c | hash-bound system messages and physical-call observations | T-F17a, T-F17b |
 | 28 | T-F17d | coverage-driven runtime, authorized mutation, final gateway/Runner composition | T-F17c, accepted T-F16f |
-| 29 | T-F18j | canonical unknown-cost consumer migration | T-F17b, T-F17c, accepted T-F18i |
+| 29 | T-F18j | backend-only canonical unknown-cost consumer migration | T-F17b, T-F17c |
 | 30 | T-F17e | content-addressed Runner capability, Web truth, deployment controls | T-F17d, accepted T-F18j |
 | 31 | T-F17f | Agents API/UI configured-versus-observed provenance and content-addressed prompts | T-F17b, T-F17c, T-F17e |
 
@@ -290,7 +330,10 @@ T-F17a and T-F17b have disjoint production/test scopes and may use two workers i
 T-F17a-c can land independently of T-F16. T-F17d starts only from the accepted T-F16f integration
 commit and becomes the sole shared `runner.py`/gateway owner. T-F18j starts only after T-F17b/c,
 owns the shared cost consumers, and must be accepted before T-F17e. T-F17e is the next sole
-`runner.py` owner. T-F17f follows capability acceptance.
+`runner.py` owner. T-F17f follows capability acceptance, and the console plan's T-F18i then follows
+T-F17f. T-F18p owns the later full Costs UI only after T-F18j, T-F17f, T-F18b/T-F18o, and T-F18i. The
+runtime/cost order is
+`T-F17b + T-F17c -> T-F18j -> T-F17e -> T-F17f -> T-F18i -> T-F18p`.
 
 ## TDD and review gates
 
@@ -324,8 +367,8 @@ No production provider or target traffic is part of the deterministic tickets. P
 6. Runner deployment first and a fresh exact-match hosted-runtime capability observation;
 7. Web deployment from the same image and authenticated Agents/preflight smoke;
 8. a separately authorized, two-person-approved, synthetic-only bounded campaign;
-9. accepted T-F18j proof that Costs, Birdseye, campaign totals, and Agents preserve unknown/partial
-   cost without zero coercion or double counting;
+9. accepted T-F18j proof that backend PostgreSQL, shared read models, Birdseye, and campaign totals
+   preserve unknown/partial cost without zero coercion or double counting;
 10. one observed successful provider event for every invoked role, exact returned model/upstream
     match, intact invocation lineage, and one final T-F16 per-surface Policy Gateway target path;
     missing measured usage/cost remains unknown and Documentation may be correctly skipped; and
@@ -344,8 +387,8 @@ separate reviewed maintenance change if required.
 | Week 3 distinct agents, models, and trust levels | T-F17a, T-F17c, T-F17d |
 | Judge independence and consistent criteria | T-F17a, T-F17c, T-F17d |
 | What each agent is doing and in what order | T-F17b, T-F17d, T-F17f |
-| Cost tracking at agent level and honest aggregates | T-F17b, T-F17c, T-F18j, T-F17f |
-| Versioned contracts, migration notes, lineage | T-F17b, T-F17c |
+| Cost tracking at agent level and honest aggregates | T-F17b, T-F17c, T-F18j, T-F17f, T-F18p |
+| Versioned contracts, migration notes, lineage | T-F17b, T-F17c, T-F17d |
 | External API auth/rate/error behavior | T-F17c, T-F17d, T-F17e |
 | Coverage-driven orchestration and authorized mutation | T-F17d |
 | Exact hosted 100-case provider budget/reconciliation | T-F17c, T-F17d |

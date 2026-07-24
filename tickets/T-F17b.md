@@ -36,11 +36,12 @@ configured assignment fields as observed provider facts. T-F00 supplies gate/spe
 - **AC-2**: Given a timeout, retryable response, terminal response, model/provider mismatch,
   invalid usage, or invalid structured output, when recorded, then the event has a bounded typed
   error and explicit unavailable measurement state without fabricated identity, tokens, or zero cost.
-- **AC-3**: Given a transient retry followed by success, when queried, then both physical events
-  remain ordered and independently attributable to one logical agent execution through a
-  Runner-created `ProviderInvocationContextV1` committed before reservation/network I/O; composite
-  organization/execution FKs and unique `(organization_id, logical_execution_id,
-  physical_sequence)` reject cross-org or duplicate attribution.
+- **AC-3**: Given a transient retry followed by success, when queried, then a Runner-owned
+  `begin_physical_attempt(logical_context, sequence)` factory has committed two distinct immutable
+  `ProviderInvocationContextV1` rows before their respective reservation/network attempts. Both
+  physical events remain ordered and independently attributable to one logical agent execution;
+  composite organization/execution FKs and unique `(organization_id, logical_execution_id,
+  physical_sequence)` reject reused contexts, cross-org attribution, or duplicate sequences.
 - **AC-4**: Given a non-Runner database role or any role attempting UPDATE, DELETE, or TRUNCATE,
   when it touches provider-call events, then PostgreSQL rejects it; authenticated Web/Runner reads
   retain organization scoping.
@@ -50,10 +51,11 @@ configured assignment fields as observed provider facts. T-F00 supplies gate/spe
 - **AC-6**: Given credential-, session-, prompt-, hostile-evidence-, or provider-key-shaped input,
   when a lineage event is validated, then values are rejected/redacted and raw content is absent
   from persisted/audit output.
-- **AC-7**: Given terminal provider facts, when persistence runs, then the terminal event and
-  logical execution terminalization commit atomically; exact replay is idempotent, changed replay
-  conflicts, and a committed invocation left after a crash is reconciled once as
-  `outcome_unknown` without another provider call.
+- **AC-7**: Given terminal provider facts, when persistence runs, then each physical terminal event
+  commits atomically with its own invocation; a retryable non-final event leaves the logical
+  execution `running`, while only final success or terminal failure atomically terminalizes it.
+  Exact replay is idempotent, changed replay conflicts, and a committed invocation left after a
+  crash is reconciled once as `outcome_unknown` without another provider call.
 - **AC-8**: Given logical or physical hosted cost, when persisted, then state is exactly
   `measured`, `partial`, `not_observed`, or `invalid`; unknown is nullable and never zero, source
   event ids prevent double counting, and unproven historical/default logical zeros do not become
@@ -61,9 +63,9 @@ configured assignment fields as observed provider facts. T-F00 supplies gate/spe
 
 ## Test Plan
 - Unit: immutable contract, status/measurement shapes, bounds, error taxonomy, secret rejection.
-- PostgreSQL integration: pre-call invocation, terminalization transaction/recovery, ordering,
-  composite FKs/uniqueness/checks, cost states, role grants, append-only, migration round trip and
-  indexes.
+- PostgreSQL integration: two pre-call contexts for retry-then-success, running logical state
+  between attempts, final terminalization/recovery, ordering, composite FKs/uniqueness/checks, cost
+  states, role grants, append-only, migration round trip and indexes.
 - E2E/eval: none; transport emission belongs to T-F17c.
 
 ## Definition of Done

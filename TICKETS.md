@@ -147,16 +147,19 @@ truth is `docs/planning/agent-runtime-provenance.md`.
 | 26 | T-F17b | Persist append-only physical provider-call lineage | backlog | T-F00 | ticket/T-F17b-provider-call-lineage |
 | 27 | T-F17c | Bind exact system prompts and provider observations to hosted calls | backlog | T-F17a, T-F17b | ticket/T-F17c-hosted-system-messages |
 | 28 | T-F17d | Compose coverage-driven HostedFourRoleRuntime through the final gateway | backlog | T-F17c, accepted T-F16f | ticket/T-F17d-runner-hosted-composition |
-| 29 | T-F18j | Migrate unknown-cost semantics across Costs/Birdseye/campaign totals | backlog | T-F17b, T-F17c, accepted T-F18i | ticket/T-F18j-cost-accounting-truth |
+| 29 | T-F18j | Migrate unknown-cost semantics across backend read models/Birdseye/campaign totals | backlog | T-F17b, T-F17c | ticket/T-F18j-cost-accounting-truth |
 | 30 | T-F17e | Publish content-addressed hosted capability and gate deployment | backlog | T-F17d, accepted T-F18j | ticket/T-F17e-hosted-capability-deployment |
 | 31 | T-F17f | Show configured versus observed provenance and content-addressed prompts | backlog | T-F17b, T-F17c, T-F17e | ticket/T-F17f-agents-provenance-ui |
 
 ```text
 T-F00 -> {T-F17a,T-F17b} -> T-F17c
 accepted T-F16f + T-F17c -> T-F17d
-T-F17b + T-F17c + accepted T-F18i -> T-F18j
-T-F17d + accepted T-F18j -> T-F17e -> T-F17f
+T-F17b + T-F17c -> T-F18j
+T-F17d + accepted T-F18j -> T-F17e -> T-F17f -> T-F18i -> T-F18p
 ```
+
+[locked-decision] T-F18j is backend-only and owns no console/UI/filter/paging files. The later full
+Costs UI is T-F18p and depends on T-F18j, T-F17f, T-F18b, T-F18o, and T-F18i.
 
 T-F17a and T-F17b are disjoint and may run in parallel. Every ticket preserves RED -> independent
 test review/freeze -> GREEN -> coordinator gate rerun -> independent code review -> independent

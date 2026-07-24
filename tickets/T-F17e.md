@@ -55,9 +55,10 @@ capability observation, not the environment-only component table, is the cross-s
 - **AC-6**: Given rollback, when the prior image is restored, then hosted admissions fail closed on
   superseded/nonmatching capability, active work hard-aborts/preserves evidence, the prior release
   receives a new explicitly selected generation, and additive lineage data is retained.
-- **AC-7**: Given promotion, when Costs/Birdseye/campaign/Agents accounting is checked, then accepted
-  T-F18j proves partial/unknown costs remain unknown, mixed evidence reports known subtotal plus
-  unknown count, and provider events are not double-counted; otherwise deployment is blocked.
+- **AC-7**: Given promotion, when backend PostgreSQL/read-model/Birdseye/campaign accounting is
+  checked, then accepted T-F18j proves partial/unknown costs remain unknown, mixed evidence reports
+  known subtotal plus unknown count, and provider events are not double-counted; otherwise
+  deployment is blocked. Agents projection remains T-F17f and the full Costs UI remains T-F18p.
 
 ## Test Plan
 - Unit/integration: exact content identity, supersession, wrong org/config/release/prompt/
