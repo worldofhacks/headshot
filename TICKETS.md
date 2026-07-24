@@ -147,7 +147,7 @@ truth is `docs/planning/agent-runtime-provenance.md`.
 | 26 | T-F17b | Persist append-only physical provider-call lineage | backlog | T-F00 | ticket/T-F17b-provider-call-lineage |
 | 27 | T-F17c | Bind exact system prompts and provider observations to hosted calls | backlog | T-F17a, T-F17b | ticket/T-F17c-hosted-system-messages |
 | 28 | T-F17d | Compose coverage-driven HostedFourRoleRuntime through the final gateway | backlog | T-F17c, accepted T-F16f | ticket/T-F17d-runner-hosted-composition |
-| 29 | T-F18j | Migrate unknown-cost semantics across backend read models/Birdseye/campaign totals | backlog | T-F17b, T-F17c | ticket/T-F18j-cost-accounting-truth |
+| 29 | T-F18j | Preserve unknown and partial provider accounting in backend projections | backlog | T-F17b, T-F17c | ticket/T-F18j-accounting-unknown-bridge |
 | 30 | T-F17e | Publish content-addressed hosted capability and gate deployment | backlog | T-F17d, accepted T-F18j | ticket/T-F17e-hosted-capability-deployment |
 | 31 | T-F17f | Show configured versus observed provenance and content-addressed prompts | backlog | T-F17b, T-F17c, T-F17e | ticket/T-F17f-agents-provenance-ui |
 
