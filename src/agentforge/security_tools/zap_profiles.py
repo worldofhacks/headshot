@@ -57,6 +57,20 @@ _METADATA_HOSTS = frozenset(
         "metadata.google.internal",
         "metadata",
         "metadata.goog",
+        "metadata.azure.com",
+        "metadata.alibaba.com",
+        "metadata.alibabacloud.com",
+        "metadata.oraclecloud.com",
+        "metadata.tencentyun.com",
+    }
+)
+
+# Cloud-metadata IP literals NOT caught by is_link_local / is_private (e.g. Azure's DNS +
+# wireserver 168.63.129.16). Belt-and-suspenders beyond the IP-class checks.
+_METADATA_IPS = frozenset(
+    {
+        "169.254.169.254",  # AWS/GCP/Azure IMDS (also link-local)
+        "168.63.129.16",  # Azure DNS / wireserver (public range — not private/link-local)
         "100.100.200.200",  # Alibaba Cloud metadata
     }
 )
@@ -139,7 +153,7 @@ def validate_active_scan_target(origin: str, *, approved_origin: str) -> str:
 
     if any(fragment in host for fragment in _IDP_HOST_FRAGMENTS):
         raise ValueError("identity-provider origins are outside active-scan scope")
-    if host in _METADATA_HOSTS:
+    if host in _METADATA_HOSTS or host in _METADATA_IPS:
         raise ValueError("cloud-metadata endpoints are outside active-scan scope")
 
     try:
@@ -206,9 +220,16 @@ def active_scan_argv(
         )
 
     origin = validate_active_scan_target(scope.origin, approved_origin=approved_origin)
+    # Compare full authority (host:port), not just the hostname, so a spec served from a
+    # non-standard port on the approved host cannot slip through and become an SSRF primitive.
     spec = urlsplit(openapi_spec_url)
-    spec_origin = f"{spec.scheme}://{spec.hostname}" if spec.hostname else ""
-    if spec.scheme != "https" or spec_origin != origin:
+    origin_parts = urlsplit(origin)
+    if (
+        spec.scheme != "https"
+        or spec.username
+        or spec.password
+        or spec.netloc.lower() != origin_parts.netloc.lower()
+    ):
         raise ValueError("the OpenAPI spec must be served from the exact approved origin")
 
     minutes = max(1, int(scope.caps.max_duration_seconds // 60))

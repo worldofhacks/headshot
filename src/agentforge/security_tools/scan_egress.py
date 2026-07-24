@@ -19,8 +19,6 @@ neutral; the dispatch is the only egress and is injected (a socket in the Runner
 
 from __future__ import annotations
 
-import fnmatch
-import hashlib
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
@@ -28,7 +26,13 @@ from typing import Any
 from agentforge.security_tools.active_authorization import (
     ActiveScanAuthorization,
     ActiveScanScope,
+    content_digest,
+    path_in_scope,
 )
+
+# The only outcomes a ledger entry may record. "aborted" = abort flipped after the permit was
+# reserved but before the physical send (no send occurred), kept for scanner<->ledger parity.
+_LEDGER_OUTCOMES = frozenset({"returned", "raised", "aborted"})
 
 
 class ScanEgressAbort(Exception):
@@ -57,20 +61,14 @@ class ScanEgressLedgerEntry:
     request_index: int
     method: str
     path: str
-    outcome: str  # "returned" | "raised"
-
-
-def _path_in_scope(path: str, patterns: tuple[str, ...]) -> bool:
-    candidate = path.split("?", 1)[0].split("#", 1)[0]
-    return any(candidate == pattern or fnmatch.fnmatch(candidate, pattern) for pattern in patterns)
+    outcome: str  # "returned" | "raised" | "aborted"
 
 
 def _mint_permit(scope: ActiveScanScope, request_index: int, method: str, path: str) -> ScanPermit:
-    material = "\x1f".join(
-        [scope.operation_hash(), str(request_index), method, path, scope.scope_nonce]
-    ).encode("utf-8")
     return ScanPermit(
-        permit_id=hashlib.sha256(material).hexdigest(),
+        permit_id=content_digest(
+            scope.operation_hash(), str(request_index), method, path, scope.scope_nonce
+        ),
         request_index=request_index,
         method=method,
         path=path,
@@ -123,7 +121,7 @@ class GovernedScanEgress:
             raise ScanEgressAbort(
                 f"method {upper} is outside the authorized active-scan scope (fail closed)"
             )
-        if not _path_in_scope(path, self._scope.path_patterns):
+        if not path_in_scope(path, self._scope.path_patterns):
             raise ScanEgressAbort(
                 f"path {path} is outside the authorized active-scan scope (fail closed)"
             )
@@ -142,6 +140,11 @@ class GovernedScanEgress:
 
     def report_send(self, permit: Any, outcome: str) -> None:
         """Post-physical-send observer: record exactly one ledger entry for a minted permit."""
+        if outcome not in _LEDGER_OUTCOMES:
+            raise ScanEgressAbort(
+                f"invalid ledger outcome {outcome!r} — must be one of "
+                f"{sorted(_LEDGER_OUTCOMES)} (fail closed)"
+            )
         permit_id = getattr(permit, "permit_id", None)
         if permit_id not in self._permits:
             raise ScanEgressAbort(
@@ -167,8 +170,19 @@ class GovernedScanEgress:
     def send(
         self, *, method: str, path: str, dispatch: Callable[[ScanPermit], Any], now: float
     ) -> Any:
-        """Reserve a permit, dispatch the single physical send, and record the ledger entry."""
+        """Reserve a permit, dispatch the single physical send, and record the ledger entry.
+
+        The abort flag is re-checked once more AFTER the permit is reserved and immediately BEFORE
+        the physical send, so a mid-flight abort blocks the send; the reserved permit is recorded as
+        ``aborted`` (never dispatched) so scanner<->permit<->send<->ledger parity is preserved.
+        """
         permit = self.reserve_permit(method=method, path=path, now=now)
+        if self._abort_check():
+            self.report_send(permit, "aborted")
+            raise ScanEgressAbort(
+                "active scan aborted after the permit was reserved — physical send blocked "
+                "(fail closed)"
+            )
         try:
             result = dispatch(permit)
         except BaseException:

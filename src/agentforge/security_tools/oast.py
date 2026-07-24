@@ -15,11 +15,10 @@ listener; a real Runner wires an internal listener that calls :meth:`observe_cal
 
 from __future__ import annotations
 
-import hashlib
 from dataclasses import dataclass
 from urllib.parse import urlsplit
 
-from agentforge.security_tools.active_authorization import ActiveScanScope
+from agentforge.security_tools.active_authorization import ActiveScanScope, content_digest
 
 # Only these suffixes are accepted as private OAST domains. A public collaborator or the target
 # origin is never a valid callback domain (the callback would leave our trust boundary).
@@ -75,10 +74,9 @@ class PrivateOastRegistry:
         self._confirmed: list[str] = []
 
     def _label(self, attempt_id: str, domain: str) -> str:
-        material = "\x1f".join(
-            [self._scope.operation_hash(), attempt_id, domain, self._scope.scope_nonce]
-        ).encode("utf-8")
-        return hashlib.sha256(material).hexdigest()[:32]
+        return content_digest(
+            self._scope.operation_hash(), attempt_id, domain, self._scope.scope_nonce
+        )[:32]
 
     def mint(self, attempt_id: str, *, domain: str | None = None) -> OastToken:
         """Mint a fresh callback for one attempt on an authorized private domain."""

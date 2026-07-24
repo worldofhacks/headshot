@@ -13,12 +13,11 @@ happens, crosses the governed egress in the private Runner).
 
 from __future__ import annotations
 
-import fnmatch
 import hashlib
 import json
 from dataclasses import dataclass
 
-from agentforge.security_tools.active_authorization import ActiveScanScope
+from agentforge.security_tools.active_authorization import ActiveScanScope, path_in_scope
 
 MAX_DISCOVERED_OPERATIONS = 1000
 _HTTP_METHODS = frozenset({"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS", "TRACE"})
@@ -39,10 +38,6 @@ class DiscoveredApi:
     surface_sha256: str
 
 
-def _path_in_scope(path: str, patterns: tuple[str, ...]) -> bool:
-    return any(path == pattern or fnmatch.fnmatch(path, pattern) for pattern in patterns)
-
-
 def discover_openapi(spec: dict, *, scope: ActiveScanScope) -> DiscoveredApi:
     """Discover the in-scope operation surface from an OpenAPI schema, content-addressed."""
     if not isinstance(spec, dict):
@@ -56,7 +51,7 @@ def discover_openapi(spec: dict, *, scope: ActiveScanScope) -> DiscoveredApi:
     for path, item in paths.items():
         if not isinstance(path, str) or not isinstance(item, dict):
             raise ValueError("malformed OpenAPI path item")
-        if not _path_in_scope(path, scope.path_patterns):
+        if not path_in_scope(path, scope.path_patterns):
             continue
         for method, operation in item.items():
             upper = method.upper()
@@ -71,7 +66,9 @@ def discover_openapi(spec: dict, *, scope: ActiveScanScope) -> DiscoveredApi:
                             {
                                 p["name"]
                                 for p in raw_params
-                                if isinstance(p, dict) and isinstance(p.get("name"), str)
+                                if isinstance(p, dict)
+                                and isinstance(p.get("name"), str)
+                                and p["name"]
                             }
                         )
                     )

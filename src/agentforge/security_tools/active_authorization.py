@@ -28,10 +28,47 @@ order-independently so the grant is byte-reproducible. Stdlib only; no Docker, n
 
 from __future__ import annotations
 
+import fnmatch
 import hashlib
 import json
 import math
 from dataclasses import dataclass
+
+# Encoded path-traversal / separator tokens an active-scan path must never contain (case-folded).
+_ENCODED_PATH_TRAVERSAL = ("%2e", "%2f", "%5c")
+
+
+def content_digest(*parts: str) -> str:
+    """Return a collision-resistant 64-hex digest of the ordered string parts.
+
+    Uses JSON array encoding (not a single-character join) so no part can borrow a separator from
+    a neighbour: ``content_digest("a\\x1fb", "c") != content_digest("a", "b\\x1fc")``. The one
+    content-addressing primitive shared by OAST label minting and egress permit minting, so both
+    are provably free of the separator-collision gadget.
+    """
+    canonical = json.dumps(list(parts), ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest()
+
+
+def path_in_scope(path: str, patterns: tuple[str, ...]) -> bool:
+    """Return True only if ``path`` is unambiguously inside the authorized pattern set.
+
+    The single scope-matching function shared by API discovery and governed egress, so the two can
+    never diverge. Fail-closed against traversal: query/fragment are stripped, and any path that is
+    not absolute, contains ``..``/``.`` segments, empty segments (``//`` or trailing ``/``),
+    backslashes, or encoded traversal (``%2e``/``%2f``/``%5c``) is out of scope BEFORE any glob
+    match — a scanner path that would normalize to a different resource can never pass.
+    """
+    candidate = path.split("?", 1)[0].split("#", 1)[0]
+    if not candidate.startswith("/"):
+        return False
+    lowered = candidate.lower()
+    if "\\" in candidate or any(token in lowered for token in _ENCODED_PATH_TRAVERSAL):
+        return False
+    for segment in candidate.split("/")[1:]:
+        if segment in ("", ".", ".."):
+            return False
+    return any(candidate == pattern or fnmatch.fnmatch(candidate, pattern) for pattern in patterns)
 
 
 class ActiveScanAuthorizationError(Exception):
@@ -238,4 +275,6 @@ __all__ = [
     "ActiveScanCaps",
     "ActiveScanScope",
     "active_scan_operation_hash",
+    "content_digest",
+    "path_in_scope",
 ]

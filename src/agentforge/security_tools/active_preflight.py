@@ -113,6 +113,11 @@ def active_scan_preflight(
 
     def _matrix() -> str:
         matrix = build_auth_matrix(auth_matrix_entries, scope=scope)
+        if not matrix.cells:
+            raise ValueError(
+                "auth matrix is empty — an active scan needs at least one authenticated "
+                "principal mapped (fail closed)"
+            )
         return f"auth matrix {matrix.matrix_sha256[:12]} ({len(matrix.cells)} cells)"
 
     _check("authorization", _authorization)
