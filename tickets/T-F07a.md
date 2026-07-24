@@ -2,7 +2,7 @@
 id: T-F07a
 title: Measure deterministic 100-case full-regression baseline
 status: backlog
-wave: 5
+wave: 9
 depends_on: [T-F06a]
 branch: ticket/T-F07a-benchmark
 file_scopes:
@@ -19,7 +19,7 @@ traces_to:
 ---
 
 ## Context
-Wave 5 deterministic code consumes T-F06a's replay executor and emitted duration interface to run fixed-seed, network-disabled measurement and produce `docs/performance/local/<sha>/` summaries. `Week_3_AgentForge.pdf`, OPT-16/17, the current release/input hashes, and the human-approved `.tdd-swarm/baselines.md` hash are authoritative.
+Wave 9 deterministic code consumes T-F06a's replay executor and emitted duration interface to run fixed-seed, network-disabled measurement and produce `docs/performance/local/<sha>/` summaries. `Week_3_AgentForge.pdf`, OPT-16/17, the current release/input hashes, and the human-approved `.tdd-swarm/baselines.md` hash are authoritative.
 
 ## Acceptance Criteria
 - **AC-1**: Three fixed-seed, network-disabled 100-case plus full-replay runs retain command/env/SHA/input hashes/raw CPU/peak RSS/p50/p95/throughput/storage/critical/full durations.

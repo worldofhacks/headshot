@@ -2,7 +2,7 @@
 id: T-F10b
 title: Produce genuine independently reproduced reports
 status: backlog
-wave: 8
+wave: 12
 depends_on: [T-F05b, T-F06b]
 branch: ticket/T-F10b-reports
 file_scopes: [docs/vulnerabilities/**, docs/evidence/reproductions/**]
@@ -15,7 +15,7 @@ traces_to:
 ---
 
 ## Context
-Wave 8 authorized operational evidence consumes T-F05b confirmed-exploit recorder/verdict hashes and T-F06b fresh replay evidence, producing schema-valid reports and `docs/evidence/reproductions/**`. `Week_3_AgentForge.pdf`, PRD-22/27/32, the packaged `vuln_report` contract hash, and exact target/release/artifact hashes are authoritative. The owner-supplied exact reproduction authorization artifact is read-only; if absent, status is `BLOCKED` with zero calls.
+Wave 12 authorized operational evidence consumes T-F05b confirmed-exploit recorder/verdict hashes and T-F06b fresh replay evidence, producing schema-valid reports and `docs/evidence/reproductions/**`. `Week_3_AgentForge.pdf`, PRD-22/27/32, the packaged `vuln_report` contract hash, and exact target/release/artifact hashes are authoritative. The owner-supplied exact reproduction authorization artifact is read-only; if absent, status is `BLOCKED` with zero calls.
 
 ## Acceptance Criteria
 - **AC-1**: Candidate must reference `EXPLOIT_CONFIRMED`, recorder/evidence hashes and exact target/release; `INDETERMINATE`, simulated or duplicate candidates are rejected.

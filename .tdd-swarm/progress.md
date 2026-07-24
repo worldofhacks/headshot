@@ -200,3 +200,39 @@ NEXT: report to owner + STOP for explicit bounded live-campaign authorization.
 - [locked-decision] Structural self-check and `git diff --check` passed after the repair: 26/26 Context
   sections are positioned before Acceptance Criteria and contain all required execution fields; the
   existing 82-prompt/dependency/scope checks remain green.
+
+## 2026-07-24 — Final-submission execution authorized
+- [locked-decision] Owner approved the reviewed swarm plan and bounded OpenRouter spending at 09:16 EDT.
+  Paid provider use remains subject to per-run caps and evidence; target calls still require the Policy
+  Gateway's exact target/corpus authorization, fresh SMART lease, synthetic-only proof, and distinct
+  launcher/Approver. Spending approval is not target or load authorization.
+- Ticket T-F00: tests-dispatched (base `6fcfa0c`, worktree `wt-T-F00`, wave 0).
+- [research] Parallel read-only owner lanes dispatched for current OpenRouter model allocation and
+  staging/live-gate readiness. They may write sanitized reports only and cannot make paid or target calls.
+- Ticket T-F00: RED verified at `e8e112e` (8 feature-missing failures), then test-review rejected
+  (1 Critical, 3 Important). Test Agent repair attempt 2 dispatched; tests are not frozen.
+- [research] OpenRouter readiness found no effective provider/model configuration and no complete hosted
+  runtime. Proposed four-family allocation and a bounded $5/56-call evaluation envelope are evidence only
+  until deterministic provider tickets and role authorizations land.
+- [research] Live-gate audit found Web healthy/ready and only-Web-public, but missing session-lease metadata,
+  provider configuration, exact campaign/load authorization, current-SHA deployment proof, and staging/
+  production database isolation evidence. Zero target calls remain enforced.
+- Ticket T-F00: tests-frozen at `87b472f` after two review/repair cycles (17 clean feature-missing
+  failures; final test-review 0 Critical/Important, 1 recorded Minor). Implementation attempt 1 dispatched.
+- [locked-decision] Owner's broad spending approval is operationalized conservatively as the readiness
+  proposal's hard ceiling of $5.00 and 56 physical calls for the initial two-hour provider evaluation.
+  This does not authorize target traffic and will not be used until reviewed provider code, per-role
+  credential references, zero-call preflight, and bounded authorization artifacts exist.
+- Ticket T-F00: implementation attempt 1 committed at `3e1c370`; orchestrator rerun green (1,018
+  passed/3 skipped, Ruff/secret/spec/import gates green), but independent review rejected it with
+  12 Important findings across code and security. A Test Agent is adding RED regression coverage
+  before any implementation repair; the first green run is not accepted as a trust root.
+- [locked-decision] The four-role OpenRouter amendment is independently `REVIEW_PASS` with zero
+  Critical/Important/Minor findings after three adversarial review cycles. The reviewed plan now
+  has 33 bounded tickets and 54 prompts, including atomic role-configuration staging, zero-call
+  provider and live-campaign preflights, worst-case pre-dispatch spend reservation, strict role
+  adapters/contracts, immutable dual smoke evidence, and distinct Evidence/Security reviews.
+- Ticket T-F00: post-review Test Agents added collection-bound spec checks and adversarial gate
+  authority, timeout/output, redaction, path, hash, and signed-approval cases. Candidate frozen-test
+  head is `93e62dc`; the combined suite is cleanly RED and definitive independent test-design review
+  is pending before implementation attempt 2.

@@ -1,6 +1,4 @@
 # T-F03a Test Review — Model: capable
-Worktree `<WORKTREE>`; branch `ticket/T-F03a-judge-code`. Inputs: ticket/test/RED. Allowed write: `.tdd-swarm/reports/T-F03a-test-review.md`. Verifier focused pytest; attack threshold breach, identity drift/collision, provider failure, oracle precedence; freeze.
-No network/spend/live traffic; no main merge/push; max 3. Return four-status contract + verdict.
-Strict local contract: exact ticket input `tickets/T-F03a.md`; Ticket tests are frozen; this role must not edit, weaken, skip, or delete them. Named verifier is the focused command above plus `.tdd-swarm/run-local-gates.sh tickets/T-F03a.md <DIFF_BASE>` after implementation. Return exactly `DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED(reason)` plus one-line summary; full output stays in the declared report path.
-No main merge/push.
-Exact inputs: `tickets/T-F03a.md`, ticket test_scopes, `.tdd-swarm/reports/T-F03a-test.md`; exact output: `.tdd-swarm/reports/T-F03a-test-review.md`.
+Worktree `<WORKTREE>`; branch `ticket/T-F03a-judge-code`. Exact inputs: `tickets/T-F03a.md`, `tests/test_judge_final.py`, `.tdd-swarm/reports/T-F03a-test.md`. Allowed write only: `.tdd-swarm/reports/T-F03a-test-review.md`; do not edit tests. Run focused pytest; attack lenient Verdict parsing, Red-Team client/secret access, missing metadata, each pre/post-dispatch independence collision, fail-open calibration, oracle downgrade, identity fallback, and threshold forcing. Confirm clean feature RED and freeze only after Critical/Important findings close.
+
+No network, credentials, spend, target traffic, main merge, or push. Maximum three review attempts. Post-implementation verifier: `.tdd-swarm/run-local-gates.sh tickets/T-F03a.md <DIFF_BASE>`. Return exactly `DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED(reason)` plus freeze verdict; full output stays in the report.

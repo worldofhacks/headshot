@@ -2,7 +2,7 @@
 id: T-F03b
 title: Execute bounded independent Judge calibration
 status: backlog
-wave: 4
+wave: 5
 depends_on: [T-F03a]
 branch: ticket/T-F03b-judge-evidence
 file_scopes: [evals/results/calibration/**, docs/evidence/calibration/**]
@@ -15,11 +15,11 @@ traces_to:
 ---
 
 ## Context
-Wave 4 authorized operational evidence consumes T-F03a's calibration CLI and `.tdd-swarm/judge-calibration-policy.json`, producing `evals/results/calibration/<run>/manifest.json`. `Week_3_AgentForge.pdf`, PRD-18/OPT-08, and the landed policy/ground-truth/provider identity hashes are authoritative. The owner-supplied `docs/evidence/authorizations/judge-calibration.json` is read-only; if absent or invalid, status is `BLOCKED` with zero calls.
+Wave 5 authorized evidence consumes T-F03a's strict Judge adapter/calibration CLI and the exact T-F04c configuration-set hash accepted by T-F04g read-only preflight. The owner Judge artifact is read-only and must bind that exact Judge configuration/identity; invalid means `BLOCKED` with zero calls.
 
 ## Acceptance Criteria
-- **AC-1**: Given `docs/evidence/authorizations/judge-calibration.json` with provider/model identities, max calls, USD cap, expiry, approver and no target scope, zero-call preflight exits 0; absent/invalid artifact exits 4 with zero provider calls.
-- **AC-2**: Given valid authorization, bounded dual judging writes category metrics, identity/policy/ground-truth hashes and usage/cost to `evals/results/calibration/<run>/manifest.json`.
+- **AC-1**: Given `docs/evidence/authorizations/judge-calibration.json` with configuration-set/version hash, requested/expected-returned/expected-upstream Judge identity, prompt/rubric/criteria/policy/ground-truth hashes, caps, expiry, approver and no target scope, zero-call persisted-record preflight exits 0; absent/invalid exits 4 with zero provider calls.
+- **AC-2**: Given valid authorization, bounded dual judging writes category metrics, requested/returned/actual-upstream identity, credential-reference/configuration/prompt/rubric/criteria/policy/ground-truth hashes and physical usage/cost to `evals/results/calibration/<run>/manifest.json`.
 - **AC-3**: Given thresholds from the landed T-F03a calibration-policy hash, runtime enablement is true only when the verifier exits 0; otherwise blocked with exact breach reasons.
 - **AC-4**: Evidence Reviewer independently recomputes metrics/hashes and records APPROVED; sampled outputs remain graded, not mocked.
 

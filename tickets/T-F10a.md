@@ -2,7 +2,7 @@
 id: T-F10a
 title: Verify owner-merged dual-remote staging release
 status: backlog
-wave: 9
+wave: 13
 depends_on: [T-F08, T-F09a, T-F09b, T-F13]
 branch: ticket/T-F10a-release
 file_scopes: [docs/evidence/release/**, README.md]
@@ -16,7 +16,7 @@ traces_to:
 ---
 
 ## Context
-Wave 9 authorized operational evidence consumes T-F08/T-F09a/T-F09b/T-F13 reviewed manifests and verifies the owner-merged release through `docs/evidence/release/**` without performing a swarm merge or deployment mutation. `Week_3_AgentForge.pdf`, `AGENTS.md` dual-remote law, the release commit SHA, CI/deploy outputs, and the release manifest hash are authoritative. The owner-supplied release authorization/evidence artifact is read-only; if absent, status is `BLOCKED` with zero remote or deployment calls.
+Wave 13 authorized operational evidence consumes T-F08/T-F09a/T-F09b/T-F13 reviewed manifests and verifies the owner-merged release through `docs/evidence/release/**` without performing a swarm merge or deployment mutation. `Week_3_AgentForge.pdf`, `AGENTS.md` dual-remote law, the release commit SHA, CI/deploy outputs, and the release manifest hash are authoritative. The owner-supplied release authorization/evidence artifact is read-only; if absent, status is `BLOCKED` with zero remote or deployment calls.
 
 ## Acceptance Criteria
 - **AC-1**: Owner-merged release records commit/deploy/migration/health/readiness/auth/private-topology/rollback outputs and SHA-256 manifest; any failed check blocks release.

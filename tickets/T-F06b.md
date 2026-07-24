@@ -2,7 +2,7 @@
 id: T-F06b
 title: Execute authorized regression replay evidence
 status: backlog
-wave: 6
+wave: 10
 depends_on: [T-F05b, T-F06a]
 branch: ticket/T-F06b-replay-evidence
 file_scopes: [docs/evidence/regression/**]
@@ -15,7 +15,7 @@ traces_to:
 ---
 
 ## Context
-Wave 6 authorized operational evidence consumes T-F05b's current-SHA campaign manifest and T-F06a's fresh-replay/right-reason interfaces, producing `docs/evidence/regression/<run>/manifest.json`. `Week_3_AgentForge.pdf`, PRD-23/24/36, and the bound target, case, release, baseline, verdict, and artifact hashes are authoritative. The owner-supplied campaign scope or `docs/evidence/authorizations/regression-replay.json` is read-only; if neither is valid, status is `BLOCKED` with zero calls.
+Wave 10 authorized operational evidence consumes T-F05b's current-SHA campaign manifest and T-F06a's fresh-replay/right-reason interfaces, producing `docs/evidence/regression/<run>/manifest.json`. `Week_3_AgentForge.pdf`, PRD-23/24/36, and the bound target, case, release, baseline, verdict, and artifact hashes are authoritative. The owner-supplied campaign scope or `docs/evidence/authorizations/regression-replay.json` is read-only; if neither is valid, status is `BLOCKED` with zero calls.
 
 ## Acceptance Criteria
 - **AC-1**: Given still-valid campaign scope or `docs/evidence/authorizations/regression-replay.json`, preflight binds case/target/release/caps and exits 0; otherwise exit 4/zero calls.

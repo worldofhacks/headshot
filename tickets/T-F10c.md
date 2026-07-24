@@ -2,7 +2,7 @@
 id: T-F10c
 title: Record demo and prepare social submission package
 status: backlog
-wave: 10
+wave: 14
 depends_on: [T-F10a, T-F10b]
 branch: ticket/T-F10c-submission
 file_scopes: [docs/demo/**, docs/submission/**]
@@ -15,7 +15,7 @@ traces_to:
 ---
 
 ## Context
-Wave 10 documentation-only packaging consumes T-F10a's reviewed release manifest and T-F10b's genuine-report/reproduction manifests into `docs/demo/**` and `docs/submission/**`. `Week_3_AgentForge.pdf`, PRD-31/35 and LEAD-07/10, release/campaign/report hashes, and the sanitation review are authoritative. The owner-supplied `docs/evidence/authorizations/social-publication.json` is read-only; if absent, publication is `BLOCKED` with zero posting calls and the agent only prepares drafts.
+Wave 14 documentation-only packaging consumes T-F10a's reviewed release manifest and T-F10b's genuine-report/reproduction manifests into `docs/demo/**` and `docs/submission/**`. `Week_3_AgentForge.pdf`, PRD-31/35 and LEAD-07/10, release/campaign/report hashes, and the sanitation review are authoritative. The owner-supplied `docs/evidence/authorizations/social-publication.json` is read-only; if absent, publication is `BLOCKED` with zero posting calls and the agent only prepares drafts.
 
 ## Acceptance Criteria
 - **AC-1**: Video metadata records duration 180–300 seconds, release/campaign hashes and sanitation reviewer; demo shows authorized staging, four-agent trace, safeguards, honest results, regression/performance/cost/limits.

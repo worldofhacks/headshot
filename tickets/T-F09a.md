@@ -2,7 +2,7 @@
 id: T-F09a
 title: Assemble current-SHA ATO evidence packet
 status: backlog
-wave: 8
+wave: 12
 depends_on: [T-F08, T-F09b, T-F11, T-F12, T-F13, T-F14a, T-F14b]
 branch: ticket/T-F09a-ato
 file_scopes: [docs/evidence/ato/**]
@@ -15,7 +15,7 @@ traces_to:
 ---
 
 ## Context
-Wave 8 documentation-only assembly consumes T-F08 cost evidence, T-F09b drill evidence, T-F11/T-F12/T-F13 architecture and integration packets, and T-F14a/T-F14b security/failure contracts into `docs/evidence/ato/manifest.sha256`. `Week_3_AgentForge.pdf`, OPT-07/15 and LEAD-03, dependency artifact hashes, tool-version hashes, and the bound release/environment SHA are authoritative.
+Wave 12 documentation-only assembly consumes T-F08 cost evidence, T-F09b drill evidence, T-F11/T-F12/T-F13 architecture and integration packets, and T-F14a/T-F14b security/failure contracts into `docs/evidence/ato/manifest.sha256`. `Week_3_AgentForge.pdf`, OPT-07/15 and LEAD-03, dependency artifact hashes, tool-version hashes, and the bound release/environment SHA are authoritative.
 
 ## Acceptance Criteria
 - **AC-1**: `docs/evidence/ato/manifest.sha256` covers architecture/data-flow, human/workload auth matrices, lineage/access/environment, dependency/SBOM, scans, evals, tests/deploy/cost; `sha256sum -c` exits 0.

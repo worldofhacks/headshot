@@ -2,7 +2,7 @@
 id: T-F14a
 title: Complete security-tool runtime correlation
 status: backlog
-wave: 3
+wave: 2
 depends_on: [T-F00]
 branch: ticket/T-F14a-security-tools
 file_scopes:
@@ -19,7 +19,7 @@ traces_to:
 ---
 
 ## Context
-Wave 3 deterministic code consumes T-F00's local-gate/report interface and existing versioned scanner artifacts, then exposes normalized immutable security signals to the Orchestrator. `Week_3_AgentForge.pdf`, LEAD-03, and the scanner tool/version/run/artifact plus normalized-signal hashes are authoritative.
+Wave 2 deterministic code consumes T-F00's local-gate/report interface and existing versioned scanner artifacts, then exposes normalized immutable security signals to the Orchestrator. `Week_3_AgentForge.pdf`, LEAD-03, and the scanner tool/version/run/artifact plus normalized-signal hashes are authoritative.
 
 ## Acceptance Criteria
 - **AC-1**: Given versioned scanner artifacts, normalization retains tool/version/run/artifact hashes and deduplicated finding lineage.

@@ -2,8 +2,8 @@
 id: T-F05a
 title: Persist durable four-agent release lineage
 status: backlog
-wave: 3
-depends_on: [T-F03a, T-F04a]
+wave: 7
+depends_on: [T-F03a, T-F04a, T-F04c, T-F04d, T-F04h]
 branch: ticket/T-F05a-trace-code
 file_scopes:
   - src/agentforge/agents/runtime.py
@@ -19,10 +19,10 @@ traces_to:
 ---
 
 ## Context
-Wave 3 deterministic code consumes T-F03a's Judge result interface and T-F04a's Red Team lineage/provider interfaces, then exposes persisted four-role lineage through the runner, store, and Birdseye query contract. `Week_3_AgentForge.pdf`, PRD-13/25/26 and LEAD-01, the release SHA, and input/output/evidence hashes stored per execution are authoritative.
+Wave 7 deterministic code consumes T-F04c's immutable configuration-set/execution references, T-F03a's Judge result, T-F04a's Red Team lineage, T-F04h's typed manifest contract, and T-F04d's composed execution metadata, then exposes durable lineage through runner/store/Birdseye. It must consume the persisted `HostedRoleConfiguration`; independent environment/artifact reparsing is forbidden.
 
 ## Acceptance Criteria
-- **AC-1**: Given an offline four-role run, each started execution persists role/parent/phase/times/status/correlation/release SHA/target/provider-or-deterministic/input-output hashes/cost provenance.
+- **AC-1**: Given an offline or injected-transport four-role run, each started execution references the immutable T-F04c role-version/configuration-set hash and persists role/parent/phase/times/status/correlation/release SHA/target, requested and exact returned model/provider/endpoint identity, prompt/rubric/criteria/policy/catalog/data-policy/fixture hashes, input-output hashes, tokens, measured cost, trace ID, and cost provenance.
 - **AC-2**: Given abort after role N, completed rows are immutable, interrupted role is terminal, later roles are explicitly omitted; verifier exits 0 only when parent graph is acyclic and complete for started roles.
 - **AC-3**: Given forged/hash-invalid/orphan execution, Birdseye marks degraded/excludes proof; never synthesizes a missing role.
 - **AC-4**: Given current-release query, all returned executions bind the same release SHA and campaign ID or verifier exits 3.

@@ -1,6 +1,6 @@
 # T-F05b Evidence Review — Model: capable
-Worktree `<WORKTREE>`; branch `ticket/T-F05b-live-campaign`. Inputs ticket/auth/live/export manifests/execute report. Allowed write `.tdd-swarm/reports/T-F05b-evidence-review.md`. No test path; recompute hashes, parent graph, physical=request rows, costs, staging/sanitation.
-No network/spend/live traffic in review; no main merge/push; max 3. Return four-status contract + verdict.
-Strict local contract: exact ticket input `tickets/T-F05b.md`; there is no test scope and no production-code permission; use only the named mechanical verifier above. Return exactly `DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED(reason)` plus one-line summary; full output stays in the declared report path.
-No main merge/push.
-Exact inputs: `tickets/T-F05b.md`, ticket file_scopes, `.tdd-swarm/reports/T-F05b-execute.md`, and named artifact manifests; exact output: `.tdd-swarm/reports/T-F05b-evidence-review.md`.
+Worktree `<WORKTREE>`; branch `ticket/T-F05b-live-campaign`. Exact inputs: `tickets/T-F05b.md`, read-only `campaign.json`, every exact T-F05c preflight input, live/export manifests, and `.tdd-swarm/reports/T-F05b-execute.md`. Allowed write only: `.tdd-swarm/reports/T-F05b-evidence-review.md`; no prior artifact edit.
+
+Without network, spend, credential resolution, or live traffic, rerun exactly `python scripts/preflight_live_campaign.py --authorization docs/evidence/authorizations/campaign.json --target-observation <TARGET_OBSERVATION> --deployment-manifest <CURRENT_DEPLOYMENT_MANIFEST> --corpus-manifest <CORPUS_MANIFEST> --synthetic-fixture-manifest <SYNTHETIC_FIXTURE_MANIFEST> --configuration-projection <HOSTED_CONFIGURATION_PROJECTION> --smoke-manifest <SMOKE_MANIFEST> --evidence-review <EVIDENCE_REVIEW> --security-review <SECURITY_REVIEW> --smart-lease-metadata <SMART_LEASE_METADATA> --launcher-ref <LAUNCHER_REF> --check-only`. Independently prove grant-derived target/allowlist/deploy/corpus/synthetic/configuration/smoke/review/cap/expiry/principal/SMART-lease hashes, then review live parent graph, physical=request rows, costs, staging label, and sanitation. Caller-supplied expected review hashes are not acceptable.
+
+Maximum three review attempts; no main merge/push. Return exactly `DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED(reason)` plus verdict; full output stays in the report.

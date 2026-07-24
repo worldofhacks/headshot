@@ -2,7 +2,7 @@
 id: T-F06a
 title: Implement fresh regression replay executor
 status: backlog
-wave: 4
+wave: 8
 depends_on: [T-F05a, T-F14b]
 branch: ticket/T-F06a-replay-code
 file_scopes:
@@ -19,7 +19,7 @@ traces_to:
 ---
 
 ## Context
-Wave 4 deterministic code consumes T-F05a's persisted campaign/lineage interface and T-F14b's typed failure contracts, and produces the fresh-replay executor and duration metrics consumed by later evidence and benchmark tickets. `Week_3_AgentForge.pdf`, PRD-23/24/36 and OPT-16, package contract hashes, accepted baseline hashes, and current target/release hashes are authoritative.
+Wave 8 deterministic code consumes T-F05a's persisted campaign/lineage interface and T-F14b's typed failure contracts, and produces the fresh-replay executor and duration metrics consumed by later evidence and benchmark tickets. `Week_3_AgentForge.pdf`, PRD-23/24/36 and OPT-16, package contract hashes, accepted baseline hashes, and current target/release hashes are authoritative.
 
 ## Acceptance Criteria
 - **AC-1**: Given admitted case/trigger, executor creates a new campaign ID and target call plan; prior verdict reuse causes exit 3.

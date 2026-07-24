@@ -2,7 +2,7 @@
 id: T-F01b
 title: Reconcile final matrix readiness deployment eval and plans
 status: backlog
-wave: 12
+wave: 16
 depends_on: [T-F10c, T-F11, T-F12, T-F13, T-F15]
 branch: ticket/T-F01b-final-reconciliation
 file_scopes:
@@ -21,7 +21,7 @@ traces_to:
 ---
 
 ## Context
-Wave 12 documentation-only finalization consumes the reviewed submission, target, architecture, integration, and story manifests from T-F10c/T-F11/T-F12/T-F13/T-F15 plus their concrete artifact paths and SHA-256 entries. `Week_3_AgentForge.pdf`, the complete `docs/requirements/REQUIREMENTS_MATRIX.csv`, and dependency manifest hashes are authoritative; no earlier status claim overrides them.
+Wave 16 documentation-only finalization consumes the reviewed submission, target, architecture, integration, and story manifests from T-F10c/T-F11/T-F12/T-F13/T-F15 plus their concrete artifact paths and SHA-256 entries. `Week_3_AgentForge.pdf`, the complete `docs/requirements/REQUIREMENTS_MATRIX.csv`, and dependency manifest hashes are authoritative; no earlier status claim overrides them.
 
 ## Acceptance Criteria
 - **AC-1**: Given final artifact manifests from dependencies, when reconciliation runs, then each matrix row names status, verification command, immutable artifact path/hash, reviewer, and remaining blocker; no blank cell.

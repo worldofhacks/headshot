@@ -1,6 +1,4 @@
 # T-F03a Code Review — Model: capable
-Worktree `<WORKTREE>`; branch `ticket/T-F03a-judge-code`. Inputs: ticket/diff/implement/gates. Allowed write `.tdd-swarm/reports/T-F03a-code-review.md`. Run wrapper; verify threshold source, category gate, identity invalidation, no oracle downgrade.
-No network/spend/live traffic; no main merge/push; max 3. Return four-status contract + verdict.
-Strict local contract: exact ticket input `tickets/T-F03a.md`; Ticket tests are frozen; this role must not edit, weaken, skip, or delete them. Named verifier is the focused command above plus `.tdd-swarm/run-local-gates.sh tickets/T-F03a.md <DIFF_BASE>` after implementation. Return exactly `DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED(reason)` plus one-line summary; full output stays in the declared report path.
-No main merge/push.
-Exact inputs: `tickets/T-F03a.md`, `.tdd-swarm/diffs/T-F03a.patch`, `.tdd-swarm/reports/T-F03a-implement.md`, `.tdd-swarm/reports/T-F03a-gates.md`; exact output: `.tdd-swarm/reports/T-F03a-code-review.md`.
+Worktree `<WORKTREE>`; branch `ticket/T-F03a-judge-code`. Exact inputs: `tickets/T-F03a.md`, `.tdd-swarm/diffs/T-F03a.patch`, `.tdd-swarm/reports/T-F03a-implement.md`, `.tdd-swarm/reports/T-F03a-gates.md`. Allowed write only: `.tdd-swarm/reports/T-F03a-code-review.md`; tests frozen. Re-run `.tdd-swarm/run-local-gates.sh tickets/T-F03a.md <DIFF_BASE>`; verify strict repository Verdict adapter, Judge-only persisted configuration/client, complete metadata, all independence collision dimensions, calibration/drift, oracle precedence after parsing, no fallback, and baseline failure.
+
+No network, credentials, spend, target traffic, main merge, or push. Maximum three review attempts. Return exactly `DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED(reason)` plus verdict; full output stays in the report.

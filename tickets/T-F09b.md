@@ -2,7 +2,7 @@
 id: T-F09b
 title: Execute failure drills and sample postmortem
 status: backlog
-wave: 7
+wave: 11
 depends_on: [T-F05b, T-F06b, T-F14b]
 branch: ticket/T-F09b-drills
 file_scopes: [docs/evidence/failure-drills/**, docs/incidents/**]
@@ -15,7 +15,7 @@ traces_to:
 ---
 
 ## Context
-Wave 7 authorized operational evidence consumes T-F05b's campaign manifest, T-F06b's replay manifest, and T-F14b's typed failure/drill schemas, producing drill manifests and `docs/incidents/**`. `Week_3_AgentForge.pdf`, OPT-04/07 and LEAD-06, package schema hashes, and dependency artifact hashes are authoritative. The owner-supplied authorization artifact for any external drill, `docs/evidence/authorizations/failure-drill.json`, is read-only; if absent, that drill is `BLOCKED` with zero calls while offline drills remain eligible.
+Wave 11 authorized operational evidence consumes T-F05b's campaign manifest, T-F06b's replay manifest, and T-F14b's typed failure/drill schemas, producing drill manifests and `docs/incidents/**`. `Week_3_AgentForge.pdf`, OPT-04/07 and LEAD-06, package schema hashes, and dependency artifact hashes are authoritative. The owner-supplied authorization artifact for any external drill, `docs/evidence/authorizations/failure-drill.json`, is read-only; if absent, that drill is `BLOCKED` with zero calls while offline drills remain eligible.
 
 ## Acceptance Criteria
 - **AC-1**: Versioned drill matrix covers provider timeout, Judge disagreement/calibration invalidity, recorder/DB/observability failure, lease/target expiry, scanner-version mismatch and hard abort; each row has injection command, expected typed error/state, actual exit, artifact hash, recovery check.
