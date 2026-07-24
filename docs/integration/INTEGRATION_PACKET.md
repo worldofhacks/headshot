@@ -2,56 +2,112 @@
 
 ## Current integration addendum - 2026-07-24
 
-Source baseline inspected: `17019f28c606e9d3a799073f80f2437ee2e98ff6`.
+Source implementation baseline inspected through:
+`ed41c6e20b7793c656c45aa6d05f8b9a0c476d1b`, including hosted Red-Team safe composition at
+`bdadc88`.
 
-This is a source/integration addendum, not a final release attestation. The final commit, identical
-GitHub/GitLab `main` SHAs, authoritative GitHub CI run, Railway deployment IDs, deployed migration,
-authorized campaign, and Langfuse reconciliation remain pending. Historical sections below are
-retained as dated evidence and are not silently upgraded to current-release proof.
+This is a **source/integration** addendum, not a final release attestation. GitHub and GitLab `main`
+and the observed Railway release remain at `23490ea9846bffcf36168b58f2c36edeceabb8df` with database
+revision `0013`. The candidate has not been deployed or live-accepted. The final immutable release
+commit, identical remote `main` SHAs, authoritative green GitHub Actions run, Railway deployment
+identities, authorized campaign, and Langfuse query-back therefore remain pending. GitLab is an
+exact source mirror; GitHub Actions is the release CI authority. Historical sections below are dated
+evidence and are not silently upgraded to current-release proof.
 
 ### Current interface inventory
 
-- The packaged contract registry contains 18 v1 JSON Schemas:
-  `AttackAttempt`, `AttemptResult`, `CampaignDirective`, typed errors, `EvidenceEnvelope`,
-  `JudgeCalibration`, `OrchestrationSnapshot`, regression admission/disposition/plan/result,
-  security-tool schemas, `Verdict`, and `VulnReport`.
-- The mediated trust boundary remains:
+- The package-owned v1 registry and the published repository-root
+  [`contracts/v1`](../../contracts/README.md) contain the same 18 JSON Schemas. Publication and
+  byte-equality tests cover `AttackAttempt`, `AttemptResult`, `CampaignDirective`, typed errors,
+  `EvidenceEnvelope`, `JudgeCalibration`, `OrchestrationSnapshot`, regression
+  admission/disposition/plan/result, security-tool schemas, `Verdict`, and `VulnReport`.
+- The mediated trust boundary is
   `Orchestrator -> Red Team -> Policy Gateway/Recorder -> Judge -> Documentation`. Red Team never
-  produces authoritative evidence and Judge never shares attack-generation authority.
-- Hosted configuration, Langfuse delivery state, and provider/Judge lineage in revisions
-  `0015`-`0017` extend persistence and runtime acceptance; they do not introduce an unversioned
-  alternate inter-agent schema.
-- Commit `17019f2` adds an optional, pattern-constrained `reason_code` to the protected REST finding
-  approve/reject body and forwards it to the existing persisted decision field. This is an additive
-  HTTP control-plane correction, not a breaking inter-agent contract change.
+  creates authoritative evidence; Judge does not share attack-generation authority; Documentation
+  cannot publish.
+- Hosted configuration, delivery state, logical execution lineage, and physical provider-call
+  lineage in revisions `0015`-`0018` extend persistence and runtime acceptance without introducing
+  an unversioned alternate inter-agent schema.
+- The hosted role configuration hashes bind model, exact `provider.only` route, prompt identity,
+  credential reference, caps, and the authorized completion-token parameter:
+
+  | Role | Model | Exact route | Accepted returned provider | Token parameter |
+  |---|---|---|---|---|
+  | Orchestrator | `anthropic/claude-opus-4.8` | `amazon-bedrock/eu-west-1` | `Amazon Bedrock` | `max_tokens` |
+  | Red Team | `qwen/qwen3.5-397b-a17b` | `atlas-cloud/fp8` | `AtlasCloud` | `max_tokens` |
+  | Judge | `google/gemini-2.5-pro` | `google-vertex/global` | `Google` or `Google Vertex` | `max_tokens` |
+  | Documentation | `openai/gpt-5.4` | `azure/eu` | `Azure` | `max_completion_tokens` |
+
+- Every physical hosted attempt receives a committed `provider_call_invocations` reservation and at
+  most one terminal `provider_call_events` row. The Langfuse projection emits one
+  `provider.openrouter.attempt` generation for each physical attempt; the logical agent observation
+  is metadata-only so tokens and cost are not double counted.
+- The query-back verifier reconciles campaign/run/attempt identity, logical parent, physical order,
+  model/provider/request identity, status, tokens, duration, retry/error state, and measured cost
+  between PostgreSQL and Langfuse before atomically marking the persisted rows exported.
 - The protected event stream remains cursor-based and bounded to 100 events per poll, requires
   `org:console:read`, validates same-origin browser provenance, and forces re-authentication after at
-  most 30 seconds. Other collection reads still have fixed server windows; stable cursor pagination
-  and total counts remain a documented gap.
+  most 30 seconds. Other collection reads still use fixed server windows; general stable cursor
+  pagination and total counts remain a documented gap.
+
+### Hosted four-agent composition and authority
+
+For each selected frozen seed, the hosted path now records this provider parentage:
+
+```text
+campaign trace
+  -> Orchestrator provider request
+      -> Red Team provider request
+          -> target attempt using only the byte-exact frozen seed
+          -> Judge provider request over Recorder-owned evidence
+              -> Documentation provider request only for a confirmed effective verdict
+```
+
+The hosted Red Team generates exactly one traced candidate variant per selected frozen seed. That
+text is unreviewed and therefore **quarantined, hashed, and discarded without target authority**.
+Only the byte-exact, corpus-hash-bound frozen seed can reach `seed_to_attempt` and the Policy
+Gateway. A provider, trace, budget, identity, or terminal-record failure aborts before target
+dispatch; no deterministic/demo fallback replaces the hosted call.
+
+The security owner's model-Judge calibration passed its documented thresholds for the identities it
+recorded, but it is not human-enabled and its recorded provider identities do not exactly match this
+candidate's exact routes. The model Judge therefore remains advisory/fail-closed. Deterministic
+oracle/canary precedence is decisive, and a calibration failure does not block a bounded campaign.
+The vulnerability conclusions remain owned by the security workstream; this packet links the
+[`vulnerability index`](../vulnerabilities/README.md) and reports
+[`004`](../vulnerabilities/AF-VULN-2026-0724-004-session-token-in-url-and-sole-bearer-credential.md),
+[`005`](../vulnerabilities/AF-VULN-2026-0724-005-missing-http-security-headers.md), and
+[`006`](../vulnerabilities/AF-VULN-2026-0724-006-readiness-and-health-information-disclosure.md)
+without changing their findings or dispositions.
 
 ### External/API behavior
 
-- Every `/api/v1` route is authenticated and permission-gated. Missing/invalid authentication is 401;
-  wrong Organization, missing permission, or same-person approval is 403; an unavailable verifier or
-  control-plane dependency fails closed.
+- Every `/api/v1` route is authenticated and permission-gated. Missing/invalid authentication is
+  401; wrong Organization, missing permission, or same-person approval is 403; an unavailable
+  verifier or control-plane dependency fails closed.
 - Mutating control-plane requests require a validated `Idempotency-Key` of 16-128 safe characters.
   Accepted work returns 202, completed work 200, immutable conflict 409, and unavailable work 503.
-- Target and provider call rates are exact run/configuration inputs, not invented platform constants.
-  The physical path enforces budget, call, rate, retry, concurrency, timeout, logical-case, and
-  physical-request limits. Typed rate/transport failures use bounded retry/backoff, then queue/abort.
-- Langfuse uses Runner-only credentials and exact HTTPS/environment configuration. Remote delivery is
-  accepted only after authenticated ID-for-ID query-back.
-- The collection REST projections use fixed server windows and do not yet expose stable cursor
-  pagination/total counts. The SSE audit/event path does expose a validated cursor, 100-event batches,
-  gap detection, and snapshot reconciliation. This limitation remains visible rather than implied
-  complete.
+- The server exposes target maximum caps as ceilings and derives a separate exact workload envelope
+  from the immutable corpus. The browser may authorize only that exact logical/physical workload,
+  with zero target retries, and only when it fits every target ceiling.
+- Authorization additionally requires the exact target/surface/corpus identities, exact host in its
+  server-owned allowlist, synthetic-only assertion and attestation, hosted configuration, positive
+  bounded budget/rate/timeout, exact attempt abort limit, and fresh nonce. Browser authorization
+  expiry is strictly greater than the chosen timeout plus a 300-second execution margin and never
+  exceeds 3,600 seconds; an impossible window disables authorization.
+- Target and provider rates are exact run/configuration inputs, not invented constants. The physical
+  path enforces budget, call, rate, retry, concurrency, timeout, logical-case, and physical-request
+  limits. Typed rate/transport failures use bounded retry/backoff, then queue/abort.
+- Langfuse credentials are Runner-only. Remote delivery is accepted only after authenticated,
+  ID-for-ID query-back; the observability system does not authorize traffic or replace PostgreSQL
+  evidence.
 
 ### Migration and compatibility state
 
-`python -m alembic heads` reports exactly one serialized source head at `0017`:
+`python -m alembic heads` reports exactly one serialized source head at `0018`:
 
 ```text
-0001 -> ... -> 0013 -> 0014 -> 0015 -> 0016 -> 0017
+0001 -> ... -> 0013 -> 0014 -> 0015 -> 0016 -> 0017 -> 0018
 ```
 
 | Revision | Integration change | Compatibility/rollback note |
@@ -66,22 +122,25 @@ retained as dated evidence and are not silently upgraded to current-release proo
 | `0015` | Atomic append-only hosted configuration sets | [`migration-notes/0015-hosted-configuration-sets.md`](migration-notes/0015-hosted-configuration-sets.md) |
 | `0016` | Multi-observation campaign traces and query-verified Langfuse delivery | [`migration-notes/0016-agent-langfuse-delivery.md`](migration-notes/0016-agent-langfuse-delivery.md) |
 | `0017` | Hosted provider/accounting/Judge authority lineage | [`migration-notes/0017-hosted-agent-execution-lineage.md`](migration-notes/0017-hosted-agent-execution-lineage.md) |
+| `0018` | Append-only physical provider attempt/event lineage | [`migrations/provider-call-lineage-v1.md`](migrations/provider-call-lineage-v1.md) |
 
-The repository's current live review records staging and production at migration `0013`. Source
-revisions `0014`-`0017` are therefore **not deployed evidence**.
+The observed staging and production databases remain at `0013`. Source revisions `0014`-`0018` are
+therefore **not deployed evidence**. Production also lacks a confirmed database rollback binding, so
+this packet does not authorize production promotion.
 
 ### Current dependency map
 
 ```text
-authenticated Web commands
-  -> organization-scoped PostgreSQL requests/decisions/jobs/audit
+authenticated Web command
+  -> organization-scoped PostgreSQL request/decision/job/audit
+  -> exact target ceilings + server-derived immutable workload + browser expiry
   -> private Runner lease + physical work-unit reservation
-  -> Orchestrator verified snapshot
-  -> Red Team typed proposal
-  -> Policy Gateway exact authorization/allowlist/synthetic/caps/abort
+  -> Orchestrator verified snapshot + physical provider attempt
+  -> quarantined Red Team generation + exact frozen-seed selection + physical provider attempt
+  -> Policy Gateway exact target/allowlist/synthetic/caps/abort
   -> target adapter + Recorder-owned hashed evidence
-  -> independent Judge with deterministic-oracle precedence
-  -> draft-only Documentation / blocked regression disposition
+  -> independent Judge + physical provider attempt + deterministic-oracle precedence
+  -> conditional draft-only Documentation + physical provider attempt
   -> PostgreSQL read models
   -> safe-metadata Langfuse projection + explicit remote query-back
 
@@ -91,30 +150,36 @@ private Scheduler
   -> no target/provider credential and no inline execution
 ```
 
-PostgreSQL is authoritative. Langfuse observes safe hashes, identity, order, latency, supplied usage,
-cost, retries, and errors; it does not authorize traffic or replace evidence.
+PostgreSQL is authoritative. Langfuse observes redacted identity, order, latency, supplied usage,
+cost, retries, and errors; missing and provider-estimated values remain distinguishable.
 
-### Current local checks
+### Current source-test evidence
 
-The following passed against the source baseline while this addendum was assembled:
+The candidate includes source tests for:
 
-- corpus validation: 16 authored cases (9 active, 7 draft), 30 ground-truth labels, 6 categories,
-  1 fixture;
-- duplicate validation: no duplicate sequence among 9 active cases;
-- selected contract, permission/configuration, campaign-authorization, Langfuse-migration, and hosted
-  agent-lineage tests; and
-- Alembic graph inspection: one head at `0017`.
+- byte-identical package/root contract publication and both-sided conformance;
+- one serialized Alembic head at `0018` and the `0017 -> 0018` physical-lineage migration;
+- exact provider routes and role-specific token parameters;
+- one physical trace per provider attempt, retry/error accounting, and Langfuse query-back;
+- hosted `Orchestrator -> Red Team -> Judge -> Documentation` parent/provider-request lineage;
+- quarantining hosted Red-Team output while dispatching only the authorized frozen seed; and
+- target ceilings versus exact workload caps, target-policy/synthetic bindings, and bounded browser
+  authorization expiry.
 
-These targeted checks are not the complete release suite and are not authoritative GitHub CI.
+These are source-level tests, not the complete final release suite or authoritative GitHub CI.
 
 ### End-to-end evidence status
 
-[`../evidence/agent-trace.md`](../evidence/agent-trace.md) and `evals/results/` are historical
-artifacts. They predate the final `0016`/`0017` deployed ledger and cannot establish a current
-four-agent Langfuse-reconciled release. The required proof remains one newly authorized campaign on
-the exact staging release, with ordered durable executions, target request lineage, finding/report
-behavior, and exact Langfuse query-back. Until that exists, end-to-end final-release status is
-**pending**.
+[`../evidence/agent-trace.md`](../evidence/agent-trace.md) and existing `evals/results/` artifacts do
+not establish a current `0018`, four-agent, Langfuse-reconciled release. No frozen 100-case corpus or
+representative 100-case result has been integrated, and no candidate campaign has been deployed or
+query-reconciled. Final cost inputs, demo URL, social-post URL, production deploy grant, and confirmed
+database rollback binding are also unavailable.
+
+The required proof remains one newly authorized campaign on the exact staging release and the
+security owner's frozen corpus, with ordered durable executions, target request lineage,
+finding/report behavior, exact provider identities, and Langfuse query-back. Until then, end-to-end
+final-release status is **pending**.
 
 ## Final integration supplement — 2026-07-22
 
