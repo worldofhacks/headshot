@@ -242,7 +242,20 @@ frozen, and the T-F17b fixture is repaired and green in a normal run. Remaining 
    `0017`'s `agent_execution_provider_identity` asserts `returned_model IS NULL OR returned_model =
    model`, and `hosted_runtime.py:425-433` raises `HostedCompositionError` while `:478-495` returns
    `None` and discards the lineage when they differ. So a provider substitution is currently
-   **unrepresentable and unrecorded**. That contradicts the locked invariant that requested identity
+   **unrepresentable and unrecorded**.
+
+   The two layers verifiably disagree. Against a freshly migrated database:
+
+   ```
+   ck_agent_executions_agent_execution_provider_identity
+     CHECK (... AND (returned_model IS NULL OR returned_model::text = model::text))
+   provider_call_events status
+     CHECK (status = ANY (ARRAY['succeeded','timeout','retryable_failure','terminal_failure',
+                                'model_mismatch','invalid_usage','invalid_output','outcome_unknown']))
+   ```
+
+   The physical layer already models the divergence as a first-class terminal status; the logical
+   layer forbids the row outright. That contradicts the locked invariant that requested identity
    is not observed identity, and for an evidence platform it discards exactly the evidence that
    matters. The physical lineage already models this correctly — `ProviderTerminalEventV1` has a
    first-class `model_mismatch` status carrying `returned_model` next to the invocation's
