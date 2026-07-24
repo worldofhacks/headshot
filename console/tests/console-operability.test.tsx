@@ -469,6 +469,12 @@ describe("target console operability", () => {
     fireEvent.click(await screen.findByText("Registered target"));
     const disable = await screen.findByRole("button", { name: "Disable surface" });
     expect((disable as HTMLButtonElement).disabled).toBe(false);
+    const authorize = screen.getByRole("button", {
+      name: "Request exact campaign authorization",
+    });
+    expect((authorize as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByText(/requires: server-supplied immutable corpus and campaign template/i))
+      .toBeTruthy();
     fireEvent.click(disable);
 
     await waitFor(() => expect(command).toHaveBeenCalledTimes(1));
@@ -556,6 +562,17 @@ describe("target console operability", () => {
           physical_request_limit: 6,
           target_retries_per_turn: 1,
         },
+        workload_caps: {
+          logical_case_limit: 2,
+          physical_request_limit: 3,
+          target_retries_per_turn: 0,
+        },
+        target_policy: {
+          exact_host: "target.invalid",
+          allowlisted_hosts: ["target.invalid"],
+          synthetic_data_only: true,
+          synthetic_data_attestation_ref: "attestation://fixtures/target-v1",
+        },
         hosted_run: hostedRun,
       },
     };
@@ -601,9 +618,10 @@ describe("target console operability", () => {
         target_requests_per_second: 0.5,
         run_timeout_seconds: 60,
         logical_case_limit: 2,
-        physical_request_limit: 6,
-        target_retries_per_turn: 1,
+        physical_request_limit: 3,
+        target_retries_per_turn: 0,
       },
+      expires_in_seconds: 361,
     }));
     expect(JSON.stringify(payload)).not.toContain("credential_reference");
     expect(JSON.stringify(payload)).not.toContain("model_id");
@@ -630,6 +648,13 @@ describe("target console operability", () => {
         tool_sources: [],
         execution_profile: "live" as const,
         maximum_caps: target(true).safety_caps,
+        workload_caps: null,
+        target_policy: {
+          exact_host: "target.invalid",
+          allowlisted_hosts: ["target.invalid"],
+          synthetic_data_only: true,
+          synthetic_data_attestation_ref: "attestation://fixtures/target-v1",
+        },
         hosted_run: hostedRun,
       },
     };

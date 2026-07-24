@@ -185,6 +185,23 @@ class SurfaceReadModel(_ReadModel):
     created_at: datetime.datetime
 
 
+class CampaignWorkloadCapsReadModel(_ReadModel):
+    """Exact execution envelope derived from the selected trusted corpus."""
+
+    logical_case_limit: int = Field(gt=0)
+    physical_request_limit: int = Field(gt=0)
+    target_retries_per_turn: Literal[0]
+
+
+class CampaignTargetPolicyReadModel(_ReadModel):
+    """Non-secret target-policy facts required before the UI may request a grant."""
+
+    exact_host: str
+    allowlisted_hosts: tuple[str, ...] = Field(min_length=1)
+    synthetic_data_only: Literal[True]
+    synthetic_data_attestation_ref: str
+
+
 class CampaignTemplateReadModel(_ReadModel):
     target_id: str
     target_version: str
@@ -196,6 +213,8 @@ class CampaignTemplateReadModel(_ReadModel):
     tool_sources: tuple[str, ...]
     execution_profile: Literal["synthetic", "live"]
     maximum_caps: SafetyCapsReadModel
+    workload_caps: CampaignWorkloadCapsReadModel | None
+    target_policy: CampaignTargetPolicyReadModel | None
     hosted_run: HostedRunBindingReadModel | None
 
 
@@ -1532,6 +1551,8 @@ __all__ = [
     "BirdseyeTimelineReadModel",
     "CampaignReadModel",
     "CampaignTemplateReadModel",
+    "CampaignTargetPolicyReadModel",
+    "CampaignWorkloadCapsReadModel",
     "ComponentReadModel",
     "ConfigurationReadModel",
     "CostReadModel",

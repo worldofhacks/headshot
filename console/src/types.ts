@@ -23,6 +23,19 @@ export interface HostedRunBindingReadModel extends JsonRecord {
   provider_timeout_seconds: number;
 }
 
+export interface CampaignWorkloadCapsReadModel extends JsonRecord {
+  logical_case_limit: number;
+  physical_request_limit: number;
+  target_retries_per_turn: 0;
+}
+
+export interface CampaignTargetPolicyReadModel extends JsonRecord {
+  exact_host: string;
+  allowlisted_hosts: string[];
+  synthetic_data_only: true;
+  synthetic_data_attestation_ref: string;
+}
+
 export interface AuthorizationScopeReadModel extends JsonRecord {
   target_id: string;
   target_version: string;
@@ -445,6 +458,8 @@ export interface CampaignTemplateReadModel extends JsonRecord {
   tool_sources: string[];
   execution_profile: "synthetic" | "live";
   maximum_caps: SafetyCapsReadModel;
+  workload_caps: CampaignWorkloadCapsReadModel | null;
+  target_policy: CampaignTargetPolicyReadModel | null;
   hosted_run: HostedRunBindingReadModel | null;
 }
 

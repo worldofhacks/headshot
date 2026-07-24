@@ -450,6 +450,17 @@ def test_agent_models_and_tool_scope_are_real_configurable_projections(
     targets_response = client.get("/api/v1/targets")
     assert targets_response.status_code == 200
     campaign_template = targets_response.json()["data"][0]["campaign_template"]
+    assert campaign_template["workload_caps"] == {
+        "logical_case_limit": 14,
+        "physical_request_limit": 17,
+        "target_retries_per_turn": 0,
+    }
+    assert campaign_template["target_policy"] == {
+        "exact_host": "target.example.test",
+        "allowlisted_hosts": ["target.example.test"],
+        "synthetic_data_only": True,
+        "synthetic_data_attestation_ref": "attestation://synthetic/api-fixture",
+    }
     hosted_run = campaign_template["hosted_run"]
     assert hosted_run == {
         "configuration_set_sha256": configuration_sha256,

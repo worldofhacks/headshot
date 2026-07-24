@@ -754,6 +754,17 @@ describe("v1 read-model decoders", () => {
       tool_sources: [],
       execution_profile: "live",
       maximum_caps: caps,
+      workload_caps: {
+        logical_case_limit: 2,
+        physical_request_limit: 3,
+        target_retries_per_turn: 0,
+      },
+      target_policy: {
+        exact_host: "target.invalid",
+        allowlisted_hosts: ["target.invalid"],
+        synthetic_data_only: true,
+        synthetic_data_attestation_ref: "attestation://fixtures/target-v1",
+      },
       hosted_run: hostedRun,
     };
 

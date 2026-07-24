@@ -96,14 +96,19 @@ const number = (
   value: JsonRecord,
   key: string,
   name: string,
-  { integer = false, minimum }: { integer?: boolean; minimum?: number } = {},
+  {
+    integer = false,
+    minimum,
+    maximum,
+  }: { integer?: boolean; minimum?: number; maximum?: number } = {},
 ): number => {
   const candidate = value[key];
   if (
     typeof candidate !== "number" ||
     !Number.isFinite(candidate) ||
     (integer && !Number.isSafeInteger(candidate)) ||
-    (minimum !== undefined && candidate < minimum)
+    (minimum !== undefined && candidate < minimum) ||
+    (maximum !== undefined && candidate > maximum)
   ) {
     return invalid(name);
   }
@@ -1732,6 +1737,8 @@ const decodeTarget = (value: unknown): TargetReadModel => {
       "tool_sources",
       "execution_profile",
       "maximum_caps",
+      "workload_caps",
+      "target_policy",
       "hosted_run",
     ], "campaign template");
     for (const key of [
@@ -1746,6 +1753,48 @@ const decodeTarget = (value: unknown): TargetReadModel => {
     stringArray(template, "tool_sources", "campaign template");
     literal(template, "execution_profile", ["synthetic", "live"], "campaign template");
     template.maximum_caps = decodeCaps(template.maximum_caps);
+    if (template.workload_caps !== null) {
+      const workloadCaps = object(
+        template,
+        "workload_caps",
+        "campaign template",
+      );
+      exactKeys(workloadCaps, [
+        "logical_case_limit",
+        "physical_request_limit",
+        "target_retries_per_turn",
+      ], "campaign workload caps");
+      number(workloadCaps, "logical_case_limit", "campaign workload caps", {
+        integer: true,
+        minimum: 1,
+      });
+      number(workloadCaps, "physical_request_limit", "campaign workload caps", {
+        integer: true,
+        minimum: 1,
+      });
+      number(workloadCaps, "target_retries_per_turn", "campaign workload caps", {
+        integer: true,
+        minimum: 0,
+        maximum: 0,
+      });
+    }
+    if (template.target_policy !== null) {
+      const targetPolicy = object(template, "target_policy", "campaign template");
+      exactKeys(targetPolicy, [
+        "exact_host",
+        "allowlisted_hosts",
+        "synthetic_data_only",
+        "synthetic_data_attestation_ref",
+      ], "campaign target policy");
+      string(targetPolicy, "exact_host", "campaign target policy");
+      stringArray(targetPolicy, "allowlisted_hosts", "campaign target policy");
+      boolean(targetPolicy, "synthetic_data_only", "campaign target policy");
+      string(
+        targetPolicy,
+        "synthetic_data_attestation_ref",
+        "campaign target policy",
+      );
+    }
     template.hosted_run = template.hosted_run === null
       ? null
       : decodeHostedRun(template.hosted_run);

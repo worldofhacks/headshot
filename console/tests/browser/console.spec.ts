@@ -81,6 +81,7 @@ test("390px navigation exposes every screen without application overflow", async
       physical_request_limit: 9,
       target_retries_per_turn: 0,
     },
+    expires_in_seconds: 1_201,
   }));
   const firstEvent = page.locator(".event-record").first();
   await expect(firstEvent).toBeVisible();

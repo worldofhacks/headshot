@@ -54,6 +54,7 @@ import {
 import { navigateTo } from "../router";
 import {
   buildCampaignAuthorizationPayload,
+  campaignAuthorizationBlocker,
   exactWorkloadCaps,
 } from "../campaignAuthorization";
 import {
@@ -288,10 +289,8 @@ export function LiveScreen({ client, principal, entityId, getToken }: ScreenProp
   // A persisted campaign is an immutable historical scope. A rerun must use the current
   // server-prepared target/corpus template, bounded by both that target and the prior run's
   // operator-selected budget/rate/timeout. A fresh nonce prevents authorization replay.
-  const preparedScope = effectiveCampaign && rerunTemplate
-    ? buildCampaignAuthorizationPayload({
-        template: rerunTemplate,
-        selection: {
+  const rerunSelection = effectiveCampaign && rerunTemplate
+    ? {
           budget_usd: Math.min(
             effectiveCampaign.caps.budget_usd,
             rerunTemplate.maximum_caps.budget_usd,
@@ -305,7 +304,19 @@ export function LiveScreen({ client, principal, entityId, getToken }: ScreenProp
             effectiveCampaign.caps.run_timeout_seconds,
             rerunTemplate.maximum_caps.run_timeout_seconds,
           ),
-        },
+        }
+    : null;
+  const rerunBlocker = effectiveCampaign && rerunSelection
+    ? campaignAuthorizationBlocker({
+        template: rerunTemplate,
+        selection: rerunSelection,
+        runNonce: rerunNonce,
+      })
+    : "a selected persisted campaign";
+  const preparedScope = rerunTemplate && rerunSelection && rerunBlocker === null
+    ? buildCampaignAuthorizationPayload({
+        template: rerunTemplate,
+        selection: rerunSelection,
         runNonce: rerunNonce,
       })
     : null;
@@ -426,7 +437,7 @@ export function LiveScreen({ client, principal, entityId, getToken }: ScreenProp
           ) : (
             <MissingCommand
               label="Request rerun authorization"
-              dependency="a current full-scan target template"
+              dependency={rerunBlocker ?? "a valid exact rerun scope"}
             />
           )}
           {selectedCampaignId ? (
@@ -1313,6 +1324,11 @@ function TargetManagement({
         runNonce,
       })
     : null;
+  const authorizationBlocker = campaignAuthorizationBlocker({
+    template,
+    selection: parsedCaps,
+    runNonce,
+  });
   return (
     <Panel title="Registered target" meta={targetId ?? undefined}>
       <RecordDetails
@@ -1392,7 +1408,7 @@ function TargetManagement({
           recovery control here.
         </p>
       </div>
-      {template && (
+      {template ? (
         <div className="evidence-stack">
           <p className="field-label">Exact campaign authorization request</p>
           <MetricStrip label="Full scan profile" values={[
@@ -1425,7 +1441,9 @@ function TargetManagement({
               "corpus_hash",
               "case_count",
               "tool_sources",
+              "workload_caps",
               "maximum_caps",
+              "target_policy",
             ]}
           />
           {template.hosted_run ? (
@@ -1484,17 +1502,29 @@ function TargetManagement({
             allowed={Boolean(requestPayload) && hasPermission(principal, PERMISSIONS.campaignLaunch)}
             unavailableReason={requestPayload
               ? PERMISSIONS.campaignLaunch
-              : template.hosted_run && workloadCaps
-                ? "operator caps within the target envelope and a valid nonce"
-                : template.hosted_run
-                  ? "server-bound exact logical, physical-request, and retry limits"
-                : "a staged server-owned four-role configuration set"}
+              : authorizationBlocker ?? "a valid exact campaign authorization scope"}
             onAcknowledged={() => {
               // Roll a fresh unused nonce after each accepted request so the next campaign
               // can be requested immediately without a replayed-nonce rejection.
               setRunNonce(`live-${globalThis.crypto.randomUUID()}`);
               refresh();
             }}
+          />
+        </div>
+      ) : (
+        <div className="evidence-stack">
+          <p className="field-label">Exact campaign authorization request</p>
+          <StateNotice
+            state="degraded"
+            detail="No server-supplied immutable corpus and campaign template is available. Campaign authorization remains unavailable."
+          />
+          <CommandButton
+            client={client}
+            path={COMMAND_PATHS.createCampaignAuthorizationRequest}
+            payload={{}}
+            label="Request exact campaign authorization"
+            allowed={false}
+            unavailableReason={authorizationBlocker ?? "server-supplied campaign template data"}
           />
         </div>
       )}

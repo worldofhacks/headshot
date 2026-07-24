@@ -33,7 +33,12 @@ from agentforge.api.birdseye import build_birdseye_snapshot
 from agentforge.api.read_models import validate_ready_data
 from agentforge.api.schemas import CommandResult, EventBatch, ResourceResult
 from agentforge.auth.errors import AuthorizationError
-from agentforge.campaign.corpus import AuthoredCorpus, resolve_workload, verified_case_payload
+from agentforge.campaign.corpus import (
+    AuthoredCorpus,
+    CorpusUnavailable,
+    resolve_workload,
+    verified_case_payload,
+)
 from agentforge.contracts import validate as validate_contract
 from agentforge.control_plane import ControlPlaneStore
 from agentforge.control_plane.errors import (
@@ -47,6 +52,7 @@ from agentforge.control_plane.errors import (
 from agentforge.control_plane.serialization import (
     content_hash,
     surface_payload,
+    target_from_payload,
     target_payload,
 )
 from agentforge.correlation import campaign_trace_id
@@ -3606,6 +3612,47 @@ class PostgresApiBackend(ApiBackend):
                         row["campaign_template"] = None
                         if self._corpus is not None and row["surfaces"]:
                             surface = row["surfaces"][0]
+                            workload_caps = None
+                            try:
+                                sequences = [
+                                    verified_case_payload(case)["input_sequence"]
+                                    for case in self._corpus.cases
+                                ]
+                            except (CorpusUnavailable, KeyError, TypeError):
+                                # A template can still explain why launch is unavailable. Never
+                                # substitute the target ceiling for an absent workload count.
+                                pass
+                            else:
+                                if all(
+                                    isinstance(sequence, list)
+                                    and sequence
+                                    and all(isinstance(turn, str) and turn for turn in sequence)
+                                    for sequence in sequences
+                                ):
+                                    physical_request_count = sum(map(len, sequences))
+                                    workload_caps = {
+                                        "logical_case_limit": len(self._corpus.cases),
+                                        "physical_request_limit": physical_request_count,
+                                        # Exact physical-count authorization permits no retry
+                                        # expansion beyond the reviewed workload manifest.
+                                        "target_retries_per_turn": 0,
+                                    }
+                            target_policy = None
+                            try:
+                                target_definition = target_from_payload(payload)
+                            except (KeyError, TypeError, ValueError):
+                                # Preserve a visible fail-closed template instead of allowing the
+                                # browser to infer allowlist or synthetic-data authority.
+                                pass
+                            else:
+                                target_policy = {
+                                    "exact_host": target_definition.exact_host,
+                                    "allowlisted_hosts": list(target_definition.allowlisted_hosts),
+                                    "synthetic_data_only": target_definition.synthetic_data_only,
+                                    "synthetic_data_attestation_ref": (
+                                        target_definition.synthetic_data_attestation_ref
+                                    ),
+                                }
                             row["campaign_template"] = {
                                 "target_id": row["target_id"],
                                 "target_version": row["version"],
@@ -3619,6 +3666,8 @@ class PostgresApiBackend(ApiBackend):
                                 if row["target_id"] == SYNTHETIC_TARGET_ID
                                 else "live",
                                 "maximum_caps": row["safety_caps"],
+                                "workload_caps": workload_caps,
+                                "target_policy": target_policy,
                                 "hosted_run": self._latest_hosted_run_binding(
                                     connection,
                                     organization_id=principal.organization_id,
