@@ -15,7 +15,7 @@ from agentforge.agents.hosted import (
     HostedRoleConfiguration,
     TokenPrices,
 )
-from agentforge.agents.hosted_prompts import hosted_prompt
+from agentforge.agents.prompts import load_prompt_registry
 from agentforge.auth.principal import Principal
 from agentforge.control_plane.errors import AuthorizationDeniedError, RecordConflictError
 from agentforge.control_plane.store import (
@@ -41,12 +41,22 @@ _UPSTREAM = {
     "judge": "google-vertex",
     "documentation": "openai",
 }
+_SERVED_UPSTREAM = {
+    "orchestrator": "Anthropic",
+    "red_team": "Together",
+    "judge": "Google",
+    "documentation": "OpenAI",
+}
 _USD_CAPS = {
     "orchestrator": Decimal("1.5"),
     "red_team": Decimal("1"),
     "judge": Decimal("4"),
     "documentation": Decimal("1"),
 }
+
+
+def _prompt(role: str):
+    return next(record for record in load_prompt_registry() if record.role == role)
 
 
 def _configuration() -> HostedConfigurationSet:
@@ -58,7 +68,7 @@ def _configuration() -> HostedConfigurationSet:
                 model_id=_MODELS[role],
                 upstream_provider=_UPSTREAM[role],
                 credential_reference=f"secretref://local/openrouter/{role}/acceptance-1",
-                prompt_sha256=hosted_prompt(role).prompt_sha256,  # type: ignore[arg-type]
+                prompt_sha256=_prompt(role).sha256,
                 policy_sha256=hashlib.sha256(f"{role}:acceptance".encode()).hexdigest(),
                 prices=TokenPrices(
                     input_usd_per_million_tokens=Decimal("100"),
@@ -175,11 +185,11 @@ def _succeed(
     role: str,
 ) -> None:
     role_configuration = next(item for item in configuration.roles if item.role == role)
-    prompt = hosted_prompt(role)  # type: ignore[arg-type]
+    prompt = _prompt(role)
     logical = store.provider_logical_context(
         execution_id=execution_id,
         prompt_version=prompt.version,
-        prompt_sha256=prompt.prompt_sha256,
+        prompt_sha256=prompt.sha256,
     )
     invocation = store.begin_physical_attempt(logical, 1)
     cost = Decimal("0.010000000000")
@@ -190,7 +200,7 @@ def _succeed(
             physical_sequence=1,
             status="succeeded",
             returned_model=logical.requested_model,
-            upstream_provider=logical.configured_upstream,
+            upstream_provider=_SERVED_UPSTREAM[role],
             provider_request_id=f"acceptance-provider-request-{role}",
             input_tokens=10,
             output_tokens=5,
@@ -206,7 +216,7 @@ def _succeed(
         status="succeeded",
         output_payload={"fixture": "synthetic-agent-acceptance-v1", "role": role},
         returned_model=logical.requested_model,
-        upstream_provider=logical.configured_upstream,
+        upstream_provider=_SERVED_UPSTREAM[role],
         provider_request_id=f"acceptance-provider-request-{role}",
         input_tokens=10,
         output_tokens=5,
@@ -441,11 +451,11 @@ def test_acceptance_final_provider_event_is_idempotent_before_logical_reconcilia
 ) -> None:
     store, identity, configuration = _create(migrated_db)
     execution_id = _start(store, identity, configuration, "orchestrator")
-    prompt = hosted_prompt("orchestrator")
+    prompt = _prompt("orchestrator")
     logical = store.provider_logical_context(
         execution_id=execution_id,
         prompt_version=prompt.version,
-        prompt_sha256=prompt.prompt_sha256,
+        prompt_sha256=prompt.sha256,
     )
     invocation = store.begin_physical_attempt(logical, 1)
     event = ProviderTerminalEventV1(
@@ -453,7 +463,7 @@ def test_acceptance_final_provider_event_is_idempotent_before_logical_reconcilia
         physical_sequence=1,
         status="succeeded",
         returned_model=logical.requested_model,
-        upstream_provider=logical.configured_upstream,
+        upstream_provider=_SERVED_UPSTREAM["orchestrator"],
         provider_request_id="acceptance-provider-request-idempotent",
         input_tokens=10,
         output_tokens=5,
@@ -497,17 +507,17 @@ def test_acceptance_pre_send_rechecks_concurrency_call_caps_and_kill_switch(
         "judge",
         parent_execution_id=planner,
     )
-    planner_prompt = hosted_prompt("orchestrator")
+    planner_prompt = _prompt("orchestrator")
     planner_logical = store.provider_logical_context(
         execution_id=planner,
         prompt_version=planner_prompt.version,
-        prompt_sha256=planner_prompt.prompt_sha256,
+        prompt_sha256=planner_prompt.sha256,
     )
-    evaluator_prompt = hosted_prompt("judge")
+    evaluator_prompt = _prompt("judge")
     evaluator_logical = store.provider_logical_context(
         execution_id=evaluator,
         prompt_version=evaluator_prompt.version,
-        prompt_sha256=evaluator_prompt.prompt_sha256,
+        prompt_sha256=evaluator_prompt.sha256,
     )
     invocation = store.begin_physical_attempt(planner_logical, 1)
     with pytest.raises(AuthorizationDeniedError, match="concurrency cap is exhausted"):
@@ -519,7 +529,7 @@ def test_acceptance_pre_send_rechecks_concurrency_call_caps_and_kill_switch(
             physical_sequence=1,
             status="succeeded",
             returned_model=planner_logical.requested_model,
-            upstream_provider=planner_logical.configured_upstream,
+            upstream_provider=_SERVED_UPSTREAM["orchestrator"],
             provider_request_id="acceptance-provider-request-orchestrator",
             input_tokens=10,
             output_tokens=5,
