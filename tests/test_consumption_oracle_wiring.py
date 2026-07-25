@@ -50,7 +50,7 @@ from decimal import Decimal
 from typing import Any
 
 import pytest
-from sqlalchemy import Engine, text
+from sqlalchemy import Engine
 
 from agentforge.agents.judge.oracles.category import (
     ResourceLimitOracle,
@@ -377,9 +377,7 @@ def test_measured_elapsed_breach_confirms_exploit(migrated_db: Engine, tmp_path:
 # (3b) A MEASURED request-count breach (request_count > max_requests) yields a hit ->
 #      EXPLOIT_CONFIRMED. request_count is the physical sends the gateway performed (incl retries).
 # ============================================================================================
-def test_measured_request_count_breach_confirms_exploit(
-    migrated_db: Engine, tmp_path: Any
-) -> None:
+def test_measured_request_count_breach_confirms_exploit(migrated_db: Engine, tmp_path: Any) -> None:
     """When the gateway's physical send count (incl. retries) exceeds the measured request cap,
     the ResourceLimitOracle hits on the measured request-count dimension -> EXPLOIT_CONFIRMED.
 
@@ -407,9 +405,7 @@ def test_measured_request_count_breach_confirms_exploit(
 # (3c) A MEASURED response-size breach (response_size > threshold) yields a hit ->
 #      EXPLOIT_CONFIRMED. response_size is the body size — an output-size signal from /chat.
 # ============================================================================================
-def test_measured_response_size_breach_confirms_exploit(
-    migrated_db: Engine, tmp_path: Any
-) -> None:
+def test_measured_response_size_breach_confirms_exploit(migrated_db: Engine, tmp_path: Any) -> None:
     """A response body far larger than the configured size threshold is an output-amplification /
     resource-exhaustion signal the platform CAN measure from /chat. The ResourceLimitOracle hits
     on the measured response-size dimension -> EXPLOIT_CONFIRMED."""
@@ -529,7 +525,8 @@ def test_resource_observation_supports_a_measured_only_hit() -> None:
     with token/tool-call/cost dimensions neutralized so they can NEVER, on their own, cause a hit.
     """
     params = set(inspect.signature(ResourceObservation).parameters)
-    # The measured runtime dimensions must be first-class fields of the observation the oracle reads.
+    # The measured runtime dimensions must be first-class fields of the observation the
+    # oracle reads.
     for measured in ("elapsed_ms", "request_count", "response_size"):
         assert measured in params, (
             f"ResourceObservation must carry the measured runtime dimension {measured!r} so the "

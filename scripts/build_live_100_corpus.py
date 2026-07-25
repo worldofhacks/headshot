@@ -49,9 +49,7 @@ REVIEWER_ID = "user_HeadshotRedTeamReviewer"
 # Authored designs dropped so the whole-corpus category balance and turn split resolve exactly
 # to PI20/DX18/TM18/SC15/DoS14/IR15 and 79 single / 21 two-turn / 121 physical requests once the
 # baseline (PI8/DX3/TM3; 11 single + 3 two-turn) is included.  All four drops are single-turn.
-DROPPED_DESIGNS = frozenset(
-    {"AF-M11-DX-102", "AF-M11-DX-113", "AF-M11-DX-114", "AF-M11-TM-008"}
-)
+DROPPED_DESIGNS = frozenset({"AF-M11-DX-102", "AF-M11-DX-113", "AF-M11-DX-114", "AF-M11-TM-008"})
 
 OWASP_NAMES = {
     ("OWASP Web", "2021", "A01"): "Broken Access Control",
@@ -111,10 +109,18 @@ def sha256_file(path: Path) -> str:
 
 
 def owasp_tags(web_id: str, llm_id: str) -> list[dict]:
-    web = {"framework": "OWASP Web", "version": "2021", "id": web_id,
-           "name": OWASP_NAMES[("OWASP Web", "2021", web_id)]}
-    llm = {"framework": "OWASP LLM", "version": "2025", "id": llm_id,
-           "name": OWASP_NAMES[("OWASP LLM", "2025", llm_id)]}
+    web = {
+        "framework": "OWASP Web",
+        "version": "2021",
+        "id": web_id,
+        "name": OWASP_NAMES[("OWASP Web", "2021", web_id)],
+    }
+    llm = {
+        "framework": "OWASP LLM",
+        "version": "2025",
+        "id": llm_id,
+        "name": OWASP_NAMES[("OWASP LLM", "2025", llm_id)],
+    }
     return [web, llm]
 
 
@@ -406,9 +412,7 @@ def main() -> str:
     designs = json.loads(DESIGNS.read_text(encoding="utf-8"))
     authored = [d for d in designs if d["case_id"] not in DROPPED_DESIGNS]
     if len(authored) != LIVE_100_CASE_COUNT - FULL_SCAN_CASE_COUNT:
-        raise SystemExit(
-            f"expected 86 authored designs, got {len(authored)} after drops"
-        )
+        raise SystemExit(f"expected 86 authored designs, got {len(authored)} after drops")
     for index, design in enumerate(authored):
         payload = build_case(design)
         validate_attack_case(payload, source=design["case_id"], **fixture_registry_kwargs)

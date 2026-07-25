@@ -205,7 +205,8 @@ def test_every_deterministic_authored_id_resolves_to_its_reviewed_code_oracle() 
             assert registration.canary_refs == set()
             if wired:
                 # A wired registration never self-asserts runtime wiring through the registry — the
-                # composition root constructs the evaluator directly. Prove the guard AND the signal.
+                # composition root constructs the evaluator directly. Prove the guard AND
+                # the signal.
                 with pytest.raises(OracleRegistryError, match="runtime wiring"):
                     registration.build_evaluator()
                 evaluator = registration.evaluator_type(oracle_id=oracle_id)

@@ -847,15 +847,11 @@ class SecureCampaignCoordinator:
             if elapsed_ms is not None and policy.run_timeout_seconds is not None
             else None
         )
-        max_requests = (
-            policy.physical_request_limit if request_count is not None else None
-        )
+        max_requests = policy.physical_request_limit if request_count is not None else None
         # A response body at/over the Judge's transcript containment bound (MAX_TRANSCRIPT) is a
         # measured output flood; the oracle uses strict-greater, so the threshold is bound-minus-one
         # to make a body that REACHES the bound a breach.
-        response_size_threshold = (
-            MAX_TRANSCRIPT - 1 if response_size is not None else None
-        )
+        response_size_threshold = MAX_TRANSCRIPT - 1 if response_size is not None else None
         observation = ResourceObservation(
             elapsed_ms=elapsed_ms,
             timeout_ms=timeout_ms,
