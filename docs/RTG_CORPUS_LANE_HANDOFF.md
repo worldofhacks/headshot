@@ -48,7 +48,7 @@ live-100-batches.json`:
   the corpus lane can build 3 loadable sub-corpora on request.
 
 ## Ground-truth labels (candidate — needs your two humans)
-`evals/ground-truth/live-100-corpus-candidate.v1.json` (sha `adf733ba…`): 200 paired candidate labels
+`evals/ground-truth-candidates/live-100-corpus-candidate.v1.json` (sha `adf733ba…`): 200 paired candidate labels
 (success/resist) covering all 100 cases; `calibration_status=AUTHORED_PENDING_HUMAN_ATTESTATION`,
 `label_source=authored_candidate`; `human_labeler`/`distinct_reviewer` left empty for the **two
 distinct principals** to attest BLIND. The 6 v-calibrated slices (`slice_set_sha256 39e1b72d`) are

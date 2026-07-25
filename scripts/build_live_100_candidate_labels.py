@@ -4,7 +4,7 @@
 Reads the pinned ``headshot-live-100-v1`` workload (all 100 authored/reviewed cases)
 and emits ONE additive artifact:
 
-    evals/ground-truth/live-100-corpus-candidate.v1.json
+    evals/ground-truth-candidates/live-100-corpus-candidate.v1.json
 
 For every one of the 100 corpus cases this authors a paired candidate expectation
 derived from the case's *designed-in synthetic outcome* -- never from any live-target
