@@ -94,9 +94,9 @@ Click **Request exact campaign authorization**.
 
 *Severity, precisely:* that report reads **Medium–High** in this tree
 (`docs/vulnerabilities/AF-VULN-2026-0724-004-…md:11`). An independent offline re-validation on lane
-`redteam/judge-calibration-corpus-evidence` (`507d032`, PR #33) downgrades it to **Medium** — because
+`redteam/judge-calibration-corpus-evidence` (`507d032`) downgrades it to **Medium** — because
 there is no negative control proving the server actually *reads* the `session_id` parameter — but that
-lane is **not merged into this base**. If asked for a number, say "Medium–High as written, Medium after
+lane is **not merged into this base and has no open PR to it**. If asked for a number, say "Medium–High as written, Medium after
 independent re-validation, and the re-validation isn't merged yet." Do not say a bare "Medium".
 
 *Wording note:* say **normalized**, not "ingested". Nothing in the repository ingests the committed

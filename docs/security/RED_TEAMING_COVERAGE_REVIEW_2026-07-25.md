@@ -532,8 +532,14 @@ previously undocumented, is **provenance**:
 `Medium–High` and `Low–Medium` are **not legal members of the `vuln_report` contract severity enum**
 (`low|medium|high|critical`). The *Reconciled severity* column carries the values from the
 independent offline re-validation of 004–006 recorded on lane `redteam/judge-calibration-corpus-evidence`
-(`507d032`, PR #33); those report bodies are **not** on this base, so this table states both values
-rather than asserting a correction the tree does not yet contain. See
+(`507d032`); those report bodies are **not** on this base, so this table states both values
+rather than asserting a correction the tree does not yet contain.
+
+**That lane has no open PR to the integration base.** Nothing currently in flight lands the reconciled
+severities — PR #33 (`codex/integration-l-findings-grounding`) is a *different* lane that grounds
+captured session evidence for 004 and 005 and leaves both severities unchanged. Until `507d032` (or an
+equivalent) is proposed, three of the six reports keep a severity outside the `vuln_report` contract
+enum (003 `Informational`, 004 `Medium–High`, 006 `Low–Medium`) and cannot be published as written. See
 [`docs/vulnerabilities/README.md`](../vulnerabilities/README.md).
 
 001–003 are substantially resistance results rather than defects. The only genuine target-side
