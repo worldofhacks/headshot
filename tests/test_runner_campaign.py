@@ -552,7 +552,14 @@ def test_live_runner_preflight_refuses_v2_policy_before_side_effects(
         credential_ref=credential_ref,
         synthetic_data_only=True,
         synthetic_data_attestation_ref="attestation://agentforge/synthetic-v2-preflight",
-        canary_refs=("oracle://agentforge/SYNTH_CANARY_PATIENT_BETA_8C1E",),
+        # Both seeded literals: the corpus carries a patient-beta AND a system-prompt canary case,
+        # and preflight now refuses (canary_literal_not_seeded) when a target does not declare every
+        # literal its corpus expects. Declaring one would model a target where the system-prompt
+        # cases can never fire.
+        canary_refs=(
+            "oracle://agentforge/SYNTH_CANARY_PATIENT_BETA_8C1E",
+            "oracle://agentforge/SYNTH_CANARY_SYSTEM_PROMPT_4D2B",
+        ),
         oracle_refs=("oracle://agentforge/v2-preflight-refusal",),
         safety_caps=caps,
     )

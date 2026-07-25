@@ -1,0 +1,468 @@
+{
+  "cases": [
+    {
+      "case_path": "workloads/live-100-cases/BASE-001.json",
+      "case_sha256": "aceca1696d5cec667318e3c58d1c85e83c4b5a50e28746bd3464dbe32811c1f1",
+      "instance_id": "BASE-001",
+      "review": {
+        "review_record_path": "workloads/live-100-reviews/BASE-001.json",
+        "review_record_sha256": "de33937f4c0f220b5fa8a971dd39b3e1beeb2ad352874a191f01c04c2db03721",
+        "reviewer_id": "user_HeadshotRedTeamReviewer",
+        "source_generation_path": "workloads/live-100-generations/BASE-001.json",
+        "source_generation_sha256": "8bc68980be469f06da669a4ba82d19c81730bca3f4ced483297bdbbd8981bbc2",
+        "source_kind": "m11_seed",
+        "status": "approved"
+      }
+    },
+    {
+      "case_path": "workloads/live-100-cases/BASE-004.json",
+      "case_sha256": "1d792259f841bde39a958a408e1a575097de550c0800b79be36df601affcfcc7",
+      "instance_id": "BASE-004",
+      "review": {
+        "review_record_path": "workloads/live-100-reviews/BASE-004.json",
+        "review_record_sha256": "6d3c9d1bfb3204021d6263d27aff3846a289c42cc6761eaf71bea96f4aabb6dc",
+        "reviewer_id": "user_HeadshotRedTeamReviewer",
+        "source_generation_path": "workloads/live-100-generations/BASE-004.json",
+        "source_generation_sha256": "e89f5cf173142af9828ce6a1d8c023962a98dd8f64b51128f1c67b776a96ff37",
+        "source_kind": "m11_seed",
+        "status": "approved"
+      }
+    },
+    {
+      "case_path": "workloads/live-100-cases/BASE-006.json",
+      "case_sha256": "693c3624343ba91fd7ebaa951b643f28765af5f01f620e6a205893c187d426d5",
+      "instance_id": "BASE-006",
+      "review": {
+        "review_record_path": "workloads/live-100-reviews/BASE-006.json",
+        "review_record_sha256": "51f9d1ad7cb30c7ac0d4abb982c10605f9d3864a7dd894b3a6234aa42aa66f10",
+        "reviewer_id": "user_HeadshotRedTeamReviewer",
+        "source_generation_path": "workloads/live-100-generations/BASE-006.json",
+        "source_generation_sha256": "ed6ce6419d4f4944b222a1dace914e8d47a8efba71fac476b3e1cca7a1fc7033",
+        "source_kind": "m11_seed",
+        "status": "approved"
+      }
+    },
+    {
+      "case_path": "workloads/live-100-cases/BASE-010.json",
+      "case_sha256": "0a1154336c78303fa8c18169aa7b281cd45e16ff950ad005b84dc7613a1c875c",
+      "instance_id": "BASE-010",
+      "review": {
+        "review_record_path": "workloads/live-100-reviews/BASE-010.json",
+        "review_record_sha256": "716be2fce7c103ba258046c77daeeb2dcffd984cf76dbb2f1a160cea2e9ef466",
+        "reviewer_id": "user_HeadshotRedTeamReviewer",
+        "source_generation_path": "workloads/live-100-generations/BASE-010.json",
+        "source_generation_sha256": "27fa17acbc280501e7f65a9214a16a12f864ee72a03b604f8d9c144c46f69005",
+        "source_kind": "reviewed_full_scan",
+        "status": "approved"
+      }
+    },
+    {
+      "case_path": "workloads/live-100-cases/BASE-013.json",
+      "case_sha256": "9edb69815659cf398b44ca4b2e66aa1443b0c4ad9eab328c1d824130f63b5017",
+      "instance_id": "BASE-013",
+      "review": {
+        "review_record_path": "workloads/live-100-reviews/BASE-013.json",
+        "review_record_sha256": "c9d8da55332b7049983a68122e0d6d02d1517a7b1d16cd48ea3a64d7729427b1",
+        "reviewer_id": "user_HeadshotRedTeamReviewer",
+        "source_generation_path": "workloads/live-100-generations/BASE-013.json",
+        "source_generation_sha256": "28717ee1617f23010945c81571622532b79ec23a603f40f0c558850e5210311c",
+        "source_kind": "reviewed_full_scan",
+        "status": "approved"
+      }
+    },
+    {
+      "case_path": "workloads/live-100-cases/HOSTED-002.json",
+      "case_sha256": "0155bcae7d6dd1a59382567ca863514f931a8c07761f4af3b573fcdbf2df755b",
+      "instance_id": "HOSTED-002",
+      "review": {
+        "review_record_path": "workloads/live-100-reviews/HOSTED-002.json",
+        "review_record_sha256": "1dbfb3aad4728856e3024597c1157b0854eaf4e097ade7d51c9afca3bdb58246",
+        "reviewer_id": "user_HeadshotRedTeamReviewer",
+        "source_generation_path": "workloads/live-100-generations/HOSTED-002.json",
+        "source_generation_sha256": "c374cc6b7c2386c1dcb65e548800ecea9c551f99dee90dce07d9713c9c2df0d4",
+        "source_kind": "hosted_red_team",
+        "status": "approved"
+      }
+    },
+    {
+      "case_path": "workloads/live-100-cases/HOSTED-005.json",
+      "case_sha256": "89219f205b7df8b5c3e9aa03dc7d711b29dd38409ef2f8b8955f04999a525c95",
+      "instance_id": "HOSTED-005",
+      "review": {
+        "review_record_path": "workloads/live-100-reviews/HOSTED-005.json",
+        "review_record_sha256": "41c1366c02a3d98f7c385fb96879b59310fd614cea2c157f2b8d1f24a66c248f",
+        "reviewer_id": "user_HeadshotRedTeamReviewer",
+        "source_generation_path": "workloads/live-100-generations/HOSTED-005.json",
+        "source_generation_sha256": "00a8078f097c8368fc599609ee48b087ecd16e8cfa112ff2ed9788b45522e3c6",
+        "source_kind": "hosted_red_team",
+        "status": "approved"
+      }
+    },
+    {
+      "case_path": "workloads/live-100-cases/HOSTED-008.json",
+      "case_sha256": "42e8be04a5d754dd5b22e15ed3a86cb141ca9e93351a5f292e5981ab49ab0d9d",
+      "instance_id": "HOSTED-008",
+      "review": {
+        "review_record_path": "workloads/live-100-reviews/HOSTED-008.json",
+        "review_record_sha256": "fb6c6238049dcb0835de1c927ae6c4bbaa78fa5491634329c0b5fd5a08356948",
+        "reviewer_id": "user_HeadshotRedTeamReviewer",
+        "source_generation_path": "workloads/live-100-generations/HOSTED-008.json",
+        "source_generation_sha256": "0ed06cf4be605eced49474cbeb0a6678f83ebcd10d93f3f8eaaffe05712d8603",
+        "source_kind": "hosted_red_team",
+        "status": "approved"
+      }
+    },
+    {
+      "case_path": "workloads/live-100-cases/HOSTED-011.json",
+      "case_sha256": "c89b765259af4b93477262be1d22ae094accc2fd21d8fe597790be88d1a0416f",
+      "instance_id": "HOSTED-011",
+      "review": {
+        "review_record_path": "workloads/live-100-reviews/HOSTED-011.json",
+        "review_record_sha256": "24d4a891dda6d0b8016fdf84a970649f7325956ee2be4ce793a5791c73463aa2",
+        "reviewer_id": "user_HeadshotRedTeamReviewer",
+        "source_generation_path": "workloads/live-100-generations/HOSTED-011.json",
+        "source_generation_sha256": "ab53ecc0dbe3f298c84b8c55b4e4e2141302c2f197df9fed89c5e1e99dbc37de",
+        "source_kind": "hosted_red_team",
+        "status": "approved"
+      }
+    },
+    {
+      "case_path": "workloads/live-100-cases/HOSTED-013.json",
+      "case_sha256": "69753f3ad1e51f8cc06c4063e0712a4e52afdc243c5ef7d7217efaa61c8a3082",
+      "instance_id": "HOSTED-013",
+      "review": {
+        "review_record_path": "workloads/live-100-reviews/HOSTED-013.json",
+        "review_record_sha256": "f33a187d13c889ea2c5cf8b113c3618a748c193d8061ab53591c605da0b3a898",
+        "reviewer_id": "user_HeadshotRedTeamReviewer",
+        "source_generation_path": "workloads/live-100-generations/HOSTED-013.json",
+        "source_generation_sha256": "e3a1e5d08fc3efe55df2d78c2d1e64e917406a5f6deb67bd8b9cdcfcdec92697",
+        "source_kind": "hosted_red_team",
+        "status": "approved"
+      }
+    },
+    {
+      "case_path": "workloads/live-100-cases/HOSTED-017.json",
+      "case_sha256": "c6c85c0646f474275c5821651cc18fff0c4224120f45d7f2027940dcc38c21b7",
+      "instance_id": "HOSTED-017",
+      "review": {
+        "review_record_path": "workloads/live-100-reviews/HOSTED-017.json",
+        "review_record_sha256": "a30d47ee2492e61e161c9643309c9fc2b57f8bd522dfbc6d34ddc0f10e034781",
+        "reviewer_id": "user_HeadshotRedTeamReviewer",
+        "source_generation_path": "workloads/live-100-generations/HOSTED-017.json",
+        "source_generation_sha256": "a3b2b4b807cad4ca38966941f971bfc6ebf710713e06b7438c6137e326d069c0",
+        "source_kind": "hosted_red_team",
+        "status": "approved"
+      }
+    },
+    {
+      "case_path": "workloads/live-100-cases/HOSTED-021.json",
+      "case_sha256": "4952c8658a871f48615de357dee14bd1c9d35a9a8f0eb7570a7479c787aa1ef9",
+      "instance_id": "HOSTED-021",
+      "review": {
+        "review_record_path": "workloads/live-100-reviews/HOSTED-021.json",
+        "review_record_sha256": "936809856b8d0b11586f956ed0afa32facf54a6d9ad9b42614df2e59ba604392",
+        "reviewer_id": "user_HeadshotRedTeamReviewer",
+        "source_generation_path": "workloads/live-100-generations/HOSTED-021.json",
+        "source_generation_sha256": "7bcc278653d2d6a0808bb51006c0ac35d40e22d75dd84b930751f30b59e98ea7",
+        "source_kind": "hosted_red_team",
+        "status": "approved"
+      }
+    },
+    {
+      "case_path": "workloads/live-100-cases/HOSTED-022.json",
+      "case_sha256": "75bc406fb883e70b98784cce189817b6b0459b7988b3a07c54efa5939a5c9999",
+      "instance_id": "HOSTED-022",
+      "review": {
+        "review_record_path": "workloads/live-100-reviews/HOSTED-022.json",
+        "review_record_sha256": "e27d980c955f8c442d9ed84afda80f4ae88820f49692e8294f7ea98529cf1e7f",
+        "reviewer_id": "user_HeadshotRedTeamReviewer",
+        "source_generation_path": "workloads/live-100-generations/HOSTED-022.json",
+        "source_generation_sha256": "7f5451f13e5f2ce8e01dce1e62a1ffc0f3e059b9603703ce481e20e34e714e3e",
+        "source_kind": "hosted_red_team",
+        "status": "approved"
+      }
+    },
+    {
+      "case_path": "workloads/live-100-cases/HOSTED-025.json",
+      "case_sha256": "a7041e65ae177dee84e253f2c5b10b18d743f56f4d9d87ec9c4bd29fb5a04afd",
+      "instance_id": "HOSTED-025",
+      "review": {
+        "review_record_path": "workloads/live-100-reviews/HOSTED-025.json",
+        "review_record_sha256": "7fe699216c309c8ce781eab2bdcf6aaac38e648a2988f4a9fb82cc7cf0bad615",
+        "reviewer_id": "user_HeadshotRedTeamReviewer",
+        "source_generation_path": "workloads/live-100-generations/HOSTED-025.json",
+        "source_generation_sha256": "2a34e32e57e039d6e17c1438c8acc9100f5e3cd371c48b85a0ca0020b7f6b664",
+        "source_kind": "hosted_red_team",
+        "status": "approved"
+      }
+    },
+    {
+      "case_path": "workloads/live-100-cases/HOSTED-029.json",
+      "case_sha256": "8bbfcdd44686310d60363a69fa4e1dbd4f48cc5b6d5026653e4b7480efcf2746",
+      "instance_id": "HOSTED-029",
+      "review": {
+        "review_record_path": "workloads/live-100-reviews/HOSTED-029.json",
+        "review_record_sha256": "d399d42cab7369757d77bc3a60683cb0fdd320bdc14e67a30a4c7775ebd6ca58",
+        "reviewer_id": "user_HeadshotRedTeamReviewer",
+        "source_generation_path": "workloads/live-100-generations/HOSTED-029.json",
+        "source_generation_sha256": "be544556babc16bb085ca6b1ebd9e339201bae7bf54bb37ed880493cad2e0d10",
+        "source_kind": "hosted_red_team",
+        "status": "approved"
+      }
+    },
+    {
+      "case_path": "workloads/live-100-cases/HOSTED-032.json",
+      "case_sha256": "a3b91e216f6199016b1ad95a2ae97596491d63a768c050c6f381c992382cca6a",
+      "instance_id": "HOSTED-032",
+      "review": {
+        "review_record_path": "workloads/live-100-reviews/HOSTED-032.json",
+        "review_record_sha256": "fe1f1da7bf1af27c9792ed8554060d04114825aa0f732de833338febb31eae48",
+        "reviewer_id": "user_HeadshotRedTeamReviewer",
+        "source_generation_path": "workloads/live-100-generations/HOSTED-032.json",
+        "source_generation_sha256": "035d6521ae3ed25835a5c02f47d065a728eaeaa42281a457b06765f5f5853d44",
+        "source_kind": "hosted_red_team",
+        "status": "approved"
+      }
+    },
+    {
+      "case_path": "workloads/live-100-cases/HOSTED-035.json",
+      "case_sha256": "ec2a4520e022f5817e67fddbf4bba029b8d35906c859640249395b5ef2305795",
+      "instance_id": "HOSTED-035",
+      "review": {
+        "review_record_path": "workloads/live-100-reviews/HOSTED-035.json",
+        "review_record_sha256": "a85ae38da27f85865633a8ce2b703d6334558a11305cb89aefb755a14918f2e9",
+        "reviewer_id": "user_HeadshotRedTeamReviewer",
+        "source_generation_path": "workloads/live-100-generations/HOSTED-035.json",
+        "source_generation_sha256": "2e9c2f6f2857de5b28aca8e2882103c7a45bfa187b31a40648b9f45d89ecb86d",
+        "source_kind": "hosted_red_team",
+        "status": "approved"
+      }
+    },
+    {
+      "case_path": "workloads/live-100-cases/HOSTED-038.json",
+      "case_sha256": "62c2aadcab5e39e9b1790153e7ebce64e83340127787ed7b656616c8f74f6374",
+      "instance_id": "HOSTED-038",
+      "review": {
+        "review_record_path": "workloads/live-100-reviews/HOSTED-038.json",
+        "review_record_sha256": "a8c5f0fa594c5cae78c4acb7bdda514b1fdb7221f1bd41914ef78648d14ac7b8",
+        "reviewer_id": "user_HeadshotRedTeamReviewer",
+        "source_generation_path": "workloads/live-100-generations/HOSTED-038.json",
+        "source_generation_sha256": "470685994ac0bc9074789ccda6ecdadaf78401a8cd23bbfff71aa7dac11c08f6",
+        "source_kind": "hosted_red_team",
+        "status": "approved"
+      }
+    },
+    {
+      "case_path": "workloads/live-100-cases/HOSTED-040.json",
+      "case_sha256": "b54e6cd4109e76f4e6d6e93f336e6d881a16d1c4d1ddaaf6f75a0e48725499a0",
+      "instance_id": "HOSTED-040",
+      "review": {
+        "review_record_path": "workloads/live-100-reviews/HOSTED-040.json",
+        "review_record_sha256": "c1af32991e65fe6b918cdbfebc528e2894a333355876dbd1b6961e5b8e91ec57",
+        "reviewer_id": "user_HeadshotRedTeamReviewer",
+        "source_generation_path": "workloads/live-100-generations/HOSTED-040.json",
+        "source_generation_sha256": "49af12984c22b206fc625ad9cd4748582806d872ee6b2dfcb2b524db44522c9f",
+        "source_kind": "hosted_red_team",
+        "status": "approved"
+      }
+    },
+    {
+      "case_path": "workloads/live-100-cases/HOSTED-043.json",
+      "case_sha256": "89597665cd58386a01be5a5b0fdd69f82aa0293386632a9491171fdcb8d69e97",
+      "instance_id": "HOSTED-043",
+      "review": {
+        "review_record_path": "workloads/live-100-reviews/HOSTED-043.json",
+        "review_record_sha256": "79e3e7dc3c5716d049d601212e4185965f54ea804f4d13f1fcb83e93e8bcd5eb",
+        "reviewer_id": "user_HeadshotRedTeamReviewer",
+        "source_generation_path": "workloads/live-100-generations/HOSTED-043.json",
+        "source_generation_sha256": "5b4959b742b15dc58c16557dee0f9057a18d7dc99c1f03feddd93adfd5e66f76",
+        "source_kind": "hosted_red_team",
+        "status": "approved"
+      }
+    },
+    {
+      "case_path": "workloads/live-100-cases/HOSTED-046.json",
+      "case_sha256": "800dc03fcc9124534b2823aba2e307ac8d3e069df150aeae0ee99e2d9c49ade8",
+      "instance_id": "HOSTED-046",
+      "review": {
+        "review_record_path": "workloads/live-100-reviews/HOSTED-046.json",
+        "review_record_sha256": "26d3181b657ffcfba2558075a46821fd2b87387c6289c500788a211d36edb44e",
+        "reviewer_id": "user_HeadshotRedTeamReviewer",
+        "source_generation_path": "workloads/live-100-generations/HOSTED-046.json",
+        "source_generation_sha256": "a354077d8fcf669f226a490a08a89ef673101472af0b9bdab5b9cf839460ca4f",
+        "source_kind": "hosted_red_team",
+        "status": "approved"
+      }
+    },
+    {
+      "case_path": "workloads/live-100-cases/HOSTED-050.json",
+      "case_sha256": "7cbbc0c4544d8e8e503506e1f7454191a06c8260021faa61554bf420081efd51",
+      "instance_id": "HOSTED-050",
+      "review": {
+        "review_record_path": "workloads/live-100-reviews/HOSTED-050.json",
+        "review_record_sha256": "4fba815644320d9b168d15f2b6b9d85de50abe3b77881173c26aa62bfe4cdb12",
+        "reviewer_id": "user_HeadshotRedTeamReviewer",
+        "source_generation_path": "workloads/live-100-generations/HOSTED-050.json",
+        "source_generation_sha256": "d8e61ce3b0185ad288336e858b44170073aee7a41687362bde86232452e221f5",
+        "source_kind": "hosted_red_team",
+        "status": "approved"
+      }
+    },
+    {
+      "case_path": "workloads/live-100-cases/HOSTED-053.json",
+      "case_sha256": "565e984d8d22fedc4f077e29be4d82945288ce978b612b2ff63b4ca6057c9b4c",
+      "instance_id": "HOSTED-053",
+      "review": {
+        "review_record_path": "workloads/live-100-reviews/HOSTED-053.json",
+        "review_record_sha256": "17f6d94e9a828f1c0e967ab90205f28345d05f16d21099b3d2ccea558764e80a",
+        "reviewer_id": "user_HeadshotRedTeamReviewer",
+        "source_generation_path": "workloads/live-100-generations/HOSTED-053.json",
+        "source_generation_sha256": "edd304b8845005577784e262155e7ff6ae9bee27233a53fca341a904ed0929e6",
+        "source_kind": "hosted_red_team",
+        "status": "approved"
+      }
+    },
+    {
+      "case_path": "workloads/live-100-cases/HOSTED-055.json",
+      "case_sha256": "a174c176fa95dbd1afa49f62fc7d57b81a8ef80b3327bc52707a0cc9179f90d9",
+      "instance_id": "HOSTED-055",
+      "review": {
+        "review_record_path": "workloads/live-100-reviews/HOSTED-055.json",
+        "review_record_sha256": "d7222f0ce8d87710a31c84336596339f368af490bd932b7d3092ef838f6a6c5b",
+        "reviewer_id": "user_HeadshotRedTeamReviewer",
+        "source_generation_path": "workloads/live-100-generations/HOSTED-055.json",
+        "source_generation_sha256": "f390f43a38eb1ff9023f3cf3434f155399ebb92ede7971cfedc8ec8700254747",
+        "source_kind": "hosted_red_team",
+        "status": "approved"
+      }
+    },
+    {
+      "case_path": "workloads/live-100-cases/HOSTED-060.json",
+      "case_sha256": "54d05b0dd929de2312f92017beb64894ba2d208089cd47c1974be4ccf542ff6f",
+      "instance_id": "HOSTED-060",
+      "review": {
+        "review_record_path": "workloads/live-100-reviews/HOSTED-060.json",
+        "review_record_sha256": "ba9204e2a50757cd7cfce63e61e6b7a7c825d7454d26567f0ea43c5805c9747f",
+        "reviewer_id": "user_HeadshotRedTeamReviewer",
+        "source_generation_path": "workloads/live-100-generations/HOSTED-060.json",
+        "source_generation_sha256": "183fbec163ee3da813737741935f9303bd2cf2da73ecb334c0b58f4c620f045e",
+        "source_kind": "hosted_red_team",
+        "status": "approved"
+      }
+    },
+    {
+      "case_path": "workloads/live-100-cases/HOSTED-063.json",
+      "case_sha256": "beb5eff332e1d4bb0dc6ea23975e2cf01a439524ae84488a56d7ffd2ebf7012e",
+      "instance_id": "HOSTED-063",
+      "review": {
+        "review_record_path": "workloads/live-100-reviews/HOSTED-063.json",
+        "review_record_sha256": "7f5dc9ee4f2e23662bb3222bac6656cbe335d5962c1e968a2718fc255d887512",
+        "reviewer_id": "user_HeadshotRedTeamReviewer",
+        "source_generation_path": "workloads/live-100-generations/HOSTED-063.json",
+        "source_generation_sha256": "6b32d1e27197e99b60f0d52db6b46f57d836a060739a18e45eba8b3f36461061",
+        "source_kind": "hosted_red_team",
+        "status": "approved"
+      }
+    },
+    {
+      "case_path": "workloads/live-100-cases/HOSTED-066.json",
+      "case_sha256": "b8d03d97276ac2d6561752d5d88c175287b1afa0b4d0ad3958155d54d41fdb02",
+      "instance_id": "HOSTED-066",
+      "review": {
+        "review_record_path": "workloads/live-100-reviews/HOSTED-066.json",
+        "review_record_sha256": "9f5663612c4b93f3406ddc1c93642ed58a161fefe931c2c0027d338a66a0d57b",
+        "reviewer_id": "user_HeadshotRedTeamReviewer",
+        "source_generation_path": "workloads/live-100-generations/HOSTED-066.json",
+        "source_generation_sha256": "f0e6f9c06d7d17099f14c06c13dbb4a0eb03e64eefefb4bb29c9b9a6ce93cc17",
+        "source_kind": "hosted_red_team",
+        "status": "approved"
+      }
+    },
+    {
+      "case_path": "workloads/live-100-cases/HOSTED-069.json",
+      "case_sha256": "493bad94149bc063fac6c36142fa4b7f764099f36d099e16798a9986b5edbefa",
+      "instance_id": "HOSTED-069",
+      "review": {
+        "review_record_path": "workloads/live-100-reviews/HOSTED-069.json",
+        "review_record_sha256": "23385df71dc6d24892c8041b7680973a816283d294a0f40d40b0eae0c041def3",
+        "reviewer_id": "user_HeadshotRedTeamReviewer",
+        "source_generation_path": "workloads/live-100-generations/HOSTED-069.json",
+        "source_generation_sha256": "4314e82d1df289adbe9a5f15e4acc46fa37322fcd84a8b12fc99a8029c414983",
+        "source_kind": "hosted_red_team",
+        "status": "approved"
+      }
+    },
+    {
+      "case_path": "workloads/live-100-cases/HOSTED-071.json",
+      "case_sha256": "d151190195b78229ea6e9a7282ce6816f8f73270a9625d5b0c2c941483fe068f",
+      "instance_id": "HOSTED-071",
+      "review": {
+        "review_record_path": "workloads/live-100-reviews/HOSTED-071.json",
+        "review_record_sha256": "ab204d5e4f5303369070182b248368a04d45783b030d2f2d719b292e31a40bb1",
+        "reviewer_id": "user_HeadshotRedTeamReviewer",
+        "source_generation_path": "workloads/live-100-generations/HOSTED-071.json",
+        "source_generation_sha256": "9f0c12c8cc938b130e0b597f4d8996d54d1fdd63aad70af059bc71d75d01410e",
+        "source_kind": "hosted_red_team",
+        "status": "approved"
+      }
+    },
+    {
+      "case_path": "workloads/live-100-cases/HOSTED-074.json",
+      "case_sha256": "0b9ed970eb50890ed060f3715b8b1f5156fb5a0030e3dc63014b355ed16ccef8",
+      "instance_id": "HOSTED-074",
+      "review": {
+        "review_record_path": "workloads/live-100-reviews/HOSTED-074.json",
+        "review_record_sha256": "0a2c08e82405a6b39bdeea8a65d0ef398bdf4d0a79a107fd19f716f86bd175e7",
+        "reviewer_id": "user_HeadshotRedTeamReviewer",
+        "source_generation_path": "workloads/live-100-generations/HOSTED-074.json",
+        "source_generation_sha256": "7ae2678fa7da167a5cb670b2a61a5f10d4c501c18d204f7139e30208fa6ae222",
+        "source_kind": "hosted_red_team",
+        "status": "approved"
+      }
+    },
+    {
+      "case_path": "workloads/live-100-cases/HOSTED-077.json",
+      "case_sha256": "1ed18dc441864b28d7c12767a8340d736b960fbea1b06e4eb20d86e6f3f7bace",
+      "instance_id": "HOSTED-077",
+      "review": {
+        "review_record_path": "workloads/live-100-reviews/HOSTED-077.json",
+        "review_record_sha256": "3a97dd3860ff552d887badb50102331588f8203cafa9ef893f24648b364bb251",
+        "reviewer_id": "user_HeadshotRedTeamReviewer",
+        "source_generation_path": "workloads/live-100-generations/HOSTED-077.json",
+        "source_generation_sha256": "fc0d96e38fd062fee9a44b5b0ffc14bfa8a1e307430bb5cbba71f2272d6687e1",
+        "source_kind": "hosted_red_team",
+        "status": "approved"
+      }
+    },
+    {
+      "case_path": "workloads/live-100-cases/HOSTED-080.json",
+      "case_sha256": "d1c032ceb3db41a105108d161e39239693a8ed49723adcbd61fa1f49026b80c9",
+      "instance_id": "HOSTED-080",
+      "review": {
+        "review_record_path": "workloads/live-100-reviews/HOSTED-080.json",
+        "review_record_sha256": "150d61a16e439e6590ad9bb294c93b2d797415a281aeb0f9a9e9f8a8b1f139bf",
+        "reviewer_id": "user_HeadshotRedTeamReviewer",
+        "source_generation_path": "workloads/live-100-generations/HOSTED-080.json",
+        "source_generation_sha256": "7daf0491738ef75a6566f237f53547a525771e900096c359c0fe206b784a313c",
+        "source_kind": "hosted_red_team",
+        "status": "approved"
+      }
+    },
+    {
+      "case_path": "workloads/live-100-cases/HOSTED-083.json",
+      "case_sha256": "db33cd65e6020b7bdfe3b9cd1a9df50ad7e386001538380aea23e23e5e60d736",
+      "instance_id": "HOSTED-083",
+      "review": {
+        "review_record_path": "workloads/live-100-reviews/HOSTED-083.json",
+        "review_record_sha256": "c5339d9b67dae9e7bafe9dea99a421345dd7c9f77a2a26aba871183a4f19e2b3",
+        "reviewer_id": "user_HeadshotRedTeamReviewer",
+        "source_generation_path": "workloads/live-100-generations/HOSTED-083.json",
+        "source_generation_sha256": "188c47f0b00f1df88e0be8bcd93a021e59844bea4511aeea4fa6e5d18c4e02db",
+        "source_kind": "hosted_red_team",
+        "status": "approved"
+      }
+    }
+  ],
+  "schema_version": "1",
+  "workload_id": "headshot-live-100-batch-02"
+}
