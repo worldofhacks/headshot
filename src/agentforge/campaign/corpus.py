@@ -31,9 +31,12 @@ LIVE_100_CORPUS_ID = "headshot-live-100-v1"
 LIVE_100_CASE_COUNT = 100
 LIVE_100_PHYSICAL_REQUEST_COUNT = 121
 LIVE_100_CATEGORY_COUNTS = {
-    "prompt_injection": 34,
-    "data_exfiltration": 33,
-    "tool_misuse": 33,
+    "prompt_injection": 20,
+    "data_exfiltration": 18,
+    "tool_misuse": 18,
+    "state_corruption": 15,
+    "denial_of_service": 14,
+    "identity_role_exploitation": 15,
 }
 TRUSTED_WORKLOAD_IDS = frozenset({MVP_CORPUS_ID, FULL_SCAN_CORPUS_ID, LIVE_100_CORPUS_ID})
 _WORKLOAD_ID = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9._:-]{0,127}\Z")
@@ -493,7 +496,7 @@ def load_live_100_corpus(
         raise CorpusUnavailable("live-100 workload contains duplicate identities or sequences")
     category_counts = {
         category: sum(case.payload["category"] == category for case in cases)
-        for category in MVP_CATEGORIES
+        for category in LIVE_100_CATEGORY_COUNTS
     }
     turn_counts = [len(case.payload["input_sequence"]) for case in cases]
     if category_counts != LIVE_100_CATEGORY_COUNTS:

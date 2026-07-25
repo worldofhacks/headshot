@@ -278,7 +278,10 @@ def _seed_authorized_campaign(engine: Engine, suffix: str) -> str:
 
 def test_agent_acceptance_migration_is_the_only_head() -> None:
     script = ScriptDirectory.from_config(_db.alembic_config(_db.admin_url()))
-    assert script.get_heads() == ["0021"]
+    # 0022 (attempt_result.resource_measurements) now extends the chain; the point of this test is
+    # that there is exactly ONE head, not that the head is any particular revision.
+    assert script.get_heads() == ["0022"]
+    assert script.get_revision("0022").down_revision == "0021"
     assert script.get_revision("0021").down_revision == "0020"
     assert script.get_revision("0020").down_revision == "0019"
     assert script.get_revision("0019").down_revision == "0018"

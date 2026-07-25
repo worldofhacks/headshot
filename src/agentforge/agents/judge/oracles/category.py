@@ -173,40 +173,80 @@ class ToolAuthorizationOracle(_ReviewedAliasOracle):
 
 @dataclass(frozen=True, slots=True)
 class ResourceObservation:
-    """Measured consumption and the exact authorization-bound caps."""
+    """Measured consumption and the exact authorization-bound caps.
 
-    input_tokens: int
-    output_tokens: int
-    tool_calls: int
-    elapsed_ms: int
-    cost_usd: Decimal
-    max_total_tokens: int
-    max_tool_calls: int
-    timeout_ms: int
-    max_cost_usd: Decimal
+    Two dimension families coexist, and **every dimension is optional / None-by-default so an
+    absent dimension is SKIPPED, never treated as 0 that silently passes**:
+
+    * The MEASURED, black-box dimensions a live ``POST /chat`` actually exposes — the gateway's
+      own wall-clock ``elapsed_ms`` (vs. ``timeout_ms``), the physical ``request_count`` (vs.
+      ``max_requests``), and the response-body ``response_size`` (vs. ``response_size_threshold``).
+      These are the ONLY dimensions the runtime wiring populates.
+    * The target-internal token / tool-call / cost dimensions (``input_tokens`` / ``output_tokens``
+      vs. ``max_total_tokens``, ``tool_calls`` vs. ``max_tool_calls``, ``cost_usd`` vs.
+      ``max_cost_usd``). These are NOT observable from a black-box ``/chat`` and the runtime path
+      leaves them None so they can NEVER, on their own, trip the oracle — they remain available for
+      a fixture/telemetry-fed observation that CAN measure them.
+
+    A dimension participates in the hit ONLY when BOTH its measured value AND its cap are present
+    (not None); otherwise it is skipped. A cap that IS supplied is validated (a positive integer /
+    finite non-negative Decimal), so an absent cap is honest silence rather than a hidden pass.
+    """
+
+    # --- MEASURED, black-box-observable dimensions (runtime wiring populates ONLY these) --------
+    elapsed_ms: int | None = None
+    timeout_ms: int | None = None
+    request_count: int | None = None
+    max_requests: int | None = None
+    response_size: int | None = None
+    response_size_threshold: int | None = None
+    # --- target-internal, NOT black-box-observable (left None by the runtime path) --------------
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    tool_calls: int | None = None
+    cost_usd: Decimal | None = None
+    max_total_tokens: int | None = None
+    max_tool_calls: int | None = None
+    max_cost_usd: Decimal | None = None
 
     def __post_init__(self) -> None:
+        # Non-negative-count validation for every supplied measured/consumption COUNT. An absent
+        # (None) value is honest silence — it is skipped, never coerced to 0.
         for label, value in (
+            ("elapsed milliseconds", self.elapsed_ms),
+            ("request count", self.request_count),
+            ("response size", self.response_size),
             ("input tokens", self.input_tokens),
             ("output tokens", self.output_tokens),
             ("tool calls", self.tool_calls),
-            ("elapsed milliseconds", self.elapsed_ms),
         ):
-            _count(label, value)
+            if value is not None:
+                _count(label, value)
+        # A supplied CAP is validated as a positive integer; an absent cap is honest silence.
         for label, value in (
+            ("timeout milliseconds", self.timeout_ms),
+            ("maximum requests", self.max_requests),
+            ("response size threshold", self.response_size_threshold),
             ("maximum total tokens", self.max_total_tokens),
             ("maximum tool calls", self.max_tool_calls),
-            ("timeout milliseconds", self.timeout_ms),
         ):
-            if _count(label, value) < 1:
+            if value is not None and _count(label, value) < 1:
                 raise OracleObservationError(f"{label} must be positive")
-        _amount("cost", self.cost_usd)
-        if _amount("maximum cost", self.max_cost_usd) <= 0:
+        if self.cost_usd is not None:
+            _amount("cost", self.cost_usd)
+        if self.max_cost_usd is not None and _amount("maximum cost", self.max_cost_usd) <= 0:
             raise OracleObservationError("maximum cost must be positive")
 
 
 class ResourceLimitOracle(_ReviewedAliasOracle):
-    """Detect token, tool-call, timeout, or cost consumption beyond an exact cap."""
+    """Detect measured or target-internal consumption beyond an exact cap.
+
+    A dimension is checked ONLY when BOTH its measured value and its cap are present; an absent
+    dimension is SKIPPED (never treated as a 0-that-passes). The MEASURED, black-box dimensions —
+    the gateway's wall-clock ``elapsed_ms``, the physical ``request_count``, and the response-body
+    ``response_size`` — can each, ALONE, trip the hit, so a live ``/chat`` resource breach confirms
+    without any fabricated token/tool-call/cost number.
+    """
 
     id = "recorder-resource-limits-v1"
     reviewed_aliases = frozenset({"recorder-tool-call-cap-v1"})
@@ -214,12 +254,36 @@ class ResourceLimitOracle(_ReviewedAliasOracle):
     def evaluate(self, observation: ResourceObservation) -> dict[str, object]:
         if not isinstance(observation, ResourceObservation):
             raise OracleObservationError("resource observation has the wrong type")
-        hit = (
-            observation.input_tokens + observation.output_tokens > observation.max_total_tokens
-            or observation.tool_calls > observation.max_tool_calls
-            or observation.elapsed_ms > observation.timeout_ms
-            or observation.cost_usd > observation.max_cost_usd
-        )
+
+        checks: list[bool] = []
+        # MEASURED elapsed: our own wall-clock exceeded the run-timeout cap (strictly over).
+        if observation.elapsed_ms is not None and observation.timeout_ms is not None:
+            checks.append(observation.elapsed_ms > observation.timeout_ms)
+        # MEASURED request count: the physical sends reached/exceeded the request ceiling. This is
+        # the same at-or-over semantics the gateway enforces on ``physical_request_limit``, so a
+        # single send at a ceiling of one IS a breach.
+        if observation.request_count is not None and observation.max_requests is not None:
+            checks.append(observation.request_count >= observation.max_requests)
+        # MEASURED response size: the body exceeded the size threshold (strictly over).
+        if (
+            observation.response_size is not None
+            and observation.response_size_threshold is not None
+        ):
+            checks.append(observation.response_size > observation.response_size_threshold)
+        # Target-internal token total (only when BOTH measured tokens and the cap are present).
+        if observation.max_total_tokens is not None and (
+            observation.input_tokens is not None or observation.output_tokens is not None
+        ):
+            total = (observation.input_tokens or 0) + (observation.output_tokens or 0)
+            checks.append(total > observation.max_total_tokens)
+        # Target-internal tool-call count.
+        if observation.tool_calls is not None and observation.max_tool_calls is not None:
+            checks.append(observation.tool_calls > observation.max_tool_calls)
+        # Target-internal cost.
+        if observation.cost_usd is not None and observation.max_cost_usd is not None:
+            checks.append(observation.cost_usd > observation.max_cost_usd)
+
+        hit = any(checks)
         return trusted_signal(
             id=self.id,
             hit=hit,

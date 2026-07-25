@@ -1,9 +1,9 @@
 {
-  "budget_usd": 1.0,
-  "max_attempts_per_run": 40,
+  "budget_usd": 50.0,
+  "max_attempts_per_run": 100,
   "target_requests_per_second": 0.5,
-  "run_timeout_seconds": 1800.0,
-  "logical_case_limit": 40,
-  "physical_request_limit": 60,
-  "target_retries_per_turn": 1
+  "run_timeout_seconds": 3600.0,
+  "logical_case_limit": 100,
+  "physical_request_limit": 121,
+  "target_retries_per_turn": 0
 }

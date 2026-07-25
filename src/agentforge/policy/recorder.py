@@ -32,6 +32,13 @@ from sqlalchemy.exc import IntegrityError
 # computed over the evidence, then stored alongside it.
 _HASH_FIELD = "content_hash"
 
+# Columns added AFTER the original hashed field set that must NOT change the content_hash when
+# ABSENT/NULL — so a legacy row (recorded before the column existed) and a reread candidate (which
+# materializes the column as None) recompute to the SAME digest. A NON-NULL value IS hashed (it is
+# genuine evidence, part of the tamper-evident record); only an absent/None value is dropped, and
+# ONLY for these newer columns — every original column still hashes its None verbatim.
+_NULLABLE_ADDED_COLUMNS: frozenset[str] = frozenset({"resource_measurements"})
+
 # Postgres SQLSTATE for a unique-constraint violation — the ONLY integrity error that is a
 # replay. Any other IntegrityError (NOT NULL 23502, FK 23503, CHECK 23514) is real corruption.
 _UNIQUE_VIOLATION = "23505"
@@ -48,6 +55,7 @@ _PERSISTED_COLUMNS: tuple[str, ...] = (
     "attack_attempt",
     "request_transcript",
     "response_transcript",
+    "resource_measurements",
     "policy_decision_id",
     "executed_at",
     "trace_id",
@@ -64,7 +72,9 @@ _PERSISTED_COLUMNS: tuple[str, ...] = (
 PERSISTED_EVIDENCE_COLUMNS = _PERSISTED_COLUMNS
 
 # Columns whose SQL type is JSONB — serialized to a JSON string for the psycopg parameter.
-_JSONB_COLUMNS: frozenset[str] = frozenset({"attack_attempt", "request_transcript"})
+_JSONB_COLUMNS: frozenset[str] = frozenset(
+    {"attack_attempt", "request_transcript", "resource_measurements"}
+)
 
 
 class EvidenceIntegrityError(Exception):
@@ -96,7 +106,11 @@ def _canonical_bytes(fields: dict[str, Any]) -> bytes:
     serialization field-order independent; ``ensure_ascii=False`` + explicit separators keep
     it stable and byte-reproducible for an independent recompute.
     """
-    payload = {k: v for k, v in fields.items() if k != _HASH_FIELD}
+    payload = {
+        k: v
+        for k, v in fields.items()
+        if k != _HASH_FIELD and not (k in _NULLABLE_ADDED_COLUMNS and v is None)
+    }
     return json.dumps(
         payload,
         sort_keys=True,
