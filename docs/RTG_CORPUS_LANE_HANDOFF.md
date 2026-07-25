@@ -59,3 +59,29 @@ enabled on it.
 ## RUN preconditions (external, not corpus-lane)
 price correction landed (node) · LLM Judge enabled (v, `human_approved:true`) · deploy the release
 (m) · two distinct principals authorize→approve via the Web API (launcher ≠ approver, code-enforced).
+
+## Update — loadable batch sub-corpora + attestation packet (delivered)
+
+**3 loadable batch sub-corpora** (resolve via `resolve_workload("headshot-live-100-batch-0N")`):
+| workload_id | cases | physical | manifest sha256 |
+|---|---|---|---|
+| headshot-live-100-batch-01 | 34 | 41 | `cb852cd514caccca99fe5eaa5a9a5fe59f2a7891fcc84409f9dcd331a8dd7d2c` |
+| headshot-live-100-batch-02 | 33 | 40 | `a29bf9c5f30154328234c4a489f279b624830cb8fbdcac52d2153f980b86845c` |
+| headshot-live-100-batch-03 | 33 | 40 | `fadf6d422ab0f59ca6ee7a9c2ec5f7352ec7c41197dcc216b37b080a715680de` |
+- Shared spine `_load_reviewed_workload_manifest` backs both the whole (behavior UNCHANGED, still sha
+  `07d649…252d`) and `load_live_100_batch`; batch entries are byte-identical to the frozen whole (no
+  re-authoring); union = exactly the 100; each physical ≤56 (no cap raise); registry stays closed.
+- **Per-batch exact caps** in `evals/workloads/live-100-batch-caps.json` (logical=cases, physical=Σturns,
+  retries=0). Code + Security review APPROVED; batch/regression/validate-corpus all green.
+
+**⚠️ runner follow-up ticket for m (NOT a cap-escape — deferred per scope):** two `LIVE_100_CORPUS_ID`-gated
+blocks don't fire for batch corpus_ids — `runner.py:~1140` (`exact_request_caps_mismatch` per-batch exact caps)
+and `runner.py:~682` (`_select_authorized_proposal` manifest-order-drift guard). Batches are still hard-capped
+at 56 by the corpus-id-agnostic `_require_hosted_workload_capacity` (`runner.py:~1187`), so no over-cap path;
+this is a missing exactness/order defense-in-depth. Fix: broaden both conditions to
+`self.corpus.corpus_id in {LIVE_100_CORPUS_ID, *LIVE_100_BATCH_IDS}` with a batch-aware `expected_physical`.
+
+**Attestation packet for the two principals** — `docs/attestation/`: `LABELING_GUIDE.v1.md`
+(guide hash `faa127147b4e8d49835b6d3c1b83ab315c8365866065bdb47e70ade13352b488`), `ATTESTATION_PACKET.md`
+(100/100 cases, blank Principal-1/Principal-2 fields), `attestation_entry.csv`. Bound to the corpus manifest
+sha + candidate-labels sha `adf733ba…`; invariants + blind + two-person distinctness stated up front.

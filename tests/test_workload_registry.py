@@ -10,6 +10,7 @@ import pytest
 
 from agentforge.campaign.corpus import (
     FULL_SCAN_CORPUS_ID,
+    LIVE_100_BATCH_IDS,
     LIVE_100_CORPUS_ID,
     MVP_CORPUS_ID,
     TRUSTED_WORKLOAD_IDS,
@@ -37,10 +38,14 @@ def _canonical_sha256(payload: dict) -> str:
 
 
 def test_registry_is_closed_and_resolves_the_two_landed_workloads() -> None:
+    # The closed registry is the three landed whole workloads PLUS the three separately-authorized
+    # live-100 batch sub-workloads that aggregate exactly back to the frozen 100-case / 121-physical
+    # whole (each batch physical <= 56, no cap raise). It remains closed: an unknown id is rejected.
     assert {
         MVP_CORPUS_ID,
         FULL_SCAN_CORPUS_ID,
         LIVE_100_CORPUS_ID,
+        *LIVE_100_BATCH_IDS,
     } == TRUSTED_WORKLOAD_IDS
     assert resolve_workload(MVP_CORPUS_ID).corpus_id == MVP_CORPUS_ID
     assert resolve_workload(FULL_SCAN_CORPUS_ID).corpus_id == FULL_SCAN_CORPUS_ID

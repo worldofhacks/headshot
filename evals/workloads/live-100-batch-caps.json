@@ -1,0 +1,45 @@
+{
+  "artifact_id": "live-100-batch-caps-v1",
+  "schema_version": "1",
+  "note": "Per-batch EXACT-MATCH campaign caps for the 3 separately-authorized live-100 batch sub-workloads. Each batch is dispatched under caps that match its own subset exactly (logical_case_limit == case_count, physical_request_limit == Sigma(input_sequence turns), target_retries_per_turn == 0), mirroring the frozen live-100 whole's exact-request-cap contract (runner.py: caps.logical_case_limit / physical_request_limit / target_retries_per_turn). Every batch's physical_request_limit is <= HOSTED_MAX_PHYSICAL_CALLS (56) — NO cap raise. Batch manifest shas are the pinned digests emitted by scripts/build_live_100_batches.py and pinned in corpus.LIVE_100_BATCH_SPECS.",
+  "hosted_max_physical_calls": 56,
+  "aggregate": {
+    "logical_case_limit": 100,
+    "physical_request_limit": 121,
+    "target_retries_per_turn": 0
+  },
+  "batches": [
+    {
+      "workload_id": "headshot-live-100-batch-01",
+      "manifest_path": "evals/workloads/headshot-live-100-batch-01.json",
+      "manifest_sha256": "cb852cd514caccca99fe5eaa5a9a5fe59f2a7891fcc84409f9dcd331a8dd7d2c",
+      "exact_match_caps": {
+        "logical_case_limit": 34,
+        "physical_request_limit": 41,
+        "target_retries_per_turn": 0
+      }
+    },
+    {
+      "workload_id": "headshot-live-100-batch-02",
+      "manifest_path": "evals/workloads/headshot-live-100-batch-02.json",
+      "manifest_sha256": "a29bf9c5f30154328234c4a489f279b624830cb8fbdcac52d2153f980b86845c",
+      "exact_match_caps": {
+        "logical_case_limit": 33,
+        "physical_request_limit": 40,
+        "target_retries_per_turn": 0
+      }
+    },
+    {
+      "workload_id": "headshot-live-100-batch-03",
+      "manifest_path": "evals/workloads/headshot-live-100-batch-03.json",
+      "manifest_sha256": "fadf6d422ab0f59ca6ee7a9c2ec5f7352ec7c41197dcc216b37b080a715680de",
+      "exact_match_caps": {
+        "logical_case_limit": 33,
+        "physical_request_limit": 40,
+        "target_retries_per_turn": 0
+      }
+    }
+  ],
+  "runner_gap_flag": "runner.py exact-request-cap enforcement is gated on corpus_id == LIVE_100_CORPUS_ID; a batch corpus_id (headshot-live-100-batch-0N) currently BYPASSES the exact_request_caps_mismatch block. See the handoff report — corpus loading is complete and green; wiring the batch ids into that runner branch is a separate, flagged change (do NOT bundle it here).",
+  "generator": "scripts/build_live_100_batches.py"
+}
