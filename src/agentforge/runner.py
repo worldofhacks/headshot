@@ -369,7 +369,12 @@ class _DurableHostedExecutionLifecycle:
         error_code: str | None,
         failed_physical_attempts: int | None = None,
     ) -> None:
-        context = self._execution_context.pop(execution_id, None)
+        # Read without removing. The store can refuse a terminal write — an out-of-range token
+        # count, an output that trips credential screening, a payload over the size bound — and
+        # the caller's whole recovery strategy is to retry with a smaller record. Dropping the
+        # context here made every one of those retries fail as "context missing" and left the
+        # execution open forever, which is strictly worse than the write it was refusing.
+        context = self._execution_context.get(execution_id)
         if context is None:
             raise DispatchUnavailable("hosted_execution_context_missing")
         oracle_agreement: bool | None = None
@@ -425,6 +430,8 @@ class _DurableHostedExecutionLifecycle:
         elif failed_physical_attempts is not None:
             terminal["physical_attempts"] = failed_physical_attempts
         self._store.finish_hosted_agent_execution(**terminal)
+        # Only now is the execution truly closed, so only now may its context go.
+        self._execution_context.pop(execution_id, None)
         with contextlib.suppress(Exception):
             self._telemetry.finish_agent(
                 execution_id=execution_id,

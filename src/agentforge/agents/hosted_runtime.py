@@ -37,6 +37,7 @@ _VERDICTS = (
 _JUDGE_CRITERIA_VERSION = "independent-judge-assessment-v2"
 _JUDGE_IMPLEMENTATION_VERSION = "hosted-role-runtime-v2"
 _SCHEMA_NAME = re.compile(r"\A[a-z][a-z0-9_]{0,63}\Z")
+_TYPED_REASON = re.compile(r"\A[a-z][a-z0-9_-]{0,63}\Z")
 _RAW_AUTH_MATERIAL = re.compile(
     r"(?i)(?:"
     r"\bsk-(?:or-|ant-|proj-)?[A-Za-z0-9_-]{12,}"
@@ -421,7 +422,9 @@ class HostedRoleRuntime:
                 execution_id=execution_id,
                 cause=failure,
                 lineage=record,
-                physical_attempts=result.physical_attempts,
+                # The observation already carries its own attempt count; passing it separately
+                # alongside lineage is a combination the runner refuses outright.
+                physical_attempts=None,
             )
             raise failure from exc
         return HostedRoleInvocation(
@@ -577,7 +580,10 @@ class HostedRoleRuntime:
         physical_attempts: int | None,
     ) -> None:
         error_code = getattr(cause, "code", "hosted-agent-failed")
-        if not isinstance(error_code, str) or not error_code:
+        # The store accepts only a lowercase typed reason. An exception carrying anything else
+        # would be refused on both attempts identically, so normalize before the first one
+        # rather than spending the single retry on a write that cannot succeed either.
+        if not isinstance(error_code, str) or _TYPED_REASON.fullmatch(error_code) is None:
             error_code = "hosted-agent-failed"
         try:
             terminal: dict[str, Any] = {

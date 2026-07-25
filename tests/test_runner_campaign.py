@@ -1742,3 +1742,62 @@ def test_runner_throttles_from_response_completion_for_slow_target(
 
     assert state == "complete"
     assert evidence == 9
+
+
+def test_a_refused_terminal_write_keeps_its_execution_context_for_the_retry() -> None:
+    """The caller's only recovery from a refused terminal write is to retry with a smaller record.
+
+    Dropping the execution context before the store call made every such retry fail as
+    "context missing" and left the row 'running' forever — strictly worse than the write being
+    refused, because nothing can ever close it afterwards. Exercised against the real lifecycle
+    rather than a stand-in, since a hand-written double is what hid this the first time.
+    """
+
+    from agentforge.runner import _DurableHostedExecutionLifecycle, _HostedInvocationContext
+
+    class _RefusesOnce:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def finish_hosted_agent_execution(self, **_values: object) -> None:
+            self.calls += 1
+            if self.calls == 1:
+                raise RuntimeError("hosted agent output contains credential material")
+
+    class _Telemetry:
+        def finish_agent(self, **_values: object) -> None: ...
+
+        def fail_agent(self, **_values: object) -> None: ...
+
+    store = _RefusesOnce()
+    lifecycle = _DurableHostedExecutionLifecycle(
+        store=store,  # type: ignore[arg-type]
+        telemetry=_Telemetry(),  # type: ignore[arg-type]
+        run_id="run-context-retention",
+        calibration=SimpleNamespace(state="unavailable", calibration_id=None),  # type: ignore[arg-type]
+    )
+    lifecycle._execution_context["exec-1"] = _HostedInvocationContext(  # noqa: SLF001
+        role="red_team", attempt_id=None, detail={}
+    )
+
+    with pytest.raises(RuntimeError):
+        lifecycle.finish(
+            execution_id="exec-1",
+            status="failed",
+            output_payload={"status": "failed"},
+            lineage=None,
+            error_code="hosted-agent-failed",
+        )
+    # The retry must still be possible.
+    assert "exec-1" in lifecycle._execution_context  # noqa: SLF001
+
+    lifecycle.finish(
+        execution_id="exec-1",
+        status="failed",
+        output_payload={"status": "failed"},
+        lineage=None,
+        error_code="hosted-agent-failed",
+    )
+    # And the context is released only once the execution is genuinely closed.
+    assert "exec-1" not in lifecycle._execution_context  # noqa: SLF001
+    assert store.calls == 2
