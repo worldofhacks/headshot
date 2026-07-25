@@ -35,6 +35,17 @@ _VERDICTS = (
     "INDETERMINATE",
     "ERROR",
 )
+
+#: The states a MODEL Judge may return.  ``EXPLOIT_CONFIRMED`` is deliberately absent: only an
+#: oracle, a canary, or a human confirms an exploit (D13), so the model is not given the vocabulary
+#: to claim one.  This mirrors ``agents/judge/hosted.py::_assessment_schema`` — the two model-Judge
+#: surfaces must not disagree about what the model is allowed to say.
+_MODEL_ASSESSMENT_VERDICTS = (
+    "EXPLOIT_LIKELY",
+    "NO_EXPLOIT_OBSERVED",
+    "INDETERMINATE",
+    "ERROR",
+)
 _JUDGE_CRITERIA_VERSION = "independent-judge-assessment-v2"
 _JUDGE_IMPLEMENTATION_VERSION = "hosted-role-runtime-v2"
 _SCHEMA_NAME = re.compile(r"\A[a-z][a-z0-9_]{0,63}\Z")
@@ -751,11 +762,12 @@ class HostedFourRoleRuntime:
             output_schema={
                 "type": "object",
                 "properties": {
-                    "state": {"enum": list(_VERDICTS)},
+                    # No EXPLOIT_CONFIRMED, and no self-reported calibration flag: the model
+                    # cannot claim a confirmation, and it cannot vouch for its own calibration.
+                    "state": {"enum": list(_MODEL_ASSESSMENT_VERDICTS)},
                     "explanation": {"type": "string"},
-                    "calibrated": {"type": "boolean"},
                 },
-                "required": ["state", "explanation", "calibrated"],
+                "required": ["state", "explanation"],
                 "additionalProperties": False,
             },
             schema_name="independent_judge_verdict",
@@ -764,6 +776,9 @@ class HostedFourRoleRuntime:
         verdict = self._deterministic_precedence(
             deterministic_verdict=deterministic_verdict,
             hosted_verdict=judge.result.output,
+            # Authority comes from the enablement gate __init__ already passed, never from the
+            # model's own output.
+            model_calibration_enabled=self._judge_calibration_id is not None,
         )
 
         documentation: Mapping[str, Any] | None = None
@@ -839,7 +854,23 @@ class HostedFourRoleRuntime:
         *,
         deterministic_verdict: Mapping[str, Any],
         hosted_verdict: Mapping[str, Any],
+        model_calibration_enabled: bool,
     ) -> dict[str, Any]:
+        """Reconcile one model assessment against deterministic ground truth, in code.
+
+        Two authorities are deliberately never taken from the model's own output:
+
+        * **Confirmation.** Only an oracle, a canary, or a human confirms an exploit. The model's
+          output schema omits ``EXPLOIT_CONFIRMED``; should one arrive anyway (a provider that
+          ignores the schema, a replayed fixture, a future caller), it is DOWNGRADED to
+          ``EXPLOIT_LIKELY`` rather than passed through. A model-sourced confirmation would
+          otherwise reach Documentation and produce a vulnerability draft with no evidence
+          behind it.
+        * **Calibration status.** Whether the model may issue a decisive ``NO_EXPLOIT_OBSERVED``
+          is decided by the caller's enablement gate, not by a boolean the model emits about
+          itself. A model that asserts its own calibration could otherwise clear a case.
+        """
+
         deterministic_state = deterministic_verdict.get("state")
         if deterministic_verdict.get("canary_triggered") is True:
             deterministic_state = "EXPLOIT_CONFIRMED"
@@ -853,7 +884,15 @@ class HostedFourRoleRuntime:
         hosted_state = hosted_verdict.get("state")
         if hosted_state not in _VERDICTS:
             raise HostedCompositionError("hosted Judge returned an invalid verdict state")
-        if hosted_state == "NO_EXPLOIT_OBSERVED" and hosted_verdict.get("calibrated") is not True:
+        if hosted_state == "EXPLOIT_CONFIRMED":
+            # Keep the unsafe signal, refuse the confirmation authority.
+            return {
+                **dict(hosted_verdict),
+                "state": "EXPLOIT_LIKELY",
+                "deterministic_precedence": False,
+                "reason": "model_confirmation_refused",
+            }
+        if hosted_state == "NO_EXPLOIT_OBSERVED" and model_calibration_enabled is not True:
             return {
                 **dict(hosted_verdict),
                 "state": "INDETERMINATE",

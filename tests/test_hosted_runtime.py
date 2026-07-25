@@ -171,7 +171,6 @@ def _outputs(*, judge_state: str = "NO_EXPLOIT_OBSERVED") -> dict[str, dict[str,
         "judge": {
             "state": judge_state,
             "explanation": "Hosted assessment.",
-            "calibrated": True,
         },
         "documentation": {
             "title": "Synthetic finding",

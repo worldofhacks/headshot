@@ -7,6 +7,31 @@ oracle Judge, but the *model* Judge can only be measured from previously capture
 outcomes.  This script produces exactly that bundle, in the shape
 ``agentforge.agents.judge.calibration_results.load_captured_calibration_evaluator`` validates.
 
+IDENTITY IS SUPPLIED, NEVER SYNTHESIZED
+---------------------------------------
+A calibration is only meaningful for the exact evaluator that will run in production, so this
+capture refuses to invent one.  ``--hosted-configuration-set`` takes the staged four-role
+configuration set *as deployed*, and ``--expected-configuration-sha256`` pins the value the
+deploying operator attested; the run aborts on any mismatch.  Every identity-bearing field then
+comes from that staged set:
+
+    judge_model_version == judge_role.configuration_sha256
+                        == sha256(role, provider, model_id, upstream_provider,
+                                  credential_reference, prompt_sha256, policy_sha256,
+                                  prices, limits)
+
+so model, prompt, and limits are all inside the identity hash, and ``HostedRoleConfiguration``
+independently rejects a staged ``prompt_sha256`` that does not equal this release's server-owned
+role prompt.  An earlier revision of this script built its own configuration set, whose
+``credential_reference``, ``prices``, and *sample-count-scaled* ``limits`` were capture-local
+inventions.  The identity it produced therefore changed with the corpus size and could never equal
+the deployed one — the measurement was real, but it attested an evaluator production would never
+run.  That path is deliberately gone.
+
+The provider secret is still resolved locally from ``OPENROUTER_API_KEY``.  Only the staged
+``credential_reference`` *string* is identity-bearing; the secret value behind it is not, and is
+never written to the bundle.
+
 What it does NOT do:
 
 * It never contacts a live TARGET.  No attack is executed, no campaign is launched, no target
@@ -38,20 +63,16 @@ import argparse
 import hashlib
 import json
 import os
+import re
 from collections.abc import Mapping
 from datetime import UTC, datetime
-from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
 from agentforge.agents.hosted import (
-    HOSTED_ROLE_MODELS,
+    HOSTED_MAX_PHYSICAL_CALLS,
     HostedConfigurationSet,
-    HostedLimits,
-    HostedRoleConfiguration,
-    TokenPrices,
 )
-from agentforge.agents.hosted_prompts import hosted_prompt
 from agentforge.agents.hosted_runtime import (
     HostedCallBounds,
     HostedExecutionLineage,
@@ -68,38 +89,11 @@ from agentforge.target.spec import HostedRunBinding
 _ROOT = Path(__file__).resolve().parents[1]
 _GROUND_TRUTH = _ROOT / "evals" / "ground-truth"
 
-# The exact non-secret provider envelope this capture is authorized to use. Every value is
-# recorded in the emitted bundle's provenance so the measurement is reproducible and auditable.
-_CREDENTIAL_REFERENCE_PREFIX = "secretref://local/openrouter"
-_SESSION_GENERATION = "generation-1"
-_GLOBAL_MAX_CALLS = 56
-_GLOBAL_MAX_USD = Decimal("10")
+_HEX64 = re.compile(r"\A[0-9a-f]{64}\Z")
 
-# Upstream OpenRouter routing slugs, pinned per role. `provider.only` is sent with
-# `allow_fallbacks: false`, so a silent reroute to a different upstream cannot happen.
-_UPSTREAM = {
-    "orchestrator": "anthropic",
-    "red_team": "together",
-    "judge": "google-vertex",
-    "documentation": "openai",
-}
-
-# Ceilings must be >= the endpoint's live list price or OpenRouter refuses the request outright
-# (`provider.max_price`, USD per million tokens). These are price CEILINGS, never a cost estimate:
-# the bundle records the provider's own measured cost per sample.
-_PRICES = {
-    "orchestrator": TokenPrices(Decimal("15"), Decimal("75"), Decimal("75")),
-    "red_team": TokenPrices(Decimal("1"), Decimal("5"), Decimal("5")),
-    "judge": TokenPrices(Decimal("5"), Decimal("30"), Decimal("30")),
-    "documentation": TokenPrices(Decimal("5"), Decimal("30"), Decimal("30")),
-}
-
-_ROLE_MAX_USD = {
-    "orchestrator": Decimal("1.50"),
-    "red_team": Decimal("1"),
-    "judge": Decimal("4"),
-    "documentation": Decimal("1"),
-}
+# A run label for the authorization binding. It is NOT identity-bearing: the staged role
+# configuration (and therefore judge_model_version) is unaffected by it.
+_DEFAULT_SESSION_GENERATION = "generation-1"
 
 _JUDGE_CALL_BOUNDS = HostedCallBounds(
     input_tokens=120_000,
@@ -133,6 +127,32 @@ def _parser() -> argparse.ArgumentParser:
         help="stable identifier for this capture; seeds the per-sample correlation trace ids",
     )
     parser.add_argument(
+        "--hosted-configuration-set",
+        type=Path,
+        required=True,
+        help=(
+            "staged production four-role hosted configuration set, as deployed "
+            "(HostedConfigurationSet.from_payload shape). The Judge identity being calibrated is "
+            "derived from this file and is never synthesized"
+        ),
+    )
+    parser.add_argument(
+        "--expected-configuration-sha256",
+        required=True,
+        help=(
+            "the configuration_sha256 the deploying operator attested for the staged set; the "
+            "capture aborts if the supplied file does not hash to exactly this value"
+        ),
+    )
+    parser.add_argument(
+        "--session-generation",
+        default=_DEFAULT_SESSION_GENERATION,
+        help=(
+            "run label recorded in the authorization binding (not identity-bearing; default "
+            f"{_DEFAULT_SESSION_GENERATION})"
+        ),
+    )
+    parser.add_argument(
         "--confirm-provider-spend",
         action="store_true",
         help="required acknowledgement that this makes real, billed OpenRouter calls",
@@ -140,8 +160,11 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--max-samples",
         type=int,
-        default=_GLOBAL_MAX_CALLS,
-        help=f"refuse to start if the corpus exceeds this many labels (default {_GLOBAL_MAX_CALLS})",
+        default=None,
+        help=(
+            "refuse to start if the corpus exceeds this many labels. Defaults to the staged "
+            "Judge role's own max_calls, which is the real ceiling"
+        ),
     )
     return parser
 
@@ -157,28 +180,34 @@ def main() -> int:
     if not credential:
         raise SystemExit("refusing to run: OPENROUTER_API_KEY is not set")
 
+    configuration = _staged_configuration(
+        args.hosted_configuration_set,
+        expected_sha256=args.expected_configuration_sha256,
+    )
+    judge_role = next(role for role in configuration.roles if role.role == "judge")
+
     slices = _load_slices(args.slice_dir)
     labels = [(item["category"], label) for item in slices for label in item["labels"]]
     labels.sort(key=lambda pair: pair[1]["label_id"])
     if not labels:
         raise SystemExit("refusing to run: the ground-truth corpus has no labels")
-    if len(labels) > args.max_samples:
-        raise SystemExit(
-            f"refusing to run: {len(labels)} labels exceeds the authorized call budget "
-            f"({args.max_samples})"
-        )
+    _require_capacity(
+        sample_count=len(labels),
+        configuration=configuration,
+        judge_role=judge_role,
+        max_samples=args.max_samples,
+    )
 
-    configuration = _configuration(call_capacity=len(labels))
     identity = hosted_judge_identity(configuration)
     generation_policy_sha256 = _generation_policy_sha256(configuration, sample_count=len(labels))
     authorization = HostedRunBinding(
         configuration_set_sha256=configuration.configuration_sha256,
         generation_policy_sha256=generation_policy_sha256,
-        session_generation=_SESSION_GENERATION,
-        provider_model_call_limit=_GLOBAL_MAX_CALLS,
-        provider_model_spend_limit_usd=format(_GLOBAL_MAX_USD, "f"),
-        provider_max_retries=1,
-        provider_max_concurrency=1,
+        session_generation=args.session_generation,
+        provider_model_call_limit=configuration.global_limits.max_calls,
+        provider_model_spend_limit_usd=format(configuration.global_limits.max_usd, "f"),
+        provider_max_retries=configuration.global_limits.max_retries,
+        provider_max_concurrency=configuration.global_limits.max_concurrency,
         provider_timeout_seconds=_JUDGE_CALL_BOUNDS.timeout_seconds,
     )
 
@@ -230,7 +259,6 @@ def main() -> int:
 
     if len(returned_models) != 1:
         raise CaptureError("provider returned more than one model identity across the capture")
-    judge_role = next(role for role in configuration.roles if role.role == "judge")
     bundle = {
         "schema_version": "1",
         "judge_identity": identity.payload(),
@@ -255,6 +283,31 @@ def main() -> int:
             "capture_run_id": args.capture_run_id,
             "sample_count": len(samples),
             "slice_ids": sorted(item["slice_id"] for item in slices),
+            "identity_binding": {
+                "source": "staged_production_configuration_set",
+                "hosted_configuration_set_path": str(args.hosted_configuration_set),
+                "attested_configuration_sha256": args.expected_configuration_sha256,
+                "observed_configuration_sha256": configuration.configuration_sha256,
+                "judge_role_configuration_sha256": judge_role.configuration_sha256,
+                "judge_prompt_sha256": judge_role.prompt_sha256,
+                "judge_policy_sha256": judge_role.policy_sha256,
+                "judge_limits": judge_role.limits.canonical_payload(),
+                "note": (
+                    "judge_model_version == judge_role_configuration_sha256, which hashes model, "
+                    "prompt, policy, prices, credential reference, and limits together. The "
+                    "configuration was supplied by the deployment, not synthesized here."
+                ),
+            },
+            "evidence_provenance": {
+                "kind": "authored_synthetic_ground_truth",
+                "target_executed": False,
+                "note": (
+                    "The Judge model calls are real and billed, but the evidence they judge is "
+                    "authored offline for calibration; the ground-truth envelopes carry "
+                    "campaign_run_id 'ground-truth-unexecuted' and no live target was contacted. "
+                    "This measures the evaluator, not the target."
+                ),
+            },
             "ledger": {
                 "physical_calls": ledger.snapshot.physical_calls,
                 "measured_usd": format(ledger.snapshot.measured_usd, "f"),
@@ -284,7 +337,12 @@ def _resolve(
     configuration: HostedConfigurationSet,
     credential: str,
 ) -> Secret:
-    """Hand the OpenRouter key to the Judge role only; every other role stays uncallable."""
+    """Hand the OpenRouter key to the Judge role only; every other role stays uncallable.
+
+    The staged ``credential_reference`` is matched exactly, so the capture cannot quietly call a
+    role the deployment did not bind. Only the reference string is identity-bearing; the secret
+    value comes from the local environment and never reaches the emitted bundle.
+    """
 
     judge = next(role for role in configuration.roles if role.role == "judge")
     if reference != judge.credential_reference:
@@ -292,66 +350,85 @@ def _resolve(
     return Secret(credential)
 
 
-def _token_capacity(call_capacity: int) -> int:
-    """Per-role token budget in whole calls, with headroom for reserve-then-settle accounting."""
+def _staged_configuration(path: Path, *, expected_sha256: str) -> HostedConfigurationSet:
+    """Load the deployed four-role set and pin it to the operator-attested hash.
 
-    return min(max(call_capacity, 1) + 2, _GLOBAL_MAX_CALLS)
-
-
-def _configuration(*, call_capacity: int) -> HostedConfigurationSet:
-    """Build the frozen four-role set. Only the Judge role is ever invoked here.
-
-    All four roles must be present: ``HostedConfigurationSet`` validates the complete set so that
-    Judge/Red Team independence (distinct model family, prompt identity, and policy identity) is
-    checked structurally rather than asserted.
+    Reconstruction is itself a check: ``HostedRoleConfiguration`` rejects a staged
+    ``prompt_sha256`` that does not match this release's server-owned role prompt, and
+    ``HostedConfigurationSet`` re-validates four-role completeness and Judge/Red-Team
+    independence. Nothing here is defaulted or repaired — a staged set that does not load is a
+    refusal, not a fallback.
     """
 
-    roles = tuple(
-        HostedRoleConfiguration(
-            role=role,  # type: ignore[arg-type]
-            provider="openrouter",
-            model_id=model_id,
-            upstream_provider=_UPSTREAM[role],
-            credential_reference=(
-                f"{_CREDENTIAL_REFERENCE_PREFIX}/{role}/judge-calibration-{_SESSION_GENERATION}"
-            ),
-            prompt_sha256=hosted_prompt(role).prompt_sha256,
-            policy_sha256=hashlib.sha256(
-                f"judge-calibration-capture:{role}:v1".encode()
-            ).hexdigest(),
-            prices=_PRICES[role],
-            limits=HostedLimits(
-                max_calls=(max(call_capacity, 1) if role == "judge" else 1),
-                # The ledger RESERVES the full per-call upper bound before each request and only
-                # settles down to measured usage afterwards, so a budget sized to exactly
-                # bounds * capacity sits on the boundary and can exhaust on the final sample.
-                # Two calls of headroom keeps the cap meaningful without making it decorative.
-                max_input_tokens=_JUDGE_CALL_BOUNDS.input_tokens * _token_capacity(call_capacity),
-                max_output_tokens=_JUDGE_CALL_BOUNDS.output_tokens * _token_capacity(call_capacity),
-                max_reasoning_tokens=(
-                    _JUDGE_CALL_BOUNDS.reasoning_tokens * _token_capacity(call_capacity)
-                ),
-                max_usd=_ROLE_MAX_USD[role],
-                max_retries=1,
-                max_requests_per_second=Decimal("0.5"),
-                max_concurrency=1,
-            ),
+    if _HEX64.fullmatch(expected_sha256 or "") is None:
+        raise SystemExit(
+            "refusing to run: --expected-configuration-sha256 must be a 64-character "
+            "lowercase hex digest"
         )
-        for role, model_id in HOSTED_ROLE_MODELS.items()
-    )
-    return HostedConfigurationSet(
-        roles=roles,
-        global_limits=HostedLimits(
-            max_calls=_GLOBAL_MAX_CALLS,
-            max_input_tokens=_JUDGE_CALL_BOUNDS.input_tokens * _GLOBAL_MAX_CALLS,
-            max_output_tokens=_JUDGE_CALL_BOUNDS.output_tokens * _GLOBAL_MAX_CALLS,
-            max_reasoning_tokens=_JUDGE_CALL_BOUNDS.reasoning_tokens * _GLOBAL_MAX_CALLS,
-            max_usd=_GLOBAL_MAX_USD,
-            max_retries=1,
-            max_requests_per_second=Decimal("0.5"),
-            max_concurrency=1,
-        ),
-    )
+    try:
+        with path.open("rb") as handle:
+            encoded = handle.read(4 * 1024 * 1024 + 1)
+    except OSError as exc:
+        raise SystemExit(
+            f"refusing to run: staged hosted configuration set is unreadable ({exc})"
+        ) from exc
+    if len(encoded) > 4 * 1024 * 1024:
+        raise SystemExit("refusing to run: staged hosted configuration set exceeds its size bound")
+    try:
+        payload = json.loads(encoded.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError) as exc:
+        raise SystemExit(
+            "refusing to run: staged hosted configuration set is not valid JSON"
+        ) from exc
+    try:
+        configuration = HostedConfigurationSet.from_payload(payload)
+    except (TypeError, ValueError) as exc:
+        raise SystemExit(
+            f"refusing to run: staged hosted configuration set is invalid for this release ({exc})"
+        ) from exc
+    if configuration.configuration_sha256 != expected_sha256:
+        raise SystemExit(
+            "refusing to run: staged configuration drifted from the attested identity — "
+            f"attested {expected_sha256}, loaded {configuration.configuration_sha256}. "
+            "Calibrating a configuration the deployment did not attest would bind the result "
+            "to an evaluator production never runs."
+        )
+    return configuration
+
+
+def _require_capacity(
+    *,
+    sample_count: int,
+    configuration: HostedConfigurationSet,
+    judge_role: Any,
+    max_samples: int | None,
+) -> None:
+    """Refuse a corpus the staged envelope cannot actually pay for, in one physical call each.
+
+    The hosted platform caps ``max_calls`` at ``HOSTED_MAX_PHYSICAL_CALLS`` (56), so a corpus
+    larger than that cannot be captured in a single run under ANY valid configuration. That is a
+    real ceiling to be batched against across several bound captures — never something to work
+    around by loosening the staged limits, which would change the identity being attested.
+    """
+
+    ceiling = max_samples if max_samples is not None else judge_role.limits.max_calls
+    if sample_count > ceiling:
+        raise SystemExit(
+            f"refusing to run: {sample_count} labels exceeds the authorized call budget "
+            f"({ceiling}). The staged Judge role allows {judge_role.limits.max_calls} physical "
+            f"calls and the platform ceiling is {HOSTED_MAX_PHYSICAL_CALLS}; capture this corpus "
+            "as several identity-bound batches instead of relaxing the staged limits."
+        )
+    if sample_count > judge_role.limits.max_calls:
+        raise SystemExit(
+            f"refusing to run: {sample_count} labels exceeds the staged Judge role's "
+            f"max_calls ({judge_role.limits.max_calls})"
+        )
+    if sample_count > configuration.global_limits.max_calls:
+        raise SystemExit(
+            f"refusing to run: {sample_count} labels exceeds the staged global "
+            f"max_calls ({configuration.global_limits.max_calls})"
+        )
 
 
 def _generation_policy_sha256(
