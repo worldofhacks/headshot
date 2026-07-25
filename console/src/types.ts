@@ -274,7 +274,12 @@ export type JudgeCalibrationState =
 export type JudgeDecisionAuthority = "oracle" | "model" | "none";
 
 export interface AgentBudgetReadModel extends JsonRecord {
-  status: "staged_pending_authorization" | "active" | "historical" | "unavailable";
+  status:
+    | "staged_pending_authorization"
+    | "active"
+    | "historical"
+    | "agent_acceptance"
+    | "unavailable";
   campaign_run_id: string | null;
   configuration_set_sha256: string | null;
   role_cost_measurement_state: CostMeasurementState | null;
@@ -551,6 +556,29 @@ export type AgentAssignmentReadModel = AgentAssignmentReadModelBase & (
     }
 );
 
+export interface AgentAcceptanceExecutionReadModel extends JsonRecord {
+  scope: "agent_acceptance";
+  agent_role: "orchestrator" | "judge" | "documentation";
+  acceptance_run_id: string;
+  acceptance_attempt_id: string;
+  execution_id: string;
+  parent_execution_id: string | null;
+  configuration_set_sha256: string;
+  returned_model: string;
+  upstream_provider: string;
+  trace_id: string;
+  measured_cost: number;
+  cost_measurement_state: "measured";
+  provider_event_ids: string[];
+  currency: "USD";
+  input_tokens: number;
+  output_tokens: number;
+  reasoning_tokens: number;
+  langfuse_status: "queued" | "exported";
+  langfuse_verified_at: string | null;
+  finished_at: string;
+}
+
 export interface AgentPromptReadModel extends JsonRecord {
   role: "orchestrator" | "red_team" | "judge" | "documentation";
   prompt_version: string;
@@ -568,6 +596,7 @@ export interface AgentReadModel extends JsonRecord {
   output_contract: string;
   active_assignment: AgentAssignmentReadModel;
   staged_assignment: AgentAssignmentReadModel | null;
+  latest_acceptance_execution: AgentAcceptanceExecutionReadModel | null;
   execution_count: number;
   hosted_execution_count: number;
   running_count: number;

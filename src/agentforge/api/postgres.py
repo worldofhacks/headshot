@@ -129,6 +129,7 @@ _FINDING_HISTORY_LIMIT = 50
 # Hosted credential readiness is refreshed on a 30-second cadence. Give one missed refresh room
 # without allowing an old Runner observation to become durable launch authority.
 _HOSTED_RUNTIME_HEARTBEAT_FRESHNESS_SECONDS = 90
+_AGENT_ACCEPTANCE_BUDGET_ROLES = frozenset({"orchestrator", "judge", "documentation"})
 _SAFE_ACCOUNTING_COUNTERS = frozenset(
     {
         "input_tokens",
@@ -333,6 +334,22 @@ def _unavailable_provider_budget() -> dict[str, Any]:
     }
 
 
+def _budget_run_for_role(
+    run: Mapping[str, Any] | None,
+    *,
+    role: str,
+) -> Mapping[str, Any] | None:
+    """Keep a three-role acceptance run from claiming generator budget authority."""
+
+    if (
+        run is not None
+        and run.get("budget_status") == "agent_acceptance"
+        and role not in _AGENT_ACCEPTANCE_BUDGET_ROLES
+    ):
+        return None
+    return run
+
+
 def _provider_budget_projection(
     *,
     configuration: HostedConfigurationSet,
@@ -351,6 +368,7 @@ def _provider_budget_projection(
     global_unresolved_usd_exposure: float | None,
     global_unresolved_physical_calls: int | None,
     global_call_count_state: str,
+    status: str | None = None,
 ) -> dict[str, Any]:
     role_configuration = next(item for item in configuration.roles if item.role == role)
     role_cap = float(role_configuration.limits.max_usd)
@@ -393,7 +411,7 @@ def _provider_budget_projection(
             else global_available_calls
         ),
     )
-    status = (
+    status = status or (
         "staged_pending_authorization"
         if campaign_run_id is None
         else "active"
@@ -1322,19 +1340,106 @@ class PostgresApiBackend(ApiBackend):
                     )
                     served_identity_rows = _rows(
                         connection,
-                        "SELECT DISTINCT ON (agent_role, configuration_set_sha256) "
-                        "agent_role, configuration_set_sha256, returned_model, "
-                        "upstream_provider, provider_request_id, finished_at "
-                        "FROM agent_executions WHERE organization_id = :org "
-                        "AND status = 'succeeded' AND configuration_set_sha256 IS NOT NULL "
-                        "AND returned_model IS NOT NULL AND upstream_provider IS NOT NULL "
-                        "AND provider_request_id IS NOT NULL "
-                        "ORDER BY agent_role, configuration_set_sha256, finished_at DESC",
+                        "SELECT DISTINCT ON "
+                        "(e.agent_role, e.configuration_set_sha256) "
+                        "e.agent_role, e.configuration_set_sha256, e.returned_model, "
+                        "e.upstream_provider, e.provider_request_id, e.finished_at "
+                        "FROM agent_executions e JOIN campaign_runs r "
+                        "ON r.organization_id = e.organization_id "
+                        "AND r.run_id = e.campaign_run_id "
+                        "WHERE e.organization_id = :org AND r.run_kind = 'campaign' "
+                        "AND e.status = 'succeeded' "
+                        "AND e.configuration_set_sha256 IS NOT NULL "
+                        "AND e.returned_model IS NOT NULL "
+                        "AND e.upstream_provider IS NOT NULL "
+                        "AND e.provider_request_id IS NOT NULL "
+                        "ORDER BY e.agent_role, e.configuration_set_sha256, "
+                        "e.finished_at DESC, e.id DESC",
                         {"org": principal.organization_id},
                     )
                     served_identity_by_role_configuration = {
                         (row["agent_role"], row["configuration_set_sha256"]): row
                         for row in served_identity_rows
+                    }
+                    acceptance_execution_rows = _rows(
+                        connection,
+                        "SELECT DISTINCT ON (e.agent_role) "
+                        "e.agent_role, e.campaign_run_id AS acceptance_run_id, "
+                        "r.acceptance_attempt_id, e.execution_id, e.parent_execution_id, "
+                        "e.configuration_set_sha256, e.returned_model, "
+                        "e.upstream_provider, e.trace_id, e.measured_cost, "
+                        "e.cost_measurement_state, e.provider_event_ids, e.currency, "
+                        "e.input_tokens, e.output_tokens, e.reasoning_tokens, "
+                        "e.langfuse_status, e.langfuse_verified_at, e.finished_at "
+                        "FROM agent_executions e JOIN campaign_runs r "
+                        "ON r.organization_id = e.organization_id "
+                        "AND r.run_id = e.campaign_run_id "
+                        "JOIN LATERAL ("
+                        "SELECT count(*) AS event_count, "
+                        "count(*) FILTER (WHERE p.cost_measurement_state = 'measured') "
+                        "AS measured_event_count, "
+                        "coalesce(sum(p.measured_cost_usd), 0::numeric) AS measured_cost, "
+                        "coalesce(jsonb_agg(p.event_id ORDER BY p.physical_sequence), "
+                        "'[]'::jsonb) AS event_ids "
+                        "FROM provider_call_events p "
+                        "WHERE p.organization_id = e.organization_id "
+                        "AND p.logical_execution_id = e.execution_id"
+                        ") provider_ledger ON true "
+                        "WHERE e.organization_id = :org "
+                        "AND r.run_kind = 'agent_acceptance' "
+                        "AND r.run_id = ("
+                        "SELECT candidate.run_id FROM campaign_runs candidate "
+                        "WHERE candidate.organization_id = :org "
+                        "AND candidate.run_kind = 'agent_acceptance' "
+                        "AND (SELECT state FROM campaign_run_events state_event "
+                        "WHERE state_event.organization_id = candidate.organization_id "
+                        "AND state_event.run_id = candidate.run_id "
+                        "ORDER BY state_event.id DESC LIMIT 1) = 'complete' "
+                        "ORDER BY candidate.created_at DESC, candidate.run_id DESC LIMIT 1"
+                        ") "
+                        "AND e.agent_role IN ('orchestrator', 'judge', 'documentation') "
+                        "AND e.attempt_id = r.acceptance_attempt_id "
+                        "AND e.status = 'succeeded' "
+                        "AND e.cost_measurement_state = 'measured' "
+                        "AND e.configuration_set_sha256 IS NOT NULL "
+                        "AND e.returned_model IS NOT NULL "
+                        "AND e.upstream_provider IS NOT NULL "
+                        "AND e.input_tokens IS NOT NULL "
+                        "AND e.output_tokens IS NOT NULL "
+                        "AND e.reasoning_tokens IS NOT NULL "
+                        "AND e.finished_at IS NOT NULL "
+                        "AND e.langfuse_status IN ('queued', 'exported') "
+                        "AND provider_ledger.event_count = e.physical_attempts "
+                        "AND provider_ledger.measured_event_count = provider_ledger.event_count "
+                        "AND provider_ledger.measured_cost = e.measured_cost "
+                        "AND provider_ledger.event_ids = e.provider_event_ids "
+                        "ORDER BY e.agent_role, e.finished_at DESC, e.id DESC",
+                        {"org": principal.organization_id},
+                    )
+                    acceptance_execution_by_role = {
+                        row["agent_role"]: {
+                            "scope": "agent_acceptance",
+                            "agent_role": row["agent_role"],
+                            "acceptance_run_id": row["acceptance_run_id"],
+                            "acceptance_attempt_id": row["acceptance_attempt_id"],
+                            "execution_id": row["execution_id"],
+                            "parent_execution_id": row["parent_execution_id"],
+                            "configuration_set_sha256": row["configuration_set_sha256"],
+                            "returned_model": row["returned_model"],
+                            "upstream_provider": row["upstream_provider"],
+                            "trace_id": row["trace_id"],
+                            "measured_cost": float(row["measured_cost"]),
+                            "cost_measurement_state": row["cost_measurement_state"],
+                            "provider_event_ids": list(row["provider_event_ids"]),
+                            "currency": row["currency"],
+                            "input_tokens": row["input_tokens"],
+                            "output_tokens": row["output_tokens"],
+                            "reasoning_tokens": row["reasoning_tokens"],
+                            "langfuse_status": row["langfuse_status"],
+                            "langfuse_verified_at": row["langfuse_verified_at"],
+                            "finished_at": row["finished_at"],
+                        }
+                        for row in acceptance_execution_rows
                     }
                     hosted_run_rows = _rows(
                         connection,
@@ -1363,6 +1468,24 @@ class PostgresApiBackend(ApiBackend):
                         for row in hosted_run_rows
                         if isinstance(row.get("configuration_sha256"), str)
                     }
+                    acceptance_run_rows = _rows(
+                        connection,
+                        "SELECT DISTINCT ON (acceptance_configuration_sha256) "
+                        "acceptance_configuration_sha256 AS configuration_sha256, "
+                        "run_id, created_at, 'agent_acceptance'::text AS budget_status "
+                        "FROM campaign_runs WHERE organization_id = :org "
+                        "AND run_kind = 'agent_acceptance' "
+                        "ORDER BY acceptance_configuration_sha256, created_at DESC",
+                        {"org": principal.organization_id},
+                    )
+                    budget_run_by_configuration = dict(hosted_run_by_configuration)
+                    for acceptance_run in acceptance_run_rows:
+                        configuration_sha256 = acceptance_run.get("configuration_sha256")
+                        if not isinstance(configuration_sha256, str):
+                            continue
+                        current = budget_run_by_configuration.get(configuration_sha256)
+                        if current is None or acceptance_run["created_at"] > current["created_at"]:
+                            budget_run_by_configuration[configuration_sha256] = acceptance_run
                     active_hosted_assignments: dict[str, dict[str, Any]] = {}
                     staged_hosted_assignments: dict[str, dict[str, Any]] = {}
                     hosted_configurations: dict[str, HostedConfigurationSet] = {}
@@ -1518,7 +1641,10 @@ class PostgresApiBackend(ApiBackend):
                         configuration = hosted_configurations.get(configuration_sha256)
                         if configuration is None:
                             return budget_record(role=role, assignment=None)
-                        run = hosted_run_by_configuration.get(configuration_sha256)
+                        run = _budget_run_for_role(
+                            budget_run_by_configuration.get(configuration_sha256),
+                            role=role,
+                        )
                         run_id = run["run_id"] if run is not None else None
                         role_usage = (
                             hosted_budget_by_run_role.get((run_id, role), {})
@@ -1585,6 +1711,11 @@ class PostgresApiBackend(ApiBackend):
                                 0,
                             ),
                             global_call_count_state=global_call_count_state,
+                            status=(
+                                str(run["budget_status"])
+                                if run is not None and run.get("budget_status") is not None
+                                else None
+                            ),
                         )
 
                     def assignment_record(source: Mapping[str, Any]) -> dict[str, Any]:
@@ -1766,6 +1897,9 @@ class PostgresApiBackend(ApiBackend):
                                 **definition_record,
                                 "active_assignment": active_assignment,
                                 "staged_assignment": staged_assignment,
+                                "latest_acceptance_execution": (
+                                    acceptance_execution_by_role.get(definition.role)
+                                ),
                                 "execution_count": execution_count,
                                 "hosted_execution_count": int(
                                     stats.get("hosted_execution_count", 0)
@@ -3003,15 +3137,20 @@ class PostgresApiBackend(ApiBackend):
                         "extract(epoch FROM ("
                         "max(coalesce(e.finished_at, statement_timestamp())) - min(e.started_at)"
                         ")) * 1000 "
-                        "AS duration_ms, q.scope_payload->>'execution_profile' "
-                        "AS execution_profile, run_state.state AS campaign_state, "
-                        "CASE WHEN jsonb_typeof(q.scope_payload->'caps'->'budget_usd') = 'number' "
+                        "AS duration_ms, "
+                        "CASE WHEN r.run_kind = 'agent_acceptance' THEN 'synthetic' "
+                        "ELSE q.scope_payload->>'execution_profile' END "
+                        "AS execution_profile, r.run_kind, "
+                        "run_state.state AS campaign_state, "
+                        "CASE WHEN r.run_kind = 'agent_acceptance' "
+                        "THEN (r.acceptance_limits->>'global_usd_cap')::double precision "
+                        "WHEN jsonb_typeof(q.scope_payload->'caps'->'budget_usd') = 'number' "
                         "THEN (q.scope_payload->'caps'->>'budget_usd')::double precision "
                         "ELSE NULL END AS budget_usd "
                         "FROM agent_executions e JOIN campaign_runs r "
                         "ON r.organization_id = e.organization_id "
                         "AND r.run_id = e.campaign_run_id "
-                        "JOIN campaign_authorization_requests q "
+                        "LEFT JOIN campaign_authorization_requests q "
                         "ON q.organization_id = r.organization_id "
                         "AND q.request_id = r.authorization_request_id "
                         "LEFT JOIN role_metrics m ON m.organization_id = e.organization_id "
@@ -3026,7 +3165,7 @@ class PostgresApiBackend(ApiBackend):
                         "OR e.configuration_set_sha256 IS NOT NULL) "
                         "GROUP BY e.campaign_run_id, e.agent_role, e.provider, e.model, "
                         "e.currency, e.execution_mode, e.configuration_set_sha256, "
-                        "q.scope_payload, run_state.state "
+                        "q.scope_payload, r.run_kind, r.acceptance_limits, run_state.state "
                         "ORDER BY max(coalesce(e.finished_at, statement_timestamp())) DESC "
                         "LIMIT 400",
                         {"org": principal.organization_id},
@@ -3155,6 +3294,11 @@ class PostgresApiBackend(ApiBackend):
                                     "lower_bound"
                                     if int(global_usage.get("historical_lineage_count", 0)) > 0
                                     else "exact"
+                                ),
+                                status=(
+                                    "agent_acceptance"
+                                    if source["run_kind"] == "agent_acceptance"
+                                    else None
                                 ),
                             )
                         rows.append(

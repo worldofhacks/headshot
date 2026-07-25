@@ -671,6 +671,7 @@ const browserAgents = [
         configured_by: "user_configuration_admin",
       }
     : null,
+  latest_acceptance_execution: null,
   running_count: agent.role === "orchestrator" ? 1 : 0,
   hosted_execution_count: agent.role === "red_team" ? 1 : 0,
   succeeded_count:
