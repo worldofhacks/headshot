@@ -77,6 +77,11 @@ class GeneratedCorpusProfile:
     attempts: tuple[dict[str, Any], ...]
     generated_case_sha256: tuple[str, ...]
     review_records: tuple[ReviewRecord, ...]
+    # The approved cases themselves, retained because ``attempts`` holds only the seed-replay
+    # dispatch projection. Stage 4 binds the FULL case payload to the governed runner and
+    # re-verifies its hash there, so dropping the payloads here would force that last gate to
+    # trust a projection instead of the reviewed bytes.
+    approved_cases: tuple[CuratedCandidate, ...] = ()
     fresh_authorization_required: bool = True
 
     def __post_init__(self) -> None:
@@ -146,6 +151,7 @@ def build_generated_corpus(
     generated_attempts: list[dict[str, Any]] = []
     generated_hashes: list[str] = []
     ordered_records: list[ReviewRecord] = []
+    ordered_cases: list[CuratedCandidate] = []
 
     for candidate in approved.candidates:
         record = records_by_instance.get(candidate.instance_id)
@@ -170,6 +176,7 @@ def build_generated_corpus(
         generated_attempts.append(attempt)
         generated_hashes.append(candidate.case_sha256)
         ordered_records.append(record)
+        ordered_cases.append(candidate)
 
     if not generated_attempts:
         raise GeneratedCorpusError("a generated corpus must add at least one approved case")
@@ -193,6 +200,7 @@ def build_generated_corpus(
         attempts=attempts,
         generated_case_sha256=tuple(generated_hashes),
         review_records=tuple(ordered_records),
+        approved_cases=tuple(ordered_cases),
     )
 
 

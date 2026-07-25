@@ -1,7 +1,7 @@
 # Generative red-teaming — the governed two-stage loop
 
-**Status: Tier 1 stages 1–3 implemented and tested. Stage 4 (dispatch) is not wired. Tier 2
-(multi-round feedback) is NOT built — it is next.**
+**Status: Tier 1 stages 1–4 implemented and tested. Stage 4 is built against the 0022 seam and is
+inert until PR #50 merges. Tier 2 (multi-round feedback) is NOT built — it is the named stretch.**
 
 Nothing in this document describes an executed live campaign. No generated case in this repository
 has been dispatched at a target, and no generated case has produced a verdict. What is implemented
@@ -29,8 +29,8 @@ identity and take a *new* grant for it. That is what this is.
 | 1 — curate | `agents/red_team/curation.py` | implemented, 16 tests |
 | 2 — human review gate | `agents/red_team/review_gate.py` | implemented, 16 tests |
 | 3 — new hash + fresh authorization | `campaign/generated_profile.py` | implemented, 16 tests |
-| 4 — dispatch through the Policy Gateway | — | **not wired** — stacks on 0022 |
-| 5 — evaluate with the oracle/canary Judge | existing | unchanged, not reached by generated cases |
+| 4 — dispatch through the Policy Gateway | `campaign/generated_dispatch.py` | built to the seam, 23 tests; **inert until #50** |
+| 5 — evaluate with the oracle/canary Judge | existing | unchanged, reached via the 0022 runner |
 
 The generator itself (`TracedHostedRedTeamProvider.generate_traced`, qwen, `target_scope:none`)
 already existed and is unmodified. It never touches the target and still does not.
@@ -110,15 +110,56 @@ coincidence); a corpus-id mismatch; a spent run nonce.
 `prepare_generated_dispatch()` runs every governed precondition and returns a plan. It is the
 complete stage-3 exit.
 
+### Stage 4 — binding to the 0022 governed dispatch
+
+`campaign/generated_dispatch.py` converts an authorized plan into the exact arguments
+`agentforge.governed_acceptance.run_governed_acceptance` (PR #50) takes, and refuses to produce
+them for anything that did not pass stages 1–3.
+
+**Built against the seam, not against an import.** That entrypoint does not exist at this base, so
+this module depends on its *shape* — a structural `Protocol` — and resolves the real callable at
+runtime through `resolve_governed_runner()`. Three consequences, all deliberate:
+
+- nothing imports a module that is not there, so it lands and tests green today;
+- when #50 merges, `resolve_governed_runner()` starts returning the real function and the wiring is
+  complete **with no edit to this module**; and
+- if that entrypoint's signature has drifted, `GovernedRunnerIncompatible` names the missing or
+  newly-required parameters at resolve time, instead of a `TypeError` mid-dispatch.
+
+`GOVERNED_RUNNER_PARAMETERS` pins the 18 keyword parameters this was built against.
+`test_a_generated_case_survives_the_0022_out_of_scope_check_unchanged` re-implements the 0022
+seed-replay projection check verbatim rather than importing it, and asserts a generated case passes
+it — which also proves the specific risk that `mutation_lineage` rides on the generated *attempt*
+but not on the seed-replay projection, so it cannot make the comparison fail.
+
+**Why a generated case may be passed as `reviewed_case`.** 0022 names the parameter that way
+because its own scope was the authored seed corpus, and it pins `acceptance_context_sha256` to that
+case's content hash so the authority covers the exact dispatched bytes. A stage-2-approved
+generated case satisfies that contract in the way that matters: a human reviewed those exact bytes
+and a record says so. The 0022 seam takes `reviewed_case` on trust from its caller — supplying that
+trust is precisely what stage 4 does, by re-verifying the content hash, the approval record, the
+corpus binding and the grant immediately before dispatch.
+
+**Gates stage 4 owns**, all fail-closed and all re-checked at the boundary rather than inherited:
+the case's hash re-derives from its payload; it is one of the profile's approved generated cases; a
+review record covers that exact hash and names the profile's reviewer; the launcher is neither the
+approver nor the generator. The governance fields (`reviewed_case`,
+`reviewed_case_content_hash`, `scope_hash`) come from the authorized case and cannot be overridden
+by the caller.
+
+**One grant, many cases.** The stage-3 scope authorizes the generated *corpus*, and every case
+dispatched under it shares that `scope_hash` — the same shape the platform already uses for the
+nine-case authored corpus under a single grant. The 0022 runner binds one case per governed run
+(`target_call_limit = 1`); that is its harness shape, not a second authorization.
+
 ## What is NOT built
 
-- **Stage 4 — dispatch.** Not wired. It reuses the 0022 governed four-role execution path
-  (PR #50, landing on `b0e641c`), which is not merged at this base. `prepare_generated_dispatch()`
-  deliberately stops after the gates rather than no-op'ing, because a silent no-op would look
-  exactly like a successful dispatch.
-- **Tier 2 — the multi-round feedback loop.** **Next, not done.** A round's verdicts do not yet
-  steer the next round's generation, and semantic (delta-debugging) minimization is part of that
-  work because it needs target feedback.
+- **Stage 4 is inert until PR #50 merges.** Every gate runs, then `GovernedRunnerUnavailable` is
+  raised — after the governance checks, never instead of them. No no-op path exists, because a
+  silent no-op would look exactly like a successful dispatch.
+- **Tier 2 — the multi-round feedback loop.** **The named stretch, not done.** A round's verdicts
+  do not steer the next round's generation, and semantic (delta-debugging) minimization is part of
+  that work because it needs live target feedback.
 - **No live run, no verdict, no confirmed exploit** from any generated case.
 
 ## Coordination notes
@@ -133,9 +174,26 @@ complete stage-3 exit.
 
 ```
 ruff check .                 # All checks passed
-ruff format --check .        # 713 files already formatted   (ruff 0.16.0, CI's resolved version)
-pytest tests/                # 1901 passed, 3 skipped
+ruff format --check .        # 716 files already formatted   (ruff 0.16.0, CI's resolved version)
+pytest tests/                # 1924 passed, 3 skipped
 pytest tests/test_red_team_curation.py \
        tests/test_red_team_review_gate.py \
-       tests/test_generated_campaign_authorization.py   # 48 passed
+       tests/test_generated_campaign_authorization.py \
+       tests/test_generated_dispatch_binding.py         # 71 passed
 ```
+
+## When PR #50 lands
+
+No edit to `generated_dispatch.py` is expected. The check is:
+
+```
+pytest tests/test_generated_dispatch_binding.py
+```
+
+- `test_the_governed_runner_is_absent_at_this_base_and_says_so_by_name` **will start failing** —
+  that is the intended signal that the seam is present, and the test should then be inverted to
+  assert `resolve_governed_runner()` returns the real callable.
+- If `GovernedRunnerIncompatible` is raised instead, q's signature drifted: re-pin
+  `GOVERNED_RUNNER_PARAMETERS` after reviewing the change.
+- If `test_a_generated_case_survives_the_0022_out_of_scope_check_unchanged` fails, the seed-replay
+  projection contract changed and the generated case shape needs re-checking against it.
