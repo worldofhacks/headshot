@@ -110,17 +110,17 @@ constructed command / injected-sender / passive result is never counted as activ
 
 ## Task-by-task status (against the assignment)
 
-- **Task 1 — every-tool scan / hosted generation + two-stage loop.** Hosted Red Team generation is
-  **already implemented and tested** (`agents/red_team/providers.py` `HostedProvider._generate_via_client`,
-  dual-gate auth; `tests/test_red_team_hosted_generation.py`, 9 tests green — the brief's
-  "raises NotImplementedError" ground-truth was stale; no such error exists). The two-stage
-  building blocks are all present: Stage-1 generation without target authority (`mutate()` +
-  providers → proposed input only, no credential/verdict), content-addressing into a NEW corpus
-  requiring fresh authorization (`campaign/tool_profile.py` `build_reviewed_tool_corpus` →
-  `fresh_authorization_required` + `operation_hash` rebinding), and the coordinator's hard-abort on
-  any in-run mutation (`campaign/coordinator.py:390-394`, corpus-hash invariant). **Not added here:**
-  a single named "hosted-variant → review → re-authorize → dispatch" orchestration — deliberately
-  not half-wired into the concurrently-churning `campaign/` tree; every primitive it needs exists.
+- **Task 1 — every-tool scan / hosted generation + two-stage loop.** The standalone
+  `HostedProvider` generator is retired and fails preflight before any client or network boundary.
+  The canonical traced qwen component (`agents/red_team/hosted_generation.py`) has deterministic
+  component coverage, but its "hosted variant → review → fresh authorization → dispatch"
+  composition is not wired and has no live evidence. The two-stage building blocks are present:
+  Stage-1 generation without target authority (`mutate()` + providers → proposed input only, no
+  credential/verdict), content-addressing into a NEW corpus requiring fresh authorization
+  (`campaign/tool_profile.py` `build_reviewed_tool_corpus` → `fresh_authorization_required` +
+  `operation_hash` rebinding), and the coordinator's hard-abort on any in-run mutation
+  (`campaign/coordinator.py:390-394`, corpus-hash invariant). Do not count hosted generation as
+  operational until that governed composition is implemented and independently authorized.
 - **Task 2 — promote adapter-only capabilities.** The promotion pathway exists and 3 tool bundles
   (garak / promptfoo / pyrit) are already promoted into the 14-case full-scan corpus
   (`security_tools/native.py` adapters → `candidates.py` `build_tool_attack_bundle` →
