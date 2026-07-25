@@ -1339,7 +1339,12 @@ def _ground_truth_label_issues(
                 EvalValidationCode.INVALID_GROUND_TRUTH,
                 source,
                 prefix,
-                "human confirmation source and reason must align",
+                (
+                    "a model-proposed label may not confirm an exploit; only an oracle, a canary "
+                    "or a human may"
+                    if label_source == "automated_model_agent"
+                    else "human confirmation source and reason must align"
+                ),
             )
         )
 

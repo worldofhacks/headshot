@@ -55,8 +55,10 @@ GROUND_TRUTH_DISCLOSURE: Mapping[GroundTruthTier, str] = {
         "to Judge output"
     ),
     "model_labeled": (
-        "automated-labeled baseline — labels proposed by a named model, NOT human ground truth "
-        "and not independently reviewed"
+        "automated-labeled baseline — labels proposed by a named model, NOT human ground truth. "
+        "Where the labelling model is a different family from the Judge under calibration, "
+        "agreement is independent rather than self-agreement; it is still one model's reading of "
+        "designed-in intent, not an attested outcome"
     ),
     "rule_derived": (
         "automated-labeled baseline — labels derived in code from a static design table "
@@ -132,15 +134,23 @@ def classify_ground_truth(
         if labeler and reviewer and labeler != reviewer and blind:
             return "human_two_person", evidence
 
-    # A model-labeled set names the model that produced EVERY label. Partial attribution does not
-    # qualify: a set where only some labels name a model is not a model-labeled baseline.
-    named = [
-        label["labeling_model"].strip()
-        for label in labels
-        if isinstance(label.get("labeling_model"), str) and label["labeling_model"].strip()
+    # A model-labeled set names the model that produced its model-proposed labels. A set may mix
+    # model-proposed labels with rule-derived ones (GT-AUTO-M11-LIVE100 pairs a model CONFIRM/LIKELY
+    # label with a rule-derived resist label per case); it qualifies as long as every label that
+    # claims automated_model_agent names its labeller. Partial attribution does NOT qualify — an
+    # unnamed model label cannot be graded at all.
+    model_labels = [
+        label for label in labels if label.get("label_source") == "automated_model_agent"
     ]
-    if len(named) == len(labels):
+    named = [
+        str(label[field]).strip()
+        for label in model_labels
+        for field in ("labeler_model_id", "labeling_model")
+        if isinstance(label.get(field), str) and label[field].strip()
+    ]
+    if model_labels and len(named) >= len(model_labels):
         evidence["labeling_models"] = sorted(set(named))
+        evidence["model_label_count"] = len(model_labels)
         return "model_labeled", evidence
 
     if all(label.get("label_source") for label in labels):

@@ -149,19 +149,43 @@ def test_a_partial_attestation_cannot_buy_the_top_tier(attestation: dict[str, ob
     assert tier == "rule_derived"
 
 
-def test_model_labeled_requires_every_label_to_name_its_model() -> None:
+def test_model_labeled_requires_every_model_label_to_name_its_labeller() -> None:
+    """Keyed on label_source, matching the real artifact: a model label declares itself as one."""
+
+    def model_label(label_id: str, **extra: object) -> dict[str, object]:
+        return _label(label_id=label_id, label_source="automated_model_agent", **extra)
+
     all_named = _slices(
         [
-            _label(label_id="L-1", labeling_model="anthropic/claude-opus-4.8"),
-            _label(label_id="L-2", labeling_model="anthropic/claude-opus-4.8"),
+            model_label("L-1", labeler_model_id="claude-opus-5[1m]"),
+            model_label("L-2", labeler_model_id="claude-opus-5[1m]"),
         ]
     )
-    assert classify_ground_truth(all_named)[0] == "model_labeled"
+    tier, evidence = classify_ground_truth(all_named)
+    assert tier == "model_labeled"
+    assert evidence["labeling_models"] == ["claude-opus-5[1m]"]
 
+    # An unnamed model label cannot be graded, so the set does not qualify.
     partly_named = _slices(
-        [_label(label_id="L-1", labeling_model="anthropic/claude-opus-4.8"), _label(label_id="L-2")]
+        [model_label("L-1", labeler_model_id="claude-opus-5[1m]"), model_label("L-2")]
     )
     assert classify_ground_truth(partly_named)[0] == "rule_derived"
+
+
+def test_a_mixed_set_of_model_and_rule_labels_still_qualifies() -> None:
+    """GT-AUTO-M11-LIVE100's shape: one model label + one rule-derived resist label per case."""
+
+    mixed = _slices(
+        [
+            _label(label_id="L-1", label_source="automated_model_agent", labeler_model_id="m"),
+            _label(label_id="L-2", label_source="rule_derived"),
+        ]
+    )
+    tier, evidence = classify_ground_truth(mixed)
+
+    assert tier == "model_labeled"
+    assert evidence["model_label_count"] == 1
+    assert evidence["label_count"] == 2
 
 
 def test_labels_with_no_source_at_all_are_unattested() -> None:
