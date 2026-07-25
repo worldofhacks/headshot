@@ -317,6 +317,16 @@ def test_runner_uses_locked_0020_guards_without_campaign_run_update_privilege(
                     "SELECT p.proname, p.prosecdef, p.proconfig, "
                     "has_function_privilege("
                     "'headshot_runner', p.oid, 'EXECUTE') AS runner_execute, "
+                    "has_function_privilege("
+                    "'headshot_web', p.oid, 'EXECUTE') AS web_execute, "
+                    "has_function_privilege("
+                    "'headshot_scheduler', p.oid, 'EXECUTE') AS scheduler_execute, "
+                    "has_function_privilege("
+                    "'headshot_redteam', p.oid, 'EXECUTE') AS redteam_execute, "
+                    "has_function_privilege("
+                    "'headshot_recorder', p.oid, 'EXECUTE') AS recorder_execute, "
+                    "has_function_privilege("
+                    "'headshot_judge', p.oid, 'EXECUTE') AS judge_execute, "
                     "NOT EXISTS (SELECT 1 FROM aclexplode(p.proacl) acl "
                     "WHERE acl.grantee = 0 AND acl.privilege_type = 'EXECUTE') "
                     "AS public_execute_revoked "
@@ -355,7 +365,12 @@ def test_runner_uses_locked_0020_guards_without_campaign_run_update_privilege(
     for row in function_rows.values():
         assert row["prosecdef"] is True
         assert row["proconfig"] == ["search_path=pg_catalog, pg_temp"]
-        assert row["runner_execute"] is True
+        assert row["runner_execute"] is False
+        assert row["web_execute"] is False
+        assert row["scheduler_execute"] is False
+        assert row["redteam_execute"] is False
+        assert row["recorder_execute"] is False
+        assert row["judge_execute"] is False
         assert row["public_execute_revoked"] is True
 
     # Prove these trigger-only lookups remain operable even without the
@@ -728,7 +743,7 @@ def test_database_guards_acceptance_execution_attempt_parentage_and_judge(
     )
 
     with (
-        pytest.raises(DBAPIError, match="must remain failed-calibration advisory"),
+        pytest.raises(DBAPIError, match="agent acceptance execution identity is immutable"),
         migrated_db.begin() as connection,
     ):
         connection.execute(
@@ -819,11 +834,26 @@ def test_runner_cannot_reassign_acceptance_execution_identity(
     )
 
     individual_mutations = (
+        ("id = id + 1000000000", {}),
+        ("execution_id = :value", {"value": uuid.uuid4().hex}),
         ("organization_id = :value", {"value": "org_ReassignedAcceptance"}),
         ("campaign_run_id = :value", {"value": campaign_run_id}),
         ("attempt_id = :value", {"value": campaign_attempt_id}),
         ("agent_role = :value", {"value": "documentation"}),
         ("parent_execution_id = NULL", {}),
+        ("provider = :value", {"value": "internal"}),
+        ("model = :value", {"value": "openai/gpt-5.4"}),
+        ("execution_mode = :value", {"value": "deterministic"}),
+        ("configuration_version = :value", {"value": 2}),
+        ("input_sha256 = :value", {"value": "5" * 64}),
+        ("trace_id = :value", {"value": uuid.uuid4().hex}),
+        ("configuration_set_sha256 = :value", {"value": "6" * 64}),
+        ("role_configuration_sha256 = :value", {"value": "7" * 64}),
+        ("generation_policy_sha256 = :value", {"value": "8" * 64}),
+        ("judge_calibration_id = :value", {"value": f"JC-{'4' * 64}"}),
+        ("judge_calibration_state = :value", {"value": "passed"}),
+        ("currency = :value", {"value": "EUR"}),
+        ("started_at = started_at + interval '1 second'", {}),
     )
     for assignment, values in individual_mutations:
         with (

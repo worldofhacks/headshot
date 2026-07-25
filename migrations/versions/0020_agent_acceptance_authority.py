@@ -133,11 +133,26 @@ def _acceptance_execution_guard() -> str:
         "AND run_id = OLD.campaign_run_id FOR SHARE; "
         "IF (old_parent_run_kind = 'agent_acceptance' "
         "OR parent_run_kind = 'agent_acceptance') AND ("
-        "NEW.organization_id IS DISTINCT FROM OLD.organization_id "
+        "NEW.id IS DISTINCT FROM OLD.id "
+        "OR NEW.execution_id IS DISTINCT FROM OLD.execution_id "
+        "OR NEW.organization_id IS DISTINCT FROM OLD.organization_id "
         "OR NEW.campaign_run_id IS DISTINCT FROM OLD.campaign_run_id "
         "OR NEW.attempt_id IS DISTINCT FROM OLD.attempt_id "
         "OR NEW.agent_role IS DISTINCT FROM OLD.agent_role "
-        "OR NEW.parent_execution_id IS DISTINCT FROM OLD.parent_execution_id) THEN "
+        "OR NEW.parent_execution_id IS DISTINCT FROM OLD.parent_execution_id "
+        "OR NEW.provider IS DISTINCT FROM OLD.provider "
+        "OR NEW.model IS DISTINCT FROM OLD.model "
+        "OR NEW.execution_mode IS DISTINCT FROM OLD.execution_mode "
+        "OR NEW.configuration_version IS DISTINCT FROM OLD.configuration_version "
+        "OR NEW.input_sha256 IS DISTINCT FROM OLD.input_sha256 "
+        "OR NEW.trace_id IS DISTINCT FROM OLD.trace_id "
+        "OR NEW.configuration_set_sha256 IS DISTINCT FROM OLD.configuration_set_sha256 "
+        "OR NEW.role_configuration_sha256 IS DISTINCT FROM OLD.role_configuration_sha256 "
+        "OR NEW.generation_policy_sha256 IS DISTINCT FROM OLD.generation_policy_sha256 "
+        "OR NEW.judge_calibration_id IS DISTINCT FROM OLD.judge_calibration_id "
+        "OR NEW.judge_calibration_state IS DISTINCT FROM OLD.judge_calibration_state "
+        "OR NEW.currency IS DISTINCT FROM OLD.currency "
+        "OR NEW.started_at IS DISTINCT FROM OLD.started_at) THEN "
         "RAISE EXCEPTION 'agent acceptance execution identity is immutable' "
         "USING ERRCODE = '55000'; END IF; END IF; "
         "IF parent_run_kind = 'agent_acceptance' THEN "
@@ -425,10 +440,6 @@ def upgrade() -> None:
     op.execute(_acceptance_attempt_guard())
     op.execute("REVOKE ALL ON FUNCTION public.m1d_validate_agent_acceptance_attempt() FROM PUBLIC")
     op.execute(
-        "GRANT EXECUTE ON FUNCTION public.m1d_validate_agent_acceptance_attempt() "
-        "TO headshot_web, headshot_runner"
-    )
-    op.execute(
         "CREATE TRIGGER trg_campaign_attempt_agent_acceptance "
         "BEFORE INSERT ON campaign_attempts FOR EACH ROW "
         "EXECUTE FUNCTION public.m1d_validate_agent_acceptance_attempt()"
@@ -436,10 +447,6 @@ def upgrade() -> None:
     op.execute(_acceptance_execution_guard())
     op.execute(
         "REVOKE ALL ON FUNCTION public.m1d_validate_agent_acceptance_execution() FROM PUBLIC"
-    )
-    op.execute(
-        "GRANT EXECUTE ON FUNCTION public.m1d_validate_agent_acceptance_execution() "
-        "TO headshot_runner"
     )
     op.execute(
         "CREATE TRIGGER trg_agent_acceptance_execution_guard "
@@ -450,10 +457,6 @@ def upgrade() -> None:
     op.execute(
         "REVOKE ALL ON FUNCTION "
         "public.m1d_validate_agent_acceptance_provider_invocation() FROM PUBLIC"
-    )
-    op.execute(
-        "GRANT EXECUTE ON FUNCTION "
-        "public.m1d_validate_agent_acceptance_provider_invocation() TO headshot_runner"
     )
     op.execute(
         "CREATE TRIGGER trg_agent_acceptance_provider_invocation_guard "
