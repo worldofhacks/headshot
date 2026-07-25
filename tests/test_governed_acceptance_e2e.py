@@ -255,10 +255,12 @@ class _StoreAwareTransport:
         self._outputs = outputs
         self._physical_attempts = physical_attempts or {}
         self.calls: list[str] = []
+        self.invocations: list[dict[str, Any]] = []
 
     def invoke(self, **kwargs: Any) -> OpenRouterResult:
         role = kwargs["role"]
         self.calls.append(role)
+        self.invocations.append(dict(kwargs))
         cfg = next(item for item in self._configuration.roles if item.role == role)
         context = kwargs["provider_context"]
         attempts = self._physical_attempts.get(role, 1)
@@ -647,6 +649,15 @@ def test_governed_e2e_judges_the_real_controlled_target_response(migrated_db: En
     red_team_row = next(row for row in executions if row["agent_role"] == "red_team")
     assert red_team_row["disposition"] == "generated_not_dispatched"
     assert result.generated_variant_count == 1
+    # The Red Team was seeded with the seed-replay projection, so its prompt names the reviewed
+    # case (`case_ref`) rather than showing the model a null seed reference.
+    red_team_messages = json.dumps(
+        next(item for item in transport.invocations if item["role"] == "red_team")["messages"]
+    )
+    assert _CASE_ID in red_team_messages
+    # and carries no trusted field that would tell the generator the expected answer.
+    assert "expected_safe_behavior" not in red_team_messages
+    assert "expected_evidence" not in red_team_messages
     assert states == ["running", "complete"]
 
 

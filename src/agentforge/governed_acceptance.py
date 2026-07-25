@@ -93,6 +93,10 @@ _DB_DECISION_AUTHORITY = {
 #: Only these confirmation sources may open Documentation (D13).  A model is never among them.
 _TRUSTED_CONFIRMATION_SOURCES = frozenset({"oracle", "canary", "human"})
 
+#: The VulnReport severity taxonomy, mirrored from ``agents/documentation/agent.py`` so an
+#: out-of-taxonomy authored severity is refused at case resolution rather than after the attack.
+_VULN_SEVERITIES = frozenset({"low", "medium", "high", "critical"})
+
 
 class GovernedAcceptanceUnconfirmed(HostedCompositionError):
     """The bound target was not confirmed exploited, so the four-role chain cannot complete.
@@ -174,16 +178,23 @@ def resolve_reviewed_case(
         manifest_path=manifest_path,
         expected_content_hash=expected_corpus_content_hash,
     )
-    case = next(
-        (item for item in corpus.cases if item.payload.get("case_id") == case_id),
-        None,
-    )
-    if case is None:
+    matches = [item for item in corpus.cases if item.payload.get("case_id") == case_id]
+    if not matches:
         raise HostedCompositionError("reviewed case is not present in the resolved trusted corpus")
+    if len(matches) > 1:
+        # Manifest workloads (the live-100 corpus and its batches) are keyed by ``instance_id``,
+        # so a ``case_id`` is not unique there. Silently taking the first match would let the run
+        # dispatch a different case than the operator named; refuse instead.
+        raise HostedCompositionError(
+            "reviewed case id is ambiguous in this workload; it resolves to more than one case"
+        )
+    case = matches[0]
     payload = verified_case_payload(case)
     severity = payload.get("severity")
-    if not isinstance(severity, Mapping) or not isinstance(severity.get("rating"), str):
-        raise HostedCompositionError("reviewed case carries no authored severity rating")
+    if not isinstance(severity, Mapping) or severity.get("rating") not in _VULN_SEVERITIES:
+        # Checked where it is derived, not two roles later inside the report writer, so a corpus
+        # case with an out-of-taxonomy severity cannot reach a live target at all.
+        raise HostedCompositionError("reviewed case severity is outside the VulnReport taxonomy")
     expected_safe_behavior = payload.get("expected_safe_behavior")
     if not isinstance(expected_safe_behavior, str) or not expected_safe_behavior.strip():
         raise HostedCompositionError("reviewed case carries no authored expected safe behavior")
@@ -575,8 +586,6 @@ def run_governed_acceptance(
         raise HostedCompositionError("governed acceptance Langfuse authentication is unavailable")
 
     authorized_attempt = reviewed.dispatch_attempt
-    verdict_box = _Box()
-    adjudication_box = _Box()
 
     judge_identity = hosted_judge_identity(configuration)
     try:
@@ -610,6 +619,67 @@ def run_governed_acceptance(
     run_id = identity.run_id
     attempt_id = identity.attempt_id
 
+    # From here the run EXISTS, so every subsequent failure — including dependency construction —
+    # must terminalize it. Anything raised between run creation and the guarded block would
+    # otherwise leave the run `running` with nothing able to close it until it expired.
+    try:
+        return _run_governed_composition(
+            store=store,
+            engine=engine,
+            run_id=run_id,
+            attempt_id=attempt_id,
+            organization_id=organization_id,
+            configuration=configuration,
+            generation_policy_sha256=generation_policy_sha256,
+            reviewed=reviewed,
+            authorized_attempt=authorized_attempt,
+            oracle_canary_markers=oracle_canary_markers,
+            dispatch=dispatch,
+            transport=transport,
+            telemetry=telemetry,
+            calibration_id=calibration_id,
+            planning_snapshot=planning_snapshot,
+        )
+    except Exception as exc:
+        with contextlib.suppress(Exception):
+            store.abort_governed_acceptance_run(
+                run_id=run_id,
+                reason_code=(
+                    "governed_acceptance_unconfirmed"
+                    if isinstance(exc, GovernedAcceptanceUnconfirmed)
+                    else "governed_acceptance_failed"
+                ),
+            )
+        raise
+    finally:
+        with contextlib.suppress(Exception):
+            telemetry.flush()
+        telemetry.shutdown()
+
+
+def _run_governed_composition(
+    *,
+    store: ControlPlaneStore,
+    engine: Engine,
+    run_id: str,
+    attempt_id: str,
+    organization_id: str,
+    configuration: HostedConfigurationSet,
+    generation_policy_sha256: str,
+    reviewed: ReviewedCase,
+    authorized_attempt: Mapping[str, Any],
+    oracle_canary_markers: Sequence[str],
+    dispatch: GovernedTargetDispatch,
+    transport: Any,
+    telemetry: _Telemetry,
+    calibration_id: str,
+    planning_snapshot: Mapping[str, Any] | None,
+) -> GovernedAcceptanceResult:
+    """The composition proper, run entirely inside the caller's terminalization guard."""
+
+    verdict_box = _Box()
+    adjudication_box = _Box()
+    dispatched: dict[str, Any] = {"content_hash": None, "response_sha256": None}
     recorder = ExecutionRecorder()
     result_context = {
         "organization_id": organization_id,
@@ -634,8 +704,10 @@ def run_governed_acceptance(
         accounting=dispatch.accounting,
         recorder=recorder,
     )
-    dispatch.adapter.credential = dispatch.credential
-    dispatched: dict[str, Any] = {"content_hash": None, "response_sha256": None}
+    if dispatch.credential is not None:
+        # Bind the scoped credential only when one was supplied. Assigning unconditionally would
+        # null out a credential the caller had already bound to its adapter.
+        dispatch.adapter.credential = dispatch.credential
 
     def _dispatch_reviewed_seed_replay(attempt: Mapping[str, Any]) -> Mapping[str, Any]:
         # Seed-replay authorization invariant. The content is recomputed from the verified
@@ -709,93 +781,74 @@ def run_governed_acceptance(
         execution_lifecycle=lifecycle,
     )
 
-    try:
-        # The Orchestrator reads REAL observability: a snapshot recomputed from authoritative
-        # Postgres evidence (hash-verified coverage, findings, regressions, spend, queue depth),
-        # never a hand-built fixture. The model then recommends a category and code checks it
-        # against the one case this run is actually authorized to replay.
-        planner = HostedPlanner(runtime=runtime).decide(
-            dict(planning_snapshot)
-            if planning_snapshot is not None
-            else store.load_orchestration_snapshot(
-                run_id=run_id,
-                case_counts=dict(reviewed.corpus_case_counts),
-            )
-        )
-        if planner.decision.directive["category"] != reviewed.category:
-            raise HostedCompositionError(
-                "Planner selected a category outside this run's reviewed authorization"
-            )
-
-        red_team_generation, red_team_execution_id = _run_traced_red_team(
-            configuration=configuration,
-            generation_policy_sha256=generation_policy_sha256,
-            transport=transport,
-            lifecycle=lifecycle,
-            planner=planner,
-            reviewed=reviewed,
-            authorized_attempt=authorized_attempt,
-        )
-
-        envelope = target_dispatch(authorized_attempt)
-        transcript = envelope["hostile"]["transcript"]
-        oracle_hit = any(item["hit"] for item in envelope["trusted"]["oracle_results"]) or any(
-            item["hit"] for item in envelope["trusted"]["canary_hits"]
-        )
-        verdict_box.value = _deterministic_verdict(
-            run_id=run_id, attempt_id=attempt_id, confirmed=oracle_hit
-        )
-
-        evaluator = HostedEvaluator(runtime=runtime).evaluate(
-            envelope,
-            integrity_ok=True,
-            sanitized=True,
-            judge_calibration_id=calibration_id,
-            parent_execution_id=red_team_execution_id,
-            parent_request_id=red_team_generation.provider_request_id,
-        )
-        adjudication: JudgeReconciliation | None = adjudication_box.value
-        if adjudication is None:
-            raise HostedCompositionError("governed acceptance Judge adjudication is unavailable")
-        effective_verdict = dict(adjudication.effective_verdict)
-
-        report = _draft_documentation_if_confirmed(
-            runtime=runtime,
-            organization_id=organization_id,
+    # The Orchestrator reads REAL observability: a snapshot recomputed from authoritative
+    # Postgres evidence (hash-verified coverage, findings, regressions, spend, queue depth),
+    # never a hand-built fixture. The model then recommends a category and code checks it
+    # against the one case this run is actually authorized to replay.
+    planner = HostedPlanner(runtime=runtime).decide(
+        dict(planning_snapshot)
+        if planning_snapshot is not None
+        else store.load_orchestration_snapshot(
             run_id=run_id,
-            attempt_id=attempt_id,
-            reviewed=reviewed,
-            verdict=effective_verdict,
-            envelope=envelope,
-            transcript=transcript,
-            evaluator=evaluator,
+            case_counts=dict(reviewed.corpus_case_counts),
         )
-        if report is None:
-            raise GovernedAcceptanceUnconfirmed(
-                "governed acceptance did not observe a trust-confirmed exploit"
-            )
-        # Completion is inside the guarded block on purpose: a refused completion must abort the
-        # run, never leave it `running` with nothing able to close it.
-        store.complete_governed_acceptance_run(run_id=run_id)
-    except Exception as exc:
-        with contextlib.suppress(Exception):
-            store.abort_governed_acceptance_run(
-                run_id=run_id,
-                reason_code=(
-                    "governed_acceptance_unconfirmed"
-                    if isinstance(exc, GovernedAcceptanceUnconfirmed)
-                    else "governed_acceptance_failed"
-                ),
-            )
-        raise
-    finally:
-        with contextlib.suppress(Exception):
-            telemetry.flush()
-        telemetry.shutdown()
+    )
+    if planner.decision.directive["category"] != reviewed.category:
+        raise HostedCompositionError(
+            "Planner selected a category outside this run's reviewed authorization"
+        )
 
-    execution_ids = [planner.execution_id, red_team_execution_id, evaluator.execution_id]
-    if report is not None:
-        execution_ids.append(report.execution_id)
+    red_team_generation, red_team_execution_id = _run_traced_red_team(
+        configuration=configuration,
+        generation_policy_sha256=generation_policy_sha256,
+        transport=transport,
+        lifecycle=lifecycle,
+        planner=planner,
+        reviewed=reviewed,
+        authorized_attempt=authorized_attempt,
+    )
+
+    envelope = target_dispatch(authorized_attempt)
+    transcript = envelope["hostile"]["transcript"]
+    oracle_hit = any(item["hit"] for item in envelope["trusted"]["oracle_results"]) or any(
+        item["hit"] for item in envelope["trusted"]["canary_hits"]
+    )
+    verdict_box.value = _deterministic_verdict(
+        run_id=run_id, attempt_id=attempt_id, confirmed=oracle_hit
+    )
+
+    evaluator = HostedEvaluator(runtime=runtime).evaluate(
+        envelope,
+        integrity_ok=True,
+        sanitized=True,
+        judge_calibration_id=calibration_id,
+        parent_execution_id=red_team_execution_id,
+        parent_request_id=red_team_generation.provider_request_id,
+    )
+    adjudication: JudgeReconciliation | None = adjudication_box.value
+    if adjudication is None:
+        raise HostedCompositionError("governed acceptance Judge adjudication is unavailable")
+    effective_verdict = dict(adjudication.effective_verdict)
+
+    report = _draft_documentation_if_confirmed(
+        runtime=runtime,
+        organization_id=organization_id,
+        run_id=run_id,
+        attempt_id=attempt_id,
+        reviewed=reviewed,
+        verdict=effective_verdict,
+        envelope=envelope,
+        transcript=transcript,
+        evaluator=evaluator,
+    )
+    if report is None:
+        raise GovernedAcceptanceUnconfirmed(
+            "governed acceptance did not observe a trust-confirmed exploit"
+        )
+    # Completion runs inside the caller's terminalization guard on purpose: a refused completion
+    # must abort the run, never leave it `running` with nothing able to close it.
+    store.complete_governed_acceptance_run(run_id=run_id)
+
     return GovernedAcceptanceResult(
         run_id=run_id,
         attempt_id=attempt_id,
@@ -805,7 +858,12 @@ def run_governed_acceptance(
         model_decisive=adjudication.model_decisive,
         ground_truth_agreement=adjudication.ground_truth_agreement,
         calibration_state=adjudication.calibration_state,
-        execution_ids=tuple(execution_ids),
+        execution_ids=(
+            planner.execution_id,
+            red_team_execution_id,
+            evaluator.execution_id,
+            report.execution_id,
+        ),
         evidence_content_hash=str(dispatched["content_hash"]),
         target_response_sha256=str(dispatched["response_sha256"]),
         target_dispatch_count=target_dispatch.count,
@@ -897,7 +955,12 @@ def _run_traced_red_team(
     )
     try:
         generation = provider.generate_traced(
-            dict(reviewed.payload),
+            # The seed-replay projection, not the raw payload: ``build_generation_messages`` reads
+            # ``case_ref`` and ``input_sequence``, and the authored payload spells the identity
+            # ``case_id`` — passing it raw showed the model a null seed reference. The projection
+            # is also exactly the bytes this run is authorized to replay, and carries no trusted
+            # field (no expected_evidence, no severity, no oracle expectation).
+            dict(authorized_attempt),
             count=1,
             category=reviewed.category,
             execution_id=execution_id,
