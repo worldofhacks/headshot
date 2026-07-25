@@ -10,7 +10,7 @@ from agentforge.readiness import build_readiness_check, database_schema_ready, e
 def test_integrated_alembic_head_is_the_single_forward_revision() -> None:
     # 0022 adds attempt_result.resource_measurements — the JSONB column persisting the MEASURED
     # consumption trio (elapsed_ms/request_count/response_size) the consumption oracle adjudicates.
-    assert expected_alembic_head() == "0022"
+    assert expected_alembic_head() == "0023"
 
 
 def test_database_schema_ready_accepts_migrated_integrated_head(migrated_db) -> None:
