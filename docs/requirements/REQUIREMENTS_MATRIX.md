@@ -6,6 +6,33 @@ Canonical row-level ledger: [`REQUIREMENTS_MATRIX.csv`](REQUIREMENTS_MATRIX.csv)
 Fresh baseline: [`../evidence/baseline/2026-07-22-final-integration.md`](../evidence/baseline/2026-07-22-final-integration.md)
 Release audit: [`../evidence/baseline/2026-07-23-role-agent-release-audit.md`](../evidence/baseline/2026-07-23-role-agent-release-audit.md)
 
+> **Staleness notice — 2026-07-25.** This matrix's own audited parent is `215584f4`, which is **72
+> commits behind** the current integration base `107c11c`. It predates migrations `0017`–`0021`, the
+> four frozen hosted role models, and **every live-target artifact in the repository**. Its
+> `25 / 34 / 6 / 7` tally is internally consistent with its CSV and is therefore still the number this
+> repository states — but it is an audit of an earlier tree and needs a dated re-audit against
+> `107c11c` before release.
+>
+> Specific rows now known to be wrong, **in both directions**. Listed so the matrix can be read safely;
+> deliberately **not** flipped here, because a status flip belongs to a re-audit with its own evidence
+> pass, not to a documentation reconciliation.
+>
+> | Row | Recorded | Reality at `107c11c` | Direction |
+> |---|---|---|---|
+> | PRD-22 | evidence path `docs/vulnerabilities (absent)` | The directory is present with **six** report files. The other half of that row — "No genuine reproduction checks exist" — is **correct**: `docs/evidence/reproductions/` does not exist | Stale pessimistic (evidence path), correct on substance |
+> | PRD-32 | `missing`; "No genuine report files exist" | Six report files exist. The `missing` verdict is still **defensible on independent-reproduction grounds** — zero of the six is reproduced, zero is published — but the stated reason is false | Stale reason, right verdict |
+> | PRD-07 | `partial`; "current results are local" | Live-target results are checked in under `evals/results/` — indeterminate, but live | Stale pessimistic |
+> | PRD-18 | `partial`; "Implement dual-judge calibration, thresholds…" | Calibration machinery, thresholds and an enablement gate exist as code. **Dual-judge cross-agreement genuinely does not** — the gate accepts one evaluator, and the only measurement at this base *fails* (30 labels, 18 agreements, 6 false negatives) | Understates the code, correct that the capability is absent |
+> | PRD-20 | `complete`; "Documentation Agent converts confirmed exploits into reports" | The code path and unit tests exist; the runtime agent has **never drafted anything** (`exploit_confirmed = 0`, and it requires `state == EXPLOIT_CONFIRMED`). All six reports are human-drafted | **Optimistic — `complete` means code, not behaviour** |
+> | USR-02 | `complete`; "Clerk protects meaningful human-facing access" | Marked complete while its own remaining-work column names an unperformed verification, and `docs/security/AUTHENTICATION.md` states the Clerk integration is not deployed and unverified | **Optimistic** |
+>
+> Ticket-level status is reconciled separately in [`TICKETS.md`](../../TICKETS.md) (46 defined, 0
+> landed). Capability status — as opposed to requirement status — is in
+> [`docs/security/RED_TEAMING_COVERAGE_REVIEW_2026-07-25.md`](../security/RED_TEAMING_COVERAGE_REVIEW_2026-07-25.md).
+> A `24 / 39 / 2 / 7` tally circulating in review notes belongs to the divergent branch
+> `codex/final-integration-release`, **not to this base**; see `TICKETS.md` for why it must not be
+> imported here.
+
 This is a review view of the canonical CSV. The CSV records, for every requirement, its source, checkpoint, status, owner, automated verification, evidence path, and remaining work. Status is deliberately strict:
 
 - `complete`: implemented and supported by current evidence.

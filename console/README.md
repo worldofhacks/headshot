@@ -4,10 +4,17 @@ Authenticated React/Vite console for the AgentForge control plane. It preserves 
 titanium-and-ceramic visual system while replacing all sample state with protected same-origin
 `/api/v1` reads, commands, and ordered events.
 
-Status: deployed in Railway staging and production with Clerk, PostgreSQL, the private Runner,
-and Langfuse configured. A surface whose authoritative repository or service is absent still
-renders a typed `unavailable` state. The console never substitutes sample records or local command
-success.
+Status (corrected 2026-07-25, base `107c11c`): **built and locally integrated against protected
+`/api/v1`; Railway and Clerk deployment is selected and planned, not verified.** The previous
+"deployed in Railway staging and production with Clerk" wording contradicted four sibling documents at
+the same commit — `docs/security/AUTHENTICATION.md` states the Clerk integration is not deployed and
+has not been verified with real Clerk users, `docs/deployment/RAILWAY.md` carries an unchecked
+promotion-evidence checklist and forbids asserting deployment before verification, `ARCHITECTURE.md`
+records the platform as locally integrated and deployment-unverified, and the root `README.md` lists
+both platform URLs as unverified.
+
+A surface whose authoritative repository or service is absent still renders a typed `unavailable`
+state. The console never substitutes sample records or local command success.
 
 ## Local checks
 

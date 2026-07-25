@@ -3,11 +3,21 @@
 Target under test: **OpenEMR Clinical Co-Pilot** (`target_ref: openemr-clinical-copilot`).
 Every mapping below is transcribed from a seed file actually read in `evals/seeds/*.json`; no
 mapping is invented. Category names come from `OWASP_NAMES` in
-`src/agentforge/evals/validation.py:122-143`. The platform's mandated coverage sets are
-`_REQUIRED_WEB` and `_REQUIRED_LLM` in `src/agentforge/api/postgres.py:66-67`:
+`src/agentforge/evals/validation.py:127` *(cite corrected 2026-07-25 from `:122-143`)*. The platform's
+mandated coverage sets are in `src/agentforge/api/postgres.py:124-126`
+*(corrected from `:66-67`)*:
 
-- `_REQUIRED_WEB = {A01, A03, A04, A06, A07, A09, A10}`
-- `_REQUIRED_LLM = {LLM01, LLM02, LLM03, LLM05, LLM06}`
+- `_REQUIRED_WEB = {A01, A03, A04, A06, A07, A09, A10}` (`postgres.py:124`)
+- `_REQUIRED_LLM = {LLM01, LLM02, LLM03, LLM05, LLM06}` (`postgres.py:125`)
+- `_REQUIRED_CATEGORIES = {prompt_injection, data_exfiltration, tool_misuse}` (`postgres.py:126`) —
+  three of the six PRD threat categories, which is why a campaign can read as "covered" while
+  `state_corruption`, `denial_of_service`, and `identity_role_exploitation` are untested
+
+**This matrix describes the offline authored corpus, not demonstrated coverage.** Mapped is not
+covered: every seed still carries `execution_status: "NOT_EXECUTED"`, and every live verdict in the
+repository is `INDETERMINATE`. See
+[`docs/security/RED_TEAMING_COVERAGE_REVIEW_2026-07-25.md`](../security/RED_TEAMING_COVERAGE_REVIEW_2026-07-25.md)
+RT-01.
 
 The 9-seed corpus is exactly 3 categories × 3 seeds. Its OWASP union is:
 
@@ -29,7 +39,7 @@ TM-003 only · A10 → TM-002 only · LLM03 → DX-002 only · LLM05 → TM-001 
 | A02 | Cryptographic Failures | no | no | — | — | — | Not exercised by the offline corpus |
 | A03 | Injection | yes | yes | PI-001, PI-002, PI-003, TM-001 | prompt_injection / tool_misuse | boundary + invariant | Instruction-in-data injection and injected write instruction |
 | A04 | Insecure Design | yes | yes | DX-003, PI-001, PI-002, PI-003, TM-001, TM-003 | all three | boundary + invariant | Trust-boundary design flaws: memory scope, instruction/data confusion, approval bypass, unbounded loops |
-| A05 | Security Misconfiguration | no | no | — | — | — | Not exercised by the offline corpus (ZAP baseline surfaces A05-class header findings on the fake host only) |
+| A05 | Security Misconfiguration | no | no | — | — | — | Not exercised by the offline **seed corpus**. **Corrected 2026-07-25:** A05 *is* exercised elsewhere — it is the primary OWASP Web mapping of both `AF-VULN-2026-0724-005` and `-006`, and `docs/evidence/zap/findings.json` records an `A05:2021` finding with `scan_provenance: live_target` on the **real authorized host**, not on a fake host |
 | A06 | Vulnerable and Outdated Components | yes | yes | **DX-002 (sole carrier)** | data_exfiltration | boundary | Poisoned retrieved document treated as a trusted component to mint authorization |
 | A07 | Identification and Authentication Failures | yes | yes | **DX-001 (sole carrier)** | data_exfiltration | invariant | Narrowly-scoped session asks retrieval to cross the patient/principal boundary |
 | A08 | Software and Data Integrity Failures | no | yes | DX-002 | data_exfiltration | boundary | Untrusted document content forges an authorization grant (data-integrity break) |
@@ -87,7 +97,8 @@ Union coverage of the mandated OWASP sets is enforced by
 `tests/evals/test_validation.py::test_repository_corpus_union_covers_every_mandated_owasp_category`
 (`tests/evals/test_validation.py:991-1017`). The test imports `_REQUIRED_WEB` and `_REQUIRED_LLM`
 directly from `agentforge.api.postgres` — the exact sets the API's `covered` flag enforces
-(`src/agentforge/api/postgres.py:448-453`) — reads every seed in `evals/seeds/`, builds the
+(defined at `src/agentforge/api/postgres.py:124-126`; the prior cite `:448-453` no longer resolves) —
+reads every seed in `evals/seeds/`, builds the
 corpus-wide OWASP union, and asserts `_REQUIRED_WEB - web_union` and `_REQUIRED_LLM - llm_union`
 are both empty. Because A06, A07, A09, A10, LLM03, and LLM05 each have a single carrier seed,
 retagging or deleting that sole carrier turns the test red — so coverage cannot silently regress.

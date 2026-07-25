@@ -66,8 +66,8 @@ at once.
 | 1 | WP-02 runtime DB roles; WP-09 evidence status; WP-13 broker foundation | Wave 0 integrated |
 | 2 | WP-03 pinned destination; WP-10 evidence coverage states; WP-13A Garak | Wave 1 integrated |
 | 3 | WP-04 delivery ambiguity; WP-06 platform readiness; WP-13B PyRIT | Wave 2 integrated |
-| 4 | WP-05 queue recovery; WP-11 trusted observations; WP-13C Giskard | Wave 3 integrated |
-| 5 | WP-12 target/platform surfaces; WP-13D Promptfoo; WP-16D governed process egress | Wave 4 integrated |
+| 4 | WP-05 queue recovery; **WP-11 trusted observations — Horizon 2, deferred**; WP-13C Giskard | Wave 3 integrated |
+| 5 | **WP-12 target/platform surfaces — Horizon 2, deferred**; WP-13D Promptfoo; WP-16D governed process egress | Wave 4 integrated |
 | 6 | WP-14 LLM/agentic corpus; WP-16A capture/editor/replay/diff | Wave 5 integrated |
 | 7 | WP-13E proposed-tool-bundle integration; WP-16B fuzz/decoder/sequencer; WP-18A private OAST | Wave 6 integrated |
 | 8 | WP-15 authorized mutation/review; WP-16C custom checks/search/organizer; WP-17 API/auth/ZAP | Wave 7 integrated |
@@ -91,12 +91,12 @@ and reason; the orchestrator assigns it to WP-20 or changes the wave plan explic
 | Review finding | Primary packages |
 |---|---|
 | RT-01 honest demonstrated coverage | WP-09, WP-10, WP-20; live proof WP-21C/D/E |
-| RT-02 decisive trusted adjudication | WP-11; live proof WP-21C/D/E |
-| RT-03 complete LLM/Agentic taxonomy | WP-12, WP-14; live proof WP-21C |
+| RT-02 decisive trusted adjudication | **Reframed — WP-11 is Horizon 2 and would not make the category oracles fire. See `DECISIONS.md` D26 (canary-anchoring) + the gateway-meter consumption oracle.** Live proof WP-21C/D/E |
+| RT-03 complete LLM/Agentic taxonomy | WP-14; **WP-12 is Horizon 2**. ASI/attack-case-v2 deferred by locked decision. Live proof WP-21C |
 | RT-04 authorized mutation | WP-15; live proof WP-21C |
 | RT-05 existing-tool depth | WP-13, WP-13A–F, WP-16D, WP-17; live proof WP-21B/C/D |
 | RT-06 Burp workflows and honest parity | WP-16A–D, WP-17, WP-18A–C, WP-19A; live proof WP-21D |
-| RT-07 real target surfaces | WP-12; live proof WP-21C/D |
+| RT-07 real target surfaces | **WP-12 is Horizon 2.** The valuable part is not code: the Week 2 upload/read/RAG surfaces already exist with `"enabled": false` in the committed catalogs (`config/live-target-catalog.production.json:250,281,312`), so enabling them is a target-authorization change. Track that separately. Live proof WP-21C/D |
 | RT-08 continuous regression | WP-19; live proof WP-21E |
 | RT-09 per-physical-request abort gate | WP-01; live proof WP-21B |
 | RT-10 runtime DB isolation | WP-02; live proof WP-21B |

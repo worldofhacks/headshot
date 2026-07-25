@@ -69,13 +69,23 @@ strong environment isolation even when observation metadata carries an environme
 
 ### LF-01 — Critical: deployed state has not crossed live acceptance
 
-The fix is not deployed, migration `0016` is not applied, and no newly authorized live
+The fix is not deployed, the repository head migration is not applied, and no newly authorized live
 campaign has produced/query-verified the four agent roles. Local tests and doubles validate
 contracts only; they are not live evidence.
 
-**Close by:** deploy one reviewed commit to Web, Runner, and Scheduler; apply `0016`; launch
-a newly authorized campaign against the deployed target URL using synthetic non-PHI data;
-then run the environment-bound verifier with `--record-verification`.
+**Close by:** deploy one reviewed commit to Web, Runner, and Scheduler; apply the repository's sole
+Alembic head — **`0021_four_role_agent_acceptance`** as of base `107c11c` *(this section previously
+named `0016`, which now under-specifies by five revisions: `0017` hosted agent-execution lineage,
+`0018` provider-call lineage, `0019` recordable provider identity, `0020` agent-acceptance authority,
+`0021` four-role agent acceptance)*; launch a newly authorized campaign against the deployed target URL
+using synthetic non-PHI data; then run the environment-bound verifier with `--record-verification`.
+
+The deployed-state observations above (release on `0013`, zero `agent_executions` in both databases,
+no canonical agent observations in Langfuse) were not re-measured in the 2026-07-25 documentation pass
+and are carried forward as recorded on 2026-07-24. They remain consistent with the repository-side
+finding that **no hosted model has ever been called in a campaign** — no `provider_request_id`,
+`returned_model`, or `measured_cost` value appears anywhere under `docs/evidence/**` or
+`evals/results/**`.
 
 ### LF-02 — High: staging and production share a Langfuse project
 
