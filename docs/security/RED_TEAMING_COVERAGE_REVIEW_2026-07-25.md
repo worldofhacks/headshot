@@ -555,9 +555,9 @@ Six `AF-VULN-2026-0724-*` reports exist. After PR #48, the inventory is:
 
 | ID | Classification | Current severity | Evidence provenance | Report authorship |
 |---|---|---|---|---|
-| 001 | observation | `low` | Platform campaign plus owner Bruno capture | **Human-written**; stale header says "Drafted autonomously" |
-| 002 | observation | `low` | Platform campaign | **Human-written**; stale header says "Drafted autonomously" |
-| 003 | observation (control validated) | `Informational` — not a contract enum member | Platform campaign | **Human-written**; stale header says "Drafted autonomously" |
+| 001 | observation | `low` | Platform campaign plus owner Bruno capture | **Human-written**; autonomous-drafting header corrected during submission reconciliation |
+| 002 | observation | `low` | Platform campaign | **Human-written**; autonomous-drafting header corrected during submission reconciliation |
+| 003 | non-closing observation | `Informational` — not a contract enum member | Platform campaign | **Human-written**; autonomous-drafting/control-validation overstatement corrected during submission reconciliation |
 | 004 | control weakness | **`medium`** | **External owner-supplied Bruno client** | **Hand-written** |
 | 005 | control weakness | **`low`** | **External owner-supplied Bruno client** | **Hand-written** |
 | 006 | control weakness | **`low`** | **External owner-supplied Bruno client** | **Hand-written** |

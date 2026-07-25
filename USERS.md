@@ -14,9 +14,9 @@ context for what an exploit puts at risk.)
 All human users enter through **Clerk** and must be invited into the exact required **Headshot**
 Organization for the environment. Personal accounts and user-created organizations are disabled. MFA is
 mandatory for every member, with TOTP plus backup codes preferred; SMS is not the only factor. Clerk and
-backend authorization are implemented and offline-tested. The older deployed release returns `401` for
-protected routes, but exact live Headshot membership, role assignments, MFA, and the two-real-user workflow
-have not yet been verified. The newest candidate implementation is not deployed.
+backend authorization are implemented and offline-tested. Staging `2069036e` / `0021` returns `401`
+for protected unauthenticated routes, but exact live Headshot membership, role assignments, MFA, and
+the two-real-user workflow have not yet been verified. The final `0022` candidate is not deployed.
 
 The backend authorizes the following custom organization permissions from verified Clerk session claims.
 Frontend role labels and client-supplied roles/permissions are display data only and create no authority.
@@ -31,6 +31,10 @@ operation requires a different authenticated Approver: `approver.user_id != laun
 launcher cannot approve their own operation even if they also possess an Approver role or permission;
 there is no solo or emergency self-approval bypass. Both identities are recorded in the append-only audit
 trail.
+
+At the packet preparation base, that distinct-principal invariant is complete for campaign
+authorization but not yet mirrored onto finding approval. The final release must reject finding
+self-approval and missing raiser lineage in both application and database layers.
 
 Authentication controls who may ask the application to act. It does **not** authorize a live attack by
 itself: the Policy Gateway must still validate exact target authorization, environment allowlist,

@@ -1,9 +1,10 @@
 # Dependency and version inventory
 
-Inventory baseline: `17019f28c606e9d3a799073f80f2437ee2e98ff6`
+Inventory preparation base: `f39e22722d3b4e256110ac5be5ce160a0ad654e4`
 
-This inventory distinguishes an exact pin from a lower-bound constraint. A lower bound is not a
-reproducible resolution.
+This is not a final-release attestation. Refresh hashes and the deployed image digest after the
+release candidate is assembled. This inventory distinguishes an exact pin from a lower-bound
+constraint; a lower bound is not a reproducible resolution.
 
 ## Runtime and container substrate
 
@@ -31,7 +32,8 @@ reproducible resolution.
 | clerk-backend-api | `6.0.1` | Networkless human request authentication |
 | langfuse | `4.14.1` | OTEL-native agent/target observation projection and query-back |
 
-Development constraints are Ruff `>=0.6`, pytest `>=8`, and pre-commit `>=3`.
+Development constraints are Ruff `==0.16.0`, pytest `>=8`, and pre-commit `>=3`. Ruff is pinned
+because 0.15.x and 0.16.x format tagged Markdown code fences differently.
 
 **Supply-chain limitation:** the repository has no committed Python resolution lock or hashes for the
 application dependency graph. Only Clerk and Langfuse are exact direct pins; the remaining direct and
@@ -89,7 +91,7 @@ for a signed release or container digest.
 
 | Manifest | SHA-256 |
 |---|---|
-| `pyproject.toml` | `26987706721f5ff1658a503bf940f61e2f697d13f6385e186f9c30f1d33001c5` |
+| `pyproject.toml` | `3712fc50824f60b08ae36ec61b92a889a89b35604a8604df4f089ebfeeec4777` |
 | `console/package-lock.json` | `67ba981b416804eb6aff511d8a3c95044475ca8bc304ea70e4f1df15aa1494ae` |
 | `security-tools/toolchain.lock.json` | `c35dd73014dc72d3455de93ae685c8d669ebfc92ff78c33a5d91168fdc094d95` |
 | `Dockerfile` | `12384162042ec58870c8f6cb73d2893a46590535f5557cc43b3af6ca53e672fd` |
@@ -102,10 +104,12 @@ The package ships 18 v1 JSON Schemas under
 consumer conformance is exercised by `tests/contract`. Breaking inter-agent changes require a new
 schema version, compatibility analysis, migration note, and updated both-sided tests.
 
-Alembic has one serialized head at `0017` in the inspected source. Migration notes are indexed in
-[`../../integration/INTEGRATION_PACKET.md`](../../integration/INTEGRATION_PACKET.md). Deployed
-environments remain at `0013` according to the current live review and must not be described as
-running `0014`-`0017`.
+Alembic has one serialized head at `0021` in the preparation base. Migration notes and compatibility
+references are indexed in
+[`../../integration/INTEGRATION_PACKET.md`](../../integration/INTEGRATION_PACKET.md). Staging
+historically reached `0021`; production remains at `0013`. The release target is the incoming
+revision `0022`, which must be reconciled onto the current integration line and reverified as the
+single head before any final inventory is signed.
 
 ## Architecture-to-manifest reconciliation
 

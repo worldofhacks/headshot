@@ -30,16 +30,17 @@ The inspected source graph was checked with:
 
 ```text
 python -m alembic heads
-0017 (head)
+0021 (head)
 ```
 
-The chain is serialized `0001 -> ... -> 0017`; there is exactly one head. Migration notes through
-`0017` are linked from
+The packet preparation chain is serialized `0001 -> ... -> 0021`; there is exactly one head.
+Migration notes and compatibility references are linked from
 [`../../integration/INTEGRATION_PACKET.md`](../../integration/INTEGRATION_PACKET.md).
 
-The current live review records deployment only through `0013`. Applying `0014`-`0017` in staging is
-a release action and must be bound to the exact final commit, backup/recovery posture, and compatible
-rollback image.
+Staging historically proved `0013 -> 0021` at `2069036e`; production remains at `0013`. The release
+target is the incoming revision `0022`, which must be rebased onto the current integration line and
+rechecked as the only head. Applying it is a release action and must be bound to the exact final
+commit, image digest, staging proof, and compatible rollback image.
 
 ## Failure-drill matrix
 
@@ -72,11 +73,12 @@ evidence:
 | Target database revision | Exact single Alembic head |
 | Rollback deployment | Known-compatible prior Railway deployment ID and commit |
 | Rollback schema compatibility | Written confirmation that the prior image tolerates the expanded schema |
-| Database recovery | Confirmed backup/PITR point and restore procedure |
 | Queue/checkpoint state | Depth, active leases, payload versions, and drain/quiesce result |
-| Human grant | Named approval for production deployment; no self-promotion |
+| Environment sequence | Staging proof, then production; Runner first, then Web and Scheduler |
 
-No such completed final binding is present in this packet. Production promotion remains blocked.
+No completed final binding is present in this packet. A database-backup artifact is not required for
+this synthetic assignment; clean staging migration proof, additive serialized revisions, quiescence,
+and compatible image rollback are the release safety controls.
 
 ## Containment and rollback procedure
 
@@ -85,14 +87,14 @@ No such completed final binding is present in this packet. Production promotion 
 3. Preserve redacted audit IDs, active reservation coordinates, queue depth, deployment identity,
    migration revision, and Langfuse delivery status.
 4. Confirm the named rollback image is compatible with the already-expanded database.
-5. Roll Web, Runner, and Scheduler back to the same known-compatible release; do not mix commits.
+5. If only the public surface is blank, roll back **Web only** and keep Runner/data intact while
+   investigating. For a whole-release failure, roll Web, Runner, and Scheduler to the same
+   known-compatible release; do not mix commits.
 6. Do **not** automatically downgrade PostgreSQL. Expand/contract compatibility is the primary code
    rollback strategy.
-7. If data restoration is necessary, restore the confirmed PITR/backup into a new isolated database,
-   validate it, then explicitly rebind services. Never overwrite the only copy first.
-8. Re-run migration identity, `/health`, `/ready`, unauthenticated 401, wrong-scope denial, private
+7. Re-run migration identity, `/health`, `/ready`, unauthenticated 401, wrong-scope denial, private
    ingress, queue/lease, and agent/Langfuse delivery checks.
-9. Re-enable schedules and launches only after the incident owner records recovery acceptance.
+8. Re-enable schedules and launches only after the incident owner records recovery acceptance.
 
 Migration `0008` once introduced a demo self-approval exception; migration `0012` revoked it. A
 rollback below `0012` would re-enable an intentionally retired authorization behavior and is

@@ -3,9 +3,13 @@
 ## Status
 
 The backend authentication, custom-permission checks, exact-Organization check, generic failure
-semantics, and distinct-launcher/Approver rule are **implemented and locally tested**. The complete
-real-environment Clerk Dashboard configuration and two-user deployed acceptance are **pending** and
-are not release evidence in this packet.
+semantics, and distinct launcher/campaign-Approver rule are **implemented and locally tested**. At
+the packet preparation base, finding approval still checks permission without enforcing a distinct
+raiser/approver lineage in both application and database layers. That is an explicit release gap:
+self-approval and missing approval lineage must fail closed before the final release is bound.
+
+The complete real-environment Clerk Dashboard configuration and two-user deployed acceptance are
+also **pending** and are not release evidence in this packet.
 
 Clerk is deliberately a human identity boundary only. A valid human session never grants permission
 to attack a target by itself.
@@ -24,6 +28,8 @@ to attack a target by itself.
 6. The Policy Gateway independently verifies the target, surface, corpus hash, execution profile,
    authorization expiry/nonce, allowlist, credential binding, synthetic-data assertion, budget,
    rate, logical/physical limits, retries, timeout, monitoring, and abort before any target send.
+7. Finding approval must likewise reject the raiser as approver and reject missing raiser lineage.
+   This final rule is a release requirement, not a capability claimed for the preparation base.
 
 Missing/invalid authentication returns generic 401. A valid session missing the required Organization
 or custom permission returns generic 403. Auth verifier/configuration failure returns 503 and denies
@@ -35,7 +41,7 @@ the operation. The implementation is documented in
 | Human role | Custom permissions accepted by backend | Cannot do |
 |---|---|---|
 | Operator `org:operator` | `org:console:read`, `org:findings:read`, `org:evidence:read`, `org:audit:read`, `org:campaign:launch`, `org:campaign:abort`, `org:targets:manage`, `org:config:manage` | Authorize a campaign; approve/resolve a finding merely because the role label says Operator |
-| Approver `org:approver` | `org:console:read`, `org:findings:read`, `org:evidence:read`, `org:audit:read`, `org:campaign:authorize`, `org:findings:approve`, `org:findings:resolve` | Approve their own launch; bypass the Policy Gateway; publish/remediate without the applicable gate |
+| Approver `org:approver` | `org:console:read`, `org:findings:read`, `org:evidence:read`, `org:audit:read`, `org:campaign:authorize`, `org:findings:approve`, `org:findings:resolve` | Approve their own launch; in the final release, approve a finding they raised or one with missing raiser lineage; bypass the Policy Gateway; publish/remediate without the applicable gate |
 
 The source of these exact constants is
 [`../../../src/agentforge/auth/permissions.py`](../../../src/agentforge/auth/permissions.py), and
@@ -91,6 +97,7 @@ re-authentication.
 
 Before this control family can be marked live-verified, staging must demonstrate exact Headshot
 membership/custom permissions, denial for wrong Organization/missing permission, distinct real
-Operator and Approver identities, and a normal UI/API flow that cannot bypass campaign authorization.
-The user has identified Clerk as a lower-priority workstream; that priority does not convert the
-unverified state into evidence.
+Operator and Approver identities, self-finding-approval denial, missing-lineage rejection, distinct
+finding-approver success, and a normal UI/API flow that cannot bypass campaign authorization. A
+release commit must first prove the finding rule at both application and database layers. Scheduling
+priority does not convert an unimplemented or unverified state into evidence.

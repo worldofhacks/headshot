@@ -11,7 +11,7 @@
 | Platform security tools | Pinned Semgrep, pip-audit, npm audit, Gitleaks, Promptfoo, Garak, PyRIT, Giskard, and isolated ZAP evidence | Historical local/CI scanner execution under the recorded scope | An exact final-release scan or an authorized live-origin active scan |
 | Vulnerability reports | Report set and owner-maintained index | The reports exist for review | Independent reproduction, publication approval, or final release linkage unless each report says so |
 | Langfuse live review | Exact deployed release/migration and zero canonical observations | The UI's unavailable state is truthful | End-to-end tracing acceptance |
-| Performance/load | No final report in this source snapshot | Nothing | A 100-case live baseline, throughput, bottleneck, or scale recommendation |
+| Performance/load | Performance report library and test fixtures exist; no retained representative report | The report contract is testable | A measured baseline, 100-case result, throughput, memory, bottleneck, or scale recommendation |
 
 ## Fresh local corpus validation
 
@@ -93,10 +93,10 @@ latency, safe input/output hashes, token fields when supplied, retries/physical 
 provider request identity, and provider-reported/measured cost when available. Missing billing fields
 remain unavailable.
 
-The current live review records deployed release `23490ea`, schema `0013`, zero canonical agent rows,
-and zero canonical Langfuse observations. Therefore there are no reconciliation totals to report for
-the reviewed `0017` source. Final acceptance requires exact remote query-back using
-`scripts/verify_langfuse_campaign.py`; an SDK flush is not evidence.
+Staging historically deployed `2069036e` / `0021` without running a live campaign. Production
+remains `23490ea` / `0013`. Therefore neither environment provides final-release four-role
+reconciliation totals. Final acceptance requires exact remote query-back using
+`scripts/verify_langfuse_campaign.py` for the final SHA; an SDK flush is not evidence.
 
 ## Fresh selected local tests
 
@@ -109,20 +109,22 @@ tests/auth/test_config.py
 tests/test_campaign_authorization.py
 tests/test_agent_langfuse_migration.py
 tests/test_hosted_agent_execution_lineage.py
+tests/docs/test_submission_integrity.py
 ```
 
-This is targeted local evidence, not a substitute for the complete release suite or authoritative
-GitHub CI.
+These groups produced **199 passed** on the packet branch. This is targeted local evidence, not a
+substitute for the complete release suite or authoritative GitHub CI.
 
 ## Unavailable final evidence
 
 - exact final-commit scanner artifacts and CI URLs;
-- a final authorized campaign ID and 100-case evidence ID;
+- a final authorized campaign ID and batched 100-case evidence ID;
 - model-Judge calibration identity/threshold result for the final run;
 - complete ordered deployed agent execution rows;
 - Langfuse expected, observed, missing, extra, token, cost, and error totals;
 - provider billing reconciliation;
-- platform CPU, memory, queue, DB, storage, and end-to-end performance baselines; and
-- an authorized live-load result and owner-supplied bottleneck/recommendation.
+- platform latency, throughput, memory, queue, DB, storage, and end-to-end performance baselines;
+- an authorized live-load result and evidence-derived bottleneck/recommendation; and
+- actual development/run usage plus the redacted provider/platform invoice exports.
 
 These remain pending rather than being inferred from local tests, old manifests, or simulated data.

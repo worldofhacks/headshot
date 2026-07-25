@@ -1,13 +1,15 @@
 # Integration Packet
 
-## Current integration addendum - 2026-07-24
+## Current integration addendum — pre-release
 
-Source baseline inspected: `17019f28c606e9d3a799073f80f2437ee2e98ff6`.
+Packet preparation base:
+`f39e22722d3b4e256110ac5be5ce160a0ad654e4`.
 
-This is a source/integration addendum, not a final release attestation. The final commit, identical
-GitHub/GitLab `main` SHAs, authoritative GitHub CI run, Railway deployment IDs, deployed migration,
-authorized campaign, and Langfuse reconciliation remain pending. Historical sections below are
-retained as dated evidence and are not silently upgraded to current-release proof.
+This is a source/integration addendum, not a final release attestation. The preparation base has one
+Alembic head at `0021`; the intended release adds incoming revision `0022`. The final commit,
+identical GitHub/GitLab SHA, authoritative GitHub CI run, image digest, Railway deployment IDs,
+deployed migration, governed campaign, and Langfuse reconciliation remain pending. Historical
+sections below are dated evidence and are not silently upgraded to current-release proof.
 
 ### Current interface inventory
 
@@ -18,12 +20,16 @@ retained as dated evidence and are not silently upgraded to current-release proo
 - The mediated trust boundary remains:
   `Orchestrator -> Red Team -> Policy Gateway/Recorder -> Judge -> Documentation`. Red Team never
   produces authoritative evidence and Judge never shares attack-generation authority.
-- Hosted configuration, Langfuse delivery state, and provider/Judge lineage in revisions
-  `0015`-`0017` extend persistence and runtime acceptance; they do not introduce an unversioned
-  alternate inter-agent schema.
-- Commit `17019f2` adds an optional, pattern-constrained `reason_code` to the protected REST finding
-  approve/reject body and forwards it to the existing persisted decision field. This is an additive
-  HTTP control-plane correction, not a breaking inter-agent contract change.
+- Hosted configuration, Langfuse delivery state, logical execution lineage, physical provider-call
+  lineage, recordable provider identity, and acceptance authority in revisions `0015`–`0021`
+  extend persistence and runtime acceptance; they do not introduce an unversioned alternate
+  inter-agent schema.
+- The protected REST finding approve/reject body has an optional, pattern-constrained `reason_code`
+  forwarded to the persisted decision field. This is an additive HTTP control-plane correction, not
+  a breaking inter-agent contract change.
+- The preparation base does **not** yet enforce distinct raiser/approver identity or missing-raiser
+  lineage rejection for finding approval. That application-and-database fix is a release dependency,
+  not a capability claimed by this packet.
 - The protected event stream remains cursor-based and bounded to 100 events per poll, requires
   `org:console:read`, validates same-origin browser provenance, and forces re-authentication after at
   most 30 seconds. Other collection reads still have fixed server windows; stable cursor pagination
@@ -48,10 +54,10 @@ retained as dated evidence and are not silently upgraded to current-release proo
 
 ### Migration and compatibility state
 
-`python -m alembic heads` reports exactly one serialized source head at `0017`:
+`python -m alembic heads` reports exactly one serialized preparation-base head at `0021`:
 
 ```text
-0001 -> ... -> 0013 -> 0014 -> 0015 -> 0016 -> 0017
+0001 -> ... -> 0017 -> 0018 -> 0019 -> 0020 -> 0021
 ```
 
 | Revision | Integration change | Compatibility/rollback note |
@@ -66,9 +72,14 @@ retained as dated evidence and are not silently upgraded to current-release proo
 | `0015` | Atomic append-only hosted configuration sets | [`migration-notes/0015-hosted-configuration-sets.md`](migration-notes/0015-hosted-configuration-sets.md) |
 | `0016` | Multi-observation campaign traces and query-verified Langfuse delivery | [`migration-notes/0016-agent-langfuse-delivery.md`](migration-notes/0016-agent-langfuse-delivery.md) |
 | `0017` | Hosted provider/accounting/Judge authority lineage | [`migration-notes/0017-hosted-agent-execution-lineage.md`](migration-notes/0017-hosted-agent-execution-lineage.md) |
+| `0018` | Append-only physical provider-call lineage | [`migrations/provider-call-lineage-v1.md`](migrations/provider-call-lineage-v1.md) |
+| `0019` | Recordable provider substitution on failed logical rows | [`migrations/provider-call-lineage-v1.md`](migrations/provider-call-lineage-v1.md) |
+| `0020` | Bounded, target-free hosted-agent acceptance authority | [`../../migrations/versions/0020_agent_acceptance_authority.py`](../../migrations/versions/0020_agent_acceptance_authority.py) |
+| `0021` | Populated-safe four-role acceptance envelope | [`../../migrations/versions/0021_four_role_agent_acceptance.py`](../../migrations/versions/0021_four_role_agent_acceptance.py) |
+| `0022` | Governed four-role campaign runtime | **Incoming; must revise `0021`, remain the sole head, and pass upgrade/downgrade/round-trip checks** |
 
-The repository's current live review records staging and production at migration `0013`. Source
-revisions `0014`-`0017` are therefore **not deployed evidence**.
+Staging historically proved `0013 -> 0021` at `2069036e`; production remains at `0013`. That
+staging result does not prove the incoming `0022` body or the final release SHA.
 
 ### Current dependency map
 
@@ -96,25 +107,24 @@ cost, retries, and errors; it does not authorize traffic or replace evidence.
 
 ### Current local checks
 
-The following passed against the source baseline while this addendum was assembled:
+The following preparation-base checks are rerun by this packet branch:
 
 - corpus validation: 16 authored cases (9 active, 7 draft), 30 ground-truth labels, 6 categories,
   1 fixture;
 - duplicate validation: no duplicate sequence among 9 active cases;
 - selected contract, permission/configuration, campaign-authorization, Langfuse-migration, and hosted
-  agent-lineage tests; and
-- Alembic graph inspection: one head at `0017`.
+  agent-lineage plus submission-integrity tests: **199 passed**; and
+- Alembic graph inspection: one head at `0021`.
 
 These targeted checks are not the complete release suite and are not authoritative GitHub CI.
 
 ### End-to-end evidence status
 
 [`../evidence/agent-trace.md`](../evidence/agent-trace.md) and `evals/results/` are historical
-artifacts. They predate the final `0016`/`0017` deployed ledger and cannot establish a current
-four-agent Langfuse-reconciled release. The required proof remains one newly authorized campaign on
-the exact staging release, with ordered durable executions, target request lineage, finding/report
-behavior, and exact Langfuse query-back. Until that exists, end-to-end final-release status is
-**pending**.
+artifacts with explicit provenance limits. They cannot establish a final four-agent
+Langfuse-reconciled release. The required proof remains one newly authorized campaign on the exact
+release, with ordered durable executions, target-request lineage, finding/report behavior, cost, and
+exact Langfuse query-back. Until that exists, end-to-end final-release status is **pending**.
 
 ## Final integration supplement — 2026-07-22
 

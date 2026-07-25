@@ -2,6 +2,10 @@
 
 ## Campaign data flow
 
+The diagram is the **intended `0022` release flow**. At the packet preparation base, the traced Red
+Team provider exists but final governed four-role composition remains incoming and must not be
+inferred from the diagram alone.
+
 ```mermaid
 flowchart TD
     Human["Authenticated Operator"] -->|"request exact scope"| Web["Web control plane"]
@@ -57,9 +61,11 @@ flowchart TD
 ## Authoritative lineage
 
 The durable join keys are Organization ID, campaign/run ID, attempt ID, agent execution ID and parent
-execution ID, finding ID, target/surface/version, content hash, and provider request ID when a provider
-returns one. Migration `0017` adds configuration, role-policy, model/provider, token, retry, Judge
-calibration, oracle agreement, and decision-authority fields to the agent execution ledger.
+execution ID, request/parent-request ID, finding ID, target/surface/version, content hash, and provider
+request ID when a provider returns one. Revisions `0017`–`0021` serialize hosted execution lineage,
+physical provider-call lineage, recordable provider identity, acceptance authority, and the
+four-role acceptance surface. Incoming `0022` composes the governed runtime and must remain the only
+head after integration.
 
 Langfuse delivery is not considered complete when the SDK merely flushes. Migration `0016` requires
 an exact remote query-back before a durable row may be marked `exported`; until then it remains
@@ -70,7 +76,7 @@ an exact remote query-back before a durable row may be marked `exported`; until 
 | Domain | Principal records | Quality/access controls |
 |---|---|---|
 | Target catalog | Target/surface identity, immutable versions, lifecycle events | Server-owned catalog, exact version references, relative-path and allowlist validation |
-| Human control plane | Authorization requests/decisions, command idempotency, audit events | Organization scope, immutable launcher/approver, scope hash, expiry, distinct-person trigger |
+| Human control plane | Authorization requests/decisions, finding decisions, command idempotency, audit events | Campaign scope/expiry/distinct-person trigger exists; final release must also enforce distinct raiser/approver and reject missing finding lineage in application and database |
 | Campaign/queue | Campaign runs/events/attempts, jobs, physical work-unit reservations | Versioned payloads, unique idempotency keys, bounded leases, dead-letter state, immutable physical coordinates |
 | Evidence/evaluation | Attack cases, AttemptResult, Verdict, finding-evidence links | Required fields, content hashes, replay uniqueness, FKs, provenance, deterministic precedence |
 | Reporting/regression | Findings, finding decisions, draft reports, dispositions, replay plans/results, case versions | Unique IDs, append-only draft evidence, confirmation/reproduction/right-reason gates, human publication block |
@@ -85,5 +91,5 @@ provider request identity. Concrete final regression/query SLO evidence remains 
 
 A final deployed trace must demonstrate the exact ordered agent chain, one-to-one physical requests,
 provider/model identity, attempts/retries, evidence hashes, finding/report behavior, and Langfuse
-observations for one authorized campaign. Historical manifests that predate the durable `0016`/`0017`
-ledger cannot be backfilled and are not accepted as that proof.
+observations for one authorized campaign. Historical manifests that predate the durable lineage
+ledger or do not bind the final SHA cannot be backfilled and are not accepted as that proof.

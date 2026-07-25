@@ -8,12 +8,13 @@
 > `docs/planning/DECISIONS.md` (D#) and `docs/planning/RESEARCH.md` (R#). The finalize audit trail is
 > `docs/planning/gap-audit.md`; every finding's resolution is registered in **§20**.
 >
-> **Implementation reconciliation — 2026-07-24.** The source audited for this update was `eac2968`
-> with one Alembic head at `0017`. GitHub `main`, GitLab `main`, and the observed Railway release
-> were still `23490ea` with schema `0013`. Consequently, the controls described as implemented below
-> are candidate-source capabilities unless a linked artifact explicitly labels them live-verified.
-> The newer hosted-agent and Langfuse paths have not been proved in Railway. Cost, performance, final
-> corpus/Judge, demo, and promotion evidence remain separate release gates; no value is invented here.
+> **Pre-release reconciliation.** The submission packet is prepared from
+> `f39e22722d3b4e256110ac5be5ce160a0ad654e4`, whose sole Alembic head is `0021`. Staging
+> historically proved Runner-first deployment of `2069036e` through `0021`; production remains
+> `23490ea` / `0013`. The intended release adds incoming revision `0022`. Consequently, source
+> capabilities below are not final deployment evidence unless a linked artifact binds the exact
+> release SHA, image, environment, migration, and result. Cost, performance, final corpus/Judge,
+> demo, and publication evidence remain separate release fields; no value is invented here.
 
 ---
 
@@ -642,8 +643,8 @@ for unavailable billing evidence.
   serves the console/API and performs Clerk verification; private
   **runner** services execute queued agent work; a private **scheduler/cron** service only enqueues work;
   private managed **Postgres** holds domain records, checkpoints, and queues. Only Web receives public
-  ingress. Runner, scheduler, and Postgres have no public hostname or inbound route. Deployment history +
-  Postgres PITR provide rollback; no GPU.
+  ingress. Runner, scheduler, and Postgres have no public hostname or inbound route. Deployment
+  history provides image rollback; no GPU.
 - **Environments (O1) — the section now defines them.** At least **two Railway environments**:
   - **non-prod (CI/staging):** TargetAdapter points at a **mock or an explicitly non-production allowlist
     entry**; its **own** Postgres; the environment-scoped allowlist **cannot resolve** the live target's
@@ -661,8 +662,9 @@ for unavailable billing evidence.
   managed-Postgres schema/rows. Therefore: **expand/contract (backward-compatible) migrations** are the rule so
   any single deploy is rollback-safe without a DB downgrade; destructive migrations are forbidden in the same
   release that introduces their consumers; job payloads are versioned and unknown rows are
-  dead-lettered (§7); a **pre-deploy drain/quiesce** step ensures a deploy never lands mid-lease; **Postgres
-  PITR is the true rollback of record** for data.
+  dead-lettered (§7); a **pre-deploy drain/quiesce** step ensures a deploy never lands mid-lease. This
+  synthetic assignment does not require a database-backup/PITR artifact; the release safety net is
+  exact staging migration proof plus compatible image rollback.
 - **Deploy sequence — Runner first:** drain/quiesce work → build and authorize the exact images → deploy
   the private Runner first in a fail-closed wait state → hold public Web routing while Web's canonical
   pre-deploy hook runs `alembic upgrade head` and Web starts behind that hold → verify the single head
@@ -676,11 +678,11 @@ for unavailable billing evidence.
   `/api/v1/principal` returned `401`, and `/` plus `/sign-in` returned the packaged HTML shell. No
   campaign, provider, or target call was made. This proves deployment mechanics, not live-campaign or
   signed-in Clerk behavior.
-- **Current integrated head and refusal boundary:** pre-deploy runs `alembic upgrade head`; the packaged
-  sole head is **`0021_four_role_agent_acceptance`** (`0005` at the time this section was written;
+- **Preparation-base head and refusal boundary:** pre-deploy runs `alembic upgrade head`; the packet
+  preparation base has the sole head **`0021_four_role_agent_acceptance`**;
   `0017`–`0021` add hosted agent-execution lineage, provider-call lineage, recordable provider identity,
-  agent-acceptance authority, and the four-role acceptance surface). The mechanism claim is unchanged and
-  still correct — readiness resolves the head dynamically and requires exactly one.
+  agent-acceptance authority, and the four-role acceptance surface. The intended release adds
+  incoming `0022`; readiness resolves the packaged head dynamically and requires exactly one.
   `/ready` requires PostgreSQL connectivity, that exact head, built assets, and
   locally parsed Clerk/Web security configuration without Clerk/JWKS/target/model egress. Runner and
   scheduler entrypoints open no public socket. **The blanket "refuse operation" no longer holds:** the
@@ -697,7 +699,7 @@ for unavailable billing evidence.
 | Failure | Handling |
 |---|---|
 | Red Team produces genuinely harmful content | Quarantine + containment (§5); only ever executed via the Policy Gateway against the allowlisted target; treated as untrusted data even by the Judge/Documentation (S4) |
-| Judge agrees with everything (drift) | Deterministic oracle precedence + async dual-judging calibration + drift detection (`judge-calibration`, §15); escalate on uncertainty; the Judge never occupies the attacker role |
+| Judge agrees with everything (drift) | Deterministic oracle precedence; exact-identity ground-truth calibration metrics and fail-closed advisory state; escalate on uncertainty. The current gate accepts one evaluator and does not implement dual-judge cross-agreement or per-category disablement |
 | Attacker forges/replays evidence | Canonical hash + append-only + per-agent DB roles (S1/S2); run-nonce + UNIQUE constraint (S3) reject replay |
 | Orchestrator has no clear next priority | Fallback policy: least-covered category → oldest open finding → regression sweep |
 | **Observability (Langfuse) unavailable/degraded (O7)** | Orchestrator falls back to the **exploit-DB system-of-record + queue table** for coverage/priority (the documented fallback policy above), degrading to structured signals rather than random or blocked; emits an alert. The coverage signal the Orchestrator needs is derivable from Postgres |
@@ -718,11 +720,12 @@ for unavailable billing evidence.
   high-cost calls. The gates are **runtime-enforced** (§5, F5), not merely a queue pause or a
   frontend button state.
 - **Separation of duties (S7).** An Operator with `org:campaign:launch` may initiate an operation, but
-  authorization/approval must be cleared by a **different** authenticated Headshot Principal with the
-  applicable Approver custom permission (`org:campaign:authorize` or `org:findings:approve`). Runtime
-  code rejects `approver.user_id == launcher_user_id` regardless of role or permission and writes both
-  immutable user/session identities to the append-only audit log. There is **no solo-user, role-based,
-  break-glass, or emergency self-approval bypass**; insufficient staffing leaves the action pending.
+  campaign authorization must be cleared by a **different** authenticated Headshot Principal with
+  `org:campaign:authorize`; application and database checks enforce that rule. Finding approval also
+  requires `org:findings:approve`, but at the packet preparation base it does **not yet** mirror the
+  distinct raiser/approver and missing-lineage checks. The final release must reject self-approval and
+  absent raiser lineage in both application and database layers. There is no permitted solo-user,
+  role-based, break-glass, or emergency bypass.
 - Read access is also permission-scoped: console/findings/evidence require their named custom read
   permissions and audit history additionally requires `org:audit:read`. Overnight runs and every
   authorization decision are fully attributable.
@@ -891,7 +894,7 @@ detail: `docs/planning/gap-audit.md`.
 
 | # | Resolution | Where |
 |---|---|---|
-| **F1** | Deterministic fail-closed Judge invariant (verdict state machine; oracle precedence; fail-closed on the verdict not the run; async dual-judging calibration) | §3, §5, §15; D13; D8 |
+| **F1** | Deterministic fail-closed Judge invariant (verdict state machine; oracle precedence; fail-closed on the verdict not the run). Dual-judge calibration remains a separately specified, unimplemented design | §3, §5, §15; D13; D8 |
 | **F2** | Trust split: untrusted generator → trusted Policy Gateway + Execution Recorder → external target; Judge sees hashed recorder `AttemptResult` only; contract direction corrected (migration note) | §3, §4, §5; D14; diagram spec |
 | **F3** | Langfuse Cloud for MVP; self-host full footprint documented post-MVP | §9, §12; D5 |
 | **F4** | Three independent cost line families; invalid `list_price/throughput` division removed | §11; D17 |
@@ -940,7 +943,7 @@ but three rows are load-bearing claims that are simply not true, and those are t
 | §4 | Contracts live in `contracts/v1/` | `src/agentforge/contracts/v1/` (18 schemas); no repo-root `contracts/` | Doc stale (broken path) | **Corrected** in §4. |
 | §1, §12 | Live campaign launch "remains fail-closed unavailable"; runner/scheduler "refuse operation" | `POST /api/v1/campaigns` exists with a gated launch handler returning `CommandResult.accepted`; the Runner is a composed durable loop | **Doc understates** | **Partially corrected** in §12. The *gate* is real and still fail-closed on its preconditions; the blanket unavailability is not. |
 | §1 | "public target/surface authoring remains typed unavailable until a trusted catalog exists" | Only partly true now — surface create/revise still return `unavailable`, but the trusted catalog exists and target registration paths have moved | Doc understates | **Open** — needs a targeted §1/§5 rewrite by the architecture owner, not a one-line patch. |
-| §15; D13 | Present tense: calibration "uses async dual-judging across the full ground-truth set, a stratified random live sample, and threshold-near cases" | The machinery exists as offline code. **Dual-judge cross-agreement does not exist** — the gate accepts exactly one evaluator, and `agreement_rate` measures agreement with ground truth, not judge-vs-judge. Per-category disablement is not implemented (per-category metrics are computed; the reason-code logic applies global rates plus a sample floor). No stratified live sample has ever been drawn | **Doc overstates** (present tense for unbuilt behavior) | **Open — flagged, not rewritten.** §15 is the AI-use disclosure; changing its tense is the architecture owner's call. |
+| §15; D13 | Earlier prose said calibration used async dual-judging, a stratified live sample, and per-category disablement | The gate accepts one evaluator; `agreement_rate` is against ground truth, not another Judge. Per-category metrics exist, but disablement is global and no stratified live sample is retained | **Historical overstatement** | **Corrected** in §13/§15: only exact-identity ground-truth calibration and fail-closed advisory behavior are claimed |
 | §11 | "All cost numbers are deferred to measurement; no placeholder number appears here" | Two appear 16 lines earlier in the same section: cached-input ≈0.1× input and Batch API ≈50%. They are unmeasured provider-discount assumptions | Doc self-contradicts | **Open** — either label them as assumptions or move them to the required-inputs table in `docs/cost/COST_ANALYSIS.md`. |
 | §19 | Baseline profiles (OPT-17) and load/stress (OPT-18) → `docs/performance/` | `docs/performance/` does not exist. Performance code exists (`src/agentforge/performance/`) with **zero producers** — no import from `src/`, `scripts/`, or `console/` | Doc overstates | **Open** — destination is empty; the report library is fed only by test samples. |
 

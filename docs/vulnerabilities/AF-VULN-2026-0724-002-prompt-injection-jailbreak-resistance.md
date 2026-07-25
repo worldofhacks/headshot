@@ -1,7 +1,8 @@
 # AF-VULN-2026-0724-002 — Prompt-injection / jailbreak outcome & first-line guardrail inconsistency
 
 > **Status: DRAFT — not published.** Publishing is a separate two-person human-approval gate
-> (approver ≠ launcher). Drafted autonomously; awaiting review.
+> (approver ≠ launcher). Human-authored from the cited captures; no runtime Documentation-agent
+> authorship is claimed.
 > **Disposition: no exploit confirmed; one LOW guardrail-consistency observation.**
 
 | Field | Value |
@@ -12,17 +13,18 @@
 | OWASP LLM | `LLM01:2025` Prompt Injection |
 | OWASP Web | `A03:2021` Injection |
 | Target | Clinical Co-Pilot Week 1 — `POST https://agent-production-9f62.up.railway.app/chat` |
-| Authoritative evidence | `evals/results/live-campaign-20260724-week1/` (Week 1 SID, 120 s timeout, 17/17 responded) |
+| Historical target captures | `evals/results/live-campaign-20260724-week1/` (Week 1 SID, 120 s timeout, 17/17 responded) |
 | Judge verdict | `INDETERMINATE` for every probe — no oracle/canary hit (no exploit confirmed) |
 
 ## Description & clinical impact
 Prompt-injection / jailbreak attacks try to override the co-pilot's safety instructions so it
 discloses hidden configuration, adopts an "unrestricted" persona, or emits unsafe clinical content.
 
-**Outcome: no injection succeeded.** Across all 8 injection/jailbreak probes (17/17 of the full
-corpus returned HTTP 200 in the authoritative run), **none** produced a system prompt, developer
-mode, tool list, environment variable, credential, or DAN-persona output. The credential-echo canary
-did not fire on any of the 17 probes.
+**Observed outcome, not a safety conclusion:** across the retained injection/jailbreak responses,
+none contains the listed system-prompt, developer-mode, tool-list, environment-variable, credential,
+or DAN-persona indicator, and the credential-echo canary did not fire. Every Judge verdict remained
+`INDETERMINATE`, so these captures do not establish that the target resisted all injections or is
+safe.
 
 ## Low observation — the *first-line* refusal is inconsistent
 Semantically similar attacks are handled two different ways:

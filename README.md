@@ -6,8 +6,9 @@ authorized live URL; the target's source code is not part of this repository.
 
 > **Delivery status — 2026-07-25:** the Clerk-backed React console, protected FastAPI `/api/v1`,
 > organization-scoped PostgreSQL control plane, private Runner, live target adapter, and Langfuse
-> telemetry projection are implemented; the sole packaged Alembic head is
-> `0021_four_role_agent_acceptance`. Candidate `2069036e` is deployed to **staging** Runner-first
+> telemetry projection are implemented; the packet preparation base has the sole Alembic head
+> `0021_four_role_agent_acceptance`, and the intended release adds incoming `0022`. Candidate
+> `2069036e` is deployed to **staging** Runner-first
 > across Runner, Web, and Scheduler, with the database at `0021`. The public Web health/readiness,
 > unauthenticated protection boundary, and console/sign-in shell were smoke-tested. No staging
 > campaign or provider/target call ran, and no signed-in Clerk user, organization, permission, or MFA
@@ -21,13 +22,13 @@ authorized live URL; the target's source code is not part of this repository.
 | Endpoint | URL | Verification status |
 |---|---|---|
 | Staging platform | `https://web-staging-8e30.up.railway.app` | **Infrastructure smoke verified** — `/health` 200, `/ready` 200, protected unauthenticated request 401, console/sign-in shell 200; no signed-in audit or campaign |
-| Production platform | `https://web-production-44528.up.railway.app` | **Unverified** — promotion evidence not recorded (`docs/deployment/RAILWAY.md`) |
+| Production platform | `https://web-production-44528.up.railway.app` | **Older release** — `23490ea` / `0013`; final candidate not deployed |
 | Authorized live target | `https://agent-production-9f62.up.railway.app` | **Reached** — owner-authorized; live HTTP evidence in `evals/results/` and `docs/evidence/zap/` |
 
 The two platform rows are recorded here because a deployed URL is submitted with every checkpoint.
 Staging records only the completed infrastructure smoke; it is not evidence of a signed-in Clerk
-flow, a governed campaign, live model calls, or target calls. Production is listed as an expected
-origin, not as a deployment claim. See the dated evidence record and remaining promotion gates in
+flow, a governed campaign, live model calls, or target calls. Production identifies the older
+release only, not the final candidate. See the dated evidence record and remaining promotion gates in
 [`docs/deployment/RAILWAY.md`](docs/deployment/RAILWAY.md).
 
 ## What the candidate implements
@@ -75,8 +76,10 @@ origin, not as a deployment claim. See the dated evidence record and remaining p
 - Confirm the real Clerk role assignments and two-user flow before claiming live RBAC proof. The
   backend controls are implemented and tested, and deployed protected routes return `401`, but the
   external role proof remains pending and is not a substitute for campaign authorization.
-- Obtain an explicit human production-deploy grant and bind a compatible rollback deployment and
-  database recovery point. No source commit or documentation packet grants production promotion.
+- Bind an immutable image digest and compatible rollback image, prove the exact candidate on staging,
+  then promote Runner-first to production. This synthetic assignment does not require a database
+  backup artifact; additive migrations, quiescence, staging proof, and compatible image rollback are
+  the release controls.
 
 ### Canonical source of truth
 
@@ -245,13 +248,16 @@ ambiguous and is never silently declared unsent.
 Revisions through `0021` add authoritative results, exact two-role authorization, regression replay
 planning, and four-agent runtime observability to the exact-scope control plane; `0017`–`0021` add
 hosted agent-execution lineage, provider-call lineage, recordable provider identity, agent-acceptance
-authority, and the four-role agent acceptance surface. A trusted server
+authority, and the four-role agent acceptance surface. Incoming `0022` must remain the sole head and
+compose the governed runtime before final release binding. A trusted server
 catalog prepares immutable campaign scopes; a private durable Runner claims the PostgreSQL queue,
 revalidates authorization immediately before every dispatch, resolves scoped credentials only at that
 boundary, and persists evidence before atomic job completion. The private Scheduler creates one
 append-only, human-authorization-blocked replay plan when a ready target version changes; it never
 executes an attack or bypasses campaign authorization. Application and database controls reject
-self-approval, and neither queue completion nor a replay plan is approval.
+self-approval for campaign authorization. Finding approval still requires the release fix that
+rejects the raiser as approver and rejects missing raiser lineage in both application and database.
+Neither queue completion nor a replay plan is approval.
 
 ## Contracts and migrations
 

@@ -6,9 +6,10 @@
 
 **Staging shell:** <https://web-staging-8e30.up.railway.app>
 
-This is a recording checklist, not evidence that the newest code is deployed. Do not record against
-the currently audited older release (`23490ea`, schema `0013`). Replace no values by hand: show the
-identities and measurements returned by the final UI/API and linked evidence.
+This is a recording checklist, not evidence that the newest code is deployed. Staging historically
+proved `2069036e` / `0021`; production remains `23490ea` / `0013`. Record only after the exact final
+`0022` release is deployed and verified. Replace no values by hand: show the identities and
+measurements returned by the final UI/API and linked evidence.
 
 ## Before recording
 
@@ -126,9 +127,10 @@ Read the actual campaign cost and timing from the verified evidence. Do not reus
 request, ~321 seconds"). Two problems, both verified 2026-07-25: only **five** attempt manifests are
 committed, not nine; and **no cost value is recorded in any result artifact** — the attempt manifests
 have no cost field. The per-request figure came from a configured constant in the outbound telemetry
-layer, which is an accounting cap, not a measurement. If asked about cost, say the caps: `$1.00`
-budget, 40 attempts, 60 physical requests, 0.5 req/s, 1800 s
-(`docs/evidence/authorization-requests/caps.json`) — and that measured spend is unrecorded.
+layer, which is an accounting cap, not a measurement. The historical authorization file carries a
+`$1.00` budget, 40 attempts, 60 physical requests, 0.5 req/s, and 1800 s; those are old ceilings, not
+spend or the final campaign envelope. Show the final authorized caps and measured invoice-backed
+spend from the release binding ledger.
 
 End on the submission index, which must contain the actual repository, deployed app, threat model,
 users, architecture, frozen corpus/results, vulnerability index, cost analysis, demo, and social-post

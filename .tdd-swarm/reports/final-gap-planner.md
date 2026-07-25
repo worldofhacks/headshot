@@ -45,8 +45,10 @@ authorizations or immutable prerequisites miss noon. The plan does not claim ful
 
 [locked-decision] Oracle precedence, fail-closed calibration, synthetic-only data, distinct approval,
 critical-publication/remediation gates, package-authoritative contracts, staging-not-production, and
-no-fabricated-findings remain binding. Run `aceddc495808427992efbd2b73b3598d` remains exactly 9 HTTP 200,
-9 evidence, 9 `INDETERMINATE`, $0.09 outbound; the 60%/33.3%/60% calibration remains failed.
+no-fabricated-findings remain binding. A legacy summary for
+`aceddc495808427992efbd2b73b3598d` claims 9 HTTP 200, 9 evidence, and 9 `INDETERMINATE`;
+its `$0.09` prose lacks a retained billing/request-cost manifest and is quarantined. The
+60%/33.3%/60% calibration remains failed.
 
 ## Review-finding closure table
 

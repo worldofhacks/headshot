@@ -50,10 +50,10 @@ flowchart LR
 
 | Component | Intended ingress | Credential classes | Source status | Live status |
 |---|---|---|---|---|
-| Web | Public HTTPS; only service with a public domain | Clerk verification configuration and environment-local DB binding; no target/model secret | Implemented and packaged | Prior deployment observed; final commit not deployed |
-| Runner | No public ingress | DB, model-provider references, Langfuse credentials, target credential reference/value at the dispatch boundary | Implemented and packaged | Prior service healthy; reviewed `0017` behavior not verified |
-| Scheduler | No public ingress | DB only | Implemented and packaged | Prior service healthy; final release identity pending |
-| PostgreSQL | Railway private network only | Database role credentials | Schema through `0017` in source | Deployed schema recorded at `0013` |
+| Web | Public HTTPS; only service with a public domain | Clerk verification configuration and environment-local DB binding; no target/model secret | Implemented and packaged | Staging shell proved at `2069036e`; final commit not deployed |
+| Runner | No public ingress | DB, model-provider references, Langfuse credentials, target credential reference/value at the dispatch boundary | Implemented and packaged | Staging deployment exists; final `0022` runtime not verified |
+| Scheduler | No public ingress | DB only | Implemented and packaged | Staging deployment exists; final release identity pending |
+| PostgreSQL | Railway private network only | Database role credentials | Preparation base through `0021`; release target `0022` pending | Staging `0021`; production `0013` |
 | Clerk | External managed identity | Browser session issuance; Web holds public JWT verification material | Backend verification implemented/tested | Full real-environment policy verification pending |
 | Langfuse Cloud | Outbound from Runner only | Environment-specific public/secret keypair | Projection and query-back implemented | No canonical observations for the deployed release |
 | Model provider | Outbound from Runner only | Provider credential reference, bounded by hosted configuration/run scope | Hosted lifecycle implemented | Final provider/model lineage not live-verified |
@@ -76,26 +76,33 @@ project is not isolation.
 
 ## Current deployment finding
 
-The latest repository-grounded live review is
-[`../../security/LANGFUSE_AGENT_OBSERVABILITY_REVIEW_2026-07-24.md`](../../security/LANGFUSE_AGENT_OBSERVABILITY_REVIEW_2026-07-24.md).
-It records:
-
-- staging and production release `23490ea`;
-- deployed migration `0013`;
-- zero `agent_executions`; and
-- zero canonical agent/runtime observations in Langfuse.
-
-The source baseline inspected for this packet has a single migration head at `0017`. Accordingly,
-the current deployment proves an older release only. It cannot be used as evidence for the hosted
-four-agent or Langfuse query-back implementation.
+- Staging historically deployed exact candidate `2069036e` Runner-first, applied `0013 → 0021`,
+  brought Web and Scheduler up, returned `200` for health/readiness, returned `401` for an
+  unauthenticated protected route, and loaded the console/sign-in shell. The observed abbreviated
+  image digests were Web `sha256:77f43ce5…bbdc`, Runner `sha256:8cb818…bcc9`, and Scheduler
+  `sha256:98860d…e078`; only Web had a public route.
+- No live campaign was run in that staging proof. It therefore proves deployment mechanics and the
+  unauthenticated boundary, not hosted four-role execution, signed-in Clerk RBAC, final cost, or
+  Langfuse query-back.
+- Production remains the older `23490ea` / `0013` release. Its observed abbreviated image digests
+  were Web `sha256:4bdfb1…551c7`, Runner `sha256:806d42…f55d`, and Scheduler
+  `sha256:0983d5…60b67`; only Web had a public route.
+- The packet preparation base has one source head at `0021`; the release target is the incoming
+  serialized `0022`. Neither is represented as the final shipped release.
 
 ## Promotion gates
 
-Staging promotion requires the exact final commit, green authoritative GitHub CI, one migration head,
-Web-only public ingress, private Runner/Scheduler/PostgreSQL, `/health` and `/ready`, protected-route
-denial, an authenticated acceptance flow, one exact authorized synthetic campaign, ordered durable
-agent records, and successful Langfuse query-back.
+For each environment, promote only the exact final commit after green GitHub CI and exact GitLab
+mirroring. Build and record one immutable image digest; quiesce application services; deploy the
+private Runner first; apply and verify the single `0022` head; verify Runner health; then activate
+Web and Scheduler. Web must return `200` for health/readiness, `401` for an unauthenticated protected
+route, and a non-blank console shell. Runner, Scheduler, and PostgreSQL remain private.
 
-Production promotion additionally requires an explicit human deploy grant and a recorded compatible
-rollback deployment plus database recovery point. No production promotion is authorized by this
-packet.
+Staging must prove this exact sequence before production. If Web renders a blank surface, roll back
+Web only while Runner and data stay intact, investigate, and retry. This synthetic assignment does
+not require a database-backup artifact; the safety controls are the clean staging migration,
+additive serialized migrations, quiescence, and compatible image rollback.
+
+Campaign acceptance is a separate runtime authorization boundary: distinct authenticated launcher
+and approver principals authorize the exact synthetic operation, then ordered durable executions and
+Langfuse query-back are retained. Deployment authority never substitutes for campaign authority.
