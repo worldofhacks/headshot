@@ -392,6 +392,39 @@ def test_transport_rejects_encoded_input_above_authorized_bound_before_any_side_
     assert observer.started == observer.finished == []
 
 
+def test_ledger_rejects_unrepresentable_reservation_as_typed_provider_error() -> None:
+    configuration = _configuration()
+    hostile_price = Decimal("0." + ("1" * 300))
+    judge = next(role for role in configuration.roles if role.role == "judge")
+    hostile_judge = replace(
+        judge,
+        prices=TokenPrices(
+            input_usd_per_million_tokens=hostile_price,
+            output_usd_per_million_tokens=Decimal("2"),
+            reasoning_usd_per_million_tokens=Decimal("3"),
+        ),
+    )
+    configuration = replace(
+        configuration,
+        roles=tuple(
+            hostile_judge if role.role == "judge" else role for role in configuration.roles
+        ),
+    )
+    ledger = HostedUsageLedger(configuration)
+
+    with pytest.raises(HostedProviderError, match="cannot be represented exactly"):
+        ledger.reserve(
+            "judge",
+            input_tokens=1,
+            output_tokens=0,
+            reasoning_tokens=0,
+        )
+
+    assert ledger.snapshot.physical_calls == 0
+    assert ledger.snapshot.measured_usd == 0
+    assert ledger.snapshot.unresolved_exposure_usd == 0
+
+
 @pytest.mark.parametrize("authorization_headroom", (0, 1))
 def test_transport_accepts_encoded_input_at_or_below_authorized_bound(
     authorization_headroom: int,

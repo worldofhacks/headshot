@@ -11,9 +11,9 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
-from decimal import Decimal
+from decimal import Decimal, DecimalException, Inexact, Rounded, localcontext
 from types import MappingProxyType
 from typing import Any, Literal, cast
 from urllib.parse import urlsplit
@@ -59,6 +59,7 @@ _MAX_USD = HOSTED_MAX_MEASURED_USD
 _MAX_PRICE_PER_MILLION = Decimal("1000000")
 _MAX_REQUESTS_PER_SECOND = Decimal("0.5")
 _MAX_CONCURRENCY = HOSTED_MAX_CONCURRENCY
+_TOKENS_PER_MILLION = Decimal(1_000_000)
 
 _ROLE_ORDER = {role: index for index, role in enumerate(AGENT_ROLES)}
 CompletionTokenParameter = Literal["max_tokens", "max_completion_tokens"]
@@ -222,6 +223,25 @@ def _validate_credential_reference(value: object) -> str:
     return value
 
 
+class HostedReservationCostError(ValueError):
+    """An authorization-bound cash reservation cannot be represented exactly."""
+
+
+def exact_reservation_usd_sum(values: Iterable[Decimal]) -> Decimal:
+    """Add reservation amounts without inheriting the process-wide Decimal context."""
+
+    try:
+        with localcontext() as context:
+            context.prec = 256
+            context.traps[Inexact] = True
+            context.traps[Rounded] = True
+            return sum(values, start=Decimal(0))
+    except DecimalException as exc:
+        raise HostedReservationCostError(
+            "hosted reservation cost cannot be represented exactly"
+        ) from exc
+
+
 @dataclass(frozen=True, slots=True)
 class TokenPrices:
     """Authorization-bound catalog prices, expressed exactly as Decimal USD per million tokens."""
@@ -246,6 +266,53 @@ class TokenPrices:
                 self.reasoning_usd_per_million_tokens
             ),
         }
+
+    def maximum_reservation_usd(
+        self,
+        *,
+        input_tokens: int,
+        output_tokens: int,
+        reasoning_tokens: int,
+        physical_attempts: int = 1,
+    ) -> Decimal:
+        """Return the exact worst-case cash reservation for bounded physical attempts."""
+
+        for label, value in (
+            ("input", input_tokens),
+            ("output", output_tokens),
+            ("reasoning", reasoning_tokens),
+            ("physical attempt", physical_attempts),
+        ):
+            if type(value) is not int:
+                raise TypeError(f"{label} token reservation must be an integer")
+            if value < 0:
+                raise ValueError(f"{label} token reservation must be non-negative")
+        reasoning_price = max(
+            self.output_usd_per_million_tokens,
+            self.reasoning_usd_per_million_tokens,
+        )
+        try:
+            # Authority values must never inherit the process-wide Decimal context. The same
+            # closed precision and traps used by catalog preflight reject unusually precise or
+            # hostile values rather than silently rounding either one attempt or a cumulative
+            # workload reservation.
+            with localcontext() as context:
+                context.prec = 256
+                context.traps[Inexact] = True
+                context.traps[Rounded] = True
+                return (
+                    (
+                        self.input_usd_per_million_tokens * input_tokens
+                        + self.output_usd_per_million_tokens * output_tokens
+                        + reasoning_price * reasoning_tokens
+                    )
+                    * physical_attempts
+                    / _TOKENS_PER_MILLION
+                )
+        except DecimalException as exc:
+            raise HostedReservationCostError(
+                "hosted reservation cost cannot be represented exactly"
+            ) from exc
 
 
 @dataclass(frozen=True, slots=True)
@@ -608,9 +675,11 @@ __all__ = [
     "HostedConfigurationPreflight",
     "HostedConfigurationSet",
     "HostedLimits",
+    "HostedReservationCostError",
     "HostedRoleConfiguration",
     "HostedRolePreflight",
     "TokenPrices",
+    "exact_reservation_usd_sum",
     "preflight_hosted_configuration_set",
     "resolve_hosted_prompt",
     "validate_hosted_configuration_set",

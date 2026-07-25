@@ -25,6 +25,7 @@ from jsonschema import Draft202012Validator
 from agentforge.agents.hosted import (
     HOSTED_MAX_LOGICAL_RETRIES,
     HostedConfigurationSet,
+    HostedReservationCostError,
     HostedRoleConfiguration,
     resolve_hosted_prompt,
     validate_hosted_configuration_set,
@@ -41,7 +42,6 @@ from agentforge.providers.lineage import (
 from agentforge.secrets import Secret
 
 OPENROUTER_CHAT_COMPLETIONS_URL = "https://openrouter.ai/api/v1/chat/completions"
-_MILLION = Decimal(1_000_000)
 _COST_QUANTUM = Decimal("0.000000000001")
 _MAX_COST = Decimal("99999999.999999999999")
 _RETRYABLE_STATUS = frozenset({429, 502, 503})
@@ -208,16 +208,16 @@ class HostedUsageLedger:
         configuration = self._roles.get(role)
         if configuration is None:
             raise HostedProviderError("hosted role is not configured")
-        prices = configuration.prices
-        reasoning_price = max(
-            prices.output_usd_per_million_tokens,
-            prices.reasoning_usd_per_million_tokens,
-        )
-        maximum_cost = (
-            prices.input_usd_per_million_tokens * input_tokens
-            + prices.output_usd_per_million_tokens * output_tokens
-            + reasoning_price * reasoning_tokens
-        ) / _MILLION
+        try:
+            maximum_cost = configuration.prices.maximum_reservation_usd(
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                reasoning_tokens=reasoning_tokens,
+            )
+        except HostedReservationCostError as exc:
+            raise HostedProviderError(
+                "hosted reservation cost cannot be represented exactly"
+            ) from exc
         with self._lock:
             global_limits = self._configuration.global_limits
             role_limits = configuration.limits

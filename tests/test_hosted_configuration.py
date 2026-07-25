@@ -14,6 +14,7 @@ from agentforge.agents.hosted import (
     HOSTED_MAX_PHYSICAL_CALLS,
     HostedConfigurationSet,
     HostedLimits,
+    HostedReservationCostError,
     HostedRoleConfiguration,
     TokenPrices,
     preflight_hosted_configuration_set,
@@ -375,6 +376,41 @@ def test_decimal_canonicalization_is_independent_of_ambient_context() -> None:
         higher_hash = replace(baseline, global_limits=higher).configuration_sha256
 
     assert lower_hash != higher_hash
+
+
+def test_reservation_cost_is_independent_of_hostile_ambient_precision() -> None:
+    prices = TokenPrices(
+        input_usd_per_million_tokens=Decimal("5.5"),
+        output_usd_per_million_tokens=Decimal("27.5"),
+        reasoning_usd_per_million_tokens=Decimal("27.5"),
+    )
+
+    with localcontext() as context:
+        context.prec = 2
+        reservation = prices.maximum_reservation_usd(
+            input_tokens=65_536,
+            output_tokens=2_048,
+            reasoning_tokens=8_192,
+            physical_attempts=100,
+        )
+
+    assert reservation == Decimal("64.2048")
+
+
+def test_reservation_cost_rejects_unrepresentable_authority_without_rounding() -> None:
+    hostile_price = Decimal("0." + ("1" * 300))
+    prices = TokenPrices(
+        input_usd_per_million_tokens=hostile_price,
+        output_usd_per_million_tokens=Decimal("1"),
+        reasoning_usd_per_million_tokens=Decimal("1"),
+    )
+
+    with pytest.raises(HostedReservationCostError, match="cannot be represented exactly"):
+        prices.maximum_reservation_usd(
+            input_tokens=1,
+            output_tokens=0,
+            reasoning_tokens=0,
+        )
 
 
 def test_configuration_round_trips_only_its_exact_canonical_payload() -> None:

@@ -8,7 +8,7 @@ import datetime
 import hashlib
 import json
 import time
-from decimal import Decimal
+from decimal import Decimal, localcontext
 from types import SimpleNamespace
 from typing import NamedTuple
 
@@ -16,6 +16,8 @@ import pytest
 from sqlalchemy import Engine, text
 
 from agentforge.agents.hosted import (
+    HOSTED_MAX_MEASURED_USD,
+    HOSTED_ROLE_MAX_MEASURED_USD,
     HostedConfigurationSet,
     HostedLimits,
     HostedRoleConfiguration,
@@ -1454,6 +1456,12 @@ def _hosted_capacity_fixture(
     required_calls = policy.required_logical_calls(case_count=case_count)
     roles = []
     global_tokens = {"input": 0, "output": 0, "reasoning": 0}
+    global_usd = Decimal(0)
+    prices = TokenPrices(
+        input_usd_per_million_tokens=Decimal("0.01"),
+        output_usd_per_million_tokens=Decimal("0.02"),
+        reasoning_usd_per_million_tokens=Decimal("0.02"),
+    )
     for role, required in required_calls.items():
         bounds = policy.call_bounds[role]
         required_physical_calls = required * (1 + max_retries)
@@ -1462,16 +1470,25 @@ def _hosted_capacity_fixture(
             "output": bounds.output_tokens * required_physical_calls,
             "reasoning": bounds.reasoning_tokens * required_physical_calls,
         }
+        required_usd = prices.maximum_reservation_usd(
+            input_tokens=bounds.input_tokens,
+            output_tokens=bounds.output_tokens,
+            reasoning_tokens=bounds.reasoning_tokens,
+            physical_attempts=required_physical_calls,
+        )
+        global_usd += required_usd
         for token_kind, token_count in totals.items():
             global_tokens[token_kind] += token_count
         roles.append(
             SimpleNamespace(
                 role=role,
+                prices=prices,
                 limits=SimpleNamespace(
                     max_calls=required_physical_calls,
                     max_input_tokens=totals["input"],
                     max_output_tokens=totals["output"],
                     max_reasoning_tokens=totals["reasoning"],
+                    max_usd=required_usd,
                     max_retries=max_retries,
                 ),
             )
@@ -1483,6 +1500,7 @@ def _hosted_capacity_fixture(
             max_input_tokens=global_tokens["input"],
             max_output_tokens=global_tokens["output"],
             max_reasoning_tokens=global_tokens["reasoning"],
+            max_usd=global_usd,
             max_retries=max_retries,
         ),
     )
@@ -1515,6 +1533,162 @@ def test_hundred_case_hosted_preflight_requires_exact_global_token_capacity() ->
             generation_policy=DEFAULT_HOSTED_GENERATION_POLICY,
             case_count=100,
         )
+
+
+def test_hundred_case_hosted_preflight_accepts_exact_role_usd_capacity() -> None:
+    configuration = _hosted_capacity_fixture(case_count=100)
+
+    _require_hosted_workload_capacity(
+        configuration=configuration,  # type: ignore[arg-type]
+        generation_policy=DEFAULT_HOSTED_GENERATION_POLICY,
+        case_count=100,
+    )
+
+
+def test_hundred_case_hosted_preflight_refuses_one_quantum_below_role_usd_capacity() -> None:
+    configuration = _hosted_capacity_fixture(case_count=100)
+    configuration.roles[2].limits.max_usd -= Decimal("0.000000000001")
+
+    with pytest.raises(DispatchUnavailable, match="hosted_role_usd_cap_incompatible"):
+        _require_hosted_workload_capacity(
+            configuration=configuration,  # type: ignore[arg-type]
+            generation_policy=DEFAULT_HOSTED_GENERATION_POLICY,
+            case_count=100,
+        )
+
+
+def test_hundred_case_hosted_preflight_accepts_exact_global_usd_capacity() -> None:
+    configuration = _hosted_capacity_fixture(case_count=100)
+
+    _require_hosted_workload_capacity(
+        configuration=configuration,  # type: ignore[arg-type]
+        generation_policy=DEFAULT_HOSTED_GENERATION_POLICY,
+        case_count=100,
+    )
+
+
+def test_hundred_case_hosted_preflight_is_independent_of_ambient_decimal_precision() -> None:
+    configuration = _hosted_capacity_fixture(case_count=100)
+
+    with localcontext() as context:
+        context.prec = 2
+        _require_hosted_workload_capacity(
+            configuration=configuration,  # type: ignore[arg-type]
+            generation_policy=DEFAULT_HOSTED_GENERATION_POLICY,
+            case_count=100,
+        )
+
+
+def test_hundred_case_hosted_preflight_refuses_one_quantum_below_global_usd_capacity() -> None:
+    configuration = _hosted_capacity_fixture(case_count=100)
+    configuration.global_limits.max_usd -= Decimal("0.000000000001")
+
+    with pytest.raises(DispatchUnavailable, match="hosted_global_usd_cap_incompatible"):
+        _require_hosted_workload_capacity(
+            configuration=configuration,  # type: ignore[arg-type]
+            generation_policy=DEFAULT_HOSTED_GENERATION_POLICY,
+            case_count=100,
+        )
+
+
+def test_hundred_case_hosted_preflight_refuses_unrepresentable_role_usd_capacity() -> None:
+    configuration = _hosted_capacity_fixture(case_count=100)
+    configuration.roles[0].prices = TokenPrices(
+        input_usd_per_million_tokens=Decimal("0." + ("1" * 300)),
+        output_usd_per_million_tokens=Decimal("0.02"),
+        reasoning_usd_per_million_tokens=Decimal("0.02"),
+    )
+
+    with pytest.raises(DispatchUnavailable, match="hosted_role_usd_cap_incompatible"):
+        _require_hosted_workload_capacity(
+            configuration=configuration,  # type: ignore[arg-type]
+            generation_policy=DEFAULT_HOSTED_GENERATION_POLICY,
+            case_count=100,
+        )
+
+
+def test_hundred_case_current_closed_usd_caps_refuse_before_provider_io() -> None:
+    base_configuration = _runner_hosted_configuration()
+    current_authorized_prices = {
+        "orchestrator": TokenPrices(
+            input_usd_per_million_tokens=Decimal("10"),
+            output_usd_per_million_tokens=Decimal("50"),
+            reasoning_usd_per_million_tokens=Decimal("50"),
+        ),
+        "red_team": TokenPrices(
+            input_usd_per_million_tokens=Decimal("10"),
+            output_usd_per_million_tokens=Decimal("100"),
+            reasoning_usd_per_million_tokens=Decimal("100"),
+        ),
+        "judge": TokenPrices(
+            input_usd_per_million_tokens=Decimal("20"),
+            output_usd_per_million_tokens=Decimal("100"),
+            reasoning_usd_per_million_tokens=Decimal("100"),
+        ),
+        "documentation": TokenPrices(
+            input_usd_per_million_tokens=Decimal("10"),
+            output_usd_per_million_tokens=Decimal("100"),
+            reasoning_usd_per_million_tokens=Decimal("100"),
+        ),
+    }
+    policy = DEFAULT_HOSTED_GENERATION_POLICY
+    required_calls = policy.required_logical_calls(case_count=100)
+    global_tokens = {"input": 0, "output": 0, "reasoning": 0}
+    roles = []
+    for role in base_configuration.roles:
+        bounds = policy.call_bounds[role.role]
+        physical_calls = required_calls[role.role]
+        tokens = {
+            "input": bounds.input_tokens * physical_calls,
+            "output": bounds.output_tokens * physical_calls,
+            "reasoning": bounds.reasoning_tokens * physical_calls,
+        }
+        for token_kind, token_count in tokens.items():
+            global_tokens[token_kind] += token_count
+        roles.append(
+            dataclasses.replace(
+                role,
+                prices=current_authorized_prices[role.role],
+                limits=HostedLimits(
+                    max_calls=physical_calls,
+                    max_input_tokens=tokens["input"],
+                    max_output_tokens=tokens["output"],
+                    max_reasoning_tokens=tokens["reasoning"],
+                    max_usd=HOSTED_ROLE_MAX_MEASURED_USD[role.role],
+                    max_retries=0,
+                    max_requests_per_second=role.limits.max_requests_per_second,
+                    max_concurrency=role.limits.max_concurrency,
+                ),
+            )
+        )
+    configuration = HostedConfigurationSet(
+        roles=tuple(roles),
+        global_limits=HostedLimits(
+            max_calls=sum(required_calls.values()),
+            max_input_tokens=global_tokens["input"],
+            max_output_tokens=global_tokens["output"],
+            max_reasoning_tokens=global_tokens["reasoning"],
+            max_usd=HOSTED_MAX_MEASURED_USD,
+            max_retries=0,
+            max_requests_per_second=base_configuration.global_limits.max_requests_per_second,
+            max_concurrency=base_configuration.global_limits.max_concurrency,
+        ),
+    )
+    provider_calls: list[bool] = []
+
+    with pytest.raises(DispatchUnavailable, match="hosted_role_usd_cap_incompatible"):
+        _require_hosted_workload_capacity(
+            configuration=configuration,
+            generation_policy=DEFAULT_HOSTED_GENERATION_POLICY,
+            case_count=100,
+        )
+        provider_calls.append(True)
+
+    assert configuration.global_limits.max_usd == Decimal("10")
+    assert {role.role: role.limits.max_usd for role in configuration.roles} == dict(
+        HOSTED_ROLE_MAX_MEASURED_USD
+    )
+    assert provider_calls == []
 
 
 def test_hundred_case_zero_retry_workload_exactly_fits_closed_capacity() -> None:

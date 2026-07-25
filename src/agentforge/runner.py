@@ -28,7 +28,12 @@ from agentforge.agents.documentation import (
     DocumentationInput,
     HostedReportWriter,
 )
-from agentforge.agents.hosted import HostedConfigurationSet
+from agentforge.agents.hosted import (
+    HOSTED_MAX_LOGICAL_RETRIES,
+    HostedConfigurationSet,
+    HostedReservationCostError,
+    exact_reservation_usd_sum,
+)
 from agentforge.agents.hosted_policy import (
     HostedGenerationPolicy,
     resolve_hosted_generation_policy,
@@ -386,12 +391,14 @@ def _require_hosted_workload_capacity(
 
     global_required = {"input": 0, "output": 0, "reasoning": 0}
     global_required_calls = 0
+    role_required_usd: list[Decimal] = []
     for role, required in required_calls.items():
         role_configuration = roles.get(role)
         bounds = generation_policy.call_bounds[role]
         if role_configuration is None:
             raise DispatchUnavailable("hosted_role_cap_incompatible")
         attempt_factor = 1 + min(
+            HOSTED_MAX_LOGICAL_RETRIES,
             role_configuration.limits.max_retries,
             configuration.global_limits.max_retries,
         )
@@ -409,7 +416,19 @@ def _require_hosted_workload_capacity(
             or cumulative["reasoning"] > limits.max_reasoning_tokens
         ):
             raise DispatchUnavailable("hosted_role_cap_incompatible")
+        try:
+            required_usd = role_configuration.prices.maximum_reservation_usd(
+                input_tokens=bounds.input_tokens,
+                output_tokens=bounds.output_tokens,
+                reasoning_tokens=bounds.reasoning_tokens,
+                physical_attempts=required_physical_calls,
+            )
+        except HostedReservationCostError as exc:
+            raise DispatchUnavailable("hosted_role_usd_cap_incompatible") from exc
+        if required_usd > limits.max_usd:
+            raise DispatchUnavailable("hosted_role_usd_cap_incompatible")
         global_required_calls += required_physical_calls
+        role_required_usd.append(required_usd)
         for token_kind, token_count in cumulative.items():
             global_required[token_kind] += token_count
 
@@ -422,6 +441,12 @@ def _require_hosted_workload_capacity(
         or global_required["reasoning"] > global_limits.max_reasoning_tokens
     ):
         raise DispatchUnavailable("hosted_global_token_cap_incompatible")
+    try:
+        global_required_usd = exact_reservation_usd_sum(role_required_usd)
+    except HostedReservationCostError as exc:
+        raise DispatchUnavailable("hosted_global_usd_cap_incompatible") from exc
+    if global_required_usd > global_limits.max_usd:
+        raise DispatchUnavailable("hosted_global_usd_cap_incompatible")
 
 
 class _DurableHostedExecutionLifecycle:
