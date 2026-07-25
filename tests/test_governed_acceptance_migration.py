@@ -258,8 +258,8 @@ def _constraint_def(engine: Engine, name: str) -> str:
 
 def test_0022_governed_is_the_only_head() -> None:
     script = ScriptDirectory.from_config(_db.alembic_config(_db.admin_url()))
-    assert script.get_heads() == ["0022"]
-    assert script.get_revision("0022").down_revision == "0021"
+    assert script.get_heads() == ["0023"]
+    assert script.get_revision("0023").down_revision == "0022"
 
 
 def test_0022_adds_governed_run_kind_and_round_trips(admin_url: str) -> None:
