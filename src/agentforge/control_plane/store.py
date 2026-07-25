@@ -185,6 +185,14 @@ class AgentAcceptanceRunIdentity:
 
 
 @dataclass(frozen=True, slots=True)
+class GovernedAcceptanceRunIdentity:
+    """The governed run and its single reviewed-corpus attempt created in one transaction."""
+
+    run_id: str
+    attempt_id: str
+
+
+@dataclass(frozen=True, slots=True)
 class AuthorizedAgentAcceptanceRoleConfiguration:
     """One non-target role resolved from a short-lived acceptance authority."""
 
@@ -213,6 +221,33 @@ def _closed_agent_acceptance_limits(version: str = "2") -> dict[str, Any]:
         "schema_version": version,
         "network_scope": "openrouter_langfuse_only",
         "target_call_limit": 0,
+        "allowed_roles": list(roles),
+        "role_call_caps": {role: 1 for role in roles},
+        "role_usd_caps": {
+            role: format(_AGENT_ACCEPTANCE_ROLE_USD_CAPS[role], "f") for role in roles
+        },
+        "global_call_cap": len(roles),
+        "global_usd_cap": format(_AGENT_ACCEPTANCE_GLOBAL_USD_CAP, "f"),
+    }
+
+
+_GOVERNED_ACCEPTANCE_ROLES: tuple[AgentRole, ...] = (
+    "orchestrator",
+    "red_team",
+    "judge",
+    "documentation",
+)
+_GOVERNED_ACCEPTANCE_RUN_PREFIX = "GA-"
+
+
+def _closed_governed_acceptance_limits() -> dict[str, Any]:
+    """The one v3 governed envelope: four roles, one call each, exactly one bounded dispatch."""
+
+    roles = _GOVERNED_ACCEPTANCE_ROLES
+    return {
+        "schema_version": "3",
+        "network_scope": "policy_gateway_target",
+        "target_call_limit": 1,
         "allowed_roles": list(roles),
         "role_call_caps": {role: 1 for role in roles},
         "role_usd_caps": {
@@ -289,6 +324,33 @@ def canonical_agent_acceptance_limits(
     """Return the exact versioned, zero-target runtime envelope for a staged configuration."""
 
     return _canonical_agent_acceptance_limits_for_configuration(configuration)
+
+
+def canonical_governed_acceptance_limits(
+    configuration: HostedConfigurationSet,
+) -> dict[str, Any]:
+    """Return the v3 governed envelope: the four-role caps of v2, but target-BOUND (one dispatch).
+
+    A governed run reuses the exact four-role call/spend envelope the target-free v2 acceptance
+    validates, so it must be staged on the same four-role configuration; only the network scope and
+    the single permitted target dispatch differ.
+    """
+
+    envelope = _canonical_agent_acceptance_limits_for_configuration(configuration)
+    if envelope["schema_version"] != "2":
+        raise InvalidControlPlaneInput("governed acceptance requires the four-role call envelope")
+    governed = _closed_governed_acceptance_limits()
+    if (
+        envelope["allowed_roles"] != governed["allowed_roles"]
+        or envelope["role_call_caps"] != governed["role_call_caps"]
+        or envelope["role_usd_caps"] != governed["role_usd_caps"]
+        or envelope["global_call_cap"] != governed["global_call_cap"]
+        or envelope["global_usd_cap"] != governed["global_usd_cap"]
+    ):
+        raise InvalidControlPlaneInput(
+            "governed acceptance caps differ from the four-role configuration envelope"
+        )
+    return governed
 
 
 class ControlPlaneStore:
@@ -2725,6 +2787,640 @@ class ControlPlaneStore:
                 actor_session_id="runner:live-acceptance",
             )
         return run_id
+
+    # ------------------------------------------------------- governed acceptance authority
+
+    def create_governed_acceptance_run(
+        self,
+        *,
+        organization_id: str,
+        authorization_request_id: str,
+        scope_hash: str,
+        launcher_user_id: str,
+        launcher_session_id: str,
+        configuration_set_sha256: str,
+        generation_policy_sha256: str,
+        reviewed_case_id: str,
+        reviewed_case_content_hash: str,
+        reviewed_category: str,
+        expires_at: datetime.datetime,
+        limits: Mapping[str, Any] | None = None,
+    ) -> GovernedAcceptanceRunIdentity:
+        """Create one governed, target-BOUND four-role run bound to an exact reviewed case.
+
+        Human-launched under a live two-person authorization (campaign-style): the launcher's
+        live, exact-scope request must already be approved by a DIFFERENT principal. The run's
+        ``acceptance_context_sha256`` is the reviewed case's content hash, so the authority is
+        pinned to the EXACT reviewed bytes the seed-replay dispatch sends — no unreviewed content.
+        """
+
+        if not isinstance(organization_id, str) or not organization_id or len(organization_id) > 64:
+            raise InvalidControlPlaneInput("governed acceptance organization identity is invalid")
+        for label, value in (
+            ("authorization request", authorization_request_id),
+            ("launcher user", launcher_user_id),
+            ("launcher session", launcher_session_id),
+            ("reviewed case", reviewed_case_id),
+        ):
+            if not isinstance(value, str) or not value or len(value) > 128:
+                raise InvalidControlPlaneInput(f"governed acceptance {label} identity is invalid")
+        for label, value in (
+            ("scope hash", scope_hash),
+            ("context", reviewed_case_content_hash),
+            ("configuration hash", configuration_set_sha256),
+            ("generation policy hash", generation_policy_sha256),
+        ):
+            if not isinstance(value, str) or _SHA256.fullmatch(value) is None:
+                raise InvalidControlPlaneInput(f"governed acceptance {label} is invalid")
+        if (
+            not isinstance(reviewed_category, str)
+            or not reviewed_category
+            or len(reviewed_category) > 64
+        ):
+            raise InvalidControlPlaneInput("governed acceptance category is invalid")
+        supplied_limits = self._bounded_agent_payload(
+            dict(limits) if limits is not None else _closed_governed_acceptance_limits(),
+            label="governed acceptance limits",
+        )
+        if (
+            not isinstance(expires_at, datetime.datetime)
+            or expires_at.tzinfo is None
+            or expires_at.utcoffset() is None
+        ):
+            raise InvalidControlPlaneInput("governed acceptance expiry must be timezone-aware")
+        normalized_expiry = expires_at.astimezone(datetime.UTC)
+        now = datetime.datetime.now(datetime.UTC)
+        if normalized_expiry <= now or normalized_expiry > now + _AGENT_ACCEPTANCE_MAX_LIFETIME:
+            raise AuthorizationDeniedError(
+                "governed acceptance expiry is outside the closed lifetime"
+            )
+
+        context_sha256 = reviewed_case_content_hash
+        run_id = f"{_GOVERNED_ACCEPTANCE_RUN_PREFIX}{uuid.uuid4().hex}"
+        attempt_id = hashlib.sha256(
+            f"m1d-attempt:v1\0{run_id}\0{0}\0{reviewed_case_id}".encode()
+        ).hexdigest()
+        with self._engine.begin() as connection:
+            self._aggregate_lock(connection, f"governed-acceptance-create:{organization_id}")
+            try:
+                configuration = self._stored_hosted_configuration(
+                    connection,
+                    organization_id=organization_id,
+                    configuration_sha256=configuration_set_sha256,
+                )
+            except (AuthorizationDeniedError, RecordNotFoundError) as exc:
+                raise AuthorizationDeniedError(
+                    "governed acceptance requires an existing human-staged configuration"
+                ) from exc
+            expected_limits = canonical_governed_acceptance_limits(configuration)
+            if supplied_limits != expected_limits:
+                raise AuthorizationDeniedError(
+                    "governed acceptance limits differ from the closed governed envelope"
+                )
+            authorization = (
+                connection.execute(
+                    text(
+                        "SELECT q.launcher_user_id, q.launcher_session_id, "
+                        "(q.expires_at > clock_timestamp()) AS authorization_live, "
+                        "d.decision, d.approver_user_id, d.self_approval_override "
+                        "FROM campaign_authorization_requests q "
+                        "JOIN campaign_authorization_decisions d "
+                        "ON d.organization_id = q.organization_id "
+                        "AND d.request_id = q.request_id AND d.scope_hash = q.scope_hash "
+                        "WHERE q.organization_id = :org AND q.request_id = :req "
+                        "AND q.scope_hash = :scope FOR SHARE OF q, d"
+                    ),
+                    {"org": organization_id, "req": authorization_request_id, "scope": scope_hash},
+                )
+                .mappings()
+                .one_or_none()
+            )
+            if (
+                authorization is None
+                or authorization["decision"] != "approved"
+                or not authorization["authorization_live"]
+            ):
+                raise AuthorizationDeniedError("governed acceptance authorization is not live")
+            if (
+                authorization["launcher_user_id"] != launcher_user_id
+                or authorization["launcher_session_id"] != launcher_session_id
+            ):
+                raise AuthorizationDeniedError(
+                    "governed acceptance launcher differs from its approval"
+                )
+            if (
+                authorization["approver_user_id"] == launcher_user_id
+                or authorization["self_approval_override"]
+            ):
+                raise AuthorizationDeniedError("governed acceptance violates two-person control")
+
+            connection.execute(
+                text(
+                    "INSERT INTO campaign_runs "
+                    "(run_id, organization_id, run_kind, authorization_request_id, scope_hash, "
+                    "launcher_user_id, launcher_session_id, acceptance_configuration_sha256, "
+                    "acceptance_generation_policy_sha256, acceptance_context_sha256, "
+                    "acceptance_attempt_id, acceptance_limits, acceptance_expires_at) VALUES "
+                    "(:run, :org, 'governed_acceptance', :req, :scope, :launcher, :session, "
+                    ":configuration, :generation_policy, :context, :attempt, "
+                    "CAST(:limits AS jsonb), :expires_at)"
+                ),
+                {
+                    "run": run_id,
+                    "org": organization_id,
+                    "req": authorization_request_id,
+                    "scope": scope_hash,
+                    "launcher": launcher_user_id,
+                    "session": launcher_session_id,
+                    "configuration": configuration.configuration_sha256,
+                    "generation_policy": generation_policy_sha256,
+                    "context": context_sha256,
+                    "attempt": attempt_id,
+                    "limits": canonical_json(expected_limits),
+                    "expires_at": normalized_expiry,
+                },
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO campaign_attempts "
+                    "(organization_id, run_id, attempt_id, ordinal, case_id, "
+                    "case_content_hash, category, fixture_provenance) VALUES "
+                    "(:org, :run, :attempt, 0, :case_id, :context, :category, "
+                    "CAST(:fixture AS jsonb))"
+                ),
+                {
+                    "org": organization_id,
+                    "run": run_id,
+                    "attempt": attempt_id,
+                    "case_id": reviewed_case_id,
+                    "context": context_sha256,
+                    "category": reviewed_category,
+                    "fixture": canonical_json(_AGENT_ACCEPTANCE_FIXTURE),
+                },
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO campaign_run_events "
+                    "(organization_id, run_id, state, actor_user_id, actor_session_id) "
+                    "VALUES (:org, :run, 'running', :actor, :session)"
+                ),
+                {
+                    "org": organization_id,
+                    "run": run_id,
+                    "actor": launcher_user_id,
+                    "session": launcher_session_id,
+                },
+            )
+            self._audit(
+                connection,
+                organization_id,
+                "governed_acceptance.started",
+                "campaign_run",
+                run_id,
+                None,
+                {
+                    "run_kind": "governed_acceptance",
+                    "attempt_id": attempt_id,
+                    "authorization_request_id": authorization_request_id,
+                    "scope_hash": scope_hash,
+                    "configuration_set_sha256": configuration.configuration_sha256,
+                    "generation_policy_sha256": generation_policy_sha256,
+                    "acceptance_context_sha256": context_sha256,
+                    "reviewed_case_id": reviewed_case_id,
+                    "acceptance_limits": expected_limits,
+                    "network_scope": "policy_gateway_target",
+                    "target_call_limit": 1,
+                    "expires_at": normalized_expiry.isoformat(),
+                },
+                actor_user_id=launcher_user_id,
+                actor_session_id=launcher_session_id,
+            )
+        return GovernedAcceptanceRunIdentity(run_id=run_id, attempt_id=attempt_id)
+
+    def start_governed_agent_execution(
+        self,
+        *,
+        run_id: str,
+        agent_role: AgentRole,
+        input_payload: Mapping[str, Any],
+        provider: str,
+        model: str,
+        upstream_provider: str,
+        configuration_set_sha256: str,
+        role_configuration_sha256: str,
+        generation_policy_sha256: str,
+        judge_calibration_id: str | None = None,
+        judge_calibration_state: str | None = None,
+        parent_execution_id: str | None = None,
+        detail: Mapping[str, Any] | None = None,
+    ) -> str:
+        """Start one governed four-role logical call — permits the one bounded target dispatch.
+
+        Unlike the target-free acceptance start, this does NOT forbid target traffic (the governed
+        authority permits exactly one bounded dispatch). The governed Judge is the real calibrated,
+        human-enabled independent model Judge, so it starts ``enabled`` — not failed-advisory.
+        """
+
+        if agent_role not in _GOVERNED_ACCEPTANCE_ROLES:
+            raise AuthorizationDeniedError(
+                "agent role is outside the governed acceptance allowlist"
+            )
+        if agent_role == "judge" and judge_calibration_state != "enabled":
+            raise AuthorizationDeniedError(
+                "governed acceptance Judge must start with an enabled calibration"
+            )
+        self._validate_judge_calibration_lineage(
+            agent_role=agent_role,
+            calibration_id=judge_calibration_id,
+            calibration_state=judge_calibration_state,
+        )
+        input_sha256 = self._agent_payload_sha256(
+            input_payload,
+            label="governed acceptance input",
+        )
+        sanitized_detail = self._bounded_agent_payload(
+            detail or {},
+            label="governed acceptance detail",
+        )
+        if "provider_lineage_state" in sanitized_detail:
+            raise InvalidControlPlaneInput("provider lineage state is server-owned")
+        sanitized_detail.update(
+            {
+                "acceptance_id": run_id,
+                "run_kind": "governed_acceptance",
+                "telemetry_contract": "hosted-agent-execution-v1",
+                "provider_lineage_state": "canonical_physical",
+            }
+        )
+        with self._engine.begin() as connection:
+            self._aggregate_lock(connection, f"governed-acceptance:{run_id}")
+            authority = self._authorized_governed_role(
+                connection,
+                run_id=run_id,
+                agent_role=agent_role,
+                for_update=True,
+            )
+            role = authority.role_configuration
+            if (
+                provider != role.provider
+                or model != role.model_id
+                or upstream_provider != role.upstream_provider
+                or configuration_set_sha256 != authority.configuration.configuration_sha256
+                or role_configuration_sha256 != role.configuration_sha256
+                or generation_policy_sha256 != authority.generation_policy_sha256
+            ):
+                raise AuthorizationDeniedError(
+                    "hosted execution identity differs from the governed authority"
+                )
+            self._assert_agent_acceptance_call_available(
+                connection,
+                authority=authority,
+            )
+            self._validate_acceptance_parent(
+                connection,
+                authority=authority,
+                agent_role=agent_role,
+                parent_execution_id=parent_execution_id,
+            )
+            prior = connection.execute(
+                text(
+                    "SELECT count(*) FROM agent_executions "
+                    "WHERE organization_id = :org AND campaign_run_id = :run "
+                    "AND agent_role = :role"
+                ),
+                {
+                    "org": authority.organization_id,
+                    "run": run_id,
+                    "role": agent_role,
+                },
+            ).scalar_one()
+            if prior:
+                raise RecordConflictError(
+                    "governed acceptance role already has a logical execution"
+                )
+
+            execution_id = uuid.uuid4().hex
+            trace_id = campaign_trace_id(run_id)
+            connection.execute(
+                text(
+                    "INSERT INTO agent_executions "
+                    "(execution_id, organization_id, campaign_run_id, attempt_id, "
+                    "parent_execution_id, agent_role, provider, model, execution_mode, "
+                    "configuration_version, input_sha256, trace_id, detail, "
+                    "configuration_set_sha256, role_configuration_sha256, "
+                    "generation_policy_sha256, judge_calibration_id, "
+                    "judge_calibration_state) VALUES "
+                    "(:execution, :org, :run_id, :attempt, :parent, :role, :provider, "
+                    ":model, 'hosted_advisory', :version, :input_hash, :trace_id, "
+                    "CAST(:detail AS jsonb), :configuration, :role_configuration, "
+                    ":generation_policy, :calibration_id, :calibration_state)"
+                ),
+                {
+                    "execution": execution_id,
+                    "org": authority.organization_id,
+                    "run_id": run_id,
+                    "attempt": authority.acceptance_attempt_id,
+                    "parent": parent_execution_id,
+                    "role": role.role,
+                    "provider": role.provider,
+                    "model": role.model_id,
+                    "version": int(authority.configuration.schema_version),
+                    "input_hash": input_sha256,
+                    "trace_id": trace_id,
+                    "detail": canonical_json(sanitized_detail),
+                    "configuration": authority.configuration.configuration_sha256,
+                    "role_configuration": role.configuration_sha256,
+                    "generation_policy": authority.generation_policy_sha256,
+                    "calibration_id": judge_calibration_id,
+                    "calibration_state": judge_calibration_state,
+                },
+            )
+            self._audit(
+                connection,
+                authority.organization_id,
+                "agent.started",
+                "agent_execution",
+                execution_id,
+                None,
+                {
+                    "acceptance_id": run_id,
+                    "run_kind": "governed_acceptance",
+                    "attempt_id": authority.acceptance_attempt_id,
+                    "parent_execution_id": parent_execution_id,
+                    "agent_role": role.role,
+                    "provider": role.provider,
+                    "requested_model": role.model_id,
+                    "requested_upstream_provider": role.upstream_provider,
+                    "execution_mode": "hosted_advisory",
+                    "configuration_set_sha256": authority.configuration.configuration_sha256,
+                    "role_configuration_sha256": role.configuration_sha256,
+                    "generation_policy_sha256": authority.generation_policy_sha256,
+                    "judge_calibration_id": judge_calibration_id,
+                    "judge_calibration_state": judge_calibration_state,
+                    "input_sha256": input_sha256,
+                    "trace_id": trace_id,
+                    "network_scope": "policy_gateway_target",
+                },
+                actor_user_id=f"agent:{role.role}",
+                actor_session_id="runner:governed-acceptance",
+            )
+            return execution_id
+
+    def complete_governed_acceptance_run(self, *, run_id: str) -> str:
+        """Close a governed run after four measured calls and its single recorded dispatch."""
+
+        with self._engine.begin() as connection:
+            self._aggregate_lock(connection, f"governed-acceptance:{run_id}")
+            row = self._governed_acceptance_run_row(
+                connection,
+                run_id=run_id,
+                for_update=True,
+            )
+            if row["state"] == "complete":
+                return run_id
+            if row["state"] != "running":
+                raise RecordConflictError("governed acceptance run is no longer completable")
+            if not row["acceptance_live"]:
+                raise AuthorizationDeniedError("governed acceptance authority has expired")
+            executions = (
+                connection.execute(
+                    text(
+                        "SELECT agent_role, attempt_id, status, cost_measurement_state, "
+                        "measured_cost, physical_attempts, judge_calibration_id, "
+                        "decision_authority, oracle_agreement "
+                        "FROM agent_executions "
+                        "WHERE organization_id = :org AND campaign_run_id = :run ORDER BY id"
+                    ),
+                    {"org": row["organization_id"], "run": run_id},
+                )
+                .mappings()
+                .all()
+            )
+            if (
+                len(executions) != len(_GOVERNED_ACCEPTANCE_ROLES)
+                or {item["agent_role"] for item in executions} != set(_GOVERNED_ACCEPTANCE_ROLES)
+                or any(
+                    item["attempt_id"] != row["acceptance_attempt_id"]
+                    or item["status"] != "succeeded"
+                    or item["cost_measurement_state"] != "measured"
+                    or item["measured_cost"] is None
+                    or item["physical_attempts"] != 1
+                    for item in executions
+                )
+            ):
+                raise RecordConflictError(
+                    "governed acceptance completion requires its exact measured successful calls"
+                )
+            judge = next(item for item in executions if item["agent_role"] == "judge")
+            if judge["judge_calibration_id"] is None or judge["decision_authority"] not in {
+                "oracle",
+                "model",
+            }:
+                raise RecordConflictError(
+                    "governed acceptance completion requires a calibration-bound adjudicated Judge"
+                )
+            dispatch_count = connection.execute(
+                text(
+                    "SELECT count(*) FROM attempt_result "
+                    "WHERE campaign_run_id = :run AND attempt_id = :attempt"
+                ),
+                {"run": run_id, "attempt": row["acceptance_attempt_id"]},
+            ).scalar_one()
+            if dispatch_count != 1:
+                raise RecordConflictError(
+                    "governed acceptance completion requires its single recorded target dispatch"
+                )
+            connection.execute(
+                text(
+                    "INSERT INTO campaign_run_events "
+                    "(organization_id, run_id, state, actor_user_id, actor_session_id) "
+                    "VALUES (:org, :run, 'complete', :actor, :session)"
+                ),
+                {
+                    "org": row["organization_id"],
+                    "run": run_id,
+                    "actor": row["launcher_user_id"],
+                    "session": row["launcher_session_id"],
+                },
+            )
+            self._audit(
+                connection,
+                str(row["organization_id"]),
+                "governed_acceptance.completed",
+                "campaign_run",
+                run_id,
+                None,
+                {
+                    "run_kind": "governed_acceptance",
+                    "attempt_id": row["acceptance_attempt_id"],
+                    "target_dispatch_count": 1,
+                },
+                actor_user_id=str(row["launcher_user_id"]),
+                actor_session_id=str(row["launcher_session_id"]),
+            )
+        return run_id
+
+    def abort_governed_acceptance_run(
+        self,
+        *,
+        run_id: str,
+        reason_code: str,
+    ) -> str:
+        """Trip the governed run kill switch without minting any new authority."""
+
+        if not isinstance(reason_code, str) or _REASON_CODE.fullmatch(reason_code) is None:
+            raise InvalidControlPlaneInput("governed acceptance abort reason code is invalid")
+        with self._engine.begin() as connection:
+            self._aggregate_lock(connection, f"governed-acceptance:{run_id}")
+            row = self._governed_acceptance_run_row(
+                connection,
+                run_id=run_id,
+                for_update=True,
+            )
+            if row["state"] == "aborted":
+                return run_id
+            if row["state"] != "running":
+                raise RecordConflictError("governed acceptance run can no longer be aborted")
+            connection.execute(
+                text(
+                    "INSERT INTO campaign_run_events "
+                    "(organization_id, run_id, state, actor_user_id, actor_session_id, "
+                    "reason_code) VALUES "
+                    "(:org, :run, 'aborted', :actor, :session, :reason)"
+                ),
+                {
+                    "org": row["organization_id"],
+                    "run": run_id,
+                    "actor": row["launcher_user_id"],
+                    "session": row["launcher_session_id"],
+                    "reason": reason_code,
+                },
+            )
+            self._audit(
+                connection,
+                str(row["organization_id"]),
+                "governed_acceptance.aborted",
+                "campaign_run",
+                run_id,
+                None,
+                {
+                    "run_kind": "governed_acceptance",
+                    "attempt_id": row["acceptance_attempt_id"],
+                    "reason_code": reason_code,
+                },
+                actor_user_id=str(row["launcher_user_id"]),
+                actor_session_id=str(row["launcher_session_id"]),
+            )
+        return run_id
+
+    def _governed_acceptance_run_row(
+        self,
+        connection: Connection,
+        *,
+        run_id: str,
+        for_update: bool,
+    ) -> Mapping[str, Any]:
+        if not isinstance(run_id, str) or not run_id.startswith(_GOVERNED_ACCEPTANCE_RUN_PREFIX):
+            raise InvalidControlPlaneInput("governed acceptance run identity is invalid")
+        lock_clause = " FOR UPDATE OF r" if for_update else ""
+        row = (
+            connection.execute(
+                text(
+                    "SELECT r.*, "
+                    "(r.acceptance_expires_at > clock_timestamp()) AS acceptance_live, "
+                    "(SELECT state FROM campaign_run_events e "
+                    "WHERE e.organization_id = r.organization_id "
+                    "AND e.run_id = r.run_id ORDER BY e.id DESC LIMIT 1) AS state "
+                    "FROM campaign_runs r WHERE r.run_id = :run_id" + lock_clause
+                ),
+                {"run_id": run_id},
+            )
+            .mappings()
+            .one_or_none()
+        )
+        if row is None:
+            raise RecordNotFoundError("governed acceptance run does not exist")
+        if (
+            row["run_kind"] != "governed_acceptance"
+            or row["authorization_request_id"] is None
+            or row["scope_hash"] is None
+            or row["launcher_user_id"] is None
+            or row["launcher_session_id"] is None
+            or row["acceptance_actor_id"] is not None
+            or row["acceptance_provenance"] is not None
+            or not isinstance(row["acceptance_expires_at"], datetime.datetime)
+            or row["state"] is None
+        ):
+            raise AuthorizationDeniedError("governed acceptance authority is malformed")
+        for column in (
+            "acceptance_configuration_sha256",
+            "acceptance_generation_policy_sha256",
+            "acceptance_context_sha256",
+            "acceptance_attempt_id",
+        ):
+            if not isinstance(row[column], str) or _SHA256.fullmatch(row[column]) is None:
+                raise AuthorizationDeniedError("governed acceptance authority hash is invalid")
+        raw_limits = row["acceptance_limits"]
+        if (
+            not isinstance(raw_limits, Mapping)
+            or dict(raw_limits) != _closed_governed_acceptance_limits()
+        ):
+            raise AuthorizationDeniedError(
+                "governed acceptance limits differ from the closed governed envelope"
+            )
+        return row
+
+    def _authorized_governed_role(
+        self,
+        connection: Connection,
+        *,
+        run_id: str,
+        agent_role: AgentRole,
+        for_update: bool = False,
+    ) -> AuthorizedAgentAcceptanceRoleConfiguration:
+        row = self._governed_acceptance_run_row(
+            connection,
+            run_id=run_id,
+            for_update=for_update,
+        )
+        if agent_role not in _GOVERNED_ACCEPTANCE_ROLES:
+            raise AuthorizationDeniedError(
+                "agent role is outside the governed acceptance allowlist"
+            )
+        if row["state"] != "running":
+            raise AuthorizationDeniedError("governed acceptance run is not executable")
+        if not row["acceptance_live"]:
+            raise AuthorizationDeniedError("governed acceptance authority has expired")
+        configuration = self._stored_hosted_configuration(
+            connection,
+            organization_id=str(row["organization_id"]),
+            configuration_sha256=str(row["acceptance_configuration_sha256"]),
+        )
+        expected_limits = canonical_governed_acceptance_limits(configuration)
+        limits = dict(row["acceptance_limits"])
+        if limits != expected_limits:
+            raise AuthorizationDeniedError(
+                "governed acceptance limits differ from hosted configuration"
+            )
+        role = next(
+            (item for item in configuration.roles if item.role == agent_role),
+            None,
+        )
+        if role is None:
+            raise AuthorizationDeniedError(
+                "agent role is absent from the governed configuration set"
+            )
+        return AuthorizedAgentAcceptanceRoleConfiguration(
+            organization_id=str(row["organization_id"]),
+            run_id=run_id,
+            acceptance_attempt_id=str(row["acceptance_attempt_id"]),
+            configuration=configuration,
+            role_configuration=role,
+            generation_policy_sha256=str(row["acceptance_generation_policy_sha256"]),
+            acceptance_context_sha256=str(row["acceptance_context_sha256"]),
+            limits=limits,
+            expires_at=row["acceptance_expires_at"],
+        )
 
     # ------------------------------------------------------- provider physical-call lineage
 
@@ -6883,5 +7579,7 @@ __all__ = [
     "AgentAcceptanceRunIdentity",
     "AuthorizedAgentAcceptanceRoleConfiguration",
     "ControlPlaneStore",
+    "GovernedAcceptanceRunIdentity",
     "canonical_agent_acceptance_limits",
+    "canonical_governed_acceptance_limits",
 ]
