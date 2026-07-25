@@ -88,12 +88,13 @@ def _legacy_campaign_run_trigger() -> str:
 
 def _acceptance_attempt_guard() -> str:
     return (
-        "CREATE OR REPLACE FUNCTION m1d_validate_agent_acceptance_attempt() "
-        "RETURNS trigger LANGUAGE plpgsql AS $$ "
+        "CREATE OR REPLACE FUNCTION public.m1d_validate_agent_acceptance_attempt() "
+        "RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER "
+        "SET search_path = pg_catalog, pg_temp AS $$ "
         "DECLARE parent_kind text; expected_attempt text; expected_context text; BEGIN "
         "SELECT run_kind, acceptance_attempt_id, acceptance_context_sha256 "
         "INTO parent_kind, expected_attempt, expected_context "
-        "FROM campaign_runs WHERE organization_id = NEW.organization_id "
+        "FROM public.campaign_runs WHERE organization_id = NEW.organization_id "
         "AND run_id = NEW.run_id FOR SHARE; "
         "IF parent_kind = 'agent_acceptance' AND ("
         "NEW.attempt_id IS DISTINCT FROM expected_attempt "
@@ -118,25 +119,32 @@ def _acceptance_attempt_guard() -> str:
 
 def _acceptance_execution_guard() -> str:
     return (
-        "CREATE OR REPLACE FUNCTION m1d_validate_agent_acceptance_execution() "
-        "RETURNS trigger LANGUAGE plpgsql AS $$ "
-        "DECLARE parent_run_kind text; expected_attempt text; observed_parent_role text; BEGIN "
+        "CREATE OR REPLACE FUNCTION public.m1d_validate_agent_acceptance_execution() "
+        "RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER "
+        "SET search_path = pg_catalog, pg_temp AS $$ "
+        "DECLARE parent_run_kind text; old_parent_run_kind text; expected_attempt text; "
+        "observed_parent_role text; BEGIN "
         "SELECT run_kind, acceptance_attempt_id INTO parent_run_kind, expected_attempt "
-        "FROM campaign_runs WHERE organization_id = NEW.organization_id "
+        "FROM public.campaign_runs WHERE organization_id = NEW.organization_id "
         "AND run_id = NEW.campaign_run_id FOR SHARE; "
-        "IF parent_run_kind = 'agent_acceptance' THEN "
-        "IF NEW.agent_role NOT IN ('orchestrator','judge','documentation') "
-        "OR NEW.attempt_id IS DISTINCT FROM expected_attempt THEN "
-        "RAISE EXCEPTION 'agent acceptance execution is outside its role or attempt authority' "
-        "USING ERRCODE = '42501'; END IF; "
-        "IF TG_OP = 'UPDATE' AND ("
+        "IF TG_OP = 'UPDATE' THEN "
+        "SELECT run_kind INTO old_parent_run_kind "
+        "FROM public.campaign_runs WHERE organization_id = OLD.organization_id "
+        "AND run_id = OLD.campaign_run_id FOR SHARE; "
+        "IF (old_parent_run_kind = 'agent_acceptance' "
+        "OR parent_run_kind = 'agent_acceptance') AND ("
         "NEW.organization_id IS DISTINCT FROM OLD.organization_id "
         "OR NEW.campaign_run_id IS DISTINCT FROM OLD.campaign_run_id "
         "OR NEW.attempt_id IS DISTINCT FROM OLD.attempt_id "
         "OR NEW.agent_role IS DISTINCT FROM OLD.agent_role "
         "OR NEW.parent_execution_id IS DISTINCT FROM OLD.parent_execution_id) THEN "
         "RAISE EXCEPTION 'agent acceptance execution identity is immutable' "
-        "USING ERRCODE = '55000'; END IF; "
+        "USING ERRCODE = '55000'; END IF; END IF; "
+        "IF parent_run_kind = 'agent_acceptance' THEN "
+        "IF NEW.agent_role NOT IN ('orchestrator','judge','documentation') "
+        "OR NEW.attempt_id IS DISTINCT FROM expected_attempt THEN "
+        "RAISE EXCEPTION 'agent acceptance execution is outside its role or attempt authority' "
+        "USING ERRCODE = '42501'; END IF; "
         "IF NEW.agent_role = 'orchestrator' THEN "
         "IF NEW.parent_execution_id IS NOT NULL THEN "
         "RAISE EXCEPTION 'agent acceptance planner must be the lineage root' "
@@ -145,7 +153,7 @@ def _acceptance_execution_guard() -> str:
         "RAISE EXCEPTION 'agent acceptance child requires its exact parent' "
         "USING ERRCODE = '23514'; "
         "ELSE "
-        "SELECT agent_role INTO observed_parent_role FROM agent_executions "
+        "SELECT agent_role INTO observed_parent_role FROM public.agent_executions "
         "WHERE organization_id = NEW.organization_id "
         "AND campaign_run_id = NEW.campaign_run_id "
         "AND attempt_id = NEW.attempt_id "
@@ -175,13 +183,14 @@ def _acceptance_execution_guard() -> str:
 
 def _acceptance_provider_invocation_guard() -> str:
     return (
-        "CREATE OR REPLACE FUNCTION m1d_validate_agent_acceptance_provider_invocation() "
-        "RETURNS trigger LANGUAGE plpgsql AS $$ "
+        "CREATE OR REPLACE FUNCTION public.m1d_validate_agent_acceptance_provider_invocation() "
+        "RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER "
+        "SET search_path = pg_catalog, pg_temp AS $$ "
         "DECLARE requested_run_kind text; logical_run_kind text; "
         "logical_run_id text; logical_attempt_id text; logical_parent_id text; "
         "logical_role text; logical_model text; logical_configuration text; "
         "logical_role_configuration text; logical_generation_policy text; BEGIN "
-        "SELECT run_kind INTO requested_run_kind FROM campaign_runs "
+        "SELECT run_kind INTO requested_run_kind FROM public.campaign_runs "
         "WHERE organization_id = NEW.organization_id "
         "AND run_id = NEW.campaign_run_id FOR SHARE; "
         "SELECT r.run_kind, e.campaign_run_id, e.attempt_id, e.parent_execution_id, "
@@ -190,7 +199,7 @@ def _acceptance_provider_invocation_guard() -> str:
         "INTO logical_run_kind, logical_run_id, logical_attempt_id, logical_parent_id, "
         "logical_role, logical_model, logical_configuration, "
         "logical_role_configuration, logical_generation_policy "
-        "FROM agent_executions e JOIN campaign_runs r "
+        "FROM public.agent_executions e JOIN public.campaign_runs r "
         "ON r.organization_id = e.organization_id "
         "AND r.run_id = e.campaign_run_id "
         "WHERE e.organization_id = NEW.organization_id "
@@ -414,22 +423,42 @@ def upgrade() -> None:
     )
     op.execute(_discriminated_campaign_run_trigger())
     op.execute(_acceptance_attempt_guard())
+    op.execute("REVOKE ALL ON FUNCTION public.m1d_validate_agent_acceptance_attempt() FROM PUBLIC")
+    op.execute(
+        "GRANT EXECUTE ON FUNCTION public.m1d_validate_agent_acceptance_attempt() "
+        "TO headshot_web, headshot_runner"
+    )
     op.execute(
         "CREATE TRIGGER trg_campaign_attempt_agent_acceptance "
         "BEFORE INSERT ON campaign_attempts FOR EACH ROW "
-        "EXECUTE FUNCTION m1d_validate_agent_acceptance_attempt()"
+        "EXECUTE FUNCTION public.m1d_validate_agent_acceptance_attempt()"
     )
     op.execute(_acceptance_execution_guard())
     op.execute(
+        "REVOKE ALL ON FUNCTION public.m1d_validate_agent_acceptance_execution() FROM PUBLIC"
+    )
+    op.execute(
+        "GRANT EXECUTE ON FUNCTION public.m1d_validate_agent_acceptance_execution() "
+        "TO headshot_runner"
+    )
+    op.execute(
         "CREATE TRIGGER trg_agent_acceptance_execution_guard "
         "BEFORE INSERT OR UPDATE ON agent_executions FOR EACH ROW "
-        "EXECUTE FUNCTION m1d_validate_agent_acceptance_execution()"
+        "EXECUTE FUNCTION public.m1d_validate_agent_acceptance_execution()"
     )
     op.execute(_acceptance_provider_invocation_guard())
     op.execute(
+        "REVOKE ALL ON FUNCTION "
+        "public.m1d_validate_agent_acceptance_provider_invocation() FROM PUBLIC"
+    )
+    op.execute(
+        "GRANT EXECUTE ON FUNCTION "
+        "public.m1d_validate_agent_acceptance_provider_invocation() TO headshot_runner"
+    )
+    op.execute(
         "CREATE TRIGGER trg_agent_acceptance_provider_invocation_guard "
         "BEFORE INSERT ON provider_call_invocations FOR EACH ROW "
-        "EXECUTE FUNCTION m1d_validate_agent_acceptance_provider_invocation()"
+        "EXECUTE FUNCTION public.m1d_validate_agent_acceptance_provider_invocation()"
     )
 
 
@@ -445,11 +474,11 @@ def downgrade() -> None:
     op.execute(
         "DROP TRIGGER trg_agent_acceptance_provider_invocation_guard ON provider_call_invocations"
     )
-    op.execute("DROP FUNCTION m1d_validate_agent_acceptance_provider_invocation()")
+    op.execute("DROP FUNCTION public.m1d_validate_agent_acceptance_provider_invocation()")
     op.execute("DROP TRIGGER trg_agent_acceptance_execution_guard ON agent_executions")
-    op.execute("DROP FUNCTION m1d_validate_agent_acceptance_execution()")
+    op.execute("DROP FUNCTION public.m1d_validate_agent_acceptance_execution()")
     op.execute("DROP TRIGGER trg_campaign_attempt_agent_acceptance ON campaign_attempts")
-    op.execute("DROP FUNCTION m1d_validate_agent_acceptance_attempt()")
+    op.execute("DROP FUNCTION public.m1d_validate_agent_acceptance_attempt()")
     op.execute(_legacy_campaign_run_trigger())
     op.drop_index(
         "ix_campaign_runs_acceptance_expiry",

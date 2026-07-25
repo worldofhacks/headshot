@@ -62,6 +62,7 @@ def _seed_hosted_configuration(
     *,
     organization_id: str = _ORGANIZATION_ID,
     configuration_sha256: str = _CONFIGURATION_SHA256,
+    payload: dict[str, object] | None = None,
 ) -> None:
     release_sha256 = uuid.uuid4().hex + uuid.uuid4().hex
     with engine.begin() as connection:
@@ -70,7 +71,7 @@ def _seed_hosted_configuration(
                 "INSERT INTO hosted_configuration_sets "
                 "(organization_id, configuration_sha256, schema_version, release_sha256, "
                 "payload, rationale, actor_user_id, actor_session_id) VALUES "
-                "(:org, :configuration, '1', :release, '{}'::jsonb, "
+                "(:org, :configuration, '1', :release, CAST(:payload AS jsonb), "
                 "'bounded acceptance fixture', 'user_AcceptanceOwner', "
                 "'sess_AcceptanceOwner')"
             ),
@@ -78,6 +79,7 @@ def _seed_hosted_configuration(
                 "org": organization_id,
                 "configuration": configuration_sha256,
                 "release": release_sha256,
+                "payload": json.dumps(payload or {}),
             },
         )
 
@@ -279,6 +281,193 @@ def test_campaign_run_model_matches_discriminated_acceptance_authority() -> None
         "acceptance_provenance",
     ):
         assert columns[name].nullable is True
+
+
+def test_runner_uses_locked_0020_guards_without_campaign_run_update_privilege(
+    migrated_db: Engine,
+) -> None:
+    configuration_sha256 = uuid.uuid4().hex + uuid.uuid4().hex
+    prompt_sha256 = "4" * 64
+    role_configuration_sha256 = "2" * 64
+    model = "qwen/qwen3.5-397b-a17b"
+    _seed_hosted_configuration(
+        migrated_db,
+        configuration_sha256=configuration_sha256,
+        payload={
+            "roles": [
+                {
+                    "role": "red_team",
+                    "model_id": model,
+                    "upstream_provider": "together",
+                    "prompt_sha256": prompt_sha256,
+                }
+            ]
+        },
+    )
+    run_id = _seed_authorized_campaign(migrated_db, uuid.uuid4().hex[:10])
+    attempt_id = uuid.uuid4().hex
+    execution_id = uuid.uuid4().hex
+    invocation_id = uuid.uuid4().hex + uuid.uuid4().hex
+
+    with migrated_db.connect() as connection:
+        function_rows = {
+            row["proname"]: row
+            for row in connection.execute(
+                text(
+                    "SELECT p.proname, p.prosecdef, p.proconfig, "
+                    "has_function_privilege("
+                    "'headshot_runner', p.oid, 'EXECUTE') AS runner_execute, "
+                    "NOT EXISTS (SELECT 1 FROM aclexplode(p.proacl) acl "
+                    "WHERE acl.grantee = 0 AND acl.privilege_type = 'EXECUTE') "
+                    "AS public_execute_revoked "
+                    "FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace "
+                    "WHERE n.nspname = 'public' AND p.proname IN ("
+                    "'m1d_validate_agent_acceptance_attempt', "
+                    "'m1d_validate_agent_acceptance_execution', "
+                    "'m1d_validate_agent_acceptance_provider_invocation')"
+                )
+            )
+            .mappings()
+            .all()
+        }
+        canonical_privileges = (
+            connection.execute(
+                text(
+                    "SELECT "
+                    "has_table_privilege("
+                    "'headshot_runner', 'public.campaign_runs', 'SELECT') AS can_select, "
+                    "has_table_privilege("
+                    "'headshot_runner', 'public.campaign_runs', 'UPDATE') AS can_update"
+                )
+            )
+            .mappings()
+            .one()
+        )
+        assert dict(canonical_privileges) == {
+            "can_select": True,
+            "can_update": False,
+        }
+    assert set(function_rows) == {
+        "m1d_validate_agent_acceptance_attempt",
+        "m1d_validate_agent_acceptance_execution",
+        "m1d_validate_agent_acceptance_provider_invocation",
+    }
+    for row in function_rows.values():
+        assert row["prosecdef"] is True
+        assert row["proconfig"] == ["search_path=pg_catalog, pg_temp"]
+        assert row["runner_execute"] is True
+        assert row["public_execute_revoked"] is True
+
+    # Prove these trigger-only lookups remain operable even without the
+    # historical broad read grant. Rollback restores that pre-0020 contract.
+    with migrated_db.connect() as connection:
+        transaction = connection.begin()
+        try:
+            connection.execute(
+                text("REVOKE SELECT ON TABLE public.campaign_runs FROM headshot_runner")
+            )
+            restricted_privileges = (
+                connection.execute(
+                    text(
+                        "SELECT "
+                        "has_table_privilege("
+                        "'headshot_runner', 'public.campaign_runs', 'SELECT') AS can_select, "
+                        "has_table_privilege("
+                        "'headshot_runner', 'public.campaign_runs', 'UPDATE') AS can_update"
+                    )
+                )
+                .mappings()
+                .one()
+            )
+            assert dict(restricted_privileges) == {
+                "can_select": False,
+                "can_update": False,
+            }
+
+            connection.execute(text("SET LOCAL ROLE headshot_runner"))
+            connection.execute(
+                text(
+                    "INSERT INTO campaign_attempts "
+                    "(organization_id, run_id, attempt_id, ordinal, case_id) "
+                    "VALUES (:org, :run, :attempt, 0, 'runner-normal-path')"
+                ),
+                {"org": _ORGANIZATION_ID, "run": run_id, "attempt": attempt_id},
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO agent_executions "
+                    "(execution_id, organization_id, campaign_run_id, attempt_id, "
+                    "parent_execution_id, agent_role, provider, model, execution_mode, "
+                    "configuration_version, input_sha256, trace_id, detail, "
+                    "configuration_set_sha256, role_configuration_sha256, "
+                    "generation_policy_sha256) VALUES "
+                    "(:execution, :org, :run, :attempt, NULL, 'red_team', 'openrouter', "
+                    ":model, 'hosted_advisory', 1, :input_hash, :trace_id, "
+                    '\'{"provider_lineage_state":"canonical_physical"}\'::jsonb, '
+                    ":configuration, :role_configuration, :generation_policy)"
+                ),
+                {
+                    "execution": execution_id,
+                    "org": _ORGANIZATION_ID,
+                    "run": run_id,
+                    "attempt": attempt_id,
+                    "model": model,
+                    "input_hash": "1" * 64,
+                    "trace_id": uuid.uuid4().hex,
+                    "configuration": configuration_sha256,
+                    "role_configuration": role_configuration_sha256,
+                    "generation_policy": _GENERATION_POLICY_SHA256,
+                },
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO provider_call_invocations "
+                    "(invocation_id, organization_id, campaign_run_id, campaign_attempt_id, "
+                    "logical_execution_id, parent_execution_id, agent_role, physical_sequence, "
+                    "idempotency_key, requested_model, configured_upstream, prompt_version, "
+                    "prompt_sha256, configuration_set_sha256, role_configuration_sha256, "
+                    "generation_policy_sha256) VALUES "
+                    "(:invocation, :org, :run, :attempt, :execution, NULL, 'red_team', 1, "
+                    ":idempotency, :model, 'together', '1', :prompt, :configuration, "
+                    ":role_configuration, :generation_policy)"
+                ),
+                {
+                    "invocation": invocation_id,
+                    "org": _ORGANIZATION_ID,
+                    "run": run_id,
+                    "attempt": attempt_id,
+                    "execution": execution_id,
+                    "idempotency": f"provider-call:{invocation_id}",
+                    "model": model,
+                    "prompt": prompt_sha256,
+                    "configuration": configuration_sha256,
+                    "role_configuration": role_configuration_sha256,
+                    "generation_policy": _GENERATION_POLICY_SHA256,
+                },
+            )
+            connection.execute(
+                text(
+                    "UPDATE agent_executions "
+                    "SET detail = detail || jsonb_build_object('runner_update', true) "
+                    "WHERE organization_id = :org AND execution_id = :execution"
+                ),
+                {"org": _ORGANIZATION_ID, "execution": execution_id},
+            )
+            row = (
+                connection.execute(
+                    text(
+                        "SELECT detail->>'runner_update' AS runner_update, physical_attempts "
+                        "FROM agent_executions "
+                        "WHERE organization_id = :org AND execution_id = :execution"
+                    ),
+                    {"org": _ORGANIZATION_ID, "execution": execution_id},
+                )
+                .mappings()
+                .one()
+            )
+            assert dict(row) == {"runner_update": "true", "physical_attempts": 1}
+        finally:
+            transaction.rollback()
 
 
 def test_0020_backfills_campaign_and_round_trips_without_weakening_campaign_gate(
@@ -573,6 +762,165 @@ def test_database_guards_acceptance_execution_attempt_parentage_and_judge(
                 "output_hash": "4" * 64,
             },
         )
+
+
+def test_runner_cannot_reassign_acceptance_execution_identity(
+    migrated_db: Engine,
+) -> None:
+    configuration_sha256 = uuid.uuid4().hex + uuid.uuid4().hex
+    _seed_hosted_configuration(
+        migrated_db,
+        configuration_sha256=configuration_sha256,
+    )
+    acceptance_run_id = _insert_acceptance(
+        migrated_db,
+        configuration_sha256=configuration_sha256,
+    )
+    acceptance_attempt_id = _acceptance_attempt_id(acceptance_run_id)
+    orchestrator_id = _insert_agent_execution(
+        migrated_db,
+        run_id=acceptance_run_id,
+        configuration_sha256=configuration_sha256,
+        role="orchestrator",
+        parent_execution_id=None,
+        attempt_id=acceptance_attempt_id,
+    )
+    judge_id = _insert_agent_execution(
+        migrated_db,
+        run_id=acceptance_run_id,
+        configuration_sha256=configuration_sha256,
+        role="judge",
+        parent_execution_id=orchestrator_id,
+        attempt_id=acceptance_attempt_id,
+    )
+
+    campaign_run_id = _seed_authorized_campaign(migrated_db, uuid.uuid4().hex[:10])
+    campaign_attempt_id = uuid.uuid4().hex
+    with migrated_db.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO campaign_attempts "
+                "(organization_id, run_id, attempt_id, ordinal, case_id) "
+                "VALUES (:org, :run, :attempt, 0, 'normal-campaign-attempt')"
+            ),
+            {
+                "org": _ORGANIZATION_ID,
+                "run": campaign_run_id,
+                "attempt": campaign_attempt_id,
+            },
+        )
+    normal_execution_id = _insert_agent_execution(
+        migrated_db,
+        run_id=campaign_run_id,
+        configuration_sha256=configuration_sha256,
+        role="red_team",
+        parent_execution_id=None,
+        attempt_id=campaign_attempt_id,
+    )
+
+    individual_mutations = (
+        ("organization_id = :value", {"value": "org_ReassignedAcceptance"}),
+        ("campaign_run_id = :value", {"value": campaign_run_id}),
+        ("attempt_id = :value", {"value": campaign_attempt_id}),
+        ("agent_role = :value", {"value": "documentation"}),
+        ("parent_execution_id = NULL", {}),
+    )
+    for assignment, values in individual_mutations:
+        with (
+            pytest.raises(
+                DBAPIError,
+                match="agent acceptance execution identity is immutable",
+            ),
+            migrated_db.begin() as connection,
+        ):
+            connection.execute(text("SET LOCAL ROLE headshot_runner"))
+            connection.execute(
+                text(
+                    f"UPDATE agent_executions SET {assignment} "
+                    "WHERE organization_id = :org AND execution_id = :execution"
+                ),
+                {
+                    **values,
+                    "org": _ORGANIZATION_ID,
+                    "execution": judge_id,
+                },
+            )
+
+    with (
+        pytest.raises(
+            DBAPIError,
+            match="agent acceptance execution identity is immutable",
+        ),
+        migrated_db.begin() as connection,
+    ):
+        connection.execute(text("SET LOCAL ROLE headshot_runner"))
+        connection.execute(
+            text(
+                "UPDATE agent_executions SET campaign_run_id = :run, "
+                "attempt_id = :attempt, agent_role = 'red_team', "
+                "parent_execution_id = NULL "
+                "WHERE organization_id = :org AND execution_id = :execution"
+            ),
+            {
+                "run": campaign_run_id,
+                "attempt": campaign_attempt_id,
+                "org": _ORGANIZATION_ID,
+                "execution": judge_id,
+            },
+        )
+
+    with (
+        pytest.raises(
+            DBAPIError,
+            match="agent acceptance execution identity is immutable",
+        ),
+        migrated_db.begin() as connection,
+    ):
+        connection.execute(text("SET LOCAL ROLE headshot_runner"))
+        connection.execute(
+            text(
+                "UPDATE agent_executions SET campaign_run_id = :run, "
+                "attempt_id = :attempt, agent_role = 'orchestrator' "
+                "WHERE organization_id = :org AND execution_id = :execution"
+            ),
+            {
+                "run": acceptance_run_id,
+                "attempt": acceptance_attempt_id,
+                "org": _ORGANIZATION_ID,
+                "execution": normal_execution_id,
+            },
+        )
+
+    with migrated_db.connect() as connection:
+        identities = {
+            row["execution_id"]: dict(row)
+            for row in connection.execute(
+                text(
+                    "SELECT execution_id, organization_id, campaign_run_id, attempt_id, "
+                    "agent_role, parent_execution_id FROM agent_executions "
+                    "WHERE execution_id IN (:judge, :normal)"
+                ),
+                {"judge": judge_id, "normal": normal_execution_id},
+            )
+            .mappings()
+            .all()
+        }
+    assert identities[judge_id] == {
+        "execution_id": judge_id,
+        "organization_id": _ORGANIZATION_ID,
+        "campaign_run_id": acceptance_run_id,
+        "attempt_id": acceptance_attempt_id,
+        "agent_role": "judge",
+        "parent_execution_id": orchestrator_id,
+    }
+    assert identities[normal_execution_id] == {
+        "execution_id": normal_execution_id,
+        "organization_id": _ORGANIZATION_ID,
+        "campaign_run_id": campaign_run_id,
+        "attempt_id": campaign_attempt_id,
+        "agent_role": "red_team",
+        "parent_execution_id": None,
+    }
 
 
 def test_database_binds_acceptance_provider_invocation_to_its_logical_execution(
