@@ -25,9 +25,9 @@ from agentforge.agents.hosted import (
     HostedRoleConfiguration,
     TokenPrices,
 )
-from agentforge.agents.hosted_prompts import hosted_prompt
 from agentforge.agents.hosted_runtime import hosted_judge_identity
 from agentforge.agents.judge import ACCEPTED_MODEL_JUDGE_THRESHOLDS, CalibrationGate
+from agentforge.agents.prompts import load_prompt_registry
 
 ROOT = Path(__file__).resolve().parents[1]
 _SCRIPT = ROOT / "scripts" / "enable_model_judge.py"
@@ -53,6 +53,12 @@ _ROLE_MAX_USD = {
 }
 
 
+def _prompt_sha256(role: str) -> str:
+    """Resolve a role's prompt digest from the package-owned prompt authority."""
+
+    return next(record for record in load_prompt_registry() if record.role == role).sha256
+
+
 def _module() -> ModuleType:
     spec = importlib.util.spec_from_file_location("enable_model_judge", _SCRIPT)
     assert spec is not None and spec.loader is not None
@@ -69,7 +75,7 @@ def _staged_set(policy: str = "production") -> HostedConfigurationSet:
             model_id=model_id,
             upstream_provider=_UPSTREAM[role],
             credential_reference=f"secretref://railway/openrouter/{role}/{policy}",
-            prompt_sha256=hosted_prompt(role).prompt_sha256,
+            prompt_sha256=_prompt_sha256(role),
             policy_sha256=hashlib.sha256(f"{policy}:{role}:v1".encode()).hexdigest(),
             prices=_PRICES[role],
             limits=HostedLimits(
