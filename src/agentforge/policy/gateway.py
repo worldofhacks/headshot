@@ -112,6 +112,13 @@ class AttemptResult:
     content_hash: str
     fields: dict[str, Any]
     credential: Secret | None = None
+    # The MEASURED consumption dimensions a black-box POST /chat exposes, collected by the gateway
+    # during THIS dispatch: ``elapsed_ms`` (the gateway's OWN wall-clock duration of the physical
+    # send(s), from the injected clock), ``request_count`` (the physical sends performed for this
+    # attempt, incl. retries), and ``response_size`` (the response body's byte length). Target-
+    # internal input/output TOKENS, tool_calls, and target LLM COST are NOT observable from /chat
+    # and are deliberately absent here — they are never fabricated onto the measurement.
+    resource_measurements: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -229,12 +236,23 @@ class PolicyGateway:
             metadata=request_metadata,
         )
         self._enforce_sequence_capacity(request, policy)
+
+        # MEASURE the black-box-observable dimensions ACROSS the physical dispatch. The gateway's
+        # OWN wall-clock (the injected clock) is sampled immediately before and after the send(s),
+        # so ``elapsed_ms`` is a real measurement of how long THIS attempt took — the only timing a
+        # black-box /chat exposes. The physical-send counter is sampled the same way so
+        # ``request_count`` is exactly the sends (incl. retries) performed for THIS attempt.
+        dispatch_started_at = self.clock.now()
+        sends_before = self._physical_sends_used
         response = self._dispatch_with_backoff(
             request,
             attack_attempt,
             policy,
             attempt_id=attempt_id or "",
         )
+        elapsed_ms = int(round(max(0.0, self.clock.now() - dispatch_started_at) * 1000.0))
+        request_count = self._physical_sends_used - sends_before
+        response_size = len(response.output.encode("utf-8"))
 
         # (6) Count the logical attempt after a real dispatch, then build hashed evidence.
         # (charge + _last_dispatch_at are committed per physical send in _dispatch_with_backoff.)
@@ -247,6 +265,11 @@ class PolicyGateway:
             credential,
             campaign_run_id=campaign_run_id,
             attempt_id=attempt_id,
+            resource_measurements={
+                "elapsed_ms": elapsed_ms,
+                "request_count": request_count,
+                "response_size": response_size,
+            },
         )
 
     @property
@@ -612,8 +635,16 @@ class PolicyGateway:
         *,
         campaign_run_id: str | None = None,
         attempt_id: str | None = None,
+        resource_measurements: dict[str, Any] | None = None,
     ) -> AttemptResult:
-        """Mint a fresh run-nonce (S3) + policy_decision_id and build hashed D14 evidence."""
+        """Mint a fresh run-nonce (S3) + policy_decision_id and build hashed D14 evidence.
+
+        The MEASURED consumption trio (``elapsed_ms`` / ``request_count`` / ``response_size``) is
+        carried BOTH on the returned :class:`AttemptResult` (``resource_measurements``) and folded
+        into the hashed ``fields`` under ``resource_measurements`` — so the recorder persists it
+        append-only and the coordinator can RE-READ the measured dimensions before adjudicating,
+        never trusting the in-memory value alone.
+        """
         campaign_run_id = campaign_run_id or uuid.uuid4().hex
         attempt_id = attempt_id or uuid.uuid4().hex
         policy_decision_id = f"pd-{uuid.uuid4().hex}"
@@ -631,6 +662,9 @@ class PolicyGateway:
             "policy_decision_id": policy_decision_id,
             "recorder_identity": "policy-gateway@1",
         }
+        if resource_measurements is not None:
+            # A hashed evidence field: the measured trio is part of the tamper-evident record.
+            fields["resource_measurements"] = dict(resource_measurements)
         content_hash = self.recorder.canonical_hash(fields)
         return AttemptResult(
             campaign_run_id=campaign_run_id,
@@ -640,4 +674,7 @@ class PolicyGateway:
             content_hash=content_hash,
             fields=fields,
             credential=credential,
+            resource_measurements=(
+                dict(resource_measurements) if resource_measurements is not None else None
+            ),
         )
