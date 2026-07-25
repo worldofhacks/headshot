@@ -8,6 +8,11 @@ SPEC verdict: **PASS**
 
 CODE/SECURITY verdict: **PASS**
 
+> **Integration supersession:** this verdict covers the source-lane blob named below. PR #34's
+> corrected Bruno routes and added legacy-disable case change that blob. Their exact delta and
+> mandatory independent re-review are recorded in
+> [`T-F16a-integration-reconciliation.md`](T-F16a-integration-reconciliation.md).
+
 The two Important findings from review commit
 `0dc935e2bda0b6c93bb97d7e1d54e66ef3584ddf` are closed. No Critical, Important, or
 Minor correctness finding remains in the repaired implementation.
@@ -86,9 +91,9 @@ per-operation maximum.
 
 - Frozen test commit:
   `295e9ccd0b8e1d2c13ad1ccfd8074e762461860f`.
-- Recomputed/current SHA-256:
+- At reviewed source commit, SHA-256:
   `fdf129e50018a13d7e69e74d9eb9f08821daba1312dc5bf84d7492583890145e`.
-- Recomputed/current Git blob:
+- At reviewed source commit, Git blob:
   `af6df0ff25e4e53aa0b6aca691d6494ff1d1e501`.
 - `git diff 295e9cc..1899c6a -- tests` is empty.
 - The repair commit changes only `spec.py`, `catalog.py`, `registry.py`, and the implementation

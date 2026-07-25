@@ -799,6 +799,57 @@ def test_spec_t_f16a_ac_1_catalog_resolves_one_complete_policy_per_surface(
     )
 
 
+@pytest.mark.parametrize("version", ["2.0.1", "2.2.0", "3.0.0"])
+# spec(T-F16a:AC-1,AC-6)
+def test_spec_t_f16a_exact_activation_versions_refuse_document_workflow_bypass(
+    monkeypatch: pytest.MonkeyPatch,
+    version: str,
+) -> None:
+    monkeypatch.setenv(
+        _CATALOG_ENV,
+        json.dumps([_v2_entry(version=version, documents_enabled=True)]),
+    )
+
+    with pytest.raises(TargetCatalogError, match="exact approved activation"):
+        TrustedTargetCatalog.from_environment("production")
+
+
+@pytest.mark.parametrize("surface_version", ["1.0.0", "2.0.1", "3.0.0"])
+# spec(T-F16a:AC-1,AC-6)
+def test_spec_t_f16a_exact_activation_surface_versions_cannot_drift(
+    monkeypatch: pytest.MonkeyPatch,
+    surface_version: str,
+) -> None:
+    entry = _v2_entry()
+    entry["surfaces"][0]["version"] = surface_version
+    monkeypatch.setenv(_CATALOG_ENV, json.dumps([entry]))
+
+    with pytest.raises(TargetCatalogError, match="surface policy version must match"):
+        TrustedTargetCatalog.from_environment("production")
+
+
+# spec(T-F16a:AC-1,AC-6)
+def test_spec_t_f16a_document_activation_requires_exact_2_1(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        _CATALOG_ENV,
+        json.dumps([_v2_entry(version="2.0.0", documents_enabled=True)]),
+    )
+    with pytest.raises(TargetCatalogError, match="v2.0.0 document surfaces must remain disabled"):
+        TrustedTargetCatalog.from_environment("production")
+
+    candidate = _load_canonical_catalog(
+        monkeypatch,
+        _v2_entry(version="2.1.0", documents_enabled=True),
+    )
+    _, lab = candidate.resolve(
+        target_id=_WEEK2_TARGET_ID,
+        surface_id="clinical-copilot-week2-lab",
+    )
+    assert lab.enabled is True
+
+
 # spec(T-F16a:AC-1)
 def test_spec_t_f16a_ac_1_caller_supplied_policy_hash_must_match_canonical_bytes() -> None:
     canonical = _surface_payloads()["chat"]

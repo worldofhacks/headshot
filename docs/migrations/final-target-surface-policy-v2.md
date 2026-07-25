@@ -25,6 +25,9 @@ document surfaces remain disabled while chat, UI, and anonymous evidence surface
 under their separate policy hashes. After the Runner proves the exact private fixture descriptors
 without a target call, stage the separately hashed `2.1.0` definitions and approve the document
 surfaces individually. No in-place mutation of either version is permitted.
+Only the exact reviewed `2.0.0` and `2.1.0` target definitions are admitted, and every surface
+version must equal its target version. Patch, later minor, later major, and mixed-version
+definitions require a new review and cannot inherit either activation.
 
 ## Rollback
 

@@ -63,6 +63,10 @@ Each workflow must carry one complete private synthetic fixture descriptor
 (`opaque_ref`, SHA-256, byte length, media type, document type, and workflow ID). No path, URL,
 credential, or fixture bytes belong in the catalog.
 
+The catalog admits only the exact reviewed `2.0.0` and `2.1.0` v2 target definitions, with every
+surface version equal to its target version. Patch, later minor, later major, and mixed-version
+definitions require a new reviewed activation set; they are not inferred or accepted as aliases.
+
 ## Preconditions before any live enablement
 
 - Land the physical-operation gateway that consumes the exact authorized `surface_policy`.

@@ -2,6 +2,11 @@
 
 Status: `DONE_WITH_CONCERNS`
 
+> **Integration supersession:** this report records the source implementation against its original
+> frozen test. PR #34 contains an intentional route/test reconciliation documented in
+> [`T-F16a-integration-reconciliation.md`](T-F16a-integration-reconciliation.md); the source identity
+> below must not be presented as the composed PR's current test identity.
+
 ## Provenance and scope
 
 - Worktree: `/Users/quietguy/Documents/Dev/Gauntlet/wt-T-F16a`

@@ -2,6 +2,10 @@
 
 Status: `DONE`
 
+> **Integration supersession:** this is the source-lane report. PR #34 deliberately reconciles its
+> frozen test with the reviewed Bruno routes. For the composed test identity and required independent
+> re-review, see [`T-F16a-integration-reconciliation.md`](T-F16a-integration-reconciliation.md).
+
 ## Provenance
 
 - Worktree: `/Users/quietguy/Documents/Dev/Gauntlet/wt-T-F16a`

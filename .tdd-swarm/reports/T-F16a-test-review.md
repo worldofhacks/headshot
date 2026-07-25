@@ -6,6 +6,11 @@ Freeze verdict: `PASS — FROZEN`
 
 Review attempt: `3/3`
 
+> **Integration supersession:** the identity below remains the frozen source-lane identity, not the
+> current PR #34 test blob. See
+> [`T-F16a-integration-reconciliation.md`](T-F16a-integration-reconciliation.md) for the exact composed
+> delta and the fresh-review gate.
+
 ## Frozen identity
 
 - Test commit: `295e9ccd0b8e1d2c13ad1ccfd8074e762461860f`

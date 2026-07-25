@@ -60,6 +60,7 @@ _V2_DOCUMENT_WORKFLOW_OPERATION_SETS = frozenset(
         frozenset({"upload", "duplicate_check"}),
     }
 )
+_APPROVED_V2_TARGET_VERSIONS = frozenset({"2.0.0", "2.1.0"})
 
 
 class TargetCatalogError(RuntimeError):
@@ -182,6 +183,14 @@ class CatalogEntry:
             if target_major < 2:
                 raise TargetCatalogError(
                     "per-surface policy requires a v2 target and approval hash"
+                )
+            if self.target.version not in _APPROVED_V2_TARGET_VERSIONS:
+                raise TargetCatalogError(
+                    "per-surface policy target version is not an exact approved activation"
+                )
+            if any(surface.version != self.target.version for surface in self.surfaces):
+                raise TargetCatalogError(
+                    "per-surface policy version must match its exact target activation"
                 )
             fixture_refs: list[str] = []
             for surface in self.surfaces:
