@@ -11,11 +11,15 @@ writes no metric and re-runs no evaluation.  Every check below is a refusal, nev
 2.  **The governing stratum must pass, not just the pooled headline.**  A trusted oracle/canary
     hit decides its case in code, so pooling those samples measures precedence, not the model.
     Enablement gates on the NON-ORACLE stratum — the only cases an enabled model Judge decides.
-3.  **Ground truth must be human-attested by two distinct principals, blind to Judge output.**
-    Rule-authored or agent-authored labels cannot license a model to act on them, and one person
-    cannot both label and review.  The attestation is bound to the exact ``slice_set_sha256``.
+3.  **Provenance is graded, and the grade is earned.**  Label and provider-call provenance are
+    COMPUTED from the evidence supplied (``agents/judge/provenance.py``), never declared.  The
+    approving human names the weakest tier they accept; enablement refuses if the real tier is
+    weaker.  A deadline may legitimately force a weaker baseline than two-person human ground
+    truth — what it may not do is let that baseline be read later as the stronger thing, so the
+    accepted tiers are encoded into ``approver_ref`` and travel inside the artifact.
 4.  **A named human approves.**  ``--approver-ref`` is recorded in the artifact and re-verified
-    by ``require_model_judge_enablement`` before the file is written.
+    by ``require_model_judge_enablement`` before the file is written.  Relaxing the label
+    provenance does NOT relax this: enablement is still a separate, attributable human act.
 
 Enabling the model Judge does NOT give it confirmation authority.  The hosted assessment schema
 has no ``EXPLOIT_CONFIRMED`` member and ``reconcile_judge_assessment`` returns the deterministic
@@ -40,6 +44,16 @@ from agentforge.agents.hosted import HostedConfigurationSet
 from agentforge.agents.hosted_runtime import hosted_judge_identity
 from agentforge.agents.judge import CalibrationGate, Judge
 from agentforge.agents.judge.enablement import require_model_judge_enablement
+from agentforge.agents.judge.provenance import (
+    GROUND_TRUTH_TIERS,
+    PROVIDER_TIERS,
+    ProvenanceError,
+    classify_ground_truth,
+    classify_provider_provenance,
+    disclosure,
+    encode_approver_ref,
+    is_at_least,
+)
 
 _ROOT = Path(__file__).resolve().parents[1]
 _GROUND_TRUTH = _ROOT / "evals" / "ground-truth"
@@ -72,20 +86,43 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--ground-truth-attestation",
         type=Path,
-        required=True,
         help=(
             "two-person human attestation over the exact slice set (see "
-            ".tdd-swarm/reports/RTG-ground-truth-label-spec.md)"
+            ".tdd-swarm/reports/RTG-ground-truth-label-spec.md). Omit to enable against a weaker "
+            "baseline, which then must be named in --accept-ground-truth-tier"
+        ),
+    )
+    parser.add_argument(
+        "--accept-ground-truth-tier",
+        choices=GROUND_TRUTH_TIERS,
+        required=True,
+        help=(
+            "the WEAKEST label provenance you are accepting. Enablement refuses if the real tier "
+            "is weaker than this, and the accepted tier is written into the artifact"
+        ),
+    )
+    parser.add_argument(
+        "--accept-provider-tier",
+        choices=PROVIDER_TIERS,
+        required=True,
+        help=(
+            "the WEAKEST provider-call provenance you are accepting. 'lineage_consistent' accepts "
+            "a bundle whose calls look real but were never reconciled against provider records"
         ),
     )
     parser.add_argument(
         "--provenance-attestation",
         type=Path,
-        required=True,
         help=(
             "output of scripts/verify_calibration_provenance.py — the reconciliation of the "
-            "capture bundle against the provider's own usage export"
+            "capture bundle against the provider's own usage export. Omit to enable at "
+            "'lineage_consistent' or weaker"
         ),
+    )
+    parser.add_argument(
+        "--captured-results",
+        type=Path,
+        help="the capture bundle, required when no provenance attestation is supplied",
     )
     parser.add_argument(
         "--approver-ref",
@@ -143,21 +180,22 @@ def _enable(args: argparse.Namespace) -> dict[str, Any]:
             "running — recalibrate against the staged configuration"
         )
 
-    _require_two_person_ground_truth(
-        _read_json(args.ground_truth_attestation, "ground-truth attestation"),
-        slice_set_sha256=calibration["slice_set_sha256"],
-    )
-    _require_measured_provenance(
-        _read_json(args.provenance_attestation, "provenance attestation"),
-        judge_identity=identity.payload(),
-        sample_count=len(calibration["sample_results"]),
-    )
+    ground_truth_tier, provider_tier = _classify(args, calibration=calibration)
     _require_governing_stratum_passes(calibration, slice_dir=args.slice_dir)
+
+    try:
+        approver_ref = encode_approver_ref(
+            approver=args.approver_ref,
+            ground_truth_tier=ground_truth_tier,
+            provider_tier=provider_tier,
+        )
+    except ProvenanceError as exc:
+        raise EnablementRefused(str(exc)) from exc
 
     enabled = CalibrationGate(evaluator=Judge()).human_enable(
         calibration,
         current_identity=identity,
-        approver_ref=args.approver_ref,
+        approver_ref=approver_ref,
     )
     # Re-run the runtime gate over the artifact we are about to persist, so what is written is
     # exactly what the runtime will accept.
@@ -165,76 +203,103 @@ def _enable(args: argparse.Namespace) -> dict[str, Any]:
     return enabled
 
 
-def _require_two_person_ground_truth(
-    attestation: Mapping[str, Any],
+def _classify(
+    args: argparse.Namespace,
     *,
-    slice_set_sha256: str,
-) -> None:
-    """A model may only act on labels two distinct humans attested, blind to its own output."""
+    calibration: Mapping[str, Any],
+) -> tuple[str, str]:
+    """Derive the real provenance tiers and refuse anything weaker than what was accepted.
 
-    if attestation.get("slice_set_sha256") != slice_set_sha256:
-        raise EnablementRefused(
-            "the ground-truth attestation is bound to a different slice set than the "
-            f"calibration ({attestation.get('slice_set_sha256')} != {slice_set_sha256})"
-        )
-    if attestation.get("blind_to_judge_output") is not True:
-        raise EnablementRefused(
-            "ground-truth labels must be attested blind to Judge output; labels adjusted after "
-            "seeing model results cannot calibrate that model"
-        )
-    labeler = _principal(attestation.get("human_labeler"), "human_labeler")
-    reviewer = _principal(attestation.get("distinct_reviewer"), "distinct_reviewer")
-    if labeler == reviewer:
-        raise EnablementRefused(
-            f"ground-truth labeler and reviewer are the same principal ({labeler}); the "
-            "two-person gate requires two distinct authorized humans"
-        )
-
-
-def _require_measured_provenance(
-    attestation: Mapping[str, Any],
-    *,
-    judge_identity: Mapping[str, str],
-    sample_count: int,
-) -> None:
-    """A shape-valid bundle is not a measurement; only the provider's record makes it one.
-
-    The replay path validates bundle shape and nothing else, so a hand-written bundle produces a
-    passing artifact. Enablement therefore requires the reconciliation against the provider's own
-    usage export, bound to the same identity and covering every sample that was scored.
+    The tiers are computed from the evidence actually supplied, so naming a strong tier does not
+    grant it. What the operator's choice does is set a floor and put their name against it — the
+    accepted tiers are then encoded into the artifact's own approver_ref, so a weaker baseline
+    travels labelled rather than being read later as the stronger thing.
     """
 
-    if attestation.get("attestation_kind") != "openrouter_usage_export_reconciled":
+    slices = _load_slices(args.slice_dir)
+    attestation = (
+        None
+        if args.ground_truth_attestation is None
+        else _read_json(args.ground_truth_attestation, "ground-truth attestation")
+    )
+    if attestation is not None:
+        bound = attestation.get("slice_set_sha256")
+        if bound != calibration["slice_set_sha256"]:
+            raise EnablementRefused(
+                "the ground-truth attestation is bound to a different slice set than the "
+                f"calibration ({bound} != {calibration['slice_set_sha256']})"
+            )
+    try:
+        ground_truth_tier, gt_evidence = classify_ground_truth(slices, attestation=attestation)
+    except ProvenanceError as exc:
+        raise EnablementRefused(str(exc)) from exc
+
+    provenance = (
+        None
+        if args.provenance_attestation is None
+        else _read_json(args.provenance_attestation, "provenance attestation")
+    )
+    if provenance is not None and provenance.get("judge_identity") != dict(
+        calibration["judge_identity"]
+    ):
         raise EnablementRefused(
-            "the provenance attestation is not a provider usage-export reconciliation; a "
-            "calibration whose provider calls cannot be shown to have happened may not grant "
-            "runtime authority"
+            "the provenance attestation covers a different Judge identity than the calibration"
         )
-    if attestation.get("judge_identity") != dict(judge_identity):
+    if provenance is None and args.captured_results is None:
         raise EnablementRefused(
-            "the provenance attestation covers a different Judge identity than the deployment"
+            "supply --provenance-attestation or --captured-results; provider provenance cannot "
+            "be graded from nothing"
         )
-    matched = attestation.get("matched_generation_count")
-    if not isinstance(matched, int) or matched < sample_count:
+    bundle = (
+        {"samples": []}
+        if args.captured_results is None
+        else _read_json(args.captured_results, "capture bundle")
+    )
+    if args.captured_results is None and provenance is not None:
+        bundle = {"samples": [{}] * int(provenance.get("matched_generation_count") or 0)}
+    try:
+        provider_tier, prov_evidence = classify_provider_provenance(bundle, attestation=provenance)
+    except ProvenanceError as exc:
+        raise EnablementRefused(str(exc)) from exc
+
+    _require_tier(
+        actual=ground_truth_tier,
+        accepted=args.accept_ground_truth_tier,
+        tiers=GROUND_TRUTH_TIERS,
+        label="ground-truth",
+        evidence=gt_evidence,
+    )
+    _require_tier(
+        actual=provider_tier,
+        accepted=args.accept_provider_tier,
+        tiers=PROVIDER_TIERS,
+        label="provider-call",
+        evidence=prov_evidence,
+    )
+    print(disclosure(ground_truth_tier=ground_truth_tier, provider_tier=provider_tier))
+    return ground_truth_tier, provider_tier
+
+
+def _require_tier(
+    *,
+    actual: str,
+    accepted: str,
+    tiers: tuple[str, ...],
+    label: str,
+    evidence: Mapping[str, Any],
+) -> None:
+    if not is_at_least(actual, accepted, tiers):
         raise EnablementRefused(
-            f"the provenance attestation reconciles {matched} generations but the calibration "
-            f"scored {sample_count} samples — every scored sample needs a provider record"
+            f"{label} provenance is {actual!r}, weaker than the accepted floor {accepted!r}. "
+            f"Evidence: {json.dumps(evidence, sort_keys=True)}"
         )
 
 
-def _principal(value: Any, field: str) -> str:
-    if not isinstance(value, Mapping):
-        raise EnablementRefused(
-            f"ground-truth attestation has no {field}; rule-authored or agent-authored labels "
-            "cannot license runtime model authority"
-        )
-    identifier = value.get("id")
-    if not isinstance(identifier, str) or not identifier.strip():
-        raise EnablementRefused(f"ground-truth {field} has no identified principal")
-    attested_at = value.get("attested_at")
-    if not isinstance(attested_at, str) or not attested_at.strip():
-        raise EnablementRefused(f"ground-truth {field} carries no attestation timestamp")
-    return identifier.strip()
+def _load_slices(slice_dir: Path) -> list[dict[str, Any]]:
+    candidates = sorted(slice_dir.glob("*.json"))
+    if not candidates:
+        raise EnablementRefused(f"no ground-truth slices under {slice_dir}")
+    return [_read_json(path, "ground-truth slice") for path in candidates]
 
 
 def _require_governing_stratum_passes(calibration: Mapping[str, Any], *, slice_dir: Path) -> None:

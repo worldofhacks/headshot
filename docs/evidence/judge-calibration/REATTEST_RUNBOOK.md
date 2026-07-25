@@ -9,14 +9,54 @@ carried forward** — see §5 for exactly why, and for what part of it was and w
 
 ---
 
-## 1. Blocked on (both required, neither is mine)
+## 1. Blocked on — ONE input remains
 
-| # | Input | Owner | Why it blocks |
+| # | Input | Owner | Status |
 |---|---|---|---|
-| B1 | Staged **production** hosted configuration set + its attested `configuration_sha256` | **m** | The Judge identity is derived from it. Without it there is nothing to bind to, and a capture would again attest a configuration production does not run. |
-| B2 | **Two-person human ground-truth attestation** over the exact `slice_set_sha256` | **g** + a distinct approver | `scripts/enable_model_judge.py` refuses to flip `runtime_enabled` without it. Every label on disk today is rule- or agent-authored. |
+| B1 | Staged **production** hosted configuration set + its attested `configuration_sha256` | **integrator** | **STILL BLOCKING.** The Judge identity is derived from it. No staged payload exists anywhere on the integration head — production role configs live in the Postgres `hosted_configuration_sets` table. Without it there is nothing to bind to, and a capture would again attest a configuration production does not run. |
+| B2 | Two-person human ground-truth attestation | g + a distinct approver | **LIFTED for the deadline** (owner). Enablement now accepts a weaker, explicitly-named baseline — see §1b. |
+| B3 | OpenRouter usage export | — | **OPTIONAL** (owner). Enablement now accepts `lineage_consistent` — see §1b. |
 
-A third constraint is not a blocker but changes the plan — see §4 (56-call ceiling).
+A further constraint is not a blocker but changes the plan — see §4 (56-call ceiling).
+
+## 1b. Graded provenance — accept a weaker baseline, never disguise one
+
+Provenance is **computed from the evidence supplied**, never declared
+(`src/agentforge/agents/judge/provenance.py`). The approving human names the weakest tier they
+accept; enablement refuses if the real tier is weaker, and the accepted tiers are encoded into
+`approver_ref` so the downgrade travels **inside** the artifact.
+
+| Ground-truth tier | Meaning |
+|---|---|
+| `human_two_person` | two distinct identified principals, blind to Judge output |
+| `model_labeled` | every label names the model that proposed it |
+| `rule_derived` | **what is on disk today** — labels derived in code from a static design table |
+| `unattested` | no label provenance at all |
+
+| Provider tier | Meaning |
+|---|---|
+| `usage_export_reconciled` | every sample matched to the provider's own usage export |
+| `lineage_consistent` | **what the committed bundle earns** — unique provider-shaped request ids, provider-reported distinct costs and token counts. Strong circumstantial evidence, *not proof* |
+| `unverified` | shape-valid only |
+
+**The committed corpus classifies as `rule_derived`, not `model_labeled`.** The 54 labels come from
+`_LABEL_TABLE[slug]` in `scripts/build_calibration_corpus.py` — resolved in code from the sample
+slug, with no model involved. Reporting them as "automated-labeled (model X)" would name a model
+that does not exist. The `model_labeled` tier is implemented and waiting for a set that genuinely
+has one.
+
+The disclosure the report must carry at the current tiers, verbatim:
+
+> Ground truth: automated-labeled baseline — labels derived in code from a static design table
+> (`scripts/build_calibration_corpus.py`), NOT model-labeled and NOT human ground truth. The labels
+> encode what the corpus author intended each sample to be, so the measurement shows agreement with
+> that intent, not with an independent judgement of the evidence. Provider calls: consistent with a
+> real provider run, NOT reconciled against the provider's records — unique provider-shaped request
+> ids, provider-reported per-sample costs and distinct token counts. Strong circumstantial evidence;
+> it is not proof the calls occurred.
+
+Relaxing label provenance does **not** relax the human approver: `--approver-ref` and `--confirm`
+are unchanged, and enablement remains a separate, attributable human act.
 
 ## 2. What m hands over
 
@@ -110,16 +150,30 @@ PYTHONPATH=src python scripts/analyze_judge_calibration.py \
   --output "$R/stratified-report.json" \
   --require-non-oracle-pass
 
-# (g) human enablement — refuses unless every gate in §6 holds
+# (g) human enablement — refuses unless every gate in §6 holds.
+#     Full-strength form:
 PYTHONPATH=src python scripts/enable_model_judge.py \
   --calibration "$R/calibration-accepted.json" \
   --hosted-configuration-set <staged-prod-config.json> \
-  --expected-configuration-sha256 <sha-m-attested> \
+  --expected-configuration-sha256 <sha-attested> \
   --ground-truth-attestation <two-person-attestation.json> \
   --provenance-attestation "$R/provenance-attestation.json" \
+  --accept-ground-truth-tier human_two_person \
+  --accept-provider-tier usage_export_reconciled \
   --approver-ref <authorized-human> \
-  --output "$R/calibration-enabled.json" \
-  --confirm
+  --output "$R/calibration-enabled.json" --confirm
+
+#     Deadline form — weaker baseline, explicitly named and recorded in the artifact:
+PYTHONPATH=src python scripts/enable_model_judge.py \
+  --calibration "$R/calibration-accepted.json" \
+  --hosted-configuration-set <staged-prod-config.json> \
+  --expected-configuration-sha256 <sha-attested> \
+  --captured-results "$R/captured-results.json" \
+  --accept-ground-truth-tier rule_derived \
+  --accept-provider-tier lineage_consistent \
+  --approver-ref <authorized-human> \
+  --output "$R/calibration-enabled.json" --confirm
+# -> approver_ref becomes "gt=rule_derived;prov=lineage_consistent;by=<authorized-human>"
 ```
 
 Steps (a)–(f) report whatever the numbers are. Step (g) is the only one that grants authority, and

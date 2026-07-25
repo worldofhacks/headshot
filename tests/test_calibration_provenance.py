@@ -182,39 +182,35 @@ def test_an_unmappable_export_refuses_and_names_the_columns_it_saw(tmp_path: Pat
 
 
 # --- the enablement gate consumes it -----------------------------------------------------
+#
+# The hard "no reconciliation, no enablement" gate was replaced by graded provenance: a
+# reconciliation now EARNS the `usage_export_reconciled` tier, and a bundle without one falls to
+# `lineage_consistent`, which an approver may accept explicitly. The tier logic and the refusal of
+# anything weaker than the accepted floor live in tests/test_calibration_provenance_tiers.py.
 
 
-def test_enablement_refuses_a_calibration_with_no_provenance_attestation() -> None:
-    spec = importlib.util.spec_from_file_location(
-        "enable_model_judge", ROOT / "scripts" / "enable_model_judge.py"
-    )
-    assert spec is not None and spec.loader is not None
-    enable = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(enable)
+def test_a_reconciliation_earns_the_top_provider_tier_for_enablement() -> None:
+    """The link between this tool's output and what enablement will grant."""
 
-    with pytest.raises(enable.EnablementRefused, match="not a provider usage-export"):
-        enable._require_measured_provenance(
-            {"attestation_kind": "trust_me"},
-            judge_identity=_IDENTITY,
-            sample_count=54,
-        )
+    from agentforge.agents.judge.provenance import classify_provider_provenance
+
+    module = _module()
+    bundle = _bundle([_sample("L-1", "gen-aaa"), _sample("L-2", "gen-bbb")])
+    attestation = module.verify(bundle, [_row("gen-aaa"), _row("gen-bbb")])
+
+    tier, _ = classify_provider_provenance(bundle, attestation=attestation)
+
+    assert tier == "usage_export_reconciled"
 
 
-def test_enablement_refuses_provenance_that_covers_fewer_samples_than_were_scored() -> None:
-    spec = importlib.util.spec_from_file_location(
-        "enable_model_judge", ROOT / "scripts" / "enable_model_judge.py"
-    )
-    assert spec is not None and spec.loader is not None
-    enable = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(enable)
+def test_without_a_reconciliation_the_same_bundle_only_reaches_lineage_consistent() -> None:
+    from agentforge.agents.judge.provenance import classify_provider_provenance
 
-    with pytest.raises(enable.EnablementRefused, match="every scored sample needs"):
-        enable._require_measured_provenance(
-            {
-                "attestation_kind": "openrouter_usage_export_reconciled",
-                "judge_identity": _IDENTITY,
-                "matched_generation_count": 40,
-            },
-            judge_identity=_IDENTITY,
-            sample_count=54,
-        )
+    bundle = _bundle([_sample("L-1", "gen-1784934309-yDHN8gAVdjgNMKHfMHlT")])
+    varied = _sample("L-2", "gen-1784934325-4gKt0ABOyvB7ZSuScxxr", cost="0.0181")
+    varied["output_tokens"] = 212  # distinct token counts are part of what the tier requires
+    bundle["samples"].append(varied)
+
+    tier, _ = classify_provider_provenance(bundle)
+
+    assert tier == "lineage_consistent"
