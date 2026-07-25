@@ -413,6 +413,16 @@ class HostedRoleRuntime:
                 "hosted provider result could not be durably terminally recorded"
             )
             failure.add_note(f"lifecycle failure type: {type(exc).__name__}")
+            # The output is refused, but the execution must not be left open. Generating text that
+            # looks like a credential is the Red Team's actual job, so an honest in-contract
+            # response routinely trips the store's screening — and stranding the row on that would
+            # mean the platform disables itself the first time an attack works.
+            self._record_failure(
+                execution_id=execution_id,
+                cause=failure,
+                lineage=record,
+                physical_attempts=result.physical_attempts,
+            )
             raise failure from exc
         return HostedRoleInvocation(
             result=result,
@@ -583,11 +593,24 @@ class HostedRoleRuntime:
                 **terminal,
             )
         except Exception as lifecycle_exc:
-            failure = HostedCompositionError(
-                "hosted execution failure could not be terminally recorded"
+            # The store can refuse the observation itself — a token count beyond the column, an
+            # output that trips credential screening, a payload over the size bound. Leaving the
+            # row `running` is the worst outcome available: no terminal record, no audit event,
+            # and nothing can ever close it because the execution context is already gone. So
+            # degrade to the smallest record the store cannot refuse and keep the execution
+            # closed. What is lost is the observation, never the fact that the call ended.
+            if lineage is None:
+                failure = HostedCompositionError(
+                    "hosted execution failure could not be terminally recorded"
+                )
+                failure.add_note(f"lifecycle failure type: {type(lifecycle_exc).__name__}")
+                raise failure from cause
+            self._record_failure(
+                execution_id=execution_id,
+                cause=cause,
+                lineage=None,
+                physical_attempts=physical_attempts,
             )
-            failure.add_note(f"lifecycle failure type: {type(lifecycle_exc).__name__}")
-            raise failure from cause
 
 
 @dataclass(frozen=True, slots=True)

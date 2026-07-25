@@ -144,13 +144,36 @@ This also fixed a defect on **honest** responses: a cost with thirteen decimal p
 by the store, swallowed into a generic composition error, and left the execution row `running`
 forever with no terminal record at all.
 
-**Residual, scoped narrowly and verified: a response whose token counts cannot be read.** If the
-`usage` block itself is absent or the wrong type, `prompt_tokens`/`completion_tokens` are
-unreadable and only four of the seven columns are available, so the all-or-nothing tuple genuinely
-cannot be satisfied and the row cannot be written. That is the schema, not an ordering bug. The
-physical `provider_call_events` path models it correctly with nullable tokens; closing it is
-T-F17c. **This claim has been wrong twice — check it against the seven columns before extending it
-to anything else.**
+**Residual: a token count `_usage` refuses. Stated exactly, after getting this wrong three times.**
+
+Whenever `_usage` refuses a token field, at least one of the seven columns is unavailable, so the
+all-or-nothing tuple cannot be satisfied and the row carries no observation. That much holds. But
+the *scope* has been misstated repeatedly, so here it is measured rather than asserted — which of
+the seven are actually available per variant:
+
+| variant | available | unavailable |
+|---|---|---|
+| `usage` absent, a list, or a string | 4 / 7 | all three token counts |
+| `completion_tokens` absent or a string | 5 / 7 | output, reasoning |
+| `reasoning_tokens` a string, null, or negative | 5 / 7 | output, reasoning |
+| `prompt_tokens` absent, a string, a float, negative, or a bool | 6 / 7 | input |
+| `reasoning_tokens` > `completion_tokens` | 6 / 7 | output |
+| `completion_tokens_details` a string (reasoning defaults to 0) | 7 / 7 | — records fine |
+
+Two honest qualifications the earlier wording hid. First, only the three whole-block variants are
+the "4 / 7" case the residual used to describe; most are 5/7 or 6/7. Second, and more important:
+`reasoning_tokens > completion_tokens` and `reasoning_tokens: null` arrive in a *well-formed*
+`usage` object — the refusal there is **this module's own rule, not the schema's**, so it is
+fixable by relaxing our rule, unlike the genuinely unreadable cases. Do not call those blocked.
+
+A token count above `INT4` is a separate, genuine schema limit: `input_tokens`, `output_tokens`,
+`reasoning_tokens` and `physical_attempts` are all `sa.Integer()`, on `agent_executions` and on
+`provider_call_events` alike, so the T-F17c path inherits it.
+
+**Terminalization no longer depends on any of this.** Whatever the store refuses — an out-of-range
+token count, an output that trips credential screening, a payload over the size bound — the
+execution is now closed with the smallest record the store will accept rather than left `running`
+with no terminal row and no audit event. The observation can be lost; the execution never is.
 
 **Residual: an upstream-provider substitution is recorded but not refused.** The request pins
 `provider.only` with `allow_fallbacks: False`, but the substitution check compares model identities
