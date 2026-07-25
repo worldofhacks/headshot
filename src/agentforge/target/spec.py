@@ -17,6 +17,8 @@ from decimal import Decimal
 from enum import StrEnum
 from urllib.parse import urlsplit
 
+from agentforge.platform_limits import HOSTED_MAX_PHYSICAL_CALLS
+
 _IDENTIFIER_RE = re.compile(r"\A[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*\Z")
 _VERSION_RE = re.compile(r"\A(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\Z")
 _REFERENCE_RE = re.compile(r"\A[a-z][a-z0-9+.-]*://[^\s\x00-\x1f\x7f]+\Z")
@@ -396,9 +398,11 @@ class HostedRunBinding:
             raise DefinitionError("session_generation must be a non-secret immutable generation")
         if (
             type(self.provider_model_call_limit) is not int
-            or not 1 <= self.provider_model_call_limit <= 56
+            or not 1 <= self.provider_model_call_limit <= HOSTED_MAX_PHYSICAL_CALLS
         ):
-            raise DefinitionError("provider_model_call_limit must be between 1 and 56")
+            raise DefinitionError(
+                f"provider_model_call_limit must be between 1 and {HOSTED_MAX_PHYSICAL_CALLS}"
+            )
         try:
             spend = Decimal(self.provider_model_spend_limit_usd)
         except (ArithmeticError, TypeError, ValueError) as exc:

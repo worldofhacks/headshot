@@ -12,6 +12,8 @@ from typing import Any, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 
+from agentforge.platform_limits import HOSTED_MAX_PHYSICAL_CALLS
+
 _LANGFUSE_DELIVERY_STATES = (
     "not_attempted",
     "disabled",
@@ -69,7 +71,7 @@ class HostedRunBindingReadModel(_ReadModel):
     configuration_set_sha256: str
     generation_policy_sha256: str
     session_generation: str
-    provider_model_call_limit: int = Field(gt=0, le=56)
+    provider_model_call_limit: int = Field(gt=0, le=HOSTED_MAX_PHYSICAL_CALLS)
     provider_model_spend_limit_usd: str
     provider_max_retries: int = Field(ge=0, le=1)
     provider_max_concurrency: Literal[1]

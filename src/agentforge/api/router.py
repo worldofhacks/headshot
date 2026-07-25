@@ -32,6 +32,7 @@ from agentforge.auth.permissions import (
     TARGETS_MANAGE,
 )
 from agentforge.auth.principal import Principal
+from agentforge.platform_limits import HOSTED_MAX_PHYSICAL_CALLS
 
 router = APIRouter(prefix="/api/v1")
 
@@ -73,7 +74,7 @@ class HostedRunBindingInput(_StrictModel):
     configuration_set_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
     generation_policy_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
     session_generation: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
-    provider_model_call_limit: int = Field(gt=0, le=56)
+    provider_model_call_limit: int = Field(gt=0, le=HOSTED_MAX_PHYSICAL_CALLS)
     provider_model_spend_limit_usd: str = Field(min_length=1, max_length=32)
     provider_max_retries: int = Field(ge=0, le=1)
     provider_max_concurrency: Literal[1]
@@ -192,7 +193,7 @@ class HostedTokenPricesInput(_StrictModel):
 
 
 class HostedLimitsInput(_StrictModel):
-    max_calls: int = Field(gt=0, le=56)
+    max_calls: int = Field(gt=0, le=HOSTED_MAX_PHYSICAL_CALLS)
     max_input_tokens: int = Field(gt=0)
     max_output_tokens: int = Field(gt=0)
     max_reasoning_tokens: int = Field(gt=0)

@@ -190,7 +190,12 @@ def _hosted_configuration_payload() -> dict[str, Any]:
     }
 
 
-def _seed_ready_target(engine: Engine, principal: Principal) -> None:
+def _seed_ready_target(
+    engine: Engine,
+    principal: Principal,
+    *,
+    surface_payloads: tuple[dict[str, Any], ...] | None = None,
+) -> None:
     """Stand in for the still-missing trusted server-side authoring catalog."""
 
     store = ControlPlaneStore(engine, environment="staging")
@@ -200,11 +205,13 @@ def _seed_ready_target(engine: Engine, principal: Principal) -> None:
         target=backend._target(_target_payload()),
         idempotency_key="server-catalog-target-0001",
     )
-    store.register_surface(
-        principal=principal,
-        surface=backend._surface("copilot-api", _surface_payload()),
-        idempotency_key="server-catalog-surface-0001",
-    )
+    selected_surfaces = (_surface_payload(),) if surface_payloads is None else surface_payloads
+    for index, surface_payload in enumerate(selected_surfaces, start=1):
+        store.register_surface(
+            principal=principal,
+            surface=backend._surface("copilot-api", surface_payload),
+            idempotency_key=f"server-catalog-surface-{index:04d}",
+        )
     for lifecycle in (TargetLifecycle.VALIDATING, TargetLifecycle.READY):
         store.transition_target(
             principal=principal,
@@ -317,6 +324,90 @@ def _seed_scheduled_tool_attempt(
         source_technique="scheduled-only-probe",
     )
     return run, attempt, scope
+
+
+def test_campaign_template_selects_the_only_currently_enabled_surface(
+    migrated_db: Engine,
+) -> None:
+    _clean(migrated_db)
+    principal = _principal(LAUNCHER_ID, "org:console:read", "org:targets:manage")
+    app_surface = _surface_payload()
+    app_surface.update({"surface_id": "app-api", "relative_path": "app"})
+    _seed_ready_target(
+        migrated_db,
+        principal,
+        surface_payloads=(app_surface, _surface_payload()),
+    )
+    ControlPlaneStore(migrated_db, environment="staging").set_surface_enabled(
+        principal=principal,
+        target_id="copilot-api",
+        surface_id="app-api",
+        version="1.0.0",
+        enabled=False,
+        idempotency_key="server-catalog-surface-disable-app-0001",
+    )
+
+    result = PostgresApiBackend(
+        migrated_db,
+        environment="staging",
+        corpus=load_full_scan_corpus(),
+    ).read("targets", principal)
+
+    assert result.state == "ready"
+    target = result.data[0]
+    assert [(surface["surface_id"], surface["enabled"]) for surface in target["surfaces"]] == [
+        ("app-api", False),
+        ("chat-api", True),
+    ]
+    assert target["campaign_template"]["surface_id"] == "chat-api"
+
+
+def test_campaign_template_fails_closed_when_no_surface_is_enabled(
+    migrated_db: Engine,
+) -> None:
+    _clean(migrated_db)
+    principal = _principal(LAUNCHER_ID, "org:console:read", "org:targets:manage")
+    _seed_ready_target(migrated_db, principal)
+    ControlPlaneStore(migrated_db, environment="staging").set_surface_enabled(
+        principal=principal,
+        target_id="copilot-api",
+        surface_id="chat-api",
+        version="1.0.0",
+        enabled=False,
+        idempotency_key="server-catalog-surface-disable-chat-0001",
+    )
+
+    result = PostgresApiBackend(
+        migrated_db,
+        environment="staging",
+        corpus=load_full_scan_corpus(),
+    ).read("targets", principal)
+
+    assert result.state == "ready"
+    assert result.data[0]["campaign_template"] is None
+
+
+def test_campaign_template_fails_closed_when_multiple_surfaces_are_enabled(
+    migrated_db: Engine,
+) -> None:
+    _clean(migrated_db)
+    principal = _principal(LAUNCHER_ID, "org:console:read", "org:targets:manage")
+    second_surface = _surface_payload()
+    second_surface.update({"surface_id": "completion-api", "relative_path": "completion"})
+    _seed_ready_target(
+        migrated_db,
+        principal,
+        surface_payloads=(_surface_payload(), second_surface),
+    )
+
+    result = PostgresApiBackend(
+        migrated_db,
+        environment="staging",
+        corpus=load_full_scan_corpus(),
+    ).read("targets", principal)
+
+    assert result.state == "ready"
+    assert result.data[0]["campaign_template"] is None
 
 
 def test_security_tool_catalog_is_exposed_with_truthful_scope_and_no_target_access(

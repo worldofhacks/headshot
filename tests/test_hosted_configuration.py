@@ -8,8 +8,10 @@ from dataclasses import FrozenInstanceError, replace
 from decimal import Decimal, localcontext
 
 import pytest
+from pydantic import ValidationError
 
 from agentforge.agents.hosted import (
+    HOSTED_MAX_PHYSICAL_CALLS,
     HostedConfigurationSet,
     HostedLimits,
     HostedRoleConfiguration,
@@ -18,6 +20,8 @@ from agentforge.agents.hosted import (
     resolve_hosted_prompt,
 )
 from agentforge.agents.prompts import load_prompt_registry
+from agentforge.api.read_models import HostedRunBindingReadModel
+from agentforge.api.router import HostedLimitsInput, HostedRunBindingInput
 
 MODELS = {
     "orchestrator": "anthropic/claude-opus-4.8",
@@ -228,14 +232,56 @@ def test_prices_and_limits_require_decimal_units_and_closed_bounds() -> None:
         replace(_limits("judge"), max_requests_per_second=Decimal("0.5001"))
     with pytest.raises(ValueError, match="concurrency"):
         replace(_limits("judge"), max_concurrency=2)
+    assert (
+        replace(_limits("judge"), max_calls=HOSTED_MAX_PHYSICAL_CALLS).max_calls
+        == HOSTED_MAX_PHYSICAL_CALLS
+    )
     with pytest.raises(ValueError, match="closed platform maximum"):
-        replace(_limits("judge"), max_calls=57)
+        replace(_limits("judge"), max_calls=HOSTED_MAX_PHYSICAL_CALLS + 1)
     with pytest.raises(ValueError, match="between zero and 1"):
         replace(_limits("judge"), max_retries=2)
     with pytest.raises(ValueError, match="closed platform maximum"):
         replace(_limits("judge"), max_usd=Decimal("10.01"))
     with pytest.raises(ValueError, match="positive"):
         replace(_limits("judge"), max_calls=0)
+
+
+def test_api_hosted_call_validators_share_the_closed_400_call_ceiling() -> None:
+    binding = {
+        "configuration_set_sha256": "a" * 64,
+        "generation_policy_sha256": "b" * 64,
+        "session_generation": "generation-20260724",
+        "provider_model_call_limit": HOSTED_MAX_PHYSICAL_CALLS,
+        "provider_model_spend_limit_usd": "5",
+        "provider_max_retries": 1,
+        "provider_max_concurrency": 1,
+        "provider_timeout_seconds": 180.0,
+    }
+    limits = {
+        "max_calls": HOSTED_MAX_PHYSICAL_CALLS,
+        "max_input_tokens": 1,
+        "max_output_tokens": 1,
+        "max_reasoning_tokens": 1,
+        "max_usd": "1",
+        "max_retries": 1,
+        "max_requests_per_second": "0.5",
+        "max_concurrency": 1,
+    }
+
+    assert HostedRunBindingInput.model_validate(binding).provider_model_call_limit == 400
+    assert HostedRunBindingReadModel.model_validate(binding).provider_model_call_limit == 400
+    assert HostedLimitsInput.model_validate(limits).max_calls == 400
+
+    with pytest.raises(ValidationError):
+        HostedRunBindingInput.model_validate(
+            {**binding, "provider_model_call_limit": HOSTED_MAX_PHYSICAL_CALLS + 1}
+        )
+    with pytest.raises(ValidationError):
+        HostedRunBindingReadModel.model_validate(
+            {**binding, "provider_model_call_limit": HOSTED_MAX_PHYSICAL_CALLS + 1}
+        )
+    with pytest.raises(ValidationError):
+        HostedLimitsInput.model_validate({**limits, "max_calls": HOSTED_MAX_PHYSICAL_CALLS + 1})
 
 
 @pytest.mark.parametrize(

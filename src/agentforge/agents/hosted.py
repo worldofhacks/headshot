@@ -20,11 +20,11 @@ from urllib.parse import urlsplit
 
 from agentforge.agents.prompts import PromptRecord, PromptRegistryError, load_prompt_registry
 from agentforge.agents.runtime import AGENT_ROLES, AgentRole
+from agentforge.platform_limits import HOSTED_MAX_PHYSICAL_CALLS
 from agentforge.secrets import looks_like_provider_key
 
 HOSTED_CONFIGURATION_SCHEMA_VERSION = "2"
 HOSTED_PROVIDER = "openrouter"
-HOSTED_MAX_PHYSICAL_CALLS = 56
 HOSTED_MAX_MEASURED_USD = Decimal("10")
 HOSTED_MAX_LOGICAL_RETRIES = 1
 HOSTED_MAX_CONCURRENCY = 1

@@ -654,7 +654,7 @@ describe("v1 read-model decoders", () => {
       configuration_set_sha256: "a".repeat(64),
       generation_policy_sha256: "b".repeat(64),
       session_generation: "generation-1",
-      provider_model_call_limit: 8,
+      provider_model_call_limit: 400,
       provider_model_spend_limit_usd: "1.250000",
       provider_max_retries: 1,
       provider_max_concurrency: 1,
@@ -680,6 +680,10 @@ describe("v1 read-model decoders", () => {
     expect(() => decodeCampaigns([{
       ...campaign,
       hosted_run: { ...hostedRun, configuration_set_sha256: "A".repeat(64) },
+    }])).toThrow("Invalid hosted run binding read model");
+    expect(() => decodeCampaigns([{
+      ...campaign,
+      hosted_run: { ...hostedRun, provider_model_call_limit: 401 },
     }])).toThrow("Invalid hosted run binding read model");
     expect(() => decodeCampaigns([{
       ...campaign,

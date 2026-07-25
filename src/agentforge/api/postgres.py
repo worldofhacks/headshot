@@ -3608,10 +3608,16 @@ class PostgresApiBackend(ApiBackend):
                             # Do not emit the internal duplicate parent key into the stable v1
                             # SurfaceReadModel.
                             surface_payload.pop("target_id", None)
+                            # The state event is authoritative; immutable definition payloads
+                            # retain only the initial value.
+                            surface_payload.pop("enabled", None)
                             surface.update(surface_payload)
                         row["campaign_template"] = None
-                        if self._corpus is not None and row["surfaces"]:
-                            surface = row["surfaces"][0]
+                        enabled_surfaces = tuple(
+                            surface for surface in row["surfaces"] if surface.get("enabled") is True
+                        )
+                        if self._corpus is not None and len(enabled_surfaces) == 1:
+                            surface = enabled_surfaces[0]
                             workload_caps = None
                             try:
                                 sequences = [

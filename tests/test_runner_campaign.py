@@ -37,6 +37,7 @@ from agentforge.campaign.corpus import (
 )
 from agentforge.contracts import is_valid
 from agentforge.control_plane.store import ControlPlaneStore
+from agentforge.platform_limits import HOSTED_MAX_PHYSICAL_CALLS
 from agentforge.policy.recorder import ExecutionRecorder
 from agentforge.policy.scoped_credentials import (
     CredentialResolutionError,
@@ -1487,24 +1488,24 @@ def _hosted_capacity_fixture(
     )
 
 
-def test_hosted_preflight_requires_cumulative_role_token_capacity() -> None:
-    configuration = _hosted_capacity_fixture()
-    configuration.roles[0].limits.max_input_tokens -= 1
+def test_hundred_case_hosted_preflight_requires_exact_role_token_capacity() -> None:
+    configuration = _hosted_capacity_fixture(case_count=100)
+    configuration.roles[2].limits.max_input_tokens -= 1
 
     with pytest.raises(DispatchUnavailable, match="hosted_role_cap_incompatible"):
         _require_hosted_workload_capacity(
             configuration=configuration,  # type: ignore[arg-type]
             generation_policy=DEFAULT_HOSTED_GENERATION_POLICY,
-            case_count=2,
+            case_count=100,
         )
 
 
-def test_hosted_preflight_requires_cumulative_global_token_capacity() -> None:
-    configuration = _hosted_capacity_fixture()
+def test_hundred_case_hosted_preflight_requires_exact_global_token_capacity() -> None:
+    configuration = _hosted_capacity_fixture(case_count=100)
     _require_hosted_workload_capacity(
         configuration=configuration,  # type: ignore[arg-type]
         generation_policy=DEFAULT_HOSTED_GENERATION_POLICY,
-        case_count=2,
+        case_count=100,
     )
     configuration.global_limits.max_reasoning_tokens -= 1
 
@@ -1512,36 +1513,88 @@ def test_hosted_preflight_requires_cumulative_global_token_capacity() -> None:
         _require_hosted_workload_capacity(
             configuration=configuration,  # type: ignore[arg-type]
             generation_policy=DEFAULT_HOSTED_GENERATION_POLICY,
-            case_count=2,
+            case_count=100,
         )
 
 
-def test_canonical_nine_case_zero_retry_workload_fits_and_one_less_call_fails() -> None:
-    configuration = _hosted_capacity_fixture(case_count=9, max_retries=0)
+def test_hundred_case_zero_retry_workload_exactly_fits_closed_capacity() -> None:
+    configuration = _hosted_capacity_fixture(case_count=100, max_retries=0)
+    roles = {role.role: role.limits for role in configuration.roles}
+
+    assert {role: limits.max_calls for role, limits in roles.items()} == {
+        "orchestrator": 100,
+        "red_team": 100,
+        "judge": 100,
+        "documentation": 100,
+    }
+    assert {
+        role: (
+            limits.max_input_tokens,
+            limits.max_output_tokens,
+            limits.max_reasoning_tokens,
+        )
+        for role, limits in roles.items()
+    } == {
+        "orchestrator": (6_553_600, 204_800, 819_200),
+        "red_team": (409_600, 204_800, 102_400),
+        "judge": (10_000_000, 204_800, 819_200),
+        "documentation": (1_638_400, 409_600, 409_600),
+    }
+    assert configuration.global_limits.max_calls == HOSTED_MAX_PHYSICAL_CALLS
+    assert (
+        configuration.global_limits.max_input_tokens,
+        configuration.global_limits.max_output_tokens,
+        configuration.global_limits.max_reasoning_tokens,
+    ) == (18_601_600, 1_024_000, 2_150_400)
     _require_hosted_workload_capacity(
         configuration=configuration,  # type: ignore[arg-type]
         generation_policy=DEFAULT_HOSTED_GENERATION_POLICY,
-        case_count=9,
+        case_count=100,
     )
-    configuration.roles[0].limits.max_calls -= 1
-
-    with pytest.raises(DispatchUnavailable, match="hosted_role_cap_incompatible"):
-        _require_hosted_workload_capacity(
-            configuration=configuration,  # type: ignore[arg-type]
-            generation_policy=DEFAULT_HOSTED_GENERATION_POLICY,
-            case_count=9,
-        )
 
 
-def test_global_fifty_six_call_cap_requires_zero_retry_nine_case_floor() -> None:
-    configuration = _hosted_capacity_fixture(case_count=9, max_retries=1)
-    configuration.global_limits.max_calls = 56
+def test_hundred_case_zero_retry_workload_refuses_399_global_calls() -> None:
+    configuration = _hosted_capacity_fixture(case_count=100, max_retries=0)
+    configuration.global_limits.max_calls = HOSTED_MAX_PHYSICAL_CALLS - 1
 
     with pytest.raises(DispatchUnavailable, match="hosted_global_call_cap_incompatible"):
         _require_hosted_workload_capacity(
             configuration=configuration,  # type: ignore[arg-type]
             generation_policy=DEFAULT_HOSTED_GENERATION_POLICY,
-            case_count=9,
+            case_count=100,
+        )
+
+
+def test_hundred_case_zero_retry_workload_refuses_99_role_calls() -> None:
+    configuration = _hosted_capacity_fixture(case_count=100, max_retries=0)
+    configuration.roles[0].limits.max_calls = 99
+
+    with pytest.raises(DispatchUnavailable, match="hosted_role_cap_incompatible"):
+        _require_hosted_workload_capacity(
+            configuration=configuration,  # type: ignore[arg-type]
+            generation_policy=DEFAULT_HOSTED_GENERATION_POLICY,
+            case_count=100,
+        )
+
+
+def test_retry_one_fits_smaller_workload_but_not_hundred_cases_under_closed_ceiling() -> None:
+    smaller_configuration = _hosted_capacity_fixture(case_count=50, max_retries=1)
+    assert smaller_configuration.global_limits.max_calls == HOSTED_MAX_PHYSICAL_CALLS
+    _require_hosted_workload_capacity(
+        configuration=smaller_configuration,  # type: ignore[arg-type]
+        generation_policy=DEFAULT_HOSTED_GENERATION_POLICY,
+        case_count=50,
+    )
+
+    hundred_case_configuration = _hosted_capacity_fixture(case_count=100, max_retries=1)
+    assert hundred_case_configuration.global_limits.max_calls == 800
+    hundred_case_configuration.global_limits.max_calls = HOSTED_MAX_PHYSICAL_CALLS
+
+    with pytest.raises(DispatchUnavailable, match="hosted_global_call_cap_incompatible"):
+        _require_hosted_workload_capacity(
+            configuration=hundred_case_configuration,  # type: ignore[arg-type]
+            generation_policy=DEFAULT_HOSTED_GENERATION_POLICY,
+            case_count=100,
         )
 
 
