@@ -14,6 +14,7 @@ import {
   ApprovalsScreen,
   TargetsScreen,
 } from "../src/screens/ConsoleScreens";
+import { AgentsScreen } from "../src/screens/AgentToolScreens";
 import { CostsScreen } from "../src/screens/ObservabilityScreens";
 import { PERMISSIONS } from "../src/types";
 
@@ -255,6 +256,121 @@ const agentCost = {
   recorded_at: "2026-07-24T00:00:02Z",
 } as const;
 
+const acceptanceAgent = {
+  role: "orchestrator",
+  display_name: "Planner",
+  responsibility: "Prioritizes authorized synthetic evaluation work.",
+  trust_level: "trusted governor",
+  target_access: "none",
+  input_contract: "Coverage snapshot",
+  output_contract: "Workload plan",
+  active_assignment: {
+    role: "orchestrator",
+    provider: "headshot",
+    model: "coverage-governor-v1",
+    resolved_model: null,
+    upstream_provider: null,
+    prompt_sha256: null,
+    prompt_version: null,
+    execution_mode: "deterministic",
+    activation_state: "active",
+    version: 1,
+    configuration_sha256: "1".repeat(64),
+    configured_at: null,
+    configured_by: null,
+  },
+  staged_assignment: {
+    role: "orchestrator",
+    provider: "openrouter",
+    model: "anthropic/claude-opus-4.8",
+    resolved_model: null,
+    upstream_provider: null,
+    prompt_sha256: "2".repeat(64),
+    prompt_version: "1",
+    execution_mode: "hosted_advisory",
+    activation_state: "staged_pending_authorization",
+    version: 1,
+    configuration_sha256: configurationHash,
+    configured_at: "2026-07-24T00:00:00Z",
+    configured_by: "system:agent-acceptance-cli",
+  },
+  latest_acceptance_execution: {
+    scope: "agent_acceptance",
+    agent_role: "orchestrator",
+    acceptance_run_id: "AR-live-acceptance",
+    acceptance_attempt_id: "5".repeat(64),
+    execution_id: "acceptance-execution-planner",
+    parent_execution_id: null,
+    configuration_set_sha256: configurationHash,
+    returned_model: "anthropic/claude-opus-4.8",
+    upstream_provider: "Anthropic",
+    trace_id: "3".repeat(32),
+    measured_cost: 0.03,
+    cost_measurement_state: "measured",
+    provider_event_ids: ["4".repeat(32)],
+    currency: "USD",
+    input_tokens: 100,
+    output_tokens: 20,
+    reasoning_tokens: 10,
+    langfuse_status: "exported",
+    langfuse_verified_at: "2026-07-24T00:02:01Z",
+    finished_at: "2026-07-24T00:02:00Z",
+  },
+  execution_count: 1,
+  running_count: 0,
+  succeeded_count: 1,
+  failed_count: 0,
+  skipped_count: 0,
+  measured_cost: 0.03,
+  accounting_status: "measured",
+  currency: "USD",
+  input_tokens: 100,
+  output_tokens: 20,
+  reasoning_tokens: 10,
+  token_observation_count: 1,
+  physical_call_count: 1,
+  provider_budget: {
+    status: "agent_acceptance",
+    campaign_run_id: "AR-live-acceptance",
+    configuration_set_sha256: configurationHash,
+    role_usd_cap: 1.5,
+    role_usd_spent: 0.03,
+    role_unresolved_usd_exposure: 0,
+    role_usd_remaining: 1.47,
+    role_usd_overrun: 0,
+    role_call_cap: 1,
+    role_physical_calls: 1,
+    role_unresolved_physical_calls: 0,
+    role_calls_remaining: 0,
+    role_call_overrun: 0,
+    global_usd_cap: 10,
+    global_usd_spent: 0.03,
+    global_unresolved_usd_exposure: 0,
+    global_usd_remaining: 9.97,
+    global_usd_overrun: 0,
+    global_call_cap: 3,
+    global_physical_calls: 1,
+    global_unresolved_physical_calls: 0,
+    global_calls_remaining: 2,
+    global_call_overrun: 0,
+  },
+  judge_calibration: null,
+  average_duration_ms: 1_000,
+  p50_duration_ms: 1_000,
+  p95_duration_ms: 1_000,
+  langfuse_not_attempted_count: 0,
+  langfuse_disabled_count: 0,
+  langfuse_queued_count: 0,
+  langfuse_exported_count: 1,
+  langfuse_error_count: 0,
+  langfuse_verified_count: 1,
+  last_langfuse_verified_at: "2026-07-24T00:02:01Z",
+  last_activity_at: "2026-07-24T00:02:00Z",
+  last_status: "succeeded",
+  last_campaign_run_id: "AR-live-acceptance",
+  last_attempt_id: "5".repeat(64),
+} as const;
+
 describe("target console operability", () => {
   it("keeps selection bound to refreshed records and exposes only safe surface transitions", async () => {
     let enabled = true;
@@ -296,6 +412,38 @@ describe("target console operability", () => {
       name: "Create target from trusted catalog",
     }) as HTMLButtonElement).disabled).toBe(true);
     expect(screen.getByText(/browser never supplies target URLs/i)).toBeTruthy();
+  });
+});
+
+describe("agent-only acceptance identity", () => {
+  it("renders canonical served identity as acceptance evidence, not campaign activation", async () => {
+    const client = {
+      read: vi.fn(async (path: string) => {
+        if (path === "agents") {
+          return { state: "ready" as const, data: [acceptanceAgent] };
+        }
+        if (path === "agent-activity") {
+          return { state: "ready" as const, data: [] };
+        }
+        throw new Error(`Unexpected read: ${path}`);
+      }),
+      command: vi.fn(),
+    } as unknown as ApiClient;
+
+    render(<AgentsScreen client={client} principal={principal} />);
+
+    expect(await screen.findByText("Latest target-free agent acceptance")).toBeTruthy();
+    expect(screen.getByText(/does not activate this assignment for campaign execution/i))
+      .toBeTruthy();
+    expect(screen.getAllByText("anthropic/claude-opus-4.8").length).toBeGreaterThan(0);
+    expect(screen.getByText("Anthropic")).toBeTruthy();
+    expect(screen.getByText("AR-live-acceptance")).toBeTruthy();
+    expect(screen.getByText("5".repeat(64))).toBeTruthy();
+    expect(screen.getByText("3".repeat(32))).toBeTruthy();
+    expect(screen.getAllByText("$0.0300").length).toBeGreaterThan(0);
+    expect(
+      screen.getAllByText("unavailable — no campaign execution recorded").length,
+    ).toBe(2);
   });
 });
 

@@ -269,7 +269,11 @@ export function AgentsScreen({
                         <strong>{agent.display_name}</strong>
                         <small className="mono">{state}</small>
                       </span>
-                      <span>{agent.active_assignment.model} · configured</span>
+                      <span>
+                        {agent.latest_acceptance_execution
+                          ? `${agent.latest_acceptance_execution.returned_model} · acceptance exercised`
+                          : `${agent.active_assignment.model} · configured`}
+                      </span>
                       <small>{count(agent.execution_count)} executions · {agent.trust_level}</small>
                     </button>
                   </div>
@@ -301,10 +305,10 @@ export function AgentsScreen({
                 { label: "Output contract", values: [selected.output_contract] },
               ]} />
               <dl className="agent-ledger-summary">
-                <div><dt>Configured model</dt><dd className="mono">{selected.active_assignment.model}</dd></div>
-                <div><dt>Configured provider</dt><dd className="mono">{selected.active_assignment.provider}</dd></div>
-                <div><dt>Provider-served model</dt><dd className="mono">{selected.active_assignment.resolved_model ?? "unavailable — not durably recorded"}</dd></div>
-                <div><dt>Provider-served upstream</dt><dd className="mono">{selected.active_assignment.upstream_provider ?? "unavailable — not durably recorded"}</dd></div>
+                <div><dt>Active configured model</dt><dd className="mono">{selected.active_assignment.model}</dd></div>
+                <div><dt>Active configured provider</dt><dd className="mono">{selected.active_assignment.provider}</dd></div>
+                <div><dt>Active assignment served model</dt><dd className="mono">{selected.active_assignment.resolved_model ?? "unavailable — no campaign execution recorded"}</dd></div>
+                <div><dt>Active assignment served upstream</dt><dd className="mono">{selected.active_assignment.upstream_provider ?? "unavailable — no campaign execution recorded"}</dd></div>
                 <div><dt>Prompt version</dt><dd className="mono">{selected.active_assignment.prompt_version ?? "not applicable"}</dd></div>
                 <div><dt>Prompt SHA-256</dt><dd className="mono">{selected.active_assignment.prompt_sha256 ?? "not applicable"}</dd></div>
                 <div><dt>Role-history p50 / p95 latency</dt><dd className="mono">{selected.p50_duration_ms === null || selected.p95_duration_ms === null ? "not yet executed" : `${selected.p50_duration_ms.toFixed(1)} / ${selected.p95_duration_ms.toFixed(1)} ms`}</dd></div>
@@ -315,6 +319,31 @@ export function AgentsScreen({
                 <div><dt>Last Langfuse query-back</dt><dd className="mono">{selected.last_langfuse_verified_at ? time(selected.last_langfuse_verified_at) : "not yet observed remotely"}</dd></div>
                 <div><dt>Last activity</dt><dd className="mono">{selected.last_activity_at ? time(selected.last_activity_at) : "not yet executed"}</dd></div>
               </dl>
+              {selected.latest_acceptance_execution && (
+                <div className="evidence-stack">
+                  <p className="field-label">Latest target-free agent acceptance</p>
+                  <StateNotice
+                    state={selected.latest_acceptance_execution.langfuse_status === "exported"
+                      ? "ready"
+                      : "degraded"}
+                    detail="Live provider evidence from the bounded agent-only acceptance authority. It does not activate this assignment for campaign execution."
+                  />
+                  <dl className="agent-ledger-summary">
+                    <div><dt>Acceptance-served model</dt><dd className="mono">{selected.latest_acceptance_execution.returned_model}</dd></div>
+                    <div><dt>Acceptance-served upstream</dt><dd className="mono">{selected.latest_acceptance_execution.upstream_provider}</dd></div>
+                    <div><dt>Acceptance run</dt><dd className="mono">{selected.latest_acceptance_execution.acceptance_run_id}</dd></div>
+                    <div><dt>Acceptance attempt</dt><dd className="mono">{selected.latest_acceptance_execution.acceptance_attempt_id}</dd></div>
+                    <div><dt>Execution</dt><dd className="mono">{selected.latest_acceptance_execution.execution_id}</dd></div>
+                    <div><dt>Parent execution</dt><dd className="mono">{selected.latest_acceptance_execution.parent_execution_id ?? "root planner call"}</dd></div>
+                    <div><dt>Langfuse trace</dt><dd className="mono">{selected.latest_acceptance_execution.trace_id}</dd></div>
+                    <div><dt>Langfuse query-back</dt><dd className="mono">{selected.latest_acceptance_execution.langfuse_verified_at ? `observed · ${time(selected.latest_acceptance_execution.langfuse_verified_at)}` : "awaiting remote verification"}</dd></div>
+                    <div><dt>Measured provider cost</dt><dd className="mono">{money(selected.latest_acceptance_execution.measured_cost)}</dd></div>
+                    <div><dt>Canonical provider events</dt><dd className="mono">{count(selected.latest_acceptance_execution.provider_event_ids.length)}</dd></div>
+                    <div><dt>Input / output / reasoning tokens</dt><dd className="mono">{count(selected.latest_acceptance_execution.input_tokens)} / {count(selected.latest_acceptance_execution.output_tokens)} / {count(selected.latest_acceptance_execution.reasoning_tokens)}</dd></div>
+                    <div><dt>Completed</dt><dd className="mono">{time(selected.latest_acceptance_execution.finished_at)}</dd></div>
+                  </dl>
+                </div>
+              )}
               <AgentBudgetSummary budget={selected.provider_budget} />
               {selected.judge_calibration && (
                 <div className="evidence-stack">

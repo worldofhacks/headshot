@@ -349,6 +349,7 @@ const validResources: Array<[string, (value: unknown) => unknown, unknown]> = [
         configured_by: null,
       },
       staged_assignment: null,
+      latest_acceptance_execution: null,
       execution_count: 1,
       running_count: 0,
       succeeded_count: 1,
@@ -863,6 +864,56 @@ describe("v1 read-model decoders", () => {
     }
   });
 
+  it("keeps target-free acceptance evidence separate from campaign activation", () => {
+    const agent = arrayFixtureRecord("agents");
+    const acceptance = {
+      scope: "agent_acceptance",
+      agent_role: "orchestrator",
+      acceptance_run_id: "AR-live-acceptance",
+      acceptance_attempt_id: "b".repeat(64),
+      execution_id: "acceptance-execution-1",
+      parent_execution_id: null,
+      configuration_set_sha256: "c".repeat(64),
+      returned_model: "anthropic/claude-opus-4.8",
+      upstream_provider: "Anthropic",
+      trace_id: "d".repeat(32),
+      measured_cost: 0.03,
+      cost_measurement_state: "measured",
+      provider_event_ids: ["e".repeat(32)],
+      currency: "USD",
+      input_tokens: 100,
+      output_tokens: 20,
+      reasoning_tokens: 10,
+      langfuse_status: "exported",
+      langfuse_verified_at: at,
+      finished_at: at,
+    };
+    const observed = {
+      ...agent,
+      latest_acceptance_execution: acceptance,
+    };
+
+    expect(decodeAgents([observed])).toEqual([observed]);
+    expect(observed.active_assignment).toEqual(agent.active_assignment);
+    for (const malformed of [
+      { ...acceptance, scope: "campaign" },
+      { ...acceptance, agent_role: "red_team" },
+      { ...acceptance, acceptance_run_id: "campaign-1" },
+      { ...acceptance, acceptance_attempt_id: "not-an-attempt" },
+      { ...acceptance, provider_event_ids: [] },
+      { ...acceptance, provider_event_ids: ["e".repeat(64)] },
+      { ...acceptance, cost_measurement_state: "partial" },
+      { ...acceptance, langfuse_verified_at: null },
+      { ...acceptance, measured_cost: -0.01 },
+      { ...acceptance, extra: "schema drift" },
+    ]) {
+      expect(() => decodeAgents([{
+        ...agent,
+        latest_acceptance_execution: malformed,
+      }])).toThrow();
+    }
+  });
+
   it("reconciles hosted subcaps and honestly labels evaluator authority", () => {
     const base = arrayFixtureRecord("agents");
     const assignment = base.active_assignment;
@@ -935,6 +986,29 @@ describe("v1 read-model decoders", () => {
       ...judge,
       provider_budget: { ...budget, status: "historical" },
     }]);
+    expect(decodeAgents([{
+      ...judge,
+      provider_budget: {
+        ...budget,
+        status: "agent_acceptance",
+        campaign_run_id: "AR-live-acceptance",
+      },
+    }])).toEqual([{
+      ...judge,
+      provider_budget: {
+        ...budget,
+        status: "agent_acceptance",
+        campaign_run_id: "AR-live-acceptance",
+      },
+    }]);
+    expect(() => decodeAgents([{
+      ...judge,
+      provider_budget: {
+        ...budget,
+        status: "agent_acceptance",
+        campaign_run_id: "campaign-1",
+      },
+    }])).toThrow("Invalid agent budget read model");
     expect(() => decodeAgents([{
       ...judge,
       judge_calibration: {

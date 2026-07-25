@@ -7,9 +7,12 @@ import datetime
 import pytest
 from pydantic import ValidationError
 
+from agentforge.api.postgres import _budget_run_for_role
 from agentforge.api.read_models import (
+    AgentAcceptanceExecutionReadModel,
     AgentActivityReadModel,
     AgentAssignmentReadModel,
+    AgentBudgetReadModel,
     AgentReadModel,
     BirdseyeNodeReadModel,
     CostReadModel,
@@ -45,6 +48,92 @@ def _unavailable_provider_budget() -> dict[str, object]:
         "global_calls_remaining": None,
         "global_call_overrun": 0,
     }
+
+
+def _acceptance_provider_budget() -> dict[str, object]:
+    return {
+        **_unavailable_provider_budget(),
+        "status": "agent_acceptance",
+        "campaign_run_id": "AR-live-acceptance",
+        "configuration_set_sha256": "a" * 64,
+        "role_usd_cap": 1.5,
+        "role_usd_spent": 0.03,
+        "role_usd_remaining": 1.47,
+        "role_call_cap": 1,
+        "role_physical_calls": 1,
+        "role_calls_remaining": 0,
+        "global_usd_cap": 10,
+        "global_usd_spent": 0.03,
+        "global_usd_remaining": 9.97,
+        "global_call_cap": 3,
+        "global_physical_calls": 1,
+        "global_calls_remaining": 2,
+    }
+
+
+def test_agent_acceptance_budget_requires_run_identity_and_preserves_caps() -> None:
+    payload = _acceptance_provider_budget()
+    budget = AgentBudgetReadModel(**payload)
+    assert budget.status == "agent_acceptance"
+    assert budget.campaign_run_id == "AR-live-acceptance"
+
+    with pytest.raises(ValidationError, match="requires its run identity"):
+        AgentBudgetReadModel(**{**payload, "campaign_run_id": None})
+    with pytest.raises(ValidationError, match="acceptance run identity"):
+        AgentBudgetReadModel(**{**payload, "campaign_run_id": "campaign-1"})
+
+
+def test_agent_acceptance_budget_never_claims_generator_authority() -> None:
+    acceptance_run = {
+        "run_id": "AR-live-acceptance",
+        "budget_status": "agent_acceptance",
+    }
+
+    assert _budget_run_for_role(acceptance_run, role="orchestrator") == acceptance_run
+    assert _budget_run_for_role(acceptance_run, role="judge") == acceptance_run
+    assert _budget_run_for_role(acceptance_run, role="documentation") == acceptance_run
+    assert _budget_run_for_role(acceptance_run, role="red_team") is None
+
+
+def test_agent_acceptance_execution_requires_canonical_measured_remote_lineage() -> None:
+    payload = {
+        "scope": "agent_acceptance",
+        "agent_role": "orchestrator",
+        "acceptance_run_id": "AR-live-acceptance",
+        "acceptance_attempt_id": "c" * 64,
+        "execution_id": "acceptance-execution-1",
+        "parent_execution_id": None,
+        "configuration_set_sha256": "a" * 64,
+        "returned_model": "anthropic/claude-opus-4.8",
+        "upstream_provider": "Anthropic",
+        "trace_id": "b" * 32,
+        "measured_cost": 0.03,
+        "cost_measurement_state": "measured",
+        "provider_event_ids": ["d" * 32],
+        "currency": "USD",
+        "input_tokens": 100,
+        "output_tokens": 20,
+        "reasoning_tokens": 10,
+        "langfuse_status": "exported",
+        "langfuse_verified_at": _NOW,
+        "finished_at": _NOW,
+    }
+    evidence = AgentAcceptanceExecutionReadModel(**payload)
+    assert evidence.scope == "agent_acceptance"
+    assert evidence.returned_model == "anthropic/claude-opus-4.8"
+
+    for malformed in (
+        {**payload, "agent_role": "red_team"},
+        {**payload, "acceptance_run_id": "campaign-1"},
+        {**payload, "acceptance_attempt_id": "not-an-attempt"},
+        {**payload, "cost_measurement_state": "partial"},
+        {**payload, "provider_event_ids": []},
+        {**payload, "provider_event_ids": ["e" * 64]},
+        {**payload, "langfuse_verified_at": None},
+        {**payload, "measured_cost": -0.01},
+    ):
+        with pytest.raises(ValidationError):
+            AgentAcceptanceExecutionReadModel(**malformed)
 
 
 def test_agent_summary_requires_latency_and_delivery_for_completed_work() -> None:

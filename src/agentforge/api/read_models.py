@@ -8,6 +8,7 @@ cannot be satisfied; they never manufacture placeholder rows.
 from __future__ import annotations
 
 import datetime
+import re
 from typing import Any, Literal, Self
 
 from pydantic import (
@@ -517,9 +518,15 @@ class TraceReadModel(_ReadModel):
 
 
 class AgentBudgetReadModel(_ReadModel):
-    """One role's campaign-scoped subcap plus the shared provider kill switch."""
+    """One role's run-scoped subcap plus the shared provider kill switch."""
 
-    status: Literal["staged_pending_authorization", "active", "historical", "unavailable"]
+    status: Literal[
+        "staged_pending_authorization",
+        "active",
+        "historical",
+        "agent_acceptance",
+        "unavailable",
+    ]
     campaign_run_id: str | None = None
     configuration_set_sha256: str | None = None
     role_usd_cap: float | None = Field(default=None, ge=0)
@@ -583,8 +590,13 @@ class AgentBudgetReadModel(_ReadModel):
             raise ValueError("hosted budget requires complete role and global cap reconciliation")
         if self.configuration_set_sha256 is None:
             raise ValueError("hosted budget requires its configuration-set identity")
-        if self.status in {"active", "historical"} and self.campaign_run_id is None:
-            raise ValueError("campaign-scoped hosted budget requires its campaign identity")
+        if (
+            self.status in {"active", "historical", "agent_acceptance"}
+            and self.campaign_run_id is None
+        ):
+            raise ValueError("run-scoped hosted budget requires its run identity")
+        if self.status == "agent_acceptance" and not self.campaign_run_id.startswith("AR-"):
+            raise ValueError("agent acceptance budget requires its acceptance run identity")
         if self.status == "staged_pending_authorization" and self.campaign_run_id is not None:
             raise ValueError("staged hosted budget cannot claim campaign activity")
         assert self.role_usd_cap is not None
@@ -760,6 +772,45 @@ class AgentAssignmentReadModel(_ReadModel):
         return self
 
 
+class AgentAcceptanceExecutionReadModel(_ReadModel):
+    """Latest provider evidence from the target-free agent acceptance authority."""
+
+    scope: Literal["agent_acceptance"]
+    agent_role: Literal["orchestrator", "judge", "documentation"]
+    acceptance_run_id: str = Field(pattern=r"^AR-")
+    acceptance_attempt_id: str = Field(pattern=r"^[0-9a-f]{64}$")
+    execution_id: str
+    parent_execution_id: str | None = None
+    configuration_set_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    returned_model: str
+    upstream_provider: str
+    trace_id: str
+    measured_cost: float = Field(ge=0)
+    cost_measurement_state: Literal["measured"]
+    provider_event_ids: list[str]
+    currency: Literal["USD"]
+    input_tokens: int = Field(ge=0)
+    output_tokens: int = Field(ge=0)
+    reasoning_tokens: int = Field(ge=0)
+    langfuse_status: Literal["queued", "exported"]
+    langfuse_verified_at: datetime.datetime | None = None
+    finished_at: datetime.datetime
+
+    @model_validator(mode="after")
+    def validate_provider_and_remote_observation(self) -> Self:
+        if not self.provider_event_ids or any(
+            re.fullmatch(r"[0-9a-f]{32}", event_id) is None for event_id in self.provider_event_ids
+        ):
+            raise ValueError("acceptance evidence requires canonical provider event identities")
+        if len(set(self.provider_event_ids)) != len(self.provider_event_ids):
+            raise ValueError("acceptance provider event identities must be unique")
+        if (self.langfuse_status == "exported") != (self.langfuse_verified_at is not None):
+            raise ValueError(
+                "exported acceptance evidence requires exact Langfuse query-back proof"
+            )
+        return self
+
+
 class JudgeCalibrationSummaryReadModel(_ReadModel):
     """Observed live-evaluator reconciliation; never a substitute for calibration evidence."""
 
@@ -823,6 +874,7 @@ class AgentReadModel(_ReadModel):
     output_contract: str
     active_assignment: AgentAssignmentReadModel
     staged_assignment: AgentAssignmentReadModel | None = None
+    latest_acceptance_execution: AgentAcceptanceExecutionReadModel | None = None
     execution_count: int = Field(ge=0)
     running_count: int = Field(ge=0)
     succeeded_count: int = Field(ge=0)
@@ -1375,6 +1427,7 @@ def validate_ready_data(resource: str, data: Any) -> Any:
 __all__ = [
     "ApprovalReadModel",
     "ApprovalDetailReadModel",
+    "AgentAcceptanceExecutionReadModel",
     "AgentActivityReadModel",
     "AgentAssignmentReadModel",
     "AgentBudgetReadModel",

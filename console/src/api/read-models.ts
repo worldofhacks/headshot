@@ -2,6 +2,7 @@ import { isJsonRecord, type JsonRecord, type Principal } from "./contracts";
 import type {
   ApprovalReadModel,
   ApprovalDetailReadModel,
+  AgentAcceptanceExecutionReadModel,
   AgentActivityReadModel,
   AgentAssignmentReadModel,
   AgentBudgetReadModel,
@@ -891,7 +892,13 @@ const decodeAgentBudget = (value: unknown): AgentBudgetReadModel => {
   const status = literal(
     result,
     "status",
-    ["staged_pending_authorization", "active", "historical", "unavailable"],
+    [
+      "staged_pending_authorization",
+      "active",
+      "historical",
+      "agent_acceptance",
+      "unavailable",
+    ],
     name,
   );
   const campaignRunId = nullableString(result, "campaign_run_id", name);
@@ -1019,7 +1026,14 @@ const decodeAgentBudget = (value: unknown): AgentBudgetReadModel => {
   if (
     caps.some((candidate) => candidate === null)
     || configurationSha256 === null
-    || (["active", "historical"].includes(status) && campaignRunId === null)
+    || (
+      ["active", "historical", "agent_acceptance"].includes(status)
+      && campaignRunId === null
+    )
+    || (
+      status === "agent_acceptance"
+      && !campaignRunId?.startsWith("AR-")
+    )
     || (status === "staged_pending_authorization" && campaignRunId !== null)
     || roleCallCap === 0
     || globalCallCap === 0
@@ -1641,6 +1655,78 @@ const decodeAgentAssignment = (value: unknown): AgentAssignmentReadModel => {
   return result as AgentAssignmentReadModel;
 };
 
+const decodeAgentAcceptanceExecution = (
+  value: unknown,
+): AgentAcceptanceExecutionReadModel => {
+  const name = "agent acceptance execution";
+  const result = record(value, name);
+  exactKeys(result, [
+    "scope",
+    "agent_role",
+    "acceptance_run_id",
+    "acceptance_attempt_id",
+    "execution_id",
+    "parent_execution_id",
+    "configuration_set_sha256",
+    "returned_model",
+    "upstream_provider",
+    "trace_id",
+    "measured_cost",
+    "cost_measurement_state",
+    "provider_event_ids",
+    "currency",
+    "input_tokens",
+    "output_tokens",
+    "reasoning_tokens",
+    "langfuse_status",
+    "langfuse_verified_at",
+    "finished_at",
+  ], name);
+  literal(result, "scope", ["agent_acceptance"], name);
+  literal(result, "agent_role", ["orchestrator", "judge", "documentation"], name);
+  for (const key of [
+    "acceptance_run_id",
+    "execution_id",
+    "returned_model",
+    "upstream_provider",
+    "trace_id",
+  ]) {
+    string(result, key, name);
+  }
+  if (!string(result, "acceptance_run_id", name).startsWith("AR-")) invalid(name);
+  sha256(result, "acceptance_attempt_id", name);
+  nullableString(result, "parent_execution_id", name);
+  sha256(result, "configuration_set_sha256", name);
+  number(result, "measured_cost", name, { minimum: 0 });
+  literal(result, "cost_measurement_state", ["measured"], name);
+  const providerEventIds = stringArray(result, "provider_event_ids", name);
+  if (
+    providerEventIds.length === 0
+    || providerEventIds.some((eventId) => !/^[0-9a-f]{32}$/.test(eventId))
+    || new Set(providerEventIds).size !== providerEventIds.length
+  ) {
+    invalid(name);
+  }
+  literal(result, "currency", ["USD"], name);
+  for (const key of ["input_tokens", "output_tokens", "reasoning_tokens"]) {
+    number(result, key, name, { integer: true, minimum: 0 });
+  }
+  const langfuseStatus = literal(
+    result,
+    "langfuse_status",
+    ["queued", "exported"],
+    name,
+  );
+  const langfuseVerifiedAt = nullableTimestamp(
+    result,
+    "langfuse_verified_at",
+    name,
+  );
+  if ((langfuseStatus === "exported") !== (langfuseVerifiedAt !== null)) invalid(name);
+  timestamp(result, "finished_at", name);
+  return result as AgentAcceptanceExecutionReadModel;
+};
+
 const decodeAgent = (value: unknown): AgentReadModel => {
   const name = "agent";
   const result = record(value, name);
@@ -1654,6 +1740,7 @@ const decodeAgent = (value: unknown): AgentReadModel => {
     "output_contract",
     "active_assignment",
     "staged_assignment",
+    "latest_acceptance_execution",
     "execution_count",
     "running_count",
     "succeeded_count",
@@ -1698,6 +1785,16 @@ const decodeAgent = (value: unknown): AgentReadModel => {
   result.staged_assignment = result.staged_assignment === null
     ? null
     : decodeAgentAssignment(result.staged_assignment);
+  const latestAcceptanceExecution = result.latest_acceptance_execution === null
+    ? null
+    : decodeAgentAcceptanceExecution(result.latest_acceptance_execution);
+  result.latest_acceptance_execution = latestAcceptanceExecution;
+  if (
+    latestAcceptanceExecution !== null
+    && latestAcceptanceExecution.agent_role !== result.role
+  ) {
+    invalid(name);
+  }
   const counters = Object.fromEntries([
     "execution_count",
     "running_count",
