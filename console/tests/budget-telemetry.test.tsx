@@ -22,24 +22,30 @@ const activeBudget: AgentBudgetReadModel = {
   status: "active",
   campaign_run_id: "run-active",
   configuration_set_sha256: "a".repeat(64),
+  role_cost_measurement_state: "partial",
   role_usd_cap: 4,
   role_usd_spent: 1,
   role_unresolved_usd_exposure: 0.5,
   role_usd_remaining: 2.5,
+  role_usd_remaining_upper_bound: 3,
   role_usd_overrun: 0,
   role_call_cap: 10,
   role_physical_calls: 2,
   role_unresolved_physical_calls: 1,
+  role_call_count_state: "lower_bound",
   role_calls_remaining: 7,
   role_call_overrun: 0,
+  global_cost_measurement_state: "partial",
   global_usd_cap: 10,
   global_usd_spent: 2,
   global_unresolved_usd_exposure: 1,
   global_usd_remaining: 7,
+  global_usd_remaining_upper_bound: 8,
   global_usd_overrun: 0,
   global_call_cap: 20,
   global_physical_calls: 4,
   global_unresolved_physical_calls: 2,
+  global_call_count_state: "lower_bound",
   global_calls_remaining: 14,
   global_call_overrun: 0,
 };
@@ -56,19 +62,23 @@ const historicalCost: CostReadModel = {
   provider: "openrouter",
   agent_role: "orchestrator",
   record_kind: "agent",
+  execution_mode: "hosted_advisory",
   measured_cost: 1,
+  cost_measurement_state: "partial",
   accounting_status: "partial",
+  provider_event_ids: [],
   currency: "USD",
-  request_count: 0,
+  request_count: 2,
   execution_count: 1,
   attempt_count: 0,
   confirmed_finding_count: 0,
-  average_cost_per_request: 0.5,
+  average_cost_per_request: null,
   input_tokens: 100,
   output_tokens: 20,
   reasoning_tokens: 10,
   token_observation_count: 1,
   physical_call_count: 2,
+  physical_call_count_state: "lower_bound",
   provider_budget: historicalBudget,
   p50_duration_ms: 50,
   p95_duration_ms: 75,
@@ -122,8 +132,12 @@ describe("conservative provider budget telemetry", () => {
     expect(await screen.findByRole("heading", { name: "Costs", level: 1 })).toBeTruthy();
     expect(await screen.findByText("No active hosted budget")).toBeTruthy();
     expect(screen.getAllByText("historical · closed")).toHaveLength(1);
-    expect(screen.getByText("$2.50 unused at close")).toBeTruthy();
-    expect(screen.getByText("7 unused at close")).toBeTruthy();
+    expect(screen.getByText(
+      "$2.50 conservative · ≤ $3.00 known-spend bound unused at close",
+    )).toBeTruthy();
+    expect(screen.getByText(
+      "7 conservative calls remaining · ≥2 observed unused at close",
+    )).toBeTruthy();
     expect(screen.getAllByText("$0.5000")).not.toHaveLength(0);
     expect(costs.container.querySelector(".cost-unresolved")).not.toBeNull();
   });

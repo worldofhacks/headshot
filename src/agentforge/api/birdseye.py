@@ -738,8 +738,9 @@ def build_birdseye_snapshot(
         "count(*) FILTER (WHERE execution_mode = 'hosted_advisory') "
         "AS hosted_execution_count, "
         "count(*) FILTER (WHERE execution_mode = 'hosted_advisory' "
-        "AND input_tokens IS NOT NULL AND output_tokens IS NOT NULL) "
-        "AS hosted_accounted_count, "
+        "AND cost_measurement_state = 'measured') AS hosted_measured_count, "
+        "count(*) FILTER (WHERE execution_mode = 'hosted_advisory' "
+        "AND cost_measurement_state = 'partial') AS hosted_partial_count, "
         "percentile_cont(0.5) WITHIN GROUP (ORDER BY duration_ms) "
         "FILTER (WHERE duration_ms IS NOT NULL) AS p50_ms, "
         "percentile_cont(0.95) WITHIN GROUP (ORDER BY duration_ms) "
@@ -819,12 +820,15 @@ def build_birdseye_snapshot(
         )
         execution_count = int(metrics.get("execution_count", 0))
         hosted_execution_count = int(metrics.get("hosted_execution_count", 0))
-        hosted_accounted_count = int(metrics.get("hosted_accounted_count", 0))
+        hosted_measured_count = int(metrics.get("hosted_measured_count", 0))
+        hosted_partial_count = int(metrics.get("hosted_partial_count", 0))
         if execution_count == 0:
             accounting_status = "not_applicable"
-        elif hosted_execution_count == 0 or hosted_accounted_count == hosted_execution_count:
+        elif hosted_execution_count == 0 or hosted_measured_count == hosted_execution_count:
             accounting_status = "measured"
-        elif hosted_accounted_count == 0 and hosted_execution_count == execution_count:
+        elif hosted_partial_count > 0:
+            accounting_status = "partial"
+        elif hosted_measured_count == 0 and hosted_execution_count == execution_count:
             accounting_status = "unavailable"
         else:
             accounting_status = "partial"

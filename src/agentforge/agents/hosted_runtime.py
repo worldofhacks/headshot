@@ -23,6 +23,7 @@ from agentforge.agents.hosted import (
 from agentforge.agents.judge import CalibrationGateClosed, JudgeIdentity
 from agentforge.agents.judge.enablement import require_model_judge_enablement
 from agentforge.agents.runtime import AgentRole
+from agentforge.providers.lineage import ProviderLogicalContextV1
 from agentforge.providers.openrouter import OpenRouterResult
 from agentforge.secrets import looks_like_provider_key
 from agentforge.target.spec import HostedRunBinding
@@ -142,6 +143,14 @@ class HostedExecutionLifecycle(Protocol):
         failed_physical_attempts: int | None = None,
     ) -> None: ...
 
+    def provider_context(
+        self,
+        *,
+        execution_id: str,
+        prompt_version: str,
+        prompt_sha256: str,
+    ) -> ProviderLogicalContextV1: ...
+
 
 @dataclass(frozen=True, slots=True)
 class HostedRoleInvocation:
@@ -219,6 +228,7 @@ class HostedRoleRuntime:
             not callable(getattr(transport, "invoke", None))
             or not callable(getattr(execution_lifecycle, "start", None))
             or not callable(getattr(execution_lifecycle, "finish", None))
+            or not callable(getattr(execution_lifecycle, "provider_context", None))
         ):
             raise HostedCompositionError("hosted runtime dependency is unavailable")
         self._configuration = configuration
@@ -308,6 +318,13 @@ class HostedRoleRuntime:
         result: OpenRouterResult | None = None
         try:
             bounds = self._call_bounds[role]
+            provider_context = self._execution_lifecycle.provider_context(
+                execution_id=execution_id,
+                prompt_version=prompt.version,
+                prompt_sha256=prompt.sha256,
+            )
+            if not isinstance(provider_context, ProviderLogicalContextV1):
+                raise HostedCompositionError("hosted provider lineage context is invalid")
             result = self._transport.invoke(
                 role=role,
                 messages=(
@@ -330,6 +347,7 @@ class HostedRoleRuntime:
                 max_output_tokens=bounds.output_tokens,
                 max_reasoning_tokens=bounds.reasoning_tokens,
                 timeout_seconds=bounds.timeout_seconds,
+                provider_context=provider_context,
             )
             self._validate_result(role=role, result=result, bounds=bounds)
             if validate_output is not None:

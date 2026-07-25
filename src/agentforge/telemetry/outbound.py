@@ -254,7 +254,9 @@ class _LangfuseBridge:
         input_tokens: int | None,
         output_tokens: int | None,
         reasoning_tokens: int | None,
-        measured_cost: float,
+        measured_cost: float | None,
+        cost_measurement_state: str,
+        provider_event_ids: list[str],
         returned_model: str | None,
     ) -> None:
         if state is None:
@@ -283,15 +285,23 @@ class _LangfuseBridge:
         final_cost_source = (
             "deterministic_zero"
             if cost_source == "deterministic_zero"
-            else ("provider_measured" if measured_cost > 0 or usage_details else "unavailable")
+            else {
+                "measured": "provider_measured",
+                "partial": "provider_partial_known",
+                "not_observed": "unavailable",
+                "invalid": "invalid",
+            }[cost_measurement_state]
         )
-        generation_values["metadata"] = {
+        authoritative_metadata = {
             **metadata,
             "cost.source": final_cost_source,
+            "cost.measurement_state": cost_measurement_state,
+            "agent.provider_event_ids": provider_event_ids,
         }
+        generation_values["metadata"] = authoritative_metadata
         # A deterministic execution has a real, observed cost of zero. For a hosted execution,
         # only attach cost when provider usage/cost accounting was actually returned.
-        if final_cost_source != "unavailable":
+        if cost_measurement_state in {"measured", "partial"} and measured_cost is not None:
             generation_values["cost_details"] = {"total": measured_cost}
         if returned_model is not None:
             generation_values["model"] = returned_model
@@ -302,7 +312,7 @@ class _LangfuseBridge:
             generation_ended = True
             agent.update(
                 output=output,
-                metadata=metadata,
+                metadata=authoritative_metadata,
                 level="ERROR" if error_code else "DEFAULT",
                 status_message=error_code or status,
             ).end()
@@ -847,7 +857,8 @@ class OutboundHttpTelemetry:
                             "SELECT status, duration_ms, input_tokens, output_tokens, "
                             "reasoning_tokens, measured_cost, currency, output_sha256, "
                             "returned_model, upstream_provider, provider_request_id, "
-                            "physical_attempts, oracle_agreement, decision_authority "
+                            "physical_attempts, cost_measurement_state, provider_event_ids, "
+                            "oracle_agreement, decision_authority "
                             "FROM agent_executions WHERE execution_id = :execution_id"
                         ),
                         {"execution_id": execution_id},
@@ -870,7 +881,9 @@ class OutboundHttpTelemetry:
                 float(row["duration_ms"]) if row["duration_ms"] is not None else None
             ),
             "agent.output_sha256": str(row["output_sha256"]),
-            "cost.usd": float(row["measured_cost"] or 0.0),
+            "cost.usd": (float(row["measured_cost"]) if row["measured_cost"] is not None else None),
+            "cost.measurement_state": str(row["cost_measurement_state"]),
+            "agent.provider_event_ids": list(row["provider_event_ids"]),
             "currency": str(row["currency"]),
             "agent.returned_model": (
                 str(row["returned_model"]) if row["returned_model"] is not None else None
@@ -896,7 +909,11 @@ class OutboundHttpTelemetry:
                 input_tokens=row["input_tokens"],
                 output_tokens=row["output_tokens"],
                 reasoning_tokens=row["reasoning_tokens"],
-                measured_cost=float(row["measured_cost"] or 0.0),
+                measured_cost=(
+                    float(row["measured_cost"]) if row["measured_cost"] is not None else None
+                ),
+                cost_measurement_state=str(row["cost_measurement_state"]),
+                provider_event_ids=list(row["provider_event_ids"]),
                 returned_model=(
                     str(row["returned_model"]) if row["returned_model"] is not None else None
                 ),

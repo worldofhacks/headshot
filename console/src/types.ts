@@ -275,27 +275,51 @@ export interface AgentBudgetReadModel extends JsonRecord {
   status: "staged_pending_authorization" | "active" | "historical" | "unavailable";
   campaign_run_id: string | null;
   configuration_set_sha256: string | null;
+  role_cost_measurement_state: CostMeasurementState | null;
   role_usd_cap: number | null;
   role_usd_spent: number;
   role_unresolved_usd_exposure: number;
   role_usd_remaining: number | null;
+  role_usd_remaining_upper_bound: number | null;
   role_usd_overrun: number;
   role_call_cap: number | null;
   role_physical_calls: number;
   role_unresolved_physical_calls: number;
+  role_call_count_state: "exact" | "lower_bound" | null;
   role_calls_remaining: number | null;
   role_call_overrun: number;
+  global_cost_measurement_state: CostMeasurementState | null;
   global_usd_cap: number | null;
   global_usd_spent: number;
   global_unresolved_usd_exposure: number;
   global_usd_remaining: number | null;
+  global_usd_remaining_upper_bound: number | null;
   global_usd_overrun: number;
   global_call_cap: number | null;
   global_physical_calls: number;
   global_unresolved_physical_calls: number;
+  global_call_count_state: "exact" | "lower_bound" | null;
   global_calls_remaining: number | null;
   global_call_overrun: number;
 }
+
+export type CostMeasurementState =
+  | "measured"
+  | "partial"
+  | "not_observed"
+  | "invalid";
+
+export type ProviderEventStatus =
+  | "succeeded"
+  | "timeout"
+  | "retryable_failure"
+  | "terminal_failure"
+  | "model_mismatch"
+  | "identity_invalid"
+  | "route_unauthorized"
+  | "invalid_usage"
+  | "invalid_output"
+  | "outcome_unknown";
 
 export interface JudgeCalibrationSummaryReadModel extends JsonRecord {
   state: JudgeCalibrationState;
@@ -322,7 +346,9 @@ export interface TraceReadModel extends JsonRecord {
   model: string | null;
   agent_role: "orchestrator" | "red_team" | "judge" | "documentation" | null;
   execution_mode: "deterministic" | "hosted_advisory" | null;
+  requested_model: string | null;
   returned_model: string | null;
+  model_substituted: boolean;
   upstream_provider: string | null;
   provider_request_id: string | null;
   configuration_set_sha256: string | null;
@@ -340,8 +366,15 @@ export interface TraceReadModel extends JsonRecord {
   duration_ms: number | null;
   request_bytes: number;
   response_bytes: number | null;
-  measured_cost: number;
+  measured_cost: number | null;
+  cost_measurement_state: CostMeasurementState;
   accounting_status: "measured" | "partial" | "unavailable";
+  provider_event_ids: string[];
+  provider_event_status: ProviderEventStatus | null;
+  provider_lineage_state:
+    | "not_applicable"
+    | "canonical_physical"
+    | "historical_not_instrumented";
   currency: string;
   input_tokens: number | null;
   output_tokens: number | null;
@@ -374,19 +407,23 @@ export interface CostReadModel extends JsonRecord {
   provider: string;
   agent_role: "orchestrator" | "red_team" | "judge" | "documentation" | null;
   record_kind: "campaign" | "agent";
-  measured_cost: number;
+  execution_mode: "deterministic" | "hosted_advisory" | null;
+  measured_cost: number | null;
+  cost_measurement_state: CostMeasurementState | "not_applicable";
   accounting_status: "not_applicable" | "measured" | "partial" | "unavailable";
+  provider_event_ids: string[];
   currency: string;
   request_count: number;
   execution_count: number;
   attempt_count: number;
   confirmed_finding_count: number;
-  average_cost_per_request: number;
+  average_cost_per_request: number | null;
   input_tokens: number | null;
   output_tokens: number | null;
   reasoning_tokens: number | null;
   token_observation_count: number;
   physical_call_count: number;
+  physical_call_count_state: "not_applicable" | "exact" | "lower_bound";
   provider_budget: AgentBudgetReadModel | null;
   p50_duration_ms: number | null;
   p95_duration_ms: number | null;
@@ -395,7 +432,7 @@ export interface CostReadModel extends JsonRecord {
   duration_ms: number;
   execution_profile: "synthetic" | "live";
   started_at: string;
-  ended_at: string;
+  ended_at: string | null;
   recorded_at: string;
 }
 
@@ -530,18 +567,22 @@ export interface AgentReadModel extends JsonRecord {
   active_assignment: AgentAssignmentReadModel;
   staged_assignment: AgentAssignmentReadModel | null;
   execution_count: number;
+  hosted_execution_count: number;
   running_count: number;
   succeeded_count: number;
   failed_count: number;
   skipped_count: number;
-  measured_cost: number;
+  measured_cost: number | null;
+  cost_measurement_state: CostMeasurementState | "not_applicable";
   accounting_status: "not_applicable" | "measured" | "partial" | "unavailable";
+  provider_event_ids: string[];
   currency: string;
   input_tokens: number | null;
   output_tokens: number | null;
   reasoning_tokens: number | null;
   token_observation_count: number;
   physical_call_count: number;
+  physical_call_count_state: "not_applicable" | "exact" | "lower_bound";
   provider_budget: AgentBudgetReadModel;
   judge_calibration: JudgeCalibrationSummaryReadModel | null;
   average_duration_ms: number | null;
@@ -570,6 +611,7 @@ export interface AgentActivityReadModel extends JsonRecord {
   provider: string;
   model: string;
   returned_model: string | null;
+  model_substituted: boolean;
   upstream_provider: string | null;
   provider_request_id: string | null;
   execution_mode: "deterministic" | "hosted_advisory";
@@ -583,8 +625,15 @@ export interface AgentActivityReadModel extends JsonRecord {
   output_tokens: number | null;
   reasoning_tokens: number | null;
   physical_attempts: number | null;
-  measured_cost: number;
+  measured_cost: number | null;
+  cost_measurement_state: CostMeasurementState;
   accounting_status: "measured" | "partial" | "unavailable";
+  provider_event_ids: string[];
+  provider_event_status: ProviderEventStatus | null;
+  provider_lineage_state:
+    | "not_applicable"
+    | "canonical_physical"
+    | "historical_not_instrumented";
   currency: string;
   trace_id: string;
   langfuse_status: "not_attempted" | "disabled" | "queued" | "exported" | "error";

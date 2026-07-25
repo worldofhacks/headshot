@@ -26,6 +26,7 @@ from agentforge.agents.hosted_runtime import (
 )
 from agentforge.agents.judge import CalibrationGate
 from agentforge.agents.prompts import load_prompt_registry
+from agentforge.providers.lineage import ProviderLogicalContextV1
 from agentforge.providers.openrouter import OpenRouterResult
 from agentforge.target.spec import HostedRunBinding
 
@@ -134,6 +135,26 @@ class _FakeExecutionLifecycle:
         self.finishes.append(dict(values))
         if values["status"] == "succeeded":
             self.recorded.append(values["lineage"])
+
+    def provider_context(self, **values: Any) -> ProviderLogicalContextV1:
+        start = next(
+            item for item in self.starts if f"execution-{item['role']}" == values["execution_id"]
+        )
+        return ProviderLogicalContextV1(
+            organization_id="org-hosted-runtime",
+            campaign_run_id="run-hosted-runtime",
+            campaign_attempt_id=None,
+            logical_execution_id=values["execution_id"],
+            parent_execution_id=start["parent_execution_id"],
+            agent_role=start["role"],
+            requested_model=start["model"],
+            configured_upstream=start["upstream_provider"],
+            prompt_version=values["prompt_version"],
+            prompt_sha256=values["prompt_sha256"],
+            configuration_set_sha256=start["configuration_sha256"],
+            role_configuration_sha256=start["role_configuration_sha256"],
+            generation_policy_sha256=start["generation_policy_sha256"],
+        )
 
 
 def _outputs(*, judge_state: str = "NO_EXPLOIT_OBSERVED") -> dict[str, dict[str, Any]]:

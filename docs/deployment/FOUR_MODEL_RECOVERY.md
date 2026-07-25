@@ -1,11 +1,18 @@
-# Four-Model Recovery Runbook
+# Four-model recovery runbook — launch blocked
 
-This runbook recovers the hosted four-role campaign path without changing Railway topology,
-networking, domains, databases, services, Clerk, or the public API version. The only permitted
-launch-time operational change is a generation-specific SMART credential rotation in the existing
-private Runner.
+This runbook describes the target four-model envelope without changing Railway topology,
+networking, domains, databases, services, Clerk, or the public API version. It is not evidence that
+the envelope is available or composed.
+
+**Current stop condition:** the production Runner composes hosted Orchestrator, Judge, and
+Documentation calls, but Red Team remains deterministic corpus selection. The traced q generator is
+a tested component only; its governed generation → quarantine → human review → fresh authorization
+workflow is not production-composed. Do not launch or describe a four-model recovery until that gap
+is closed and a human gives final model-envelope confirmation.
 
 ## Fixed role set
+
+These are requested identities, not availability claims:
 
 | Role | Requested model |
 | --- | --- |
@@ -14,16 +21,21 @@ private Runner.
 | Judge | `google/gemini-2.5-pro` |
 | Documentation | `openai/gpt-5.4` |
 
-All four roles must be staged atomically. Per-role activation, model fallback, provider fallback,
-and browser-managed credential configuration are unsupported.
+After q is governed and composed, all four roles must be staged atomically. Per-role activation,
+model fallback, provider fallback, and browser-managed credential configuration remain unsupported.
+The distinct human confirmation must verify that every exact model/upstream pair resolves on the
+selected OpenRouter route; the repository must not infer availability from a model name or silently
+substitute another model.
 
 ## Read-only preflight
 
-Stop before every provider or target call unless all of these checks pass:
+Stop before every provider or target call unless the production-composition blocker above is closed
+and all of these checks pass:
 
 - the exact target and attack-surface versions are ready and allowlisted;
 - the private Runner heartbeat is no more than 30 seconds old;
-- the staged configuration hash resolves to four distinct role credential references;
+- the human-confirmed staged configuration hash resolves to four distinct role credential
+  references and exact model/upstream routes;
 - two distinct Headshot organization users requested and approved the exact scope;
 - the authorization covers campaign start plus the full run timeout;
 - the authorization binds the configuration set, generation policy, corpus, target and surface,
@@ -33,13 +45,14 @@ Stop before every provider or target call unless all of these checks pass:
 - all fixtures are synthetic.
 
 The configuration preflight is deliberately secret-free and performs zero provider and target
-calls. A missing hosted composition, stale Runner heartbeat, incomplete credential readiness, or
-lease failure is terminal for that launch attempt.
+calls. A missing q-generation composition, stale Runner heartbeat, incomplete credential
+readiness, unresolved model envelope, or lease failure is terminal for that launch attempt.
 
 ## Final SMART session rotation
 
-Do not reuse or overwrite a previously authorized generation. Immediately before the final
-authorized campaign:
+This section is inapplicable while the q-composition stop condition remains open. Once closed, do
+not reuse or overwrite a previously authorized generation. Immediately before the final authorized
+campaign:
 
 1. Obtain a genuinely fresh session from the authorized operator workflow.
 2. Provision only the raw identifier value inside the protected provisioning boundary. Never
@@ -61,21 +74,26 @@ or evidence.
 
 ## Runtime and evidence acceptance
 
-The hosted path is:
+The required future governed path is:
 
-`Orchestrator -> Red Team -> Policy Gateway/target -> Judge -> Documentation`
+`Orchestrator → q generation → quarantine/review → fresh authorization → deterministic selection → Policy Gateway/target → Judge → Documentation`
 
-The Policy Gateway remains the only target-dispatch authority. A deterministic oracle or canary
-finding takes precedence over the hosted Judge, and Documentation emits unpublished drafts behind
-the human approval gate.
+The generation and dispatch phases are separate authorization domains; q output cannot flow
+directly to the target. The Policy Gateway remains the only target-dispatch authority. A
+deterministic oracle or canary finding takes precedence over the hosted Judge, and Documentation
+emits unpublished drafts behind the human approval gate.
 
 A live run is operationally accepted only when evidence includes real provider request IDs,
 returned model and upstream provider identities, token usage and measured cost, configuration and
-policy hashes, execution lineage, and real target HTTP records. Mocks and cassettes do not count.
+policy hashes, execution lineage, and real target HTTP records. The q generation must have its own
+canonical logical/physical lineage and a fresh authorized corpus must bind its reviewed output.
+Mocks, cassettes, deterministic Red Team selection, and component tests do not count as q-live
+evidence.
 
 ## Abort conditions
 
-Abort without a provider or target call when any preflight gate fails. Abort an active campaign on
-session expiry, returned-model/provider mismatch, invalid structured output, budget or physical-call
-exhaustion, authorization expiry, or explicit operator abort. Never relaunch a terminal campaign
-from a consumed approval.
+Abort without a provider or target call when the q workflow is not composed, final human model
+confirmation is absent, or any preflight gate fails. Abort an active campaign on session expiry,
+returned-model/provider mismatch, invalid structured output, budget or physical-call exhaustion,
+authorization expiry, or explicit operator abort. Never relaunch a terminal campaign from a
+consumed approval.

@@ -688,7 +688,8 @@ def test_agent_activation_calibration_and_budget_follow_latest_authority(
                 "(execution_id, organization_id, campaign_run_id, agent_role, status, provider, "
                 "model, execution_mode, configuration_version, input_sha256, output_sha256, "
                 "returned_model, upstream_provider, provider_request_id, input_tokens, "
-                "output_tokens, reasoning_tokens, measured_cost, trace_id, "
+                "output_tokens, reasoning_tokens, measured_cost, cost_measurement_state, "
+                "trace_id, "
                 "configuration_set_sha256, role_configuration_sha256, "
                 "generation_policy_sha256, physical_attempts, judge_calibration_id, "
                 "judge_calibration_state, oracle_agreement, decision_authority, "
@@ -696,8 +697,9 @@ def test_agent_activation_calibration_and_budget_follow_latest_authority(
                 "('judge-history', :org, :run, 'judge', 'succeeded', 'openrouter', :model, "
                 "'hosted_advisory', 1, :input_hash, :output_hash, :model, "
                 "'Google AI Studio', 'provider-request-history', 100, 20, 5, 0.2, "
-                ":trace, :configuration, :role_configuration, :generation_policy, 1, "
-                ":calibration, 'enabled', true, 'model', 'disabled', '{}'::jsonb, "
+                "'partial', :trace, :configuration, :role_configuration, :generation_policy, 1, "
+                ":calibration, 'enabled', true, 'model', 'disabled', "
+                '\'{"provider_lineage_state":"historical_not_instrumented"}\'::jsonb, '
                 ":started_at, :finished_at, 1000)"
             ),
             {
@@ -755,6 +757,8 @@ def test_agent_activation_calibration_and_budget_follow_latest_authority(
     current_run = "run-hosted-authority-current"
     current_request = "request-hosted-authority-current"
     current_scope_hash = "5" * 64
+    current_invocation_ids = ("b" * 64, "c" * 64)
+    current_event_ids = ("d" * 64, "e" * 64)
     with migrated_db.begin() as connection:
         connection.execute(text("SET LOCAL session_replication_role = replica"))
         connection.execute(
@@ -819,7 +823,8 @@ def test_agent_activation_calibration_and_budget_follow_latest_authority(
                 "(execution_id, organization_id, campaign_run_id, agent_role, status, provider, "
                 "model, execution_mode, configuration_version, input_sha256, output_sha256, "
                 "returned_model, upstream_provider, provider_request_id, input_tokens, "
-                "output_tokens, reasoning_tokens, measured_cost, trace_id, "
+                "output_tokens, reasoning_tokens, measured_cost, cost_measurement_state, "
+                "provider_event_ids, provider_event_status, trace_id, "
                 "configuration_set_sha256, role_configuration_sha256, "
                 "generation_policy_sha256, physical_attempts, judge_calibration_id, "
                 "judge_calibration_state, oracle_agreement, decision_authority, "
@@ -827,14 +832,18 @@ def test_agent_activation_calibration_and_budget_follow_latest_authority(
                 "('judge-current-measured', :org, :run, 'judge', 'succeeded', 'openrouter', "
                 ":model, 'hosted_advisory', 1, :input_hash, :output_hash, :model, "
                 "'Google AI Studio', 'provider-request-current', 100, 20, 5, 0.1, "
-                ":trace, :configuration, :role_configuration, :generation_policy, 2, "
-                ":calibration, 'failed', false, 'oracle', 'disabled', '{}'::jsonb, "
+                "'measured', CAST(:event_ids AS jsonb), 'succeeded', :trace, "
+                ":configuration, :role_configuration, :generation_policy, 2, "
+                ":calibration, 'failed', false, 'oracle', 'disabled', "
+                '\'{"provider_lineage_state":"canonical_physical"}\'::jsonb, '
                 ":started_at, :finished_at, 1000), "
                 "('judge-current-running', :org, :run, 'judge', 'running', 'openrouter', "
                 ":model, 'hosted_advisory', 1, :running_input_hash, NULL, NULL, NULL, NULL, "
-                "NULL, NULL, NULL, 0, :running_trace, :configuration, :role_configuration, "
-                ":generation_policy, NULL, :calibration, 'failed', NULL, NULL, 'queued', "
-                "'{}'::jsonb, :running_started_at, NULL, NULL)"
+                "NULL, NULL, NULL, NULL, 'not_observed', '[]'::jsonb, NULL, :running_trace, "
+                ":configuration, :role_configuration, :generation_policy, NULL, :calibration, "
+                "'failed', NULL, NULL, 'queued', "
+                '\'{"provider_lineage_state":"canonical_physical"}\'::jsonb, '
+                ":running_started_at, NULL, NULL)"
             ),
             {
                 "org": organization_id,
@@ -842,6 +851,7 @@ def test_agent_activation_calibration_and_budget_follow_latest_authority(
                 "model": judge_configuration.model_id,
                 "input_hash": "6" * 64,
                 "output_hash": "7" * 64,
+                "event_ids": json.dumps(list(current_event_ids)),
                 "trace": "8" * 32,
                 "running_input_hash": "9" * 64,
                 "running_trace": "a" * 32,
@@ -859,6 +869,87 @@ def test_agent_activation_calibration_and_budget_follow_latest_authority(
                     6,
                     tzinfo=datetime.UTC,
                 ),
+            },
+        )
+        connection.execute(
+            text(
+                "INSERT INTO provider_call_invocations "
+                "(invocation_id, organization_id, campaign_run_id, campaign_attempt_id, "
+                "logical_execution_id, parent_execution_id, agent_role, physical_sequence, "
+                "idempotency_key, requested_model, configured_upstream, prompt_version, "
+                "prompt_sha256, configuration_set_sha256, role_configuration_sha256, "
+                "generation_policy_sha256, started_at) VALUES "
+                "(:invocation_one, :org, :run, NULL, 'judge-current-measured', NULL, "
+                "'judge', 1, :idempotency_one, :model, 'google-vertex', :prompt_version, "
+                ":prompt_sha256, :configuration, :role_configuration, :generation_policy, "
+                ":started_at), "
+                "(:invocation_two, :org, :run, NULL, 'judge-current-measured', NULL, "
+                "'judge', 2, :idempotency_two, :model, 'google-vertex', :prompt_version, "
+                ":prompt_sha256, :configuration, :role_configuration, :generation_policy, "
+                ":retry_started_at)"
+            ),
+            {
+                "invocation_one": current_invocation_ids[0],
+                "invocation_two": current_invocation_ids[1],
+                "idempotency_one": f"provider-call:{current_invocation_ids[0]}",
+                "idempotency_two": f"provider-call:{current_invocation_ids[1]}",
+                "org": organization_id,
+                "run": current_run,
+                "model": judge_configuration.model_id,
+                "prompt_version": _PROMPTS["judge"].version,
+                "prompt_sha256": _PROMPTS["judge"].sha256,
+                "configuration": configuration_sha256,
+                "role_configuration": judge_configuration.configuration_sha256,
+                "generation_policy": generation_policy_sha256,
+                "started_at": datetime.datetime(2026, 7, 24, 12, 4, 59, tzinfo=datetime.UTC),
+                "retry_started_at": datetime.datetime(
+                    2026,
+                    7,
+                    24,
+                    12,
+                    4,
+                    59,
+                    500000,
+                    tzinfo=datetime.UTC,
+                ),
+            },
+        )
+        connection.execute(
+            text(
+                "INSERT INTO provider_call_events "
+                "(event_id, invocation_id, organization_id, campaign_run_id, "
+                "campaign_attempt_id, logical_execution_id, agent_role, physical_sequence, "
+                "status, returned_model, upstream_provider, provider_request_id, "
+                "input_tokens, output_tokens, reasoning_tokens, cost_measurement_state, "
+                "measured_cost_usd, error_code, finished_at, duration_ms) VALUES "
+                "(:event_one, :invocation_one, :org, :run, NULL, "
+                "'judge-current-measured', 'judge', 1, 'retryable_failure', :model, "
+                "'Google AI Studio', 'provider-request-current-retry', 40, 5, 2, "
+                "'measured', 0.04, 'provider_retryable', :retry_finished_at, 400), "
+                "(:event_two, :invocation_two, :org, :run, NULL, "
+                "'judge-current-measured', 'judge', 2, 'succeeded', :model, "
+                "'Google AI Studio', 'provider-request-current', 60, 15, 3, "
+                "'measured', 0.06, NULL, :finished_at, 500)"
+            ),
+            {
+                "event_one": current_event_ids[0],
+                "event_two": current_event_ids[1],
+                "invocation_one": current_invocation_ids[0],
+                "invocation_two": current_invocation_ids[1],
+                "org": organization_id,
+                "run": current_run,
+                "model": judge_configuration.model_id,
+                "retry_finished_at": datetime.datetime(
+                    2026,
+                    7,
+                    24,
+                    12,
+                    4,
+                    59,
+                    400000,
+                    tzinfo=datetime.UTC,
+                ),
+                "finished_at": datetime.datetime(2026, 7, 24, 12, 5, tzinfo=datetime.UTC),
             },
         )
 
@@ -881,16 +972,16 @@ def test_agent_activation_calibration_and_budget_follow_latest_authority(
 
     budget = judge["provider_budget"]
     assert budget["status"] == "active"
-    assert budget["role_physical_calls"] == 1
-    assert budget["role_unresolved_physical_calls"] == 3
+    assert budget["role_physical_calls"] == 2
+    assert budget["role_unresolved_physical_calls"] == 2
     assert budget["role_calls_remaining"] == 15
-    assert abs(budget["role_unresolved_usd_exposure"] - 0.386016) < 1e-9
-    assert abs(budget["role_usd_remaining"] - 2.013984) < 1e-9
-    assert budget["global_physical_calls"] == 1
-    assert budget["global_unresolved_physical_calls"] == 3
+    assert abs(budget["role_unresolved_usd_exposure"] - 0.257344) < 1e-9
+    assert abs(budget["role_usd_remaining"] - 2.142656) < 1e-9
+    assert budget["global_physical_calls"] == 2
+    assert budget["global_unresolved_physical_calls"] == 2
     assert budget["global_calls_remaining"] == 52
-    assert abs(budget["global_unresolved_usd_exposure"] - 0.386016) < 1e-9
-    assert abs(budget["global_usd_remaining"] - 4.513984) < 1e-9
+    assert abs(budget["global_unresolved_usd_exposure"] - 0.257344) < 1e-9
+    assert abs(budget["global_usd_remaining"] - 4.642656) < 1e-9
 
     costs = client.get("/api/v1/costs").json()
     assert costs["state"] == "ready", costs
@@ -901,7 +992,7 @@ def test_agent_activation_calibration_and_budget_follow_latest_authority(
     }
     assert judge_costs[first_run]["provider_budget"]["status"] == "historical"
     assert judge_costs[current_run]["provider_budget"]["status"] == "active"
-    assert judge_costs[current_run]["provider_budget"]["role_unresolved_physical_calls"] == 3
+    assert judge_costs[current_run]["provider_budget"]["role_unresolved_physical_calls"] == 2
 
 
 def test_tooling_does_not_count_scheduled_attempt_without_authoritative_result(
@@ -2183,12 +2274,14 @@ def _seed_agent_observations(engine: Engine, org_id: str, run_id: str) -> None:
                     "(execution_id, organization_id, campaign_run_id, attempt_id, "
                     "parent_execution_id, agent_role, status, provider, model, execution_mode, "
                     "configuration_version, input_sha256, output_sha256, input_tokens, "
-                    "output_tokens, measured_cost, trace_id, langfuse_status, "
+                    "output_tokens, measured_cost, cost_measurement_state, "
+                    "trace_id, langfuse_status, "
                     "langfuse_verified_at, detail, "
                     "started_at, finished_at, duration_ms) VALUES "
                     "(:execution, :org, :run, :attempt, :parent, :role, 'succeeded', "
                     "'headshot', :model, 'deterministic', 1, :input_hash, :output_hash, "
-                    ":input_tokens, :output_tokens, :cost, :trace, :langfuse_status, "
+                    ":input_tokens, :output_tokens, :cost, 'measured', "
+                    ":trace, :langfuse_status, "
                     "CASE WHEN :langfuse_verified "
                     "THEN TIMESTAMPTZ '2026-07-21 10:00:02+00' ELSE NULL END, "
                     "'{}'::jsonb, TIMESTAMPTZ '2026-07-21 10:00:00+00' + "
@@ -2285,11 +2378,12 @@ def test_agent_role_percentiles_use_full_tenant_campaign_ledger_before_trace_lim
                 "INSERT INTO agent_executions "
                 "(execution_id, organization_id, campaign_run_id, agent_role, status, "
                 "provider, model, execution_mode, configuration_version, input_sha256, "
-                "output_sha256, measured_cost, trace_id, detail, started_at, finished_at, "
-                "duration_ms) "
+                "output_sha256, measured_cost, cost_measurement_state, trace_id, detail, "
+                "started_at, finished_at, duration_ms) "
                 "SELECT 'role-latency-' || series::text, :org, :run, 'red_team', "
                 "'succeeded', 'headshot', 'full-scan-corpus-v1', 'deterministic', 1, "
-                "repeat('a', 64), repeat('b', 64), 0, repeat('c', 32), '{}'::jsonb, "
+                "repeat('a', 64), repeat('b', 64), 0, 'measured', repeat('c', 32), "
+                "'{}'::jsonb, "
                 "TIMESTAMPTZ '2026-07-21 10:00:00+00' + series * INTERVAL '1 second', "
                 "TIMESTAMPTZ '2026-07-21 10:00:01+00' + series * INTERVAL '1 second', "
                 "CASE WHEN series <= 100 THEN 10000 ELSE 10 END "
@@ -2335,7 +2429,10 @@ def test_agent_activity_exposes_row_level_hosted_accounting_status(
                     "input_tokens": 120,
                     "output_tokens": 30,
                     "physical_attempts": None,
+                    "provider_event_ids": [],
+                    "provider_event_status": None,
                     "cost": 0.012,
+                    "cost_state": "measured",
                 },
                 {
                     "execution": "hosted-agent-unaccounted",
@@ -2344,7 +2441,10 @@ def test_agent_activity_exposes_row_level_hosted_accounting_status(
                     "input_tokens": None,
                     "output_tokens": None,
                     "physical_attempts": None,
-                    "cost": 0,
+                    "provider_event_ids": [],
+                    "provider_event_status": None,
+                    "cost": None,
+                    "cost_state": "not_observed",
                 },
                 {
                     "execution": "hosted-agent-partial",
@@ -2353,7 +2453,10 @@ def test_agent_activity_exposes_row_level_hosted_accounting_status(
                     "input_tokens": None,
                     "output_tokens": None,
                     "physical_attempts": 2,
+                    "provider_event_ids": ["e" * 64, "f" * 64],
+                    "provider_event_status": "retryable_failure",
                     "cost": 0,
+                    "cost_state": "partial",
                 },
             ),
             start=1,
@@ -2364,17 +2467,22 @@ def test_agent_activity_exposes_row_level_hosted_accounting_status(
                     "(execution_id, organization_id, campaign_run_id, agent_role, status, "
                     "provider, model, execution_mode, configuration_version, input_sha256, "
                     "output_sha256, input_tokens, output_tokens, physical_attempts, "
-                    "measured_cost, trace_id, detail, "
+                    "provider_event_ids, provider_event_status, measured_cost, "
+                    "cost_measurement_state, "
+                    "trace_id, detail, "
                     "started_at, finished_at, duration_ms) VALUES "
                     "(:execution, :org, :run, :role, :status, 'openrouter', "
                     "'provider/model', 'hosted_advisory', 1, :input_hash, :output_hash, "
-                    ":input_tokens, :output_tokens, :physical_attempts, :cost, :trace, "
-                    "'{}'::jsonb, "
+                    ":input_tokens, :output_tokens, :physical_attempts, "
+                    "CAST(:provider_event_ids AS JSONB), :provider_event_status, "
+                    ":cost, :cost_state, :trace, "
+                    '\'{"provider_lineage_state":"canonical_physical"}\'::jsonb, '
                     "TIMESTAMPTZ '2026-07-21 10:00:00+00' + :index * INTERVAL '1 second', "
                     "TIMESTAMPTZ '2026-07-21 10:00:01+00' + :index * INTERVAL '1 second', 25)"
                 ),
                 {
                     **accounting,
+                    "provider_event_ids": json.dumps(accounting["provider_event_ids"]),
                     "org": org_id,
                     "run": run_id,
                     "input_hash": f"{index:x}" * 64,
@@ -2392,27 +2500,47 @@ def test_agent_activity_exposes_row_level_hosted_accounting_status(
     assert activity_by_id["hosted-agent-accounted"]["accounting_status"] == "measured"
     assert activity_by_id["hosted-agent-accounted"]["measured_cost"] == 0.012
     assert activity_by_id["hosted-agent-unaccounted"]["accounting_status"] == "unavailable"
-    assert activity_by_id["hosted-agent-unaccounted"]["measured_cost"] == 0
+    assert activity_by_id["hosted-agent-unaccounted"]["measured_cost"] is None
     assert activity_by_id["hosted-agent-partial"]["accounting_status"] == "partial"
     assert activity_by_id["hosted-agent-partial"]["physical_attempts"] == 2
 
     agents = {row["role"]: row for row in client.get("/api/v1/agents").json()["data"]}
     assert agents["orchestrator"]["accounting_status"] == "partial"
     assert agents["orchestrator"]["physical_call_count"] == 2
+    assert agents["documentation"]["accounting_status"] == "unavailable"
+    assert agents["documentation"]["measured_cost"] is None
     agent_cost = next(
         row
         for row in client.get("/api/v1/costs").json()["data"]
         if row["record_kind"] == "agent" and row["agent_role"] == "orchestrator"
     )
     assert agent_cost["accounting_status"] == "partial"
+    assert agent_cost["measured_cost"] == 0
     assert agent_cost["physical_call_count"] == 2
+    assert agent_cost["average_cost_per_request"] is None
+    unavailable_cost = next(
+        row
+        for row in client.get("/api/v1/costs").json()["data"]
+        if row["record_kind"] == "agent" and row["agent_role"] == "documentation"
+    )
+    assert unavailable_cost["accounting_status"] == "unavailable"
+    assert unavailable_cost["measured_cost"] is None
+    assert unavailable_cost["average_cost_per_request"] is None
     agent_trace = next(
         row
         for row in client.get("/api/v1/traces").json()["data"]
         if row["execution_id"] == "hosted-agent-partial"
     )
     assert agent_trace["accounting_status"] == "partial"
+    assert agent_trace["measured_cost"] == 0
     assert agent_trace["physical_attempts"] == 2
+    unavailable_trace = next(
+        row
+        for row in client.get("/api/v1/traces").json()["data"]
+        if row["execution_id"] == "hosted-agent-unaccounted"
+    )
+    assert unavailable_trace["accounting_status"] == "unavailable"
+    assert unavailable_trace["measured_cost"] is None
 
 
 def test_costs_projection_is_empty_for_org_without_persisted_summaries(
@@ -2443,8 +2571,11 @@ def test_costs_projection_is_ready_from_persisted_run_summary(migrated_db: Engin
         "provider",
         "agent_role",
         "record_kind",
+        "execution_mode",
         "measured_cost",
+        "cost_measurement_state",
         "accounting_status",
+        "provider_event_ids",
         "currency",
         "request_count",
         "execution_count",
@@ -2456,6 +2587,7 @@ def test_costs_projection_is_ready_from_persisted_run_summary(migrated_db: Engin
         "reasoning_tokens",
         "token_observation_count",
         "physical_call_count",
+        "physical_call_count_state",
         "provider_budget",
         "p50_duration_ms",
         "p95_duration_ms",
@@ -2475,7 +2607,9 @@ def test_costs_projection_is_ready_from_persisted_run_summary(migrated_db: Engin
     # Numeric(14,6) must be projected as a JSON number, never a stringified Decimal.
     assert isinstance(row["measured_cost"], (int, float))
     assert row["measured_cost"] == 1.234567
+    assert row["cost_measurement_state"] == "measured"
     assert row["accounting_status"] == "measured"
+    assert row["provider_event_ids"] == []
     assert row["p50_duration_ms"] is None
     assert row["p95_duration_ms"] is None
     assert row["currency"] == "USD"
@@ -2531,7 +2665,9 @@ def test_traces_projection_is_ready_from_persisted_attempt_and_verdict(
         "model",
         "agent_role",
         "execution_mode",
+        "requested_model",
         "returned_model",
+        "model_substituted",
         "upstream_provider",
         "provider_request_id",
         "configuration_set_sha256",
@@ -2550,7 +2686,11 @@ def test_traces_projection_is_ready_from_persisted_attempt_and_verdict(
         "request_bytes",
         "response_bytes",
         "measured_cost",
+        "cost_measurement_state",
         "accounting_status",
+        "provider_event_ids",
+        "provider_event_status",
+        "provider_lineage_state",
         "currency",
         "input_tokens",
         "output_tokens",
@@ -2576,6 +2716,10 @@ def test_traces_projection_is_ready_from_persisted_attempt_and_verdict(
     assert row["agent_role"] is None
     assert row["execution_mode"] is None
     assert row["status"] == "NO_EXPLOIT_OBSERVED"
+    assert row["cost_measurement_state"] == "not_observed"
+    assert row["provider_event_ids"] == []
+    assert row["provider_lineage_state"] == "not_applicable"
+    assert row["measured_cost"] is None
     # verdict.created_at (10:00:02.500) - attempt_result.executed_at (10:00:00) == 2500 ms.
     assert row["duration_ms"] == 2500.0
     assert row["accounting_status"] == "unavailable"

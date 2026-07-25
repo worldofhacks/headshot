@@ -215,29 +215,82 @@ def _rows(connection, statement: str, parameters: Mapping[str, Any]) -> list[dic
     return [dict(row) for row in connection.execute(text(statement), parameters).mappings().all()]
 
 
+def _aggregate_cost_measurement_state(
+    *,
+    measured: int,
+    partial: int,
+    not_observed: int,
+    invalid: int,
+) -> str:
+    total = measured + partial + not_observed + invalid
+    if total == 0 or measured == total:
+        return "measured"
+    if partial > 0 or measured > 0:
+        return "partial"
+    if invalid > 0:
+        return "invalid"
+    return "not_observed"
+
+
+def _accounting_status(cost_measurement_state: str, *, applicable: bool = True) -> str:
+    if not applicable:
+        return "not_applicable"
+    return {
+        "measured": "measured",
+        "partial": "partial",
+        "not_observed": "unavailable",
+        "invalid": "unavailable",
+    }[cost_measurement_state]
+
+
+def _flatten_provider_event_ids(value: Any) -> list[str]:
+    if value is None:
+        return []
+    flattened: list[str] = []
+    for group in value:
+        if isinstance(group, list):
+            flattened.extend(str(item) for item in group)
+    return flattened
+
+
+def _provider_lineage_state(execution_mode: object, detail: object) -> str:
+    if execution_mode != "hosted_advisory":
+        return "not_applicable"
+    state = detail.get("provider_lineage_state") if isinstance(detail, Mapping) else None
+    if state not in {"canonical_physical", "historical_not_instrumented"}:
+        raise ApiBackendUnavailable("persisted provider lineage state is invalid")
+    return str(state)
+
+
 def _unavailable_provider_budget() -> dict[str, Any]:
     return {
         "status": "unavailable",
         "campaign_run_id": None,
         "configuration_set_sha256": None,
+        "role_cost_measurement_state": None,
         "role_usd_cap": None,
         "role_usd_spent": 0.0,
         "role_unresolved_usd_exposure": 0.0,
         "role_usd_remaining": None,
+        "role_usd_remaining_upper_bound": None,
         "role_usd_overrun": 0.0,
         "role_call_cap": None,
         "role_physical_calls": 0,
         "role_unresolved_physical_calls": 0,
+        "role_call_count_state": None,
         "role_calls_remaining": None,
         "role_call_overrun": 0,
+        "global_cost_measurement_state": None,
         "global_usd_cap": None,
         "global_usd_spent": 0.0,
         "global_unresolved_usd_exposure": 0.0,
         "global_usd_remaining": None,
+        "global_usd_remaining_upper_bound": None,
         "global_usd_overrun": 0.0,
         "global_call_cap": None,
         "global_physical_calls": 0,
         "global_unresolved_physical_calls": 0,
+        "global_call_count_state": None,
         "global_calls_remaining": None,
         "global_call_overrun": 0,
     }
@@ -250,13 +303,17 @@ def _provider_budget_projection(
     campaign_run_id: str | None,
     campaign_state: str | None,
     role_spent: float,
+    role_cost_measurement_state: str,
     role_physical_calls: int,
     role_unresolved_usd_exposure: float | None,
     role_unresolved_physical_calls: int | None,
+    role_call_count_state: str,
     global_spent: float,
+    global_cost_measurement_state: str,
     global_physical_calls: int,
     global_unresolved_usd_exposure: float | None,
     global_unresolved_physical_calls: int | None,
+    global_call_count_state: str,
 ) -> dict[str, Any]:
     role_configuration = next(item for item in configuration.roles if item.role == role)
     role_cap = float(role_configuration.limits.max_usd)
@@ -310,27 +367,33 @@ def _provider_budget_projection(
         "status": status,
         "campaign_run_id": campaign_run_id,
         "configuration_set_sha256": configuration.configuration_sha256,
+        "role_cost_measurement_state": role_cost_measurement_state,
         "role_usd_cap": role_cap,
         "role_usd_spent": role_spent,
         "role_unresolved_usd_exposure": role_exposure,
         "role_usd_remaining": max(0.0, role_cap - role_spent - role_exposure),
+        "role_usd_remaining_upper_bound": role_available_usd,
         "role_usd_overrun": max(0.0, role_spent - role_cap),
         "role_call_cap": role_call_cap,
         "role_physical_calls": role_physical_calls,
         "role_unresolved_physical_calls": role_unresolved_calls,
+        "role_call_count_state": role_call_count_state,
         "role_calls_remaining": max(
             0,
             role_call_cap - role_physical_calls - role_unresolved_calls,
         ),
         "role_call_overrun": max(0, role_physical_calls - role_call_cap),
+        "global_cost_measurement_state": global_cost_measurement_state,
         "global_usd_cap": global_cap,
         "global_usd_spent": global_spent,
         "global_unresolved_usd_exposure": global_exposure,
         "global_usd_remaining": max(0.0, global_cap - global_spent - global_exposure),
+        "global_usd_remaining_upper_bound": global_available_usd,
         "global_usd_overrun": max(0.0, global_spent - global_cap),
         "global_call_cap": global_call_cap,
         "global_physical_calls": global_physical_calls,
         "global_unresolved_physical_calls": global_unresolved_calls,
+        "global_call_count_state": global_call_count_state,
         "global_calls_remaining": max(
             0,
             global_call_cap - global_physical_calls - global_unresolved_calls,
@@ -359,35 +422,35 @@ def _hosted_budget_usage(
                 "physical_calls": 0,
                 "unresolved_usd_exposure": 0.0,
                 "unresolved_physical_calls": 0,
+                "historical_lineage_count": 0,
+                "measured_cost_count": 0,
+                "partial_cost_count": 0,
+                "not_observed_cost_count": 0,
+                "invalid_cost_count": 0,
             },
         )
         usage["measured_cost"] = float(usage["measured_cost"]) + float(
             row.get("measured_cost") or 0
         )
+        cost_state = str(row.get("cost_measurement_state") or "not_observed")
+        state_counter = f"{cost_state}_cost_count"
+        if state_counter in usage:
+            usage[state_counter] = int(usage[state_counter]) + 1
+        lineage_state = _provider_lineage_state(
+            row.get("execution_mode"),
+            row.get("detail"),
+        )
+        if lineage_state == "historical_not_instrumented":
+            usage["historical_lineage_count"] = int(usage["historical_lineage_count"]) + 1
         observed_calls = int(row.get("physical_attempts") or 0)
-        measured_tuple = all(
-            row.get(field) is not None
-            for field in (
-                "returned_model",
-                "upstream_provider",
-                "provider_request_id",
-                "input_tokens",
-                "output_tokens",
-                "reasoning_tokens",
-                "physical_attempts",
-            )
-        )
-        accounted_calls = (
-            1
-            if row.get("status") in {"succeeded", "failed"}
-            and measured_tuple
-            and observed_calls > 0
-            else 0
-        )
-        usage["physical_calls"] = int(usage["physical_calls"]) + accounted_calls
+        usage["physical_calls"] = int(usage["physical_calls"]) + observed_calls
+        if lineage_state == "historical_not_instrumented":
+            usage["unresolved_usd_exposure"] = None
+            usage["unresolved_physical_calls"] = None
+            continue
         configuration = configurations.get(str(row.get("configuration_set_sha256") or ""))
         if configuration is None:
-            if row.get("status") == "running" or observed_calls > accounted_calls:
+            if row.get("status") == "running" or cost_state != "measured":
                 usage["unresolved_usd_exposure"] = None
                 usage["unresolved_physical_calls"] = None
             continue
@@ -397,17 +460,20 @@ def _hosted_budget_usage(
             configuration.global_limits.max_retries,
         )
         unresolved_calls = (
-            maximum_attempts
-            if row.get("status") == "running"
-            else max(0, observed_calls - 1)
-            if measured_tuple
-            else observed_calls
+            max(0, maximum_attempts - observed_calls) if row.get("status") == "running" else 0
         )
         if usage["unresolved_physical_calls"] is not None:
             usage["unresolved_physical_calls"] = (
                 int(usage["unresolved_physical_calls"]) + unresolved_calls
             )
-        if unresolved_calls == 0:
+        unresolved_cost_calls = (
+            maximum_attempts
+            if row.get("status") == "running"
+            else observed_calls
+            if cost_state != "measured"
+            else 0
+        )
+        if unresolved_cost_calls == 0:
             continue
         try:
             policy = resolve_hosted_generation_policy(
@@ -429,7 +495,8 @@ def _hosted_budget_usage(
         else:
             if usage["unresolved_usd_exposure"] is not None:
                 usage["unresolved_usd_exposure"] = float(
-                    Decimal(str(usage["unresolved_usd_exposure"])) + reservation * unresolved_calls
+                    Decimal(str(usage["unresolved_usd_exposure"]))
+                    + reservation * unresolved_cost_calls
                 )
 
     global_by_run: dict[str, dict[str, Any]] = {}
@@ -441,6 +508,11 @@ def _hosted_budget_usage(
                 "physical_calls": 0,
                 "unresolved_usd_exposure": 0.0,
                 "unresolved_physical_calls": 0,
+                "historical_lineage_count": 0,
+                "measured_cost_count": 0,
+                "partial_cost_count": 0,
+                "not_observed_cost_count": 0,
+                "invalid_cost_count": 0,
             },
         )
         aggregate["measured_cost"] = float(aggregate["measured_cost"]) + float(
@@ -457,6 +529,14 @@ def _hosted_budget_usage(
                 aggregate[field] = None
             else:
                 aggregate[field] += usage[field]
+        for field in (
+            "historical_lineage_count",
+            "measured_cost_count",
+            "partial_cost_count",
+            "not_observed_cost_count",
+            "invalid_cost_count",
+        ):
+            aggregate[field] = int(aggregate[field]) + int(usage[field])
     return by_run_role, global_by_run
 
 
@@ -1305,17 +1385,26 @@ class PostgresApiBackend(ApiBackend):
                         "count(*) FILTER (WHERE status = 'succeeded') AS succeeded_count, "
                         "count(*) FILTER (WHERE status = 'failed') AS failed_count, "
                         "count(*) FILTER (WHERE status = 'skipped') AS skipped_count, "
-                        "coalesce(sum(measured_cost), 0) AS measured_cost, "
+                        "sum(measured_cost) AS measured_cost, "
                         "sum(input_tokens) AS input_tokens, sum(output_tokens) AS output_tokens, "
                         "sum(reasoning_tokens) AS reasoning_tokens, "
                         "coalesce(sum(physical_attempts), 0) AS physical_call_count, "
+                        "count(*) FILTER (WHERE execution_mode = 'hosted_advisory' "
+                        "AND detail->>'provider_lineage_state' = "
+                        "'historical_not_instrumented') AS historical_lineage_count, "
+                        "count(*) FILTER (WHERE cost_measurement_state = 'measured') "
+                        "AS measured_cost_count, "
+                        "count(*) FILTER (WHERE cost_measurement_state = 'partial') "
+                        "AS partial_cost_count, "
+                        "count(*) FILTER (WHERE cost_measurement_state = 'not_observed') "
+                        "AS not_observed_cost_count, "
+                        "count(*) FILTER (WHERE cost_measurement_state = 'invalid') "
+                        "AS invalid_cost_count, "
+                        "array_agg(provider_event_ids ORDER BY id) AS provider_event_id_sets, "
                         "count(*) FILTER (WHERE input_tokens IS NOT NULL "
                         "OR output_tokens IS NOT NULL) AS token_observation_count, "
                         "count(*) FILTER (WHERE execution_mode = 'hosted_advisory') "
                         "AS hosted_execution_count, "
-                        "count(*) FILTER (WHERE execution_mode = 'hosted_advisory' "
-                        "AND input_tokens IS NOT NULL AND output_tokens IS NOT NULL) "
-                        "AS hosted_accounted_count, "
                         "avg(duration_ms) FILTER (WHERE duration_ms IS NOT NULL) "
                         "AS average_duration_ms, "
                         "percentile_cont(0.5) WITHIN GROUP (ORDER BY duration_ms) "
@@ -1346,8 +1435,9 @@ class PostgresApiBackend(ApiBackend):
                     execution_by_role = {row["agent_role"]: row for row in execution_rows}
                     hosted_budget_rows = _rows(
                         connection,
-                        "SELECT campaign_run_id, agent_role, status, measured_cost, "
-                        "physical_attempts, configuration_set_sha256, "
+                        "SELECT campaign_run_id, agent_role, status, execution_mode, detail, "
+                        "measured_cost, cost_measurement_state, physical_attempts, "
+                        "configuration_set_sha256, "
                         "generation_policy_sha256, returned_model, upstream_provider, "
                         "provider_request_id, input_tokens, output_tokens, reasoning_tokens "
                         "FROM agent_executions WHERE organization_id = :org "
@@ -1388,6 +1478,28 @@ class PostgresApiBackend(ApiBackend):
                             if run_id is not None
                             else {}
                         )
+                        role_cost_state = _aggregate_cost_measurement_state(
+                            measured=int(role_usage.get("measured_cost_count", 0)),
+                            partial=int(role_usage.get("partial_cost_count", 0)),
+                            not_observed=int(role_usage.get("not_observed_cost_count", 0)),
+                            invalid=int(role_usage.get("invalid_cost_count", 0)),
+                        )
+                        role_call_count_state = (
+                            "lower_bound"
+                            if int(role_usage.get("historical_lineage_count", 0)) > 0
+                            else "exact"
+                        )
+                        global_cost_state = _aggregate_cost_measurement_state(
+                            measured=int(global_usage.get("measured_cost_count", 0)),
+                            partial=int(global_usage.get("partial_cost_count", 0)),
+                            not_observed=int(global_usage.get("not_observed_cost_count", 0)),
+                            invalid=int(global_usage.get("invalid_cost_count", 0)),
+                        )
+                        global_call_count_state = (
+                            "lower_bound"
+                            if int(global_usage.get("historical_lineage_count", 0)) > 0
+                            else "exact"
+                        )
                         return _provider_budget_projection(
                             configuration=configuration,
                             role=role,
@@ -1398,6 +1510,7 @@ class PostgresApiBackend(ApiBackend):
                                 else None
                             ),
                             role_spent=float(role_usage.get("measured_cost", 0.0)),
+                            role_cost_measurement_state=role_cost_state,
                             role_physical_calls=int(role_usage.get("physical_calls", 0)),
                             role_unresolved_usd_exposure=role_usage.get(
                                 "unresolved_usd_exposure",
@@ -1407,7 +1520,9 @@ class PostgresApiBackend(ApiBackend):
                                 "unresolved_physical_calls",
                                 0,
                             ),
+                            role_call_count_state=role_call_count_state,
                             global_spent=float(global_usage.get("measured_cost", 0.0)),
+                            global_cost_measurement_state=global_cost_state,
                             global_physical_calls=int(global_usage.get("physical_calls", 0)),
                             global_unresolved_usd_exposure=global_usage.get(
                                 "unresolved_usd_exposure",
@@ -1417,6 +1532,7 @@ class PostgresApiBackend(ApiBackend):
                                 "unresolved_physical_calls",
                                 0,
                             ),
+                            global_call_count_state=global_call_count_state,
                         )
 
                     def assignment_record(source: Mapping[str, Any]) -> dict[str, Any]:
@@ -1578,24 +1694,16 @@ class PostgresApiBackend(ApiBackend):
                         )
                         stats = execution_by_role.get(definition.role, {})
                         execution_count = int(stats.get("execution_count", 0))
-                        hosted_execution_count = int(stats.get("hosted_execution_count", 0))
-                        hosted_accounted_count = int(stats.get("hosted_accounted_count", 0))
-                        if execution_count == 0:
-                            accounting_status = "not_applicable"
-                        elif hosted_execution_count == 0 or (
-                            hosted_accounted_count == hosted_execution_count
-                        ):
-                            accounting_status = "measured"
-                        elif hosted_accounted_count == 0 and (
-                            hosted_execution_count == execution_count
-                        ):
-                            accounting_status = (
-                                "partial"
-                                if int(stats.get("physical_call_count", 0)) > 0
-                                else "unavailable"
-                            )
-                        else:
-                            accounting_status = "partial"
+                        cost_measurement_state = _aggregate_cost_measurement_state(
+                            measured=int(stats.get("measured_cost_count", 0)),
+                            partial=int(stats.get("partial_cost_count", 0)),
+                            not_observed=int(stats.get("not_observed_cost_count", 0)),
+                            invalid=int(stats.get("invalid_cost_count", 0)),
+                        )
+                        accounting_status = _accounting_status(
+                            cost_measurement_state,
+                            applicable=execution_count > 0,
+                        )
                         judge_calibration = (
                             judge_calibration_record(active_assignment)
                             if definition.role == "judge"
@@ -1607,12 +1715,27 @@ class PostgresApiBackend(ApiBackend):
                                 "active_assignment": active_assignment,
                                 "staged_assignment": staged_assignment,
                                 "execution_count": execution_count,
+                                "hosted_execution_count": int(
+                                    stats.get("hosted_execution_count", 0)
+                                ),
                                 "running_count": int(stats.get("running_count", 0)),
                                 "succeeded_count": int(stats.get("succeeded_count", 0)),
                                 "failed_count": int(stats.get("failed_count", 0)),
                                 "skipped_count": int(stats.get("skipped_count", 0)),
-                                "measured_cost": float(stats.get("measured_cost", 0.0)),
+                                "measured_cost": (
+                                    float(stats["measured_cost"])
+                                    if stats.get("measured_cost") is not None
+                                    else None
+                                ),
+                                "cost_measurement_state": (
+                                    cost_measurement_state
+                                    if execution_count > 0
+                                    else "not_applicable"
+                                ),
                                 "accounting_status": accounting_status,
+                                "provider_event_ids": _flatten_provider_event_ids(
+                                    stats.get("provider_event_id_sets")
+                                ),
                                 "currency": "USD",
                                 "input_tokens": stats.get("input_tokens"),
                                 "output_tokens": stats.get("output_tokens"),
@@ -1621,6 +1744,15 @@ class PostgresApiBackend(ApiBackend):
                                     stats.get("token_observation_count", 0)
                                 ),
                                 "physical_call_count": int(stats.get("physical_call_count", 0)),
+                                "physical_call_count_state": (
+                                    "not_applicable"
+                                    if int(stats.get("hosted_execution_count", 0)) == 0
+                                    else (
+                                        "lower_bound"
+                                        if int(stats.get("historical_lineage_count", 0)) > 0
+                                        else "exact"
+                                    )
+                                ),
                                 "provider_budget": budget_record(
                                     role=definition.role,
                                     assignment=budget_assignment,
@@ -1836,30 +1968,32 @@ class PostgresApiBackend(ApiBackend):
                         "configuration_set_sha256, role_configuration_sha256, "
                         "generation_policy_sha256, input_sha256, output_sha256, input_tokens, "
                         "output_tokens, reasoning_tokens, physical_attempts, measured_cost, "
+                        "cost_measurement_state, provider_event_ids, "
                         "currency, trace_id, langfuse_status, "
                         "langfuse_verified_at, "
                         "detail, judge_calibration_id, judge_calibration_state, "
                         "oracle_agreement, decision_authority, error_code, "
+                        "provider_event_status, "
                         "started_at, finished_at, duration_ms FROM agent_executions "
                         "WHERE organization_id = :org ORDER BY id DESC LIMIT 1000",
                         {"org": principal.organization_id},
                     )
                     for row in rows:
-                        row["measured_cost"] = float(row["measured_cost"] or 0.0)
-                        row["accounting_status"] = (
-                            "measured"
-                            if row["execution_mode"] == "deterministic"
-                            or (
-                                row["input_tokens"] is not None
-                                and row["output_tokens"] is not None
-                                and (
-                                    row["configuration_set_sha256"] is None
-                                    or row["reasoning_tokens"] is not None
-                                )
-                            )
-                            else (
-                                "partial" if row["physical_attempts"] is not None else "unavailable"
-                            )
+                        row["model_substituted"] = row["provider_event_status"] == "model_mismatch"
+                        row["measured_cost"] = (
+                            float(row["measured_cost"])
+                            if row["measured_cost"] is not None
+                            else None
+                        )
+                        row["accounting_status"] = {
+                            "measured": "measured",
+                            "partial": "partial",
+                            "not_observed": "unavailable",
+                            "invalid": "unavailable",
+                        }[row["cost_measurement_state"]]
+                        row["provider_lineage_state"] = _provider_lineage_state(
+                            row["execution_mode"],
+                            row["detail"],
                         )
                         row["duration_ms"] = (
                             float(row["duration_ms"]) if row["duration_ms"] is not None else None
@@ -2738,11 +2872,14 @@ class PostgresApiBackend(ApiBackend):
                                 "provider": source["provider"],
                                 "agent_role": None,
                                 "record_kind": "campaign",
+                                "execution_mode": None,
                                 # measured_cost is a Numeric(14,6) -> Decimal; the console/pydantic
                                 # contract requires a JSON number, so coerce it to float here rather
                                 # than letting _safe stringify the Decimal.
-                                "measured_cost": float(cost) if cost is not None else 0.0,
+                                "measured_cost": float(cost) if cost is not None else None,
+                                "cost_measurement_state": "measured",
                                 "accounting_status": "measured",
+                                "provider_event_ids": [],
                                 "currency": source["currency"],
                                 "request_count": source["request_count"],
                                 "execution_count": 0,
@@ -2751,13 +2888,14 @@ class PostgresApiBackend(ApiBackend):
                                 "average_cost_per_request": (
                                     float(cost) / source["request_count"]
                                     if cost is not None and source["request_count"]
-                                    else 0.0
+                                    else None
                                 ),
                                 "input_tokens": None,
                                 "output_tokens": None,
                                 "reasoning_tokens": None,
                                 "token_observation_count": 0,
                                 "physical_call_count": 0,
+                                "physical_call_count_state": "not_applicable",
                                 "provider_budget": None,
                                 "p50_duration_ms": None,
                                 "p95_duration_ms": None,
@@ -2789,24 +2927,34 @@ class PostgresApiBackend(ApiBackend):
                         "SELECT e.campaign_run_id, e.agent_role, e.provider, e.model, "
                         "e.execution_mode, "
                         "sum(e.measured_cost) AS measured_cost, e.currency, "
-                        "count(*) AS executions, "
+                        "count(*) FILTER (WHERE e.status <> 'running') AS executions, "
                         "count(DISTINCT e.attempt_id) AS attempt_count, "
                         "sum(e.input_tokens) AS input_tokens, "
                         "sum(e.output_tokens) AS output_tokens, "
                         "sum(e.reasoning_tokens) AS reasoning_tokens, "
                         "coalesce(sum(e.physical_attempts), 0) AS physical_call_count, "
+                        "count(*) FILTER (WHERE e.detail->>'provider_lineage_state' = "
+                        "'historical_not_instrumented') AS historical_lineage_count, "
+                        "count(*) FILTER (WHERE e.cost_measurement_state = 'measured') "
+                        "AS measured_cost_count, "
+                        "count(*) FILTER (WHERE e.cost_measurement_state = 'partial') "
+                        "AS partial_cost_count, "
+                        "count(*) FILTER (WHERE e.cost_measurement_state = 'not_observed') "
+                        "AS not_observed_cost_count, "
+                        "count(*) FILTER (WHERE e.cost_measurement_state = 'invalid') "
+                        "AS invalid_cost_count, "
+                        "array_agg(e.provider_event_ids ORDER BY e.id) "
+                        "AS provider_event_id_sets, "
                         "e.configuration_set_sha256, "
                         "count(*) FILTER (WHERE e.input_tokens IS NOT NULL "
                         "OR e.output_tokens IS NOT NULL) AS token_observation_count, "
-                        "count(*) FILTER (WHERE e.input_tokens IS NOT NULL "
-                        "AND e.output_tokens IS NOT NULL "
-                        "AND (e.execution_mode = 'deterministic' "
-                        "OR e.configuration_set_sha256 IS NULL "
-                        "OR e.reasoning_tokens IS NOT NULL)) AS fully_accounted_count, "
                         "max(m.p50_duration_ms) AS p50_duration_ms, "
                         "max(m.p95_duration_ms) AS p95_duration_ms, "
                         "min(e.started_at) AS started_at, max(e.finished_at) AS ended_at, "
-                        "extract(epoch FROM (max(e.finished_at) - min(e.started_at))) * 1000 "
+                        "statement_timestamp() AS recorded_at, "
+                        "extract(epoch FROM ("
+                        "max(coalesce(e.finished_at, statement_timestamp())) - min(e.started_at)"
+                        ")) * 1000 "
                         "AS duration_ms, q.scope_payload->>'execution_profile' "
                         "AS execution_profile, run_state.state AS campaign_state, "
                         "CASE WHEN jsonb_typeof(q.scope_payload->'caps'->'budget_usd') = 'number' "
@@ -2818,18 +2966,21 @@ class PostgresApiBackend(ApiBackend):
                         "JOIN campaign_authorization_requests q "
                         "ON q.organization_id = r.organization_id "
                         "AND q.request_id = r.authorization_request_id "
-                        "JOIN role_metrics m ON m.organization_id = e.organization_id "
+                        "LEFT JOIN role_metrics m ON m.organization_id = e.organization_id "
                         "AND m.campaign_run_id = e.campaign_run_id "
                         "AND m.agent_role = e.agent_role "
                         "LEFT JOIN LATERAL (SELECT state FROM campaign_run_events event "
                         "WHERE event.organization_id = e.organization_id "
                         "AND event.run_id = e.campaign_run_id "
                         "ORDER BY event.id DESC LIMIT 1) run_state ON true "
-                        "WHERE e.organization_id = :org AND e.status <> 'running' "
+                        "WHERE e.organization_id = :org "
+                        "AND (e.status <> 'running' "
+                        "OR e.configuration_set_sha256 IS NOT NULL) "
                         "GROUP BY e.campaign_run_id, e.agent_role, e.provider, e.model, "
                         "e.currency, e.execution_mode, e.configuration_set_sha256, "
                         "q.scope_payload, run_state.state "
-                        "ORDER BY max(e.finished_at) DESC LIMIT 400",
+                        "ORDER BY max(coalesce(e.finished_at, statement_timestamp())) DESC "
+                        "LIMIT 400",
                         {"org": principal.organization_id},
                     )
                     cost_configuration_rows = _rows(
@@ -2853,8 +3004,9 @@ class PostgresApiBackend(ApiBackend):
                             cost_configurations[configuration.configuration_sha256] = configuration
                     hosted_cost_usage_rows = _rows(
                         connection,
-                        "SELECT campaign_run_id, agent_role, status, measured_cost, "
-                        "physical_attempts, configuration_set_sha256, "
+                        "SELECT campaign_run_id, agent_role, status, execution_mode, detail, "
+                        "measured_cost, cost_measurement_state, physical_attempts, "
+                        "configuration_set_sha256, "
                         "generation_policy_sha256, returned_model, upstream_provider, "
                         "provider_request_id, input_tokens, output_tokens, reasoning_tokens "
                         "FROM agent_executions "
@@ -2870,21 +3022,27 @@ class PostgresApiBackend(ApiBackend):
                         cost_configurations,
                     )
                     for source in agent_cost_rows:
-                        cost = float(source["measured_cost"] or 0.0)
-                        execution_count = int(source["executions"])
-                        fully_accounted_count = int(source["fully_accounted_count"])
-                        physical_call_count = int(source["physical_call_count"] or 0)
-                        if (
-                            source["execution_mode"] == "deterministic"
-                            or fully_accounted_count == execution_count
-                        ):
-                            accounting_status = "measured"
-                        elif fully_accounted_count == 0:
-                            accounting_status = (
-                                "partial" if physical_call_count > 0 else "unavailable"
+                        role_usage = source
+                        measured_cost = role_usage["measured_cost"]
+                        cost = float(measured_cost) if measured_cost is not None else None
+                        execution_count = int(role_usage["executions"])
+                        physical_call_count = int(role_usage["physical_call_count"] or 0)
+                        physical_call_count_state = (
+                            "not_applicable"
+                            if source["execution_mode"] == "deterministic"
+                            else (
+                                "lower_bound"
+                                if int(role_usage["historical_lineage_count"] or 0) > 0
+                                else "exact"
                             )
-                        else:
-                            accounting_status = "partial"
+                        )
+                        cost_measurement_state = _aggregate_cost_measurement_state(
+                            measured=int(role_usage["measured_cost_count"]),
+                            partial=int(role_usage["partial_cost_count"]),
+                            not_observed=int(role_usage["not_observed_cost_count"]),
+                            invalid=int(role_usage["invalid_cost_count"]),
+                        )
+                        accounting_status = _accounting_status(cost_measurement_state)
                         accounting_id = hashlib.sha256(
                             (
                                 f"agent-cost:{source['campaign_run_id']}:"
@@ -2896,7 +3054,7 @@ class PostgresApiBackend(ApiBackend):
                         if configuration is None:
                             provider_budget = _unavailable_provider_budget()
                         else:
-                            role_usage = cost_usage_by_run_role.get(
+                            budget_role_usage = cost_usage_by_run_role.get(
                                 (source["campaign_run_id"], source["agent_role"]),
                                 {},
                             )
@@ -2904,24 +3062,38 @@ class PostgresApiBackend(ApiBackend):
                                 source["campaign_run_id"],
                                 {},
                             )
+                            global_cost_measurement_state = _aggregate_cost_measurement_state(
+                                measured=int(global_usage.get("measured_cost_count", 0)),
+                                partial=int(global_usage.get("partial_cost_count", 0)),
+                                not_observed=int(global_usage.get("not_observed_cost_count", 0)),
+                                invalid=int(global_usage.get("invalid_cost_count", 0)),
+                            )
                             provider_budget = _provider_budget_projection(
                                 configuration=configuration,
                                 role=source["agent_role"],
                                 campaign_run_id=source["campaign_run_id"],
                                 campaign_state=source["campaign_state"],
-                                role_spent=float(role_usage.get("measured_cost", cost)),
-                                role_physical_calls=int(
-                                    role_usage.get("physical_calls", physical_call_count)
+                                role_spent=float(
+                                    budget_role_usage.get("measured_cost", cost or 0.0)
                                 ),
-                                role_unresolved_usd_exposure=role_usage.get(
+                                role_cost_measurement_state=cost_measurement_state,
+                                role_physical_calls=int(
+                                    budget_role_usage.get(
+                                        "physical_calls",
+                                        physical_call_count,
+                                    )
+                                ),
+                                role_unresolved_usd_exposure=budget_role_usage.get(
                                     "unresolved_usd_exposure",
                                     0.0,
                                 ),
-                                role_unresolved_physical_calls=role_usage.get(
+                                role_unresolved_physical_calls=budget_role_usage.get(
                                     "unresolved_physical_calls",
                                     0,
                                 ),
+                                role_call_count_state=physical_call_count_state,
                                 global_spent=float(global_usage.get("measured_cost", 0.0)),
+                                global_cost_measurement_state=(global_cost_measurement_state),
                                 global_physical_calls=int(global_usage.get("physical_calls", 0)),
                                 global_unresolved_usd_exposure=global_usage.get(
                                     "unresolved_usd_exposure",
@@ -2930,6 +3102,11 @@ class PostgresApiBackend(ApiBackend):
                                 global_unresolved_physical_calls=global_usage.get(
                                     "unresolved_physical_calls",
                                     0,
+                                ),
+                                global_call_count_state=(
+                                    "lower_bound"
+                                    if int(global_usage.get("historical_lineage_count", 0)) > 0
+                                    else "exact"
                                 ),
                             )
                         rows.append(
@@ -2942,31 +3119,52 @@ class PostgresApiBackend(ApiBackend):
                                 ),
                                 "agent_role": source["agent_role"],
                                 "record_kind": "agent",
+                                "execution_mode": source["execution_mode"],
                                 "measured_cost": cost,
+                                "cost_measurement_state": cost_measurement_state,
                                 "accounting_status": accounting_status,
+                                "provider_event_ids": _flatten_provider_event_ids(
+                                    role_usage["provider_event_id_sets"]
+                                ),
                                 "currency": source["currency"],
                                 "request_count": physical_call_count,
                                 "execution_count": execution_count,
-                                "attempt_count": int(source["attempt_count"]),
+                                "attempt_count": int(role_usage["attempt_count"]),
                                 "confirmed_finding_count": 0,
                                 "average_cost_per_request": (
-                                    cost / physical_call_count if physical_call_count else 0.0
+                                    cost / physical_call_count
+                                    if accounting_status == "measured"
+                                    and cost is not None
+                                    and physical_call_count
+                                    and physical_call_count_state == "exact"
+                                    else None
                                 ),
-                                "input_tokens": source["input_tokens"],
-                                "output_tokens": source["output_tokens"],
-                                "reasoning_tokens": source["reasoning_tokens"],
-                                "token_observation_count": int(source["token_observation_count"]),
+                                "input_tokens": role_usage["input_tokens"],
+                                "output_tokens": role_usage["output_tokens"],
+                                "reasoning_tokens": role_usage["reasoning_tokens"],
+                                "token_observation_count": int(
+                                    role_usage["token_observation_count"]
+                                ),
                                 "physical_call_count": physical_call_count,
+                                "physical_call_count_state": physical_call_count_state,
                                 "provider_budget": provider_budget,
-                                "p50_duration_ms": float(source["p50_duration_ms"]),
-                                "p95_duration_ms": float(source["p95_duration_ms"]),
+                                "p50_duration_ms": (
+                                    float(source["p50_duration_ms"])
+                                    if source["p50_duration_ms"] is not None
+                                    else None
+                                ),
+                                "p95_duration_ms": (
+                                    float(source["p95_duration_ms"])
+                                    if source["p95_duration_ms"] is not None
+                                    else None
+                                ),
                                 "budget_usd": None,
                                 "budget_utilization": None,
                                 "duration_ms": float(source["duration_ms"] or 0.0),
                                 "execution_profile": source["execution_profile"],
                                 "started_at": source["started_at"],
                                 "ended_at": source["ended_at"],
-                                "recorded_at": source["ended_at"],
+                                "recorded_at": source["recorded_at"],
                             }
                         )
                 elif resource == "traces":
@@ -3003,8 +3201,10 @@ class PostgresApiBackend(ApiBackend):
                                 "parent_execution_id": None,
                                 "agent_role": None,
                                 "execution_mode": None,
-                                "model": None,
+                                "requested_model": None,
                                 "returned_model": None,
+                                "model_substituted": False,
+                                "provider_event_status": None,
                                 "upstream_provider": None,
                                 "provider_request_id": None,
                                 "configuration_set_sha256": None,
@@ -3021,8 +3221,15 @@ class PostgresApiBackend(ApiBackend):
                                 "p50_duration_ms": None,
                                 "p95_duration_ms": None,
                                 "duration_ms": duration_ms,
-                                "measured_cost": float(source["measured_cost"] or 0.0),
+                                "measured_cost": (
+                                    float(source["measured_cost"])
+                                    if source["measured_cost"] is not None
+                                    else None
+                                ),
+                                "cost_measurement_state": "measured",
                                 "accounting_status": "measured",
+                                "provider_event_ids": [],
+                                "provider_lineage_state": "not_applicable",
                             }
                         )
                     legacy_rows = _rows(
@@ -3059,7 +3266,10 @@ class PostgresApiBackend(ApiBackend):
                                 "model": None,
                                 "agent_role": None,
                                 "execution_mode": None,
+                                "requested_model": None,
                                 "returned_model": None,
+                                "model_substituted": False,
+                                "provider_event_status": None,
                                 "upstream_provider": None,
                                 "provider_request_id": None,
                                 "configuration_set_sha256": None,
@@ -3080,8 +3290,11 @@ class PostgresApiBackend(ApiBackend):
                                 ),
                                 "request_bytes": 0,
                                 "response_bytes": None,
-                                "measured_cost": 0.0,
+                                "measured_cost": None,
+                                "cost_measurement_state": "not_observed",
                                 "accounting_status": "unavailable",
+                                "provider_event_ids": [],
+                                "provider_lineage_state": "not_applicable",
                                 "currency": "USD",
                                 "input_tokens": None,
                                 "output_tokens": None,
@@ -3124,7 +3337,10 @@ class PostgresApiBackend(ApiBackend):
                                 "model": None,
                                 "agent_role": None,
                                 "execution_mode": None,
+                                "requested_model": None,
                                 "returned_model": None,
+                                "model_substituted": False,
+                                "provider_event_status": None,
                                 "upstream_provider": None,
                                 "provider_request_id": None,
                                 "configuration_set_sha256": None,
@@ -3146,8 +3362,15 @@ class PostgresApiBackend(ApiBackend):
                                 ),
                                 "request_bytes": 0,
                                 "response_bytes": None,
-                                "measured_cost": float(source["measured_cost"] or 0.0),
+                                "measured_cost": (
+                                    float(source["measured_cost"])
+                                    if source["measured_cost"] is not None
+                                    else None
+                                ),
+                                "cost_measurement_state": "measured",
                                 "accounting_status": "measured",
+                                "provider_event_ids": [],
+                                "provider_lineage_state": "not_applicable",
                                 "currency": source["currency"],
                                 "input_tokens": None,
                                 "output_tokens": None,
@@ -3191,7 +3414,9 @@ class PostgresApiBackend(ApiBackend):
                         "e.judge_calibration_state, e.oracle_agreement, e.decision_authority, "
                         "e.error_code, e.started_at, e.finished_at, "
                         "e.duration_ms, e.measured_cost, e.currency, e.langfuse_status, "
+                        "e.cost_measurement_state, e.provider_event_ids, e.detail, "
                         "e.langfuse_verified_at, "
+                        "e.provider_event_status, "
                         "m.p50_duration_ms, m.p95_duration_ms "
                         "FROM agent_executions e LEFT JOIN role_metrics m "
                         "ON m.organization_id = e.organization_id "
@@ -3215,7 +3440,11 @@ class PostgresApiBackend(ApiBackend):
                                 "model": source["model"],
                                 "agent_role": source["agent_role"],
                                 "execution_mode": source["execution_mode"],
+                                "requested_model": source["model"],
                                 "returned_model": source["returned_model"],
+                                "model_substituted": (
+                                    source["provider_event_status"] == "model_mismatch"
+                                ),
                                 "upstream_provider": source["upstream_provider"],
                                 "provider_request_id": source["provider_request_id"],
                                 "configuration_set_sha256": source["configuration_set_sha256"],
@@ -3237,23 +3466,20 @@ class PostgresApiBackend(ApiBackend):
                                 ),
                                 "request_bytes": 0,
                                 "response_bytes": None,
-                                "measured_cost": float(source["measured_cost"] or 0.0),
-                                "accounting_status": (
-                                    "measured"
-                                    if source["execution_mode"] == "deterministic"
-                                    or (
-                                        source["input_tokens"] is not None
-                                        and source["output_tokens"] is not None
-                                        and (
-                                            source["configuration_set_sha256"] is None
-                                            or source["reasoning_tokens"] is not None
-                                        )
-                                    )
-                                    else (
-                                        "partial"
-                                        if source["physical_attempts"] is not None
-                                        else "unavailable"
-                                    )
+                                "measured_cost": (
+                                    float(source["measured_cost"])
+                                    if source["measured_cost"] is not None
+                                    else None
+                                ),
+                                "cost_measurement_state": source["cost_measurement_state"],
+                                "accounting_status": _accounting_status(
+                                    source["cost_measurement_state"]
+                                ),
+                                "provider_event_ids": source["provider_event_ids"],
+                                "provider_event_status": source["provider_event_status"],
+                                "provider_lineage_state": _provider_lineage_state(
+                                    source["execution_mode"],
+                                    source["detail"],
                                 ),
                                 "currency": source["currency"],
                                 "input_tokens": source["input_tokens"],

@@ -10,6 +10,7 @@ import {
   count,
   money,
   Panel,
+  servedModel,
   shortId,
   Timeline,
 } from "./Analytics";
@@ -34,9 +35,11 @@ const evaluatorState = (row: AgentActivityReadModel): string => {
 };
 
 const accountingValue = (records: AgentActivityReadModel[]): string => {
-  const known = records.filter((row) => row.accounting_status !== "unavailable");
+  const known = records.filter(
+    (row) => row.accounting_status !== "unavailable" && row.measured_cost !== null,
+  );
   if (known.length === 0) return "Unavailable";
-  const measured = known.reduce((total, row) => total + row.measured_cost, 0);
+  const measured = known.reduce((total, row) => total + (row.measured_cost ?? 0), 0);
   return known.length === records.length
     && known.every((row) => row.accounting_status === "measured")
     ? money(measured)
@@ -64,9 +67,18 @@ const tokenValue = (records: AgentActivityReadModel[]): string => {
 const rowAccountingValue = (row: AgentActivityReadModel): string =>
   row.accounting_status === "unavailable"
     ? "cost unavailable"
+    : row.measured_cost === null
+      ? "cost unavailable"
     : row.accounting_status === "partial"
       ? `${money(row.measured_cost)} known cost`
       : money(row.measured_cost);
+
+const providerLineageValue = (row: AgentActivityReadModel): string =>
+  row.provider_lineage_state === "historical_not_instrumented"
+    ? "provider events historical—not instrumented"
+    : row.provider_lineage_state === "canonical_physical"
+      ? `${count(row.provider_event_ids.length)} canonical provider event(s)`
+      : "provider events not applicable";
 
 export function AgentActivityPanel({
   client,
@@ -91,6 +103,16 @@ export function AgentActivityPanel({
     (total, row) => total + (row.physical_attempts ?? 0),
     0,
   );
+  const hostedRecords = records.filter((row) => row.execution_mode === "hosted_advisory");
+  const providerCallValue = hostedRecords.length === 0
+    ? "Not applicable"
+    : hostedRecords.some(
+        (row) => row.provider_lineage_state === "historical_not_instrumented",
+      )
+      ? providerCalls === 0
+        ? "Unavailable—historical count incomplete"
+        : `≥${count(providerCalls)} known`
+      : count(providerCalls);
   const verifiedTraces = records.filter(
     (row) => row.langfuse_status === "exported" && row.langfuse_verified_at !== null,
   ).length;
@@ -107,7 +129,7 @@ export function AgentActivityPanel({
         <>
           <div className="reconciliation-grid">
             <div><span>Executions</span><strong className="mono">{count(records.length)}</strong></div>
-            <div><span>Provider calls</span><strong className="mono">{count(providerCalls)}</strong></div>
+            <div><span>Provider calls</span><strong className="mono">{providerCallValue}</strong></div>
             <div><span>Provider spend</span><strong className="mono">{accountingValue(records)}</strong></div>
             <div><span>Observed tokens</span><strong className="mono">{tokenValue(records)}</strong></div>
             <div>
@@ -119,7 +141,7 @@ export function AgentActivityPanel({
           <Timeline rows={records.slice(0, 12).map((row) => ({
             id: row.execution_id,
             title: `${row.agent_role.replace("_", " ")} · ${row.status}`,
-            detail: `${row.returned_model ?? row.model} · ${shortId(row.trace_id)} · ${rowAccountingValue(row)} · Langfuse ${row.langfuse_status.replaceAll("_", " ")}${evaluatorState(row)}`,
+            detail: `${servedModel(row)} · ${shortId(row.trace_id)} · ${rowAccountingValue(row)} · ${providerLineageValue(row)} · Langfuse ${row.langfuse_status.replaceAll("_", " ")}${evaluatorState(row)}`,
             at: row.started_at,
             tone: activityTone(row.status),
           }))} />
