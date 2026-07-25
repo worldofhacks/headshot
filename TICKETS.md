@@ -28,9 +28,10 @@ open. They are not ticket dispositions; no ticket has been formally marked block
 
 **The stale pin in the header above.** `23490ea` **is** an ancestor of this base, but it is 70 commits
 behind it, so the "1001 Python passed / 3 skipped, 75 console, 4 browser, dual CI green" figures do not
-describe this tree. `tests/` now defines **1,284** test functions, so the Python
-count cannot be current, and dual-CI green is unverified at `107c11c`. The same stale pin appears in
-`.tdd-swarm/gates.md`. Treat those numbers as a historical measurement, not a gate.
+describe this tree. `tests/` now defines **1,284** test functions, so the Python count cannot be
+current. GitHub CI is the sole current gate and GitLab is a passive mirror, so the old dual-CI
+criterion is itself superseded. The same stale pin appears in `.tdd-swarm/gates.md`. Treat those
+numbers as a historical measurement, not a gate.
 
 **On the "24/39/2/7" scorecard.** That tally **does not exist at this base.** It exists only at
 `refs/heads/codex/final-integration-release:docs/requirements/REQUIREMENTS_MATRIX.md`, on a branch that
@@ -66,14 +67,19 @@ every live-target artifact. Rows now wrong in the *pessimistic* direction includ
 (evidence path `docs/vulnerabilities (absent)` and "No genuine report files exist" — six report files
 are present) and PRD-07/PRD-18. Rows wrong in the *optimistic* direction include USR-02, marked
 `complete` while its own remaining-work column names an unperformed verification and
-`docs/security/AUTHENTICATION.md` states the Clerk integration is not deployed. **Do not flip any row
-from this document** — the matrix needs its own dated re-audit against `107c11c`.
+`docs/security/AUTHENTICATION.md` at `107c11c` stated the Clerk integration was not deployed. Staging
+now proves only the shell and missing-token boundary; the real-user acceptance named by the row remains
+unperformed. **Do not flip any row from this document** — the matrix needs its own dated re-audit
+against `107c11c`.
 
 Capability status, as opposed to requirement status, lives in
 [`docs/security/RED_TEAMING_COVERAGE_REVIEW_2026-07-25.md`](docs/security/RED_TEAMING_COVERAGE_REVIEW_2026-07-25.md).
-Note in particular that `[locked-decision]` at the end of this file — "Fewer than three genuine
-independently reproduced findings leaves PRD-32 incomplete" — is **currently unmet**: six draft reports
-exist, `docs/evidence/reproductions/` does not, and zero are published or reproduced.
+The `[locked-decision]` at the end of this file — "Fewer than three genuine independently reproduced
+findings leaves PRD-32 incomplete" — still controls. **Post-PR #48 reconciliation:** six draft reports
+exist, and 004–006 now embed runnable offline re-derivations over the retained captures. Those checks
+are real evidence, but no report is published and there is no independent reviewer attestation, run
+manifest, or separately retained reproduction artifact (`docs/evidence/reproductions/` still does not
+exist). The embedded derivations therefore do not close PRD-32.
 
 ## Waves
 
@@ -186,7 +192,8 @@ tests, source channel, bounded history, event/evidence, delivery, Runner, rotati
 ### P1 — human/external evidence likely blocking noon
 
 T-F03b, T-F04b, T-F04e, actual T-F05l/T-F05i observations, activation receipt, T-F05b, T-F06b,
-T-F07b, T-F10b reproduction/publication, and T-F10a deploy/dual-CI.
+T-F07b, T-F10b reproduction/publication, and T-F10a production deploy/GitHub-green exact GitLab
+mirror.
 
 ### P2 — downstream packaging after immutable P0/P1 artifacts
 

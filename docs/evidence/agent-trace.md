@@ -31,23 +31,33 @@ corrections note; credentials by reference; synthetic-only.
 >
 > **Report authorship, for the record:** all six `AF-VULN-2026-0724-*` reports are human-drafted. This
 > document is correct that the runtime Documentation agent drafted nothing (`exploit_confirmed = 0`);
-> **all six** reports' header lines claim autonomous drafting and all six are wrong (001–003 say
-> "Drafted autonomously"; 004–006 add "by the Documentation agent").
+> at base `2069036`, **all six** reports' header lines claimed autonomous drafting and all six were
+> wrong (001–003 said "Drafted autonomously"; 004–006 added "by the Documentation agent").
 > Provenance, precisely: 001–003 cite the **adapter-boundary scan** results in
-> `evals/results/live-campaign-20260724*/`; 004–006 come from the **external Bruno client**. **No
-> report cites the coordinator run** — `grep -rn platform-live-run-20260724 docs/vulnerabilities/`
-> returns zero hits — so "the platform campaign" must not be read as the `SecureCampaignCoordinator`
-> run described in this document.
+> `evals/results/live-campaign-20260724*/`; 004–006 come from the **external Bruno client**. At that
+> base, **no report cited the coordinator run** — `git grep -n platform-live-run-20260724 2069036 --
+> docs/vulnerabilities/` returns zero hits — so "the platform campaign" must not be read as the
+> `SecureCampaignCoordinator` run described in this document.
+>
+> **Post-PR #48 reconciliation (current tree).** PR #48 merged at `a67ac1e`, replacing closed,
+> unmerged PR #33. Reports 004–006 now explicitly say they are hand-written; only 001–003 retain the
+> stale "Drafted autonomously" header. Provenance is now stated precisely: 001 is mixed
+> campaign/Bruno evidence, 002–003 are platform-campaign observations, and 004–006 are external
+> owner-supplied Bruno findings. Corrected 004/005 report bodies cross-reference the coordinator run
+> only to distinguish unrelated Judge evidence, never as their source. Reports 004–006 also embed
+> runnable offline derivations, but no independent reviewer attestation, run manifest, or separately
+> retained reproduction artifact records that process.
 >
 > Context: [`docs/security/RED_TEAMING_COVERAGE_REVIEW_2026-07-25.md`](../security/RED_TEAMING_COVERAGE_REVIEW_2026-07-25.md).
 
-> **Honesty note (read first).** The captured live campaign exercised the **full five-agent
-> pipeline** against **week1** using the **authored seed corpus** as the Red Team source
-> (`red_team = seed_replay corpus-replay-v1`). The standalone DeepSeek generator is retired. The
-> canonical traced qwen component is deterministically tested, but it was **not** composed into the
-> governed production Runner and was **not** exercised by this live run. Launching *new* live
-> traffic requires a two-person authorization an agent cannot self-mint (see §1). A **week2**
-> coordinator run is scoped but **not approved** and therefore did **not** run.
+> **Honesty note (read first).** The retained evidence describes a script-launched **seed-replay
+> coordinator run** against **week1**, using the authored corpus as the Red Team source
+> (`red_team = seed_replay corpus-replay-v1`). Five attempt manifests survive; they do not prove full
+> autonomous Orchestrator → hosted Red Team → Judge → Documentation composition. The standalone
+> DeepSeek generator is retired. The canonical traced qwen component is deterministically tested, but
+> it was **not** composed into the governed production Runner and was **not** exercised by this live
+> run. Launching *new* live traffic requires a two-person authorization an agent cannot self-mint
+> (see §1). A **week2** coordinator run is scoped but **not approved** and therefore did **not** run.
 > Live HTTP evidence for **both** week1 and week2 surfaces exists separately via the Bruno probe
 > suite (`evals/results/bruno-20260724/`), which grounds the web-layer vulnerability reports.
 
@@ -88,14 +98,14 @@ script). Source: `summary.json` `agents_exercised` + per-attempt manifests.
 | 3 | **Policy Gateway** | budget / rate / timeout / abort + host allowlist + sequential turn delivery. Rate cap **0.5 req/s (1 request / 2 s)**; per-attempt `policy_decision_id` issued (§3). | none (local) |
 | 3b | **Execution Recorder** | Append evidence to Postgres → re-read → `content_hash` verify (`integrity_ok = true` on every attempt). Raw payloads are never persisted (redaction guarantee). | none (local) |
 | 4 | **Judge** | `oracle-precedence-v1` — **deterministic, independent** of attack generation. No oracle/canary hit → `INDETERMINATE` (`non_oracle_uncalibrated_indeterminate`); the LLM-only path is disabled, so the Judge **never** confirms an exploit without decisive evidence (invariant preserved). | none (deterministic) |
-| 5 | **Documentation** | Renders **only** confirmed findings. `exploit_confirmed = 0` → **nothing drafted** by the runtime agent. (The reports in `docs/vulnerabilities/` are human-drafted from the Bruno HTTP evidence — see §5.) | none (local) |
+| 5 | **Documentation** | Renders **only** confirmed findings. `exploit_confirmed = 0` → **nothing drafted** by the runtime agent. (The reports in `docs/vulnerabilities/` are human-drafted; see §5 for their split provenance.) | none (local) |
 
 **Total hosted-model spend this run: $0** (budget cap `$1.00`, unused — seed-replay needs no model).
 No hosted generator was invoked, so this evidence reports no hosted-generation cost.
 
 ---
 
-## 3. Per-attempt correlation-ID trace (live, human-approved)
+## 3. Per-attempt correlation-ID trace (live, stand-in approval record)
 
 5 of the 9 corpus cases have captured live coordinator evidence. The other 4 (`DX-002`, `DX-003`,
 `PI-001`, `PI-002`) were in an interrupted continuation chunk that was discarded during workspace
@@ -131,22 +141,25 @@ was decisively observed on these surfaces.
 
 ## 5. What grounds the vulnerability reports
 
-Because the Documentation agent drafts only *confirmed* runtime findings (0 here), the six reports in
-`docs/vulnerabilities/` are **human-drafted** from the live **Bruno probe evidence**
-(`evals/results/bruno-20260724/week1-bruno.json`, `week2-bruno.json`) — real HTTP request/response
-captures against both the `/app` (week1) and `/week2` surfaces (health, readiness, chat, lab upload,
-intake). These are the web-layer / transport findings (security headers, readiness disclosure,
-session-token placement) plus the chat resistance observations. All remain **drafts** behind the human
-publish/remediation gate.
+Because the Documentation agent drafts only *confirmed* runtime findings (0 here), all six reports in
+`docs/vulnerabilities/` are **human-drafted**. Their evidence provenance is split: 001 is mixed
+campaign/Bruno evidence; 002–003 are platform-campaign observations; and 004–006 come from the
+owner's external Bruno captures (`evals/results/bruno-20260724/{week1,week2}-bruno.json`), not the
+platform scanner. Reports 004–006 embed runnable offline derivations over those retained captures,
+but no independent reviewer attestation, run manifest, or separately retained reproduction artifact
+records the review process. All remain **drafts** behind the human publish/remediation gate, and the
+embedded derivations do not close PRD-32.
 
 ---
 
 ## 6. Bottom line
 
-- The **five-agent orchestration** ran end-to-end against **week1** under a genuine human approval
-  (`approver != launcher`), rate-limited to 1 req/2 s, synthetic-only; the independent deterministic
-  Judge returned `INDETERMINATE` on all captured cases and **confirmed zero exploits** — the Judge
-  invariant (never approve a confirmed exploit; never confirm without decisive evidence) held.
+- The retained evidence is a script-launched seed-replay coordinator run against **week1**, backed by
+  a stand-in two-person record rather than two authenticated principals. Five attempt manifests
+  survive, so it does not prove full autonomous orchestration. It was rate-limited to 1 req/2 s and
+  synthetic-only; the independent deterministic Judge returned `INDETERMINATE` on all captured cases
+  and **confirmed zero exploits** — the Judge invariant (never approve a confirmed exploit; never
+  confirm without decisive evidence) held.
 - The **Red Team hosted generator** is the canonical traced qwen component
   (`src/agentforge/agents/red_team/hosted_generation.py`); it is deterministically tested but was
   **not** used as the live source, and the run used seed replay. The standalone `HostedProvider` route

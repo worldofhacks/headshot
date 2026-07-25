@@ -2,16 +2,20 @@
 
 **Date:** 2026-07-25
 **Base:** `2069036` (branch `codex/platform-observability-followup`, tip after PR #44 "Retire
-superseded DeepSeek Red Team provider"; sole Alembic head `0021_four_role_agent_acceptance`). Every
-`file:line` below was re-read at this commit. Where a documentation cite is marked `@107c11c`, that is
-the base this pass started from — two commits earlier — and the marker means "that is what the file said
-before this pass". Line numbers from the predecessor review were **not** carried forward.
+superseded DeepSeek Red Team provider"; sole Alembic head `0021_four_role_agent_acceptance`). The
+original review was performed at this commit; the post-base addendum below carries PRs #47/#48 and
+staging truth forward. Where a documentation cite is marked `@107c11c`, that is the base this pass
+started from — two commits earlier — and the marker means "that is what the file said before this
+pass". Line numbers from the predecessor review were **not** carried forward.
 
-**Reading the cites.** Code cites resolve at `107c11c`. **Documentation cites carry an explicit
-`@107c11c` marker** wherever this same reconciliation pass edits the file being cited (`107c11c` being the commit this pass started from) — otherwise the
-anchor would die the moment this review lands, which is precisely the failure this document exists to
-correct. `@107c11c` means: that is what the file said *before* this pass; the correction is described
-alongside it. An **unmarked** cite resolves in the shipped tree — i.e. after this pass lands.
+**Reading the cites.** Unmarked current-tree code cites use `path::symbol` as the durable locator and,
+where useful, give the line in the post-PR-#47 tree as a secondary aid. **Documentation cites carry an
+explicit `@107c11c` marker** wherever this same reconciliation pass edits the file being cited
+(`107c11c` being the commit this pass started from) — otherwise the anchor would die the moment this
+review lands, which is precisely the failure this document exists to correct. `@107c11c` means: that
+is what the file said *before* this pass; the correction is described alongside it. Those
+commit-qualified historical numbers remain intentionally unchanged. An **unmarked** cite resolves in
+the shipped tree — i.e. after this pass lands.
 **Supersedes:** [`RED_TEAMING_COVERAGE_REVIEW_2026-07-24.md`](RED_TEAMING_COVERAGE_REVIEW_2026-07-24.md)
 (retained; its analysis is still the reference framing for RT-01 … RT-14).
 **Scope:** AgentForge / Adversarial Machine repository, deployed-platform design, LLM
@@ -21,6 +25,26 @@ integrations, and Burp-style workbench claims.
 offline calibration harness and the Judge/calibration test modules. No live campaign, active scan,
 target request, provider call, Clerk administration, deployment change, or publication action was
 performed.
+
+### Post-base integration addendum
+
+The analysis base above remains `2069036`; the following later facts are carried forward so this
+review does not overwrite newer integration truth:
+
+- PR #47 merged terminalization reconciliation at `a6a9617`. Current-tree source anchors below were
+  re-resolved after that merge; its lifecycle changes do not alter the findings verdict in this
+  review.
+- PR #48 merged corrected reports 004–006 at `a67ac1e` after all five GitHub checks passed. Their
+  legal severities are now `medium`, `low`, and `low`; all three explicitly identify hand-written
+  authorship, external owner-supplied Bruno provenance, no attributable Judge verdict, and the
+  limits of their embedded offline re-derivations.
+- Railway staging deployed the exact `2069036e` candidate Runner-first. Web's pre-deploy migration
+  advanced the database from `0013` to the single `0021` head while public routing was held; the
+  Runner became healthy, Web started behind the hold, the private Scheduler became stable, and only
+  then was Web routing opened. Public `/health` and `/ready` returned `200`, unauthenticated
+  `/api/v1/principal` returned `401`, and `/` plus `/sign-in` returned the packaged HTML shell. No
+  campaign, provider, or target call occurred. This is deployment proof, not live-campaign,
+  signed-in Clerk, or finding-reproduction evidence.
 
 ## Executive verdict
 
@@ -59,10 +83,10 @@ confirmed an exploit.
 
 | Predecessor claim | Status at this base | Evidence |
 |---|---|---|
-| "hosted attack generation raises `NotImplementedError`" | **No longer true, but not for the reason it looks.** There is now exactly **one** hosted generator, and the legacy route is deliberately retired. | The governed generator is `TracedHostedRedTeamProvider` (`src/agentforge/agents/red_team/hosted_generation.py:185`), routed through the shared `OpenRouterTransport` with `role="red_team"`, the shared usage ledger, and the durable lineage recorder. The standalone `HostedProvider` is a **fail-closed compatibility shell** (`providers.py:216-250`): it runs provider/model preflight, refuses without explicit authorization, then raises `ProviderPreflightError` unconditionally **before building any client, importing any SDK, or opening any socket**. No `NotImplementedError` remains — it was replaced by a stronger refusal, not by a working path. |
+| "hosted attack generation raises `NotImplementedError`" | **No longer true, but not for the reason it looks.** There is now exactly **one** hosted generator, and the legacy route is deliberately retired. | The governed generator is `src/agentforge/agents/red_team/hosted_generation.py::TracedHostedRedTeamProvider` (currently line 204), routed through the shared `OpenRouterTransport` with `role="red_team"`, the shared usage ledger, and the durable lineage recorder. The standalone `HostedProvider` is a **fail-closed compatibility shell** (`providers.py:216-250`): it runs provider/model preflight, refuses without explicit authorization, then raises `ProviderPreflightError` unconditionally **before building any client, importing any SDK, or opening any socket**. No `NotImplementedError` remains — it was replaced by a stronger refusal, not by a working path. |
 | "there is no checked-in live LLM-campaign result" | **No longer true.** Four result groups exist. | `evals/results/live-campaign-20260724/`, `…-week1/`, `platform-live-run-20260724/`, `bruno-20260724/` |
 | "the current 15-label calibration produces 9 agreements, 3 false negatives, and 9 abstentions" | **Stale counts.** The corpus is 30 labels; the result is 18 / 6 / 18. | `tests/test_judge_calibration.py:51-58` |
-| RT-09 "persisted abort state is not rechecked before every physical request" | **Materially reduced.** A pre-physical-send gate now fires before every physical send, including retries. **Not closed** — the specific test the predecessor demanded does not exist. | `src/agentforge/policy/gateway.py:532-548`; `src/agentforge/runner.py:1746-1783`; `src/agentforge/campaign/coordinator.py:588-611` |
+| RT-09 "persisted abort state is not rechecked before every physical request" | **Materially reduced.** A pre-physical-send gate now fires before every physical send, including retries. **Not closed** — the specific test the predecessor demanded does not exist. | `src/agentforge/policy/gateway.py:532-548`; nested `revalidate` in `src/agentforge/runner.py::DurableCampaignRunner._execute_prepared` (currently lines 1753–1790); `src/agentforge/campaign/coordinator.py:588-611` |
 | RT-11 "DNS-rebinding time-of-check/time-of-use gap" | **Narrowed, not eliminated.** Validation moved into the adapter's `send()`, so it runs per physical send — but there is still no address pinning. | validation now per-send in `src/agentforge/target/openemr_adapter.py`; `src/agentforge/target/destination.py` and `pinned_transport.py` do not exist |
 | RT-14 "`docs/evidence/zap/README.md` records a live passive target scan, while … SECURITY_TOOL_EVIDENCE.md still says live-target ZAP remained blocked" | **Was still drifted, and the drift ran both ways. Resolved in this pass** — see RT-14. | `docs/evidence/ato/SECURITY_TOOL_EVIDENCE.md:99 @107c11c` vs `docs/evidence/zap/zap-target.json` |
 | Sole Alembic head `0016` (as `README.md:11,179 @107c11c` stated) | **Head is `0021`.** Corrected in this pass; `README.md` no longer names `0016`. | `migrations/versions/0021_four_role_agent_acceptance.py` |
@@ -81,7 +105,7 @@ populated.
 | `pytest tests/test_judge.py` | 26 passed, 0 skipped, 0 xfail |
 | `pytest tests/test_hosted_runtime.py` | 8 passed, 0 skipped, 0 xfail |
 | `sha256sum docs/evidence/zap/zap-target.json` | `89f10c9445a98a324d80d38f5ed12db4e6e05885441b0da00598a8634b88edac` — matches all three metadata records byte-for-byte; `byte_length` 7910 matches the file |
-| Full suite (`scripts/check.sh`), console, browser, dual CI | **Not run in this pass.** The predecessor's "1,001 Python tests passed, 3 skipped" is **not** measured at this base; `tests/` now defines **1,284** test functions, so that figure cannot be current. Treat it as unverified. |
+| Full suite (`scripts/check.sh`), console, browser, GitHub CI, GitLab mirror | **Not run in this original pass.** The predecessor's "1,001 Python tests passed, 3 skipped" is **not** measured at this base; `tests/` now defines **1,284** test functions, so that figure cannot be current. Treat it as unverified. GitLab is a passive mirror with no runner gate. |
 
 The calibration harness is a hand-run CLI. It appears in neither `scripts/check.sh` nor
 `.github/workflows/ci.yml`, so an ordinary green CI run says nothing about calibration.
@@ -153,7 +177,8 @@ un-enableable without new code or a hand-placed artifact:** `CalibrationGate.eva
 (`src/agentforge/agents/judge/calibration.py:198-200`), and `human_enable`
 (`calibration.py:205-226`) has **zero callers in `src/` or `scripts/`** — every invocation is in
 tests. The runner's artifact path is `AGENTFORGE_JUDGE_CALIBRATION_PATH`
-(`src/agentforge/runner.py:827-832`), which is the sole occurrence of that string in the tree and
+(`src/agentforge/runner.py::DurableCampaignRunner.__init__`, currently lines 834–839), which is the
+sole occurrence of that string in the tree and
 is set in no `.env`, container, CI, or Railway configuration; the loader deliberately has no default
 (`src/agentforge/agents/judge/calibration_runtime.py:73-79`) and returns
 `state="unavailable"`/`calibration_artifact_unavailable` when both sources are absent (`:88-93`).
@@ -173,7 +198,7 @@ is set in no `.env`, container, CI, or Railway configuration; the loader deliber
 | Burp-style web/API workflow | Partial | Six of ten workbench workflows still labelled `operational` (`src/agentforge/security_tools/workbench.py:37,45,69,77,85,95`) |
 | Continuous regression | Planned/partial | Replay plans are pinned `execution_state: "blocked"` by a schema `const` **and** a database CHECK, so no authorize-and-execute path can exist |
 | Runtime operational safety | Needs hardening | RT-09 partially addressed, RT-11 narrowed; RT-10, RT-12, RT-13 and all four RT-14 sub-items unchanged |
-| Deployment/release proof | Incomplete | `docs/deployment/RAILWAY.md` has every promotion evidence box unchecked; `docs/security/AUTHENTICATION.md:4-7` states the Clerk integration is not deployed and unverified |
+| Deployment/release proof | Partial | Staging candidate `2069036e` is deployed Runner-first at schema `0021` with public probes and unauthenticated denial verified; production, signed-in Clerk acceptance, rollback, and a governed campaign remain unverified |
 
 ## Detailed findings
 
@@ -271,24 +296,28 @@ disagree about whether a model may emit `EXPLOIT_CONFIRMED`:
 
 - `src/agentforge/agents/judge/hosted.py:22` excludes `EXPLOIT_CONFIRMED` from
   `_ASSESSMENT_STATES` and `:313-318` rejects it at runtime. This is the seam the production runner
-  composes (`src/agentforge/runner.py:1506`). Correct.
-- `src/agentforge/agents/hosted_runtime.py:725` hands the judge role an output enum of
-  `list(_VERDICTS)`, and `_VERDICTS` (`:31-37`) **includes `EXPLOIT_CONFIRMED`**. The fall-through
-  at `:834-837` returns the hosted verdict verbatim with `deterministic_precedence: False`, and it
-  additionally triggers the Documentation role at `:741`. No test exercises that path.
+  composes in `src/agentforge/runner.py::DurableCampaignRunner._execute_prepared` (currently line
+  1513). Correct.
+- `src/agentforge/agents/hosted_runtime.py::HostedFourRoleRuntime.run_attempt` hands the judge role
+  an output enum of `list(_VERDICTS)` at line 754, and `_VERDICTS` (lines 31–37) **includes
+  `EXPLOIT_CONFIRMED`**. The fall-through in
+  `HostedFourRoleRuntime._deterministic_precedence` at lines 863–866 returns the hosted verdict
+  verbatim with `deterministic_precedence: False`, and it additionally triggers the Documentation
+  role at line 770. No test exercises that path.
 
 This violates the Judge invariant *as written*. It is unreachable today for two reasons, **neither of
 which is a check inside that function**: nothing in `src/` ever constructs `HostedFourRoleRuntime`
-(definition `hosted_runtime.py:594`, `__all__` at `:875`, otherwise tests only), and construction is
-additionally hard-gated at `hosted_runtime.py:619-625`, where a closed calibration gate raises
+(definition currently at line 623, `__all__` export at line 904, otherwise tests only), and
+construction is additionally hard-gated in `HostedFourRoleRuntime.__init__` at lines 648–654, where
+a closed calibration gate raises
 `HostedCompositionError("model Judge calibration gate is closed")` — which it always does at this base,
 since no calibration artifact is committed. Both barriers are external to the verdict logic, so either
 one changing re-exposes the gap. Flagged for the owning
 lane, not patched here.
 
 Also stale in the source itself: `judge.py:20` asserts "At MVP the LLM path is unwired." At this
-base `src/agentforge/runner.py:517-558` wraps the deterministic Judge in a `HostedEvaluator`, so
-that comment is false.
+base `src/agentforge/runner.py::_PreManifestHostedJudge.evaluate` (currently lines 524–565) wraps
+the deterministic Judge in a `HostedEvaluator`, so that comment is false.
 
 ### RT-03 — High, **open**: the LLM taxonomy is incomplete and some mappings are nominal
 
@@ -324,7 +353,8 @@ A mutated or model-generated attempt is therefore not covered by the grant that 
 
 Consequently generation and mutation are **structurally undispatchable, not merely unwired**:
 
-- `src/agentforge/runner.py:820` constructs `SeedReplayRedTeam()` unconditionally.
+- `src/agentforge/runner.py::DurableCampaignRunner.__init__` constructs `SeedReplayRedTeam()`
+  unconditionally (currently line 827).
 - `src/agentforge/campaign/coordinator.py:37` states outright that hosted Red Team generation is
   skipped.
 - `src/agentforge/agents/red_team/mutation.py:41-85` is implemented and tested; its only callers are
@@ -343,8 +373,9 @@ generation route: `HostedProvider` built its own client from an ambiently import
 SDK, so the generation call bypassed the shared `OpenRouterTransport`, the usage ledger, and the
 lineage recorder. That route is now retired to a fail-closed shell (`providers.py:216-250`), and its
 test module is deleted. **One governed generator remains**, `TracedHostedRedTeamProvider`
-(`hosted_generation.py:185`), which routes through all three. Closing a second, ungoverned egress path
-is the right call even though it reduces raw capability.
+(`src/agentforge/agents/red_team/hosted_generation.py::TracedHostedRedTeamProvider`, currently line
+204), which routes through all three. Closing a second, ungoverned egress path is the right call even
+though it reduces raw capability.
 
 One stale docstring remains: `mutation.py:9-11` still says "the hosted provider is the boundary for real
 generation (behind authorization, never called in a test)". The hosted provider is no longer that
@@ -424,7 +455,8 @@ keyed on target version is keyed on a constant, which silently defeats regressio
 This is the only item with real movement. A `pre_physical_send_gate` now fires before every physical
 send, **including retries and after pacing/backoff**, and is wired in production to a durable
 per-`(attempt, turn, retry)` reservation that re-reads lease and persisted authorization:
-`src/agentforge/policy/gateway.py:532-548`, `src/agentforge/runner.py:1746-1783`,
+`src/agentforge/policy/gateway.py:532-548`, nested `revalidate` in
+`src/agentforge/runner.py::DurableCampaignRunner._execute_prepared` (currently lines 1753–1790),
 `src/agentforge/campaign/coordinator.py:588-611`. Unit and database tests pass.
 
 **Not closed**, for three specific reasons:
@@ -463,8 +495,10 @@ The only real IP pinning in the repository is in the unrelated active-scan path
 
 `PostgresJobQueue.reap_expired()` is implemented in `src/agentforge/storage/queue.py` and still has
 **literally zero production callers**. The Runner loop does gain a bounded crash-reservation
-recovery step, `recover_interrupted_provider_calls` (`src/agentforge/runner.py:958-975`, which delegates to the store's `recover_interrupted_hosted_executions` at `:971`) — but
-that recovers hosted executions, not expired job leases. The finding stands.
+recovery step, `src/agentforge/runner.py::DurableCampaignRunner.recover_interrupted_provider_calls`
+(currently lines 965–982), which delegates to the store's
+`recover_interrupted_hosted_executions` at line 978 — but that recovers hosted executions, not
+expired job leases. The finding stands.
 
 ### RT-13 — Medium, **open**: ambiguous POST failures can duplicate a conversational turn
 
@@ -515,48 +549,50 @@ rather than prose): `docs/evidence/zap/findings.json:22,50,78` carry dangling
 stamps post-date ZAP's own generation time by 93 s, so the recorded scan limits (depth 5, ≤10
 children, 2-minute spider, 5-minute run) are not corroborated by any artifact.
 
-## Findings inventory — what the platform actually produced
+## Findings inventory — what exists and who produced it
 
-Six `AF-VULN-2026-0724-*` reports exist. The distinction that matters for grading, and that was
-previously undocumented, is **provenance**:
+Six `AF-VULN-2026-0724-*` reports exist. After PR #48, the inventory is:
 
-| ID | Classification | Severity as stated in the report | Reconciled severity | Provenance |
+| ID | Classification | Current severity | Evidence provenance | Report authorship |
 |---|---|---|---|---|
-| 001 | observation | Low | Low | Platform campaign |
-| 002 | observation | Low | Low | Platform campaign |
-| 003 | observation (control validated) | Informational | Informational | Platform campaign |
-| 004 | control weakness | `Medium–High` | **Medium** | **External Bruno client** |
-| 005 | control weakness | `Medium` | **Low** | **External Bruno client** |
-| 006 | control weakness | `Low–Medium` | **Low** | **External Bruno client** |
+| 001 | observation | `low` | Platform campaign plus owner Bruno capture | **Human-written**; stale header says "Drafted autonomously" |
+| 002 | observation | `low` | Platform campaign | **Human-written**; stale header says "Drafted autonomously" |
+| 003 | observation (control validated) | `Informational` — not a contract enum member | Platform campaign | **Human-written**; stale header says "Drafted autonomously" |
+| 004 | control weakness | **`medium`** | **External owner-supplied Bruno client** | **Hand-written** |
+| 005 | control weakness | **`low`** | **External owner-supplied Bruno client** | **Hand-written** |
+| 006 | control weakness | **`low`** | **External owner-supplied Bruno client** | **Hand-written** |
 
-`Medium–High` and `Low–Medium` are **not legal members of the `vuln_report` contract severity enum**
-(`low|medium|high|critical`). The *Reconciled severity* column carries the values from the
-independent offline re-validation of 004–006 recorded on lane `redteam/judge-calibration-corpus-evidence`
-(`507d032`); those report bodies are **not** on this base, so this table states both values
-rather than asserting a correction the tree does not yet contain.
+PR #48 corrected 004–006 in the report bodies themselves. The former `Medium–High` and
+`Low–Medium` labels are gone; 004/005/006 now use legal `vuln_report` severity values
+(`low|medium|high|critical`). Report 003's `Informational` label is the one remaining value outside
+that enum.
 
-**That lane has no open PR to the integration base.** Nothing currently in flight lands the reconciled
-severities — PR #33 (`codex/integration-l-findings-grounding`) is a *different* lane that grounds
-captured session evidence for 004 and 005 and leaves both severities unchanged. Until `507d032` (or an
-equivalent) is proposed, three of the six reports keep a severity outside the `vuln_report` contract
-enum (003 `Informational`, 004 `Medium–High`, 006 `Low–Medium`) and cannot be published as written. See
-[`docs/vulnerabilities/README.md`](../vulnerabilities/README.md).
+001–003 are substantially resistance results rather than defects. The three genuine target-side
+control-weakness reports are 004–006, and **all three derive from the owner's external Bruno
+collections, not from the platform scanner or a governed platform campaign.** They are legitimate
+reports about retained target observations; they are not evidence that the platform discovered a
+confirmed exploit.
 
-001–003 are substantially resistance results rather than defects. The only genuine target-side
-findings are 004–006, and **all three came from the owner's external Bruno collections, not from the
-platform scanner.** They are legitimate findings about the target; they are not evidence that the
-platform discovered anything.
+Each of 004–006 now embeds runnable, read-only derivation code over the 15 retained Bruno
+request/response pairs. That makes the reported counts and capture-derived claims reproducible
+offline. It does **not** create an independently attested target reproduction: no reviewer log,
+attestation, run manifest, separately retained reproduction artifact, or negative-control rerun is
+committed. The reports explicitly label reviewer blinding, a second adversarial pass, and no-network
+execution as process assertions rather than repository-verifiable evidence.
 
-**On PRD-32 (≥3 genuine, independently reproduced vulnerability reports): the bar is not met at this
-base.** Zero of the six have a recorded independent reproduction — `docs/evidence/reproductions/`
-does not exist — zero are human-approved for publication (all six are DRAFT), and all live launchers
-are retired/fail-closed. The honest position is three candidate findings with zero reproduction
-artifacts. `docs/planning/gap-audit.md:66` marks PRD-32 "covered (seam)"; that is an
-architecture-seam claim, not evidence.
+**On PRD-32 (≥3 genuine, independently reproduced vulnerability reports): the bar remains unmet.**
+The file-count half is present, and three distinct target-side control weaknesses are documented, but
+none is a confirmed exploit or an independently evidenced target reproduction; all six reports remain
+draft/unpublished. `docs/planning/gap-audit.md:66` marks PRD-32 "covered (seam)"; that is an
+architecture-seam claim, not completion evidence.
 
-Also inaccurate and corrected in this pass: 004/005/006 each carry the header line "Drafted
-autonomously by the Documentation agent", while `docs/evidence/agent-trace.md:56 @107c11c` states the runtime
-Documentation agent drafted nothing at all (`exploit_confirmed = 0`). The reports are human-drafted.
+The historical authorship contradiction is now resolved. At `107c11c`, 004–006 claimed
+Documentation-agent authorship while `docs/evidence/agent-trace.md:56 @107c11c` recorded that the
+runtime Documentation agent drafted nothing (`exploit_confirmed = 0`). PR #48 replaced those headers
+with explicit hand-written authorship and explains that the runtime agent emits schema-valid JSON only
+after `EXPLOIT_CONFIRMED`. Reports 001–003 are also human-written; their retained "Drafted
+autonomously" headers are false/stale and are not evidence of output from the governed runtime
+Documentation agent.
 
 ## Predecessor cites that no longer resolve
 
@@ -567,12 +603,12 @@ predecessor can be read safely rather than silently distrusted.
 | Predecessor cite | Claim | Where it actually is at this base |
 |---|---|---|
 | `api/postgres.py:77-79` | required Web/LLM/category sets | `api/postgres.py:124-126` (content unchanged) |
-| `runner.py:269,285-288` | Runner constructs `SeedReplayRedTeam` | `runner.py:820`; `:269` is unrelated hosted-invocation context |
-| `runner.py:629-693` | selects exact reviewed cases | `:629` is `_literal_destination_allowed` |
-| `runner.py:716-736` | persisted gate refreshes lease | `:716-736` is `_scope_payload_profile`; the gate is `runner.py:1746-1783` |
-| `runner.py:838-846` | finding flags all `False` | `:838-846` is `_start_agent_execution` |
+| `runner.py:269,285-288` | Runner constructs `SeedReplayRedTeam` | `DurableCampaignRunner.__init__`, currently `runner.py:827`; `:269` is unrelated hosted-invocation context |
+| `runner.py:629-693` | selects exact reviewed cases | `_literal_destination_allowed`, currently `runner.py:636`; the predecessor range is stale |
+| `runner.py:716-736` | persisted gate refreshes lease | `_scope_payload_profile` is currently `runner.py:727`; the gate is nested `revalidate` in `DurableCampaignRunner._execute_prepared`, currently `:1753-1790` |
+| `runner.py:838-846` | finding flags all `False` | `DurableCampaignRunner._start_agent_execution`, currently `runner.py:845-853` |
 | `runner.py:176-193` | resolves and rejects private addresses | `:176-193` is `_sanitize_hosted_transcript` |
-| `runner.py:960-1047` | loop does not reap expired leases | `:958-975` is `recover_interrupted_provider_calls`; the *claim* about lease reaping is still true, the cite is not |
+| `runner.py:960-1047` | loop does not reap expired leases | `DurableCampaignRunner.recover_interrupted_provider_calls`, currently `runner.py:965-982`; the *claim* about lease reaping is still true, the cite is not |
 | `coordinator.py:390-425` | gate invoked once per logical attempt | superseded; see `coordinator.py:588-611` |
 | `policy/gateway.py:421-468` | retries check only in-memory caps | `:421-468` is the multi-turn sequential dispatch loop; retries are `_dispatch_one_with_backoff` |
 | `campaign/corpus.py:200-210` | five tool cases use a `none` oracle | `:200-210` is `expected_evidence`/`safe_signals` template prose; the five-case claim could not be confirmed at any cited line |
@@ -619,7 +655,8 @@ gap-swarm as `BLOCKED(base-precondition)`, held at Wave 0 entry.
    during retry backoff; cover the non-running-run refusal branch; make the gate
    fail-**closed** when callbacks are absent.
 2. Reconcile the two Judge seams so a model can never emit `EXPLOIT_CONFIRMED` on either
-   (`hosted_runtime.py:725` / `:834-837`), and add the test.
+   (`HostedFourRoleRuntime.run_attempt`, currently line 754 /
+   `HostedFourRoleRuntime._deterministic_precedence`, currently lines 863–866), and add the test.
 3. Enforce the per-agent database role boundary in production composition (RT-10).
 4. Pin the validated destination address while preserving TLS SNI/hostname verification (RT-11);
    close ambiguous POST retry behavior with an idempotency key bound to run/attempt/turn (RT-13).
@@ -687,7 +724,8 @@ standard is the load-bearing part of this document:
 - Confirmed findings are deterministically reproduced, fixed for the right reason, replayed on
   target-version changes, and monitored for reappearance.
 - The release commit is pushed to both `origin/main` and `gitlab/main`, the refs resolve to the same
-  commit, and both CI systems are green.
+  commit, GitHub CI is green on that exact commit, and the same commit is mirrored to GitLab. GitLab
+  is passive and has no runner gate.
 
 ## External baselines
 

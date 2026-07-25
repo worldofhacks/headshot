@@ -89,20 +89,21 @@ Click **Request exact campaign authorization**.
 > target. It recorded missing HSTS, missing X-Content-Type-Options, and cache-control
 > review. These are publication-gated Low, Low, and Informational findings—not confirmed
 > exploits. Alongside them sit six draft vulnerability reports; the highest is a control
-> weakness on a session identifier carried in a URL query string. All six are DRAFT, none
-> is published, and none has an independent reproduction yet.”
+> weakness on a session identifier carried in a URL query string. Reports 004–006 include
+> offline re-derivations over retained captures, but all six remain DRAFT and unpublished,
+> with no independent attestation or separately recorded reproduction artifact. PRD-32
+> remains incomplete.”
 
-*Severity, precisely:* that report reads **Medium–High** in this tree
-(`docs/vulnerabilities/AF-VULN-2026-0724-004-…md:11`). An independent offline re-validation on lane
-`redteam/judge-calibration-corpus-evidence` (`507d032`) downgrades it to **Medium** — because
-there is no negative control proving the server actually *reads* the `session_id` parameter — but that
-lane is **not merged into this base and has no open PR to it**. If asked for a number, say "Medium–High as written, Medium after
-independent re-validation, and the re-validation isn't merged yet." Do not say a bare "Medium".
+*Severity, precisely:* PR #48 merged at `a67ac1e`, replacing closed, unmerged PR #33. In this tree,
+004 is **`medium`** and 005/006 are **`low`**, all legal `vuln_report` enum values. All three came
+from the owner's external Bruno captures, not the platform scanner. Their embedded derivations are
+checkable, but the claimed independent/blinded/no-network review process has no repository
+attestation or separate run artifact. Do not call 004 “Medium–High” or say its correction is unmerged.
 
 *Wording note:* say **normalized**, not "ingested". Nothing in the repository ingests the committed
 ZAP artifact into Postgres — the only `SecurityToolEvidenceRepository.ingest` calls are in tests. And
 name the six AF-VULN drafts: this beat previously presented the three ZAP records as the whole
-findings set, which understates the Medium finding a reviewer will ask about.
+findings set, which understates the `medium` finding a reviewer will ask about.
 
 ## 3:30 — Show observability and cost
 

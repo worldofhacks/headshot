@@ -8,6 +8,12 @@ console surfaces.
 campaign launch, target request, credential rotation, publication, or other external
 mutation was performed.
 
+> **Supersession note — 2026-07-25:** the deployed-state table below is a 2026-07-24 snapshot, not
+> current staging state. Candidate `2069036e` was subsequently deployed Runner-first to staging and
+> its database reached `0021`; `/health`, `/ready`, unauthenticated denial, and the console shell were
+> verified. No campaign or provider/target call ran, so four-role live acceptance and Langfuse
+> query-back remain open. Production was not promoted or re-verified.
+
 ## Verdict
 
 The reviewed code now has an end-to-end, durable accounting and Langfuse projection path
@@ -17,10 +23,10 @@ shared campaign trace. The live console distinguishes queued/awaiting-verificati
 observed, disabled, and failed delivery. Per-role p50, p95, and spend are computed from the
 authoritative ledger and exposed on Live, Agents, Costs, and Traces.
 
-This is not yet live acceptance. The currently deployed staging and production release is
-still on migration `0013`, both databases have zero `agent_executions`, and the configured
-Langfuse project has no canonical agent observations. The displayed “not observed” state is
-therefore truthful for the deployed release.
+This was not live acceptance. At the time of this review, the deployed staging and production release
+was on migration `0013`, both databases had zero `agent_executions`, and the configured
+Langfuse project had no canonical agent observations. The displayed “not observed” state was
+therefore truthful for that reviewed release.
 
 ## Read-only live evidence
 
@@ -36,8 +42,9 @@ therefore truthful for the deployed release.
 | Langfuse `agent.judge` / runtime | 0 / 0 | Same configured project |
 | Langfuse `agent.documentation` / runtime | 0 / 0 | Same configured project |
 
-Staging and production currently use the same Langfuse project identity. That prevents
-strong environment isolation even when observation metadata carries an environment label.
+At review time, staging and production used the same Langfuse project identity. That prevented
+strong environment isolation even when observation metadata carried an environment label; the later
+staging smoke did not re-audit this configuration.
 
 ## Implemented controls
 
@@ -69,9 +76,10 @@ strong environment isolation even when observation metadata carries an environme
 
 ### LF-01 — Critical: deployed state has not crossed live acceptance
 
-The fix is not deployed, the repository head migration is not applied, and no newly authorized live
-campaign has produced/query-verified the four agent roles. Local tests and doubles validate
-contracts only; they are not live evidence.
+At review time the fix was not deployed, the repository head migration was not applied, and no newly
+authorized live campaign had produced/query-verified the four agent roles. The later staging smoke
+closed only the deployment and migration subparts: no campaign ran and no four-role query-back was
+recorded. Local tests and doubles validate contracts only; they are not live evidence.
 
 **Close by:** deploy one reviewed commit to Web, Runner, and Scheduler; apply the repository's sole
 Alembic head — **`0021_four_role_agent_acceptance`** as of base `107c11c` *(this section previously
@@ -81,9 +89,9 @@ named `0016`, which now under-specifies by five revisions: `0017` hosted agent-e
 using synthetic non-PHI data; then run the environment-bound verifier with `--record-verification`.
 
 The deployed-state observations above (release on `0013`, zero `agent_executions` in both databases,
-no canonical agent observations in Langfuse) were not re-measured in the 2026-07-25 documentation pass
-and are carried forward as recorded on 2026-07-24. They remain consistent with the repository-side
-finding that **no hosted model has ever been called in a campaign** — no `provider_request_id`,
+no canonical agent observations in Langfuse) are retained as the recorded 2026-07-24 snapshot and must
+not be read as current staging state. The later staging migration to `0021` did not run a campaign.
+Repository evidence still contains no hosted campaign call: no `provider_request_id`,
 `returned_model`, or `measured_cost` value appears anywhere under `docs/evidence/**` or
 `evals/results/**`.
 
@@ -157,10 +165,10 @@ raw content or let a tool span authorize traffic.
 ## Live activation sequence
 
 1. Provision separate staging and production Langfuse projects and rotate credentials.
-2. Review and commit one exact source state; push the same commit to both required remotes
-   and require both CI systems to pass.
-3. Deploy the same commit to Web, Runner, and Scheduler in staging and apply migration
-   `0016`.
+2. Review and commit one exact source state; require GitHub CI to pass on that commit and mirror the
+   same commit to GitLab. GitLab is passive and has no runner gate.
+3. Deploy the same commit Runner-first to Runner, Web, and Scheduler in staging and apply the exact
+   packaged Alembic head.
 4. Obtain exact target/corpus/budget authorization and launch a new campaign against the
    deployed target URL with synthetic non-PHI data.
 5. Run `scripts/verify_langfuse_campaign.py --expected-environment staging

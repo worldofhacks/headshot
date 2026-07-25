@@ -107,14 +107,14 @@ before their consumers**, frontmatter + trigger boundaries validated against `CL
   - Verify: `pytest tests/contract` green producer **and** consumer of every boundary; `contract-steward` breaking-change detector fires on an unversioned edit
   - Test: **boundary** — oversized transcript truncated+recorded; **invariant** — a Verdict failing schema validation is a typed error, not a verdict · Skills: **contract-steward** (P1)
 
-- [ ] **P11 — Repository bootstrap (dual-remote)  ⚠ HUMAN AUTH — PARTIALLY COMPLETE / BLOCKED**
+- [ ] **P11 — Repository bootstrap (GitHub CI + passive GitLab mirror)  ⚠ HUMAN AUTH — RELEASE PARITY PENDING**
   - Files: `.github/workflows/ci.yml`, `.gitlab-ci.yml`, `.pre-commit-config.yaml` (gitleaks)
   - Anchors: §12 · Map: enables GitHub-based CI (M1), Railway deploy-from-GitHub (M1), tdd-swarm · Deps: P8 · Est: M
-  - **Repository URLs:** GitHub `https://github.com/worldofhacks/headshot` (**private**) · GitLab `https://labs.gauntletai.com/alexander.miller/headshot` — *(updated 2026-07-25: both remotes are configured at base `107c11c`, so the "GitLab pending / push blocked" status recorded below is stale in the pessimistic direction. `origin` and `gitlab` both resolve. What remains unverified is whether both `main` refs point at the same commit and whether both pipelines are green — that is the dual-remote release law, not a bootstrap blocker. Note also that the project has since dropped independent GitLab CI in favour of treating GitLab as a mirror; reconcile that against the dual-remote law before release.)*
-  - **Status (2026-07-21):** ✅ gitleaks-before-push (proven on an ephemeral fixture, never committed) · ✅ GitHub repo created + `origin` + `main` pushed · ✅ GitHub CI green (checks `test`, `secret-scan`) · ✅ `.gitlab-ci.yml` parity authored · ✅ dual-remote law added to `CLAUDE.md`/`AGENTS.md` · ⛔ **GitHub `main` protection blocked** — HTTP 403 *"Upgrade to GitHub Pro or make this repository public"* (private repo on a free account; not weakened, repo stays private) · ⛔ **GitLab remote/push blocked** — no Gauntlet Labs auth (`glab` absent, no token, SSH publickey denied); project `headshot` (private) not yet created.
-  - Accept: (a) gitleaks before first push ✅; (b) GitHub repo + remote + push ✅; (c) protected `main` ⛔ (account capability); (d) required CI checks ✅ (exist+green, not enforceable-as-required without protection); (e) GitLab remote + push + green pipeline ⛔ (auth); (f) tdd-swarm prereqs — see §tdd-swarm; (g) does **not** block D1/target-readiness ✅; (h) secret pre-push blocks push ✅
-  - **Recorded honestly:** "GitHub remote + CI complete; GitLab remote pending Gauntlet Labs auth; GitHub branch protection blocked by private-repository account capability." **Not fully complete; tdd-swarm not ready.**
-  - **⚠ HUMAN AUTHORIZATION REQUIRED — remaining:** (1) GitHub Pro **or** make repo public → enables protection; (2) Gauntlet Labs GitLab auth + private project `headshot` → enables the GitLab remote/push.
+  - **Repository URLs:** GitHub `https://github.com/worldofhacks/headshot` (**private**) · GitLab `https://labs.gauntletai.com/alexander.miller/headshot` — *(updated 2026-07-25: both remotes are configured. GitHub Actions is the sole CI gate; GitLab is a passive exact-commit mirror with no runner gate. At release, `origin/main` and `gitlab/main` must resolve to the same GitHub-green commit.)*
+  - **Historical status (2026-07-21):** gitleaks-before-push, the GitHub repository, initial GitHub CI, and the GitLab CI file were authored; GitHub branch protection and GitLab access were then unavailable. Those access facts no longer describe the integration branch. GitLab CI must remain disabled in project Settings rather than by editing the shared branch's `.gitlab-ci.yml`.
+  - Accept: (a) gitleaks before first push ✅; (b) GitHub repo + remote + push ✅; (c) the exact release commit passes GitHub CI; (d) the same commit is pushed without force to `gitlab/main`; (e) both `main` refs match; (f) GitLab pipeline status is ignored because the project is a passive mirror; (g) secret pre-push blocks push ✅
+  - **Recorded honestly:** integration refs are dual-pushed; final `main` parity remains a release-time gate.
+  - **⚠ HUMAN AUTHORIZATION REQUIRED — remaining:** the protected/two-person merge of the release PR to GitHub `main`; the integration owner then performs the exact GitLab mirror push.
 
 ---
 
@@ -155,7 +155,7 @@ before their consumers**, frontmatter + trigger boundaries validated against `CL
   - Verify: `docker build` + `compose up` healthy; `/ready` reflects DB/migration state; env-isolation test green in CI on the ephemeral PG · Test: **invariant** — staging/local config cannot resolve prod target creds (O1) · Skills: —
   - **Local-complete does NOT satisfy the deployed-URL gate** (that is M1b).
 
-- [ ] **M1b — Full-platform Railway topology + deployment  ⚠ HUMAN AUTH (Railway, secrets)** — PACKAGED LOCALLY; DEPLOYMENT DEFERRED
+- [ ] **M1b — Full-platform Railway topology + deployment  ⚠ HUMAN AUTH (Railway, secrets)** — STAGING SMOKE COMPLETE; PRODUCTION/ROLLBACK OPEN
   - Files: multi-stage `Dockerfile`, Railway service manifests, migration/container verification scripts,
     `docs/deployment/RAILWAY.md`; resource provisioning and sealed values remain external
   - Anchors: §12, **D16** · Map: PRD-34 (deployed half) · Deps: **M1a**, **P11** (deploy-from-GitHub) · Est: M
@@ -168,16 +168,16 @@ before their consumers**, frontmatter + trigger boundaries validated against `CL
     (i) **edge:** staging cannot resolve production target, Clerk Organization, origin, or database
     bindings; (j) **error:** migration or readiness failure blocks promotion without exposing another
     service publicly
-  - **Local status (2026-07-21):** one runtime image now carries the built console, Python wheel,
-    `alembic.ini`, and complete migration tree; Web/runner/scheduler/pre-deploy entrypoints and
-    staging/production configuration templates are present. This is not a Railway deployment. The
-    private runner and scheduler deliberately refuse operation while their authoritative compositions
-    are absent.
-  - Verify: staging + production topology inventory; public-port scan; pre-deploy migration, health,
-    readiness, and rollback smokes; URLs recorded only after a successful deploy · Test: environment
+  - **Staging status (2026-07-25):** candidate `2069036e` deployed Runner-first to private Runner,
+    private Scheduler, public Web, and PostgreSQL. The database reached `0021`; `/health` and `/ready`
+    returned `200`; an unauthenticated protected request returned `401`; and the console shell loaded.
+    No signed-in Clerk flow, campaign, provider/target call, rollback exercise, or production promotion
+    was performed.
+  - Verify: staging evidence is recorded; production topology/public-port inspection, production
+    migration and probes, authenticated smoke, and rollback rehearsal remain · Test: environment
     isolation + deploy/rollback smoke on Railway · Skills: — · **⚠ HUMAN AUTH (Railway)**
 
-- [x] **M1c — Clerk authentication + custom-permission RBAC foundation**  (local/offline implemented; not deployed)
+- [x] **M1c — Clerk authentication + custom-permission RBAC foundation**  (code deployed to staging; real-user verification open)
   - Files: NEW `src/agentforge/auth/`, NEW `tests/auth/`, `pyproject.toml`, authentication/security docs
   - Anchors: identity ADR + `docs/security/AUTHENTICATION.md` · Map: **USR-02/03/04/05/07** · Deps:
     **M1a** · Est: M
@@ -195,7 +195,7 @@ before their consumers**, frontmatter + trigger boundaries validated against `CL
     environment isolation, verifier failure, and same-user rejection; prove the suite makes no network
     calls · Test: boundary + invariant cases in `tests/auth/` · Skills: security-best-practices
 
-- [ ] **M1d — Authenticated Railway Web/API/console integration  ⚠ HUMAN AUTH (Clerk + Railway)** — LOCAL INTEGRATION IMPLEMENTED; EXTERNAL VERIFICATION OPEN
+- [ ] **M1d — Authenticated Railway Web/API/console integration  ⚠ HUMAN AUTH (Clerk + Railway)** — STAGING SHELL/DENIAL VERIFIED; SIGNED-IN/PRODUCTION OPEN
   - Files: `src/agentforge/app.py`, `src/agentforge/web.py`, `src/agentforge/readiness.py`,
     `src/agentforge/api/`, `src/agentforge/control_plane/`, `src/agentforge/runner.py`,
     `src/agentforge/scheduler.py`, `console/**`, revision `0005`, Railway packaging/configuration, and
@@ -216,22 +216,23 @@ before their consumers**, frontmatter + trigger boundaries validated against `CL
     persisted workflow state, self-approval is rejected in application and database enforcement, and
     queue completion cannot create approval; (l) every screen uses a protected authoritative projection
     or a typed unavailable result—never a fixture or simulated success
-  - **Local status (2026-07-21):** Clerk React session/task states, request-time bearer API access,
+  - **Integration status:** Clerk React session/task states, request-time bearer API access,
     default-deny `/api/v1`, exact permission dependencies, PostgreSQL control-plane projections,
     append-only approval/audit persistence, fetch-stream reconciliation, same-origin Web composition,
     and fail-closed readiness are integrated. Coverage is unavailable until a nonce-deduplicated,
     hash-reconciled projection exists. Findings, traces, costs, configuration, component heartbeats,
     resilience, live probes, server-prepared campaign composition, campaign execution, and schedules
-    also report their exact missing dependency. No Railway/Clerk resource or live target/model was
-    contacted.
+    also report their exact missing dependency. The 2026-07-25 staging smoke proved config/readiness,
+    shell delivery, and missing-token `401`; it did not exercise a real Clerk session, target, model,
+    or campaign.
   - Verify: Clerk Dashboard checklist + protected-route matrix + two identities in staging; unauthenticated,
     wrong-org, missing-permission, XSS/log-redaction, SSE leakage, and fail-closed outage tests; inspect
     Railway service exposure and then record actual deployment/CI status · Test: integration/e2e tests
     against staging · Skills: security-best-practices · **⚠ HUMAN AUTH (Clerk + Railway)**
-  - **M1 is complete only when M1a–M1d all pass.** M1c is complete offline. M1b/M1d remain incomplete
-    until authorized Railway/Clerk provisioning and staging verification with two real users prove
-    self-approval denial, cross-Organization denial, protected API/fetch-stream access, exact-scope
-    approval, and the private-service topology.
+  - **M1 is complete only when M1a–M1d all pass.** M1c's code foundation and M1b's staging
+    infrastructure smoke are complete. M1b/M1d remain incomplete until production/rollback evidence
+    and staging verification with two real users prove self-approval denial, cross-Organization denial,
+    protected API/fetch-stream access, and exact-scope approval.
 
 - [ ] **M2 — Data model + migrations + per-agent DB roles + indexes**
   - Files: NEW `src/storage/models.py`, `migrations/` (Alembic), `src/storage/roles.sql`
@@ -327,12 +328,13 @@ before their consumers**, frontmatter + trigger boundaries validated against `CL
 
 - [ ] **M15 — README + deployed URL  ⚠ HUMAN AUTH (Railway URL)**  ∥
   - Files: extend `README.md` · Anchors: §2, §19 · Map: PRD-29/34 · Deps: **M1d**, M5 · Est: S
-  - Accept: (a) setup + arch overview + **deployed link** only after M1d verification + run-vs-live-target
+  - Accept: (a) setup + arch overview + a **deployed staging link** after M1b smoke, while any
+    authenticated or production claim waits for M1d verification; include run-vs-live-target
     instructions; (b) public/protected route model and Clerk prerequisites documented; (c) **edge:**
     synthetic-data + no-real-PHI stated and authentication distinguished from campaign authorization;
-    (d) **error:** pending/degraded deployment is never described as live or green · Verify: clean-checkout
-    reproduction after **M1d**; until then the deployed URL remains explicitly pending · Test: — · Skills:
-    — · **⚠ HUMAN AUTH**
+    (d) **error:** pending/degraded deployment is never described as live or green · Verify: staging URL
+    and smoke evidence are recorded; production and signed-in status remain explicitly pending · Test: —
+    · Skills: — · **⚠ HUMAN AUTH**
 
 ---
 
@@ -498,10 +500,10 @@ Every **runtime** F/S/O finding has an implementing + verifying task. F9–F12 a
 - **Critical path → MVP (local):** `P8 → M1a → M1c` (runtime + authentication foundations) and
   `P8 → P10` (needs `P1`) `→ M2 → M4` (needs `P9`,`P5`) `→ M9` (needs `M6a`,`P4`) `→ M11`
   **[hard gate]**. After `M2`: `M3` and `M6a` proceed in parallel.
-- **External halves are deferred (do not block local foundations):** `M1b` (Railway provisioning ⚠) +
-  `M1d` (Clerk Dashboard, two-real-user, and Railway verification ⚠), `M6b` (Langfuse ⚠), `M5`/`M7`
-  (live target ⚠, need `D1`), `M8` (hosted-OSS ⚠). M1d's local Web/API/console/control-plane slice is
-  implemented on the integration branch.
+- **Remaining external evidence does not block local foundations:** M1b's staging infrastructure smoke
+  is complete; its production/rollback evidence remains. `M1d` still needs Clerk Dashboard and
+  two-real-user verification, while `M6b` needs live Langfuse acceptance, `M5`/`M7` need a governed live
+  target run, and `M8` needs hosted-OSS campaign evidence.
 - **Critical path → Final:** `M1c → M1d → F3/F8/F11`; independently, `M9/M11 → F4` and `→ F1`
   (Orchestrator) `→ F2` (Documentation) `→ F6/F8/F10 → F13`.
 - **Fully parallel, done or start-now (local, no ext auth):** `P1–P7` skills ✅, `P8` scaffold ✅, `P9` fake ✅, `P10` contracts ✅, `M14` matrix, `D2` dry-run, `F14` devlog. `D1` target-readiness (⚠) unblocks `M5`/`M7`. **`D3` is off the critical path** — a pre-presentation gate on `wip/d3-diagram`.
@@ -509,10 +511,10 @@ Every **runtime** F/S/O finding has an implementing + verifying task. F9–F12 a
   every meaningful human-facing route and two-person approval; `M4` (gateway) gates all live work; `M6a`
   gates the Judge's evidence-integrity + the Orchestrator's learning signal. Land
   `M1a → M1c/M2 → M4/M6a` first.
-- **The DEPLOYED MVP gate (authenticated deployed URL + live traces + live eval results) needs the
-  EXTERNAL halves — `M1b`, M1d's real-user/Railway verification, `M6b`, `M5`, and `M8` — and stays
-  incomplete until those authorizations land.** Local foundations (`M1a`, `M1c`, M1d's integration
-  slice, `M2`, `M3`, `M4`, `M6a`) are buildable/testable now, fake-backed/offline as applicable.
+- **The DEPLOYED MVP gate (authenticated deployed URL + live traces + live eval results) remains
+  incomplete.** Staging infrastructure is proven, but M1d's real-user verification, M1b's
+  production/rollback evidence, live Langfuse acceptance, and the governed target/model run are still
+  required.
 
 ## Account & external blockers (classified — 2026-07-21)
 
@@ -524,17 +526,16 @@ bypassed.
 |---|---|---|
 | **GitHub branch protection** (private repo needs Pro/public — 403) | the repository-approved **`tdd-swarm` execution workflow** | local design/plan work |
 | **Gauntlet Labs GitLab auth** | **dual-remote checkpoint parity** (a repo policy, `CLAUDE.md` dual-remote law) | **intrinsic `tdd-swarm` prerequisites** — GitLab parity is a policy gate, not a swarm precondition |
-| **Railway authorization** | **M1b/M1d external half** (private-service topology, authenticated deploy, deployed URLs) | **M1a/M1c and M1d's local Web/API/console/control-plane integration** |
+| **Railway authorization** | Remaining **M1b/M1d external evidence** (production promotion, rollback rehearsal, authenticated smoke) | The completed staging private-service topology, schema migration, public probes, shell, and missing-token denial |
 | **Clerk Dashboard authorization** | **M1d external half** (restricted mode, Headshot Organization, MFA, role/permission assignments, environment keys, two-real-user verification) | **M1c and M1d's offline/local authentication boundary** |
 | **Trusted runtime/repository composition** | campaign execution, schedules, findings, verified coverage, traces, measured costs, configuration, component heartbeats, resilience, and live probes | explicit typed unavailable behavior and the rest of the local protected console |
 | **Langfuse authorization** | **M6b** (cloud traces, per-agent cost) | **M6a** local observability core |
 | **D1 inputs / live authorization** | **D1, M5, M7, and live eval results** | fake-backed foundations `M1a/M2/M3/M4/M6a` |
 | **Hosted-OSS credentials/budget** | **live M8 inference** | building M8's mutation loop against the fake |
 
-**GitLab, Railway/Clerk access, and D1 are NOT reasons to call the local architecture blocked.** Local
-foundations (M1a, M1c, M1d's integration slice, M2, M3, M4, M6a) are buildable/testable now; only their
-external halves and the deployed/live gate are deferred. Missing authoritative runtime repositories are
-reported as unavailable, not silently treated as complete.
+**The staging Railway infrastructure is no longer a blocker.** Clerk real-user acceptance,
+production/rollback evidence, and the governed deployed/live gate remain external work. Missing
+authoritative runtime evidence is reported as unavailable, not silently treated as complete.
 
 ## `tdd-swarm` local-MVP-foundations epic (pre-approved scope; NOT invoked)
 

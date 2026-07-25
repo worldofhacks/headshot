@@ -20,15 +20,12 @@ attempt. The number of attempts and agent calls inside a run must be measured ra
   hosted role model is composed at all is a deliberately target-free acceptance harness
   (`src/agentforge/agent_acceptance.py`) whose output is recorded
   `quarantined_not_dispatched` with `target_call_limit: 0`.
-- **"Provisioned Railway baseline" is retained but must not be read as deployed.** The distinction is
-  the one `docs/deployment/RAILWAY.md:8-9` draws itself: "a provisioned resource is not evidence that
-  the current release is deployed or that a live campaign is authorized." Web, Runner and PostgreSQL
-  are provisioned in both environments; what is **unverified** is deployment of this release and the
-  Clerk integration (`docs/security/AUTHENTICATION.md:3-7`: "not deployed", "has not been verified with
-  real Clerk users"), and every promotion-evidence box in the Railway runbook is unchecked. For cost
-  purposes the consequence is narrow and total: **no hosting, storage, or egress invoice exists for
-  this release**, so the platform-operations family is unmeasured for the same reason the inference
-  families are.
+- **The Railway staging baseline is now deployed, but not cost-measured.** Candidate `2069036e` was
+  deployed Runner-first to the staging Web, Runner, Scheduler, and PostgreSQL topology; schema `0021`,
+  `/health`, `/ready`, unauthenticated denial, and the console shell were verified. No campaign,
+  provider call, or target call ran during that smoke, production remains unverified, and no signed-in
+  Clerk acceptance was performed. No hosting, storage, egress invoice, billing export, or utilization
+  record has been supplied for this release, so the platform-operations family remains unmeasured.
 
 Still absent, and still the reason every number below is a symbol: any provider billing export, token
 trace, local-capacity benchmark, deployed-platform invoice, or utilization measurement. Consequently:

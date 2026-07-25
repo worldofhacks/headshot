@@ -114,8 +114,8 @@ rejected** in ADR-0001."
 
 - **Argument arrays, no shell** — `subprocess.Popen(list(argv), ..., shell=False)`, and empty /
   non-string argv is rejected (`process.py:64-65,84-94`).
-- **Pinned versions** — every scanner is version-pinned in both CI files and asserted by
-  `test_ci_contract.py`.
+- **Pinned versions** — every scanner is version-pinned in GitHub CI; `test_ci_contract.py` also
+  statically guards command parity with the checked-in GitLab mirror configuration, which is not run.
 - **Isolated tmp / HOME** — a fresh `TemporaryDirectory`; `HOME` and `TMPDIR` point there, never
   the caller's (`process.py:74-83`).
 - **Bounded resources** — CPU seconds, address space, file size, descriptor count (64), wall-clock
@@ -132,8 +132,8 @@ rejected** in ADR-0001."
 
 ### One-line close
 
-"Six green pinned scanners in GitHub Actions CI, contract-tested against both CI files so they can't be
-dropped; every
+"Six green pinned scanners in GitHub Actions CI, contract-tested against the checked-in mirror
+configuration so they cannot be dropped; every
 mandated OWASP Web and LLM category seeded and union-guarded by a test; a reproducible simulated
 triage exercise; and a hard rule enforced in code that scanner output is evidence, never
 publication authority — findings stay human-gated."

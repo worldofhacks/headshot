@@ -7,12 +7,13 @@ repository.
 
 > **Delivery status — 2026-07-25:** the Clerk-backed React console, protected FastAPI `/api/v1`,
 > organization-scoped PostgreSQL control plane, private Runner, live target adapter, and Langfuse
-> telemetry projection are **implemented and locally integrated**; the sole packaged Alembic head is
-> `0021_four_role_agent_acceptance`. Railway and Clerk provisioning is **selected and planned, not
-> yet verified** — [Railway deployment](docs/deployment/RAILWAY.md) still carries an unchecked
-> promotion-evidence checklist and [Authentication](docs/security/AUTHENTICATION.md) states the Clerk
-> integration is not deployed and has not been verified with real Clerk users. An authorized,
-> synthetic-only campaign **has** run against the live Co-Pilot target; every verdict it produced is
+> telemetry projection are implemented; the sole packaged Alembic head is
+> `0021_four_role_agent_acceptance`. Candidate `2069036e` is deployed to **staging** Runner-first
+> across Runner, Web, and Scheduler, with the database at `0021`. The public Web health/readiness,
+> unauthenticated protection boundary, and console/sign-in shell were smoke-tested. No staging
+> campaign or provider/target call ran, and no signed-in Clerk user, organization, permission, or MFA
+> flow was audited. **Production remains unverified.** An earlier authorized, synthetic-only campaign
+> ran against the live Co-Pilot target by a direct script; every verdict it produced is
 > `INDETERMINATE` and **no exploit has ever been confirmed** — see
 > [Red-teaming coverage review (2026-07-25)](docs/security/RED_TEAMING_COVERAGE_REVIEW_2026-07-25.md).
 > Live campaigns remain bounded by persisted exact-scope authorization, synthetic-only evidence,
@@ -20,15 +21,15 @@ repository.
 
 | Endpoint | URL | Verification status |
 |---|---|---|
-| Staging platform | `https://web-staging-8e30.up.railway.app` | **Unverified** — promotion evidence not recorded (`docs/deployment/RAILWAY.md`) |
+| Staging platform | `https://web-staging-8e30.up.railway.app` | **Infrastructure smoke verified** — `/health` 200, `/ready` 200, protected unauthenticated request 401, console/sign-in shell 200; no signed-in audit or campaign |
 | Production platform | `https://web-production-44528.up.railway.app` | **Unverified** — promotion evidence not recorded (`docs/deployment/RAILWAY.md`) |
 | Authorized live target | `https://agent-production-9f62.up.railway.app` | **Reached** — owner-authorized; live HTTP evidence in `evals/results/` and `docs/evidence/zap/` |
 
 The two platform rows are recorded here because a deployed URL is submitted with every checkpoint.
-They are listed as unverified deliberately: `docs/deployment/RAILWAY.md:479` sets the rule that exact
-URLs and CI/deployment statuses are added to this README **only after successful verification**, and
-that checklist item — like every other promotion-evidence box in that runbook — is unchecked. Do not
-read these rows as a deployment claim.
+Staging records only the completed infrastructure smoke; it is not evidence of a signed-in Clerk
+flow, a governed campaign, live model calls, or target calls. Production is listed as an expected
+origin, not as a deployment claim. See the dated evidence record and remaining promotion gates in
+[`docs/deployment/RAILWAY.md`](docs/deployment/RAILWAY.md).
 
 The requirements source of truth is [Week_3_AgentForge.pdf](Week_3_AgentForge.pdf). See
 [PLAN.md](PLAN.md), [ARCHITECTURE.md](ARCHITECTURE.md), and
@@ -65,9 +66,9 @@ which supersedes the 2026-07-24 review.
 
 ## Locked Railway topology
 
-The full platform is hosted on Railway in separate staging and production environments. Web, Runner,
-and PostgreSQL are provisioned in both environments. Scheduler is part of this release and must be
-verified as a private service during promotion.
+The full platform topology is deployed and smoke-tested in Railway staging. The current release still
+requires production promotion. Web, Runner, Scheduler, and PostgreSQL are separate services in each
+environment; only Web may receive public ingress.
 
 | Railway component | Network boundary | Responsibility |
 |---|---|---|
@@ -82,8 +83,8 @@ Railway's private network. See [Railway deployment](docs/deployment/RAILWAY.md).
 
 ## Clerk prerequisites
 
-Provisioning is a manual integration step. Staging and production must use isolated Clerk
-configuration, including different exact Organization IDs and authorized origins.
+Provisioning and real-user verification are manual integration steps. Staging and production must use
+isolated Clerk configuration, including different exact Organization IDs and authorized origins.
 
 1. Enable **Restricted** sign-up mode and use invitations for enrollment.
 2. Enable Organizations, create the single required **Headshot** Organization, disable Personal
@@ -252,8 +253,9 @@ evidence about the target, never as evidence that the governed loop has executed
 
 - [Red-teaming coverage review — 2026-07-25](docs/security/RED_TEAMING_COVERAGE_REVIEW_2026-07-25.md)
   (supersedes [2026-07-24](docs/security/RED_TEAMING_COVERAGE_REVIEW_2026-07-24.md))
-- [Vulnerability report index](docs/vulnerabilities/README.md) — six DRAFT reports, none published,
-  none independently reproduced
+- [Vulnerability report index](docs/vulnerabilities/README.md) — six DRAFT reports; 004–006 contain
+  embedded offline re-derivations over retained captures, but none is published and no independent
+  attestation or separately recorded reproduction artifact exists; PRD-32 remains incomplete
 - [Ticket and requirement reconciliation](TICKETS.md)
 - [Requirements matrix](docs/requirements/REQUIREMENTS_MATRIX.md) ·
   [canonical CSV ledger](docs/requirements/REQUIREMENTS_MATRIX.csv)

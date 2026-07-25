@@ -4,14 +4,13 @@ Authenticated React/Vite console for the AgentForge control plane. It preserves 
 titanium-and-ceramic visual system while replacing all sample state with protected same-origin
 `/api/v1` reads, commands, and ordered events.
 
-Status (corrected 2026-07-25, base `107c11c`): **built and locally integrated against protected
-`/api/v1`; Railway and Clerk deployment is selected and planned, not verified.** The previous
-"deployed in Railway staging and production with Clerk" wording contradicted four sibling documents at
-the same commit — `docs/security/AUTHENTICATION.md` states the Clerk integration is not deployed and
-has not been verified with real Clerk users, `docs/deployment/RAILWAY.md` carries an unchecked
-promotion-evidence checklist and forbids asserting deployment before verification, `ARCHITECTURE.md`
-records the platform as locally integrated and deployment-unverified, and the root `README.md` lists
-both platform URLs as unverified.
+Status (updated 2026-07-25): **built, integrated, and deployed to Railway staging from candidate
+`2069036e`.** The public Web tier at `https://web-staging-8e30.up.railway.app` serves the console shell
+and protected same-origin API; `/health` and `/ready` returned `200`, and an unauthenticated protected
+API request returned `401`. The private Runner and Scheduler were deployed in Runner-first order, and
+PostgreSQL reports Alembic head `0021`. This was a smoke deployment only: no campaign, provider call,
+or target call ran, and neither a signed-in Clerk flow nor real Organization/permission/MFA behavior
+was verified. Production remains unverified.
 
 A surface whose authoritative repository or service is absent still renders a typed `unavailable`
 state. The console never substitutes sample records or local command success.

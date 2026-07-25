@@ -1,23 +1,35 @@
 # Railway deployment runbook
 
-> **Status — provisioned baseline, release promotion pending:** the Headshot Railway project has
-> separate Staging and production environments with Web, Runner, and PostgreSQL provisioned. This
-> release adds the private Scheduler and the linear migration head
+> **Status — staging promotion proven; production pending:** the Headshot Railway project has
+> separate Staging and production environments. Candidate `2069036e` was deployed to Staging in
+> Runner-first order across Web, Runner, Scheduler, and PostgreSQL. The staging database reached
+> `0021`, the public Web origin passed `/health` and `/ready`, an unauthenticated protected request
+> returned `401`, and the console shell loaded. This release adds the private Scheduler and the linear
+> migration head
 > **`0020_agent_acceptance_authority` → `0021_four_role_agent_acceptance`** *(updated 2026-07-25; this
 > line previously named `0018` → `0019`, two revisions behind — a runbook that names the wrong head
-> will fail its own readiness check)*. A provisioned resource is not
-> evidence that the current release is deployed or that a live campaign is authorized; exact
-> deployment IDs, commit, probes, schema revision, private-ingress checks, and CI results must be
-> recorded after promotion.
+> will fail its own readiness check)*.
 >
-> **No promotion evidence has been recorded.** Every evidence box in this runbook is unchecked at base
-> `107c11c`. Per the rule stated later in this document — exact URLs and CI/deployment statuses are
-> added to the root `README.md` only after successful verification — the platform URLs now carried in
-> `README.md` are explicitly labelled **unverified** there, and `console/README.md`'s prior "deployed
-> with Clerk" claim has been corrected.
+> This proves a smoke deployment, not an authenticated Clerk flow or a campaign. No signed-in user,
+> Organization/permission/MFA behavior, provider call, target call, or production promotion was
+> verified. The release-wide evidence checklist remains incomplete where a row combines staging with
+> production, authentication, campaign, or rollback evidence.
 
 This runbook defines the required staging and production topology and the evidence needed before a
 deployed status can be claimed.
+
+## Recorded staging promotion evidence
+
+| Item | Verified staging result |
+|---|---|
+| Candidate | `2069036e` |
+| Public Web origin | `https://web-staging-8e30.up.railway.app` |
+| Service order | Runner deployed first; Web-owned migration; Runner activation; Scheduler activation; Web public routing |
+| PostgreSQL | Sole Alembic head `0021` |
+| Public probes | `GET /health` → `200`; `GET /ready` → `200` |
+| Default-deny boundary | Unauthenticated protected request → `401` |
+| Browser surface | Console and sign-in shell load |
+| Explicitly not exercised | Signed-in Clerk flow, real Organization/permissions/MFA, campaign, provider/target I/O, production, rollback |
 
 ## Repository deployment artifacts
 
@@ -136,9 +148,10 @@ its service function: exact-head Runner work consumption, Scheduler enqueue, or 
 promotion. A successful Railway build or process start is deployment evidence, not activation
 evidence.
 
-The `0017` → `0018` → `0019` seam is Runner-first and requires this exact order. In the final
-release, `H` below means the exact packaged Alembic head (which may include later serialized
-revisions such as `0020`):
+The migration-bearing seam is Runner-first and requires this exact order. Let `C` mean the signed
+grant's current database revision and `H` the exact packaged Alembic head. The recorded staging
+promotion used its grant-bound values and reached `H = 0021`; later releases may serialize additional
+revisions:
 
 1. Freeze one release commit and image digest. Require green unit, integration, contract, corpus,
    lint, formatting, secret-scan, and package checks in GitHub CI for that exact commit; then verify
@@ -154,10 +167,10 @@ revisions such as `0020`):
    - `running` hosted `agent_executions`; and
    - queued work whose campaign authorization is still dispatchable.
 4. Scale the old private Runner deployment to zero and prove its process has stopped. Runner
-   `overlapSeconds: 30` is unsafe during this migration: a normal rolling replacement can keep the
-   `0017` consumer alive while the new consumer starts. Do not rely on overlap, lease expiry, or a
-   new Runner's schema gate to contain the old process.
-5. Deploy the new Runner artifact **first**, still against schema `0017`. Because its packaged exact
+   `overlapSeconds: 30` is unsafe during this migration: a normal rolling replacement can keep an old
+   consumer alive while the new consumer starts. Do not rely on overlap, lease expiry, or a new
+   Runner's schema gate to contain the old process.
+5. Deploy the new Runner artifact **first**, still against schema `C`. Because its packaged exact
    head is `H`, it must remain in the exact-head wait state. Prove that it does not publish a runtime
    heartbeat, recover provider work, claim/reclaim a lease, mutate a job/campaign, or perform
    provider/target I/O. This is deployed, not activated.
@@ -168,12 +181,12 @@ revisions such as `0020`):
    alembic upgrade head
    ```
 
-   Capture evidence that the single linear graph applied `0018` and then `0019`. Revision `0018`
-   takes an exclusive `agent_executions` lock and independently refuses any running hosted row;
-   `0019` then makes observed model substitution recordable without permitting it on a successful
-   execution. A refusal, timeout, partial revision, unexpected head, or second migrator stops the
-   release. If the Railway workflow cannot hold the candidate Web deployment from public traffic,
-   stop rather than changing this order.
+   Capture evidence that the single linear graph advanced from `C` through `H`, including `0018` and
+   then `0019` when they are in that range. Revision `0018` takes an exclusive `agent_executions` lock
+   and independently refuses any running hosted row; `0019` then makes observed model substitution
+   recordable without permitting it on a successful execution. A refusal, timeout, partial revision,
+   unexpected head, or second migrator stops the release. If the Railway workflow cannot hold the
+   candidate Web deployment from public traffic, stop rather than changing this order.
 7. Verify PostgreSQL reports the one exact packaged head `H`, the old Web remains compatible with
    the additive schema, migration authority is absent from runtime roles, and the zero-work
    conditions still hold.
@@ -254,14 +267,15 @@ queued rows unchanged and cannot be mistaken for persisted observation. Store th
 deployment evidence; do not substitute local fixtures or an SDK `flush()` result for this query-back
 check.
 
-Migration `0016` and a newly authorized live campaign are both required before remote Langfuse
-evidence can exist. Migration `0018` adds authoritative physical-provider lineage and `0019`
-preserves rejected provider-model substitutions as non-success evidence. Historical campaigns that
-predate `agent_executions.langfuse_status` are not reconstructed or backfilled into Langfuse, and
-pre-`0018` hosted rows remain explicitly `historical_not_instrumented` with no fabricated physical
-events. Until a post-`0019` live run passes the query-back verifier, the console must keep remote
+Migrations through `0021` are deployed in staging, but that smoke ran no campaign. A newly authorized
+governed live campaign on the exact release head is still required before remote Langfuse evidence can
+exist. Migration `0018` adds authoritative physical-provider lineage and `0019` preserves rejected
+provider-model substitutions as non-success evidence. Historical campaigns that predate
+`agent_executions.langfuse_status` are not reconstructed or backfilled into Langfuse, and pre-`0018`
+hosted rows remain explicitly `historical_not_instrumented` with no fabricated physical events. Until
+a live run on the current packaged head passes the query-back verifier, the console must keep remote
 visibility—and any metric with no durable execution row—explicitly unavailable rather than infer
-either from fixtures or manifests. A q component test is never a post-`0019` production trace.
+either from fixtures or manifests. A q component test is never a production trace.
 
 The process commands are fixed in the repository artifact table above. A command's presence is not
 evidence that its external Railway service exists or is healthy. The former one-shot
@@ -459,7 +473,8 @@ authentication to recover availability.
       queued dispatchable authorizations before migration.
 - [ ] The old Runner was scaled to zero; Railway's 30-second Runner overlap was not used during the
       migration.
-- [ ] The new Runner artifact was deployed first, proven inert at `0017`, and activated only after
+- [ ] The new Runner artifact was deployed first, proven inert at the grant-bound current revision
+      `C`, and activated only after
       the Web-owned migration reached the one exact packaged head.
 - [ ] Alembic migration and revision evidence is captured without credentials.
 - [ ] The Web service uses `/railway/web.json`; Runner and Scheduler use their respective private config paths.
