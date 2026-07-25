@@ -158,8 +158,22 @@ for development and the local cost-baseline. The **Judge default is Claude Sonne
 calibration, false-negative rate, consistency, latency, and cost** — *not* because of refusal behavior:
 the 'never approve a confirmed exploit' invariant is enforced **deterministically** (oracle/canary
 precedence, fail-closed), and refusal is a model *characteristic and failure mode*, not a security
-control. Documentation default is **GPT-5.4 (`gpt-5.4`)** — a *different vendor from the Judge*, so a single-vendor failure
+control. Documentation default is **GPT-5.4 (`openai/gpt-5.4`)** — a *different vendor from the Judge*, so a single-vendor failure
 can't corrupt the trust chain (defense-in-depth, not the invariant)."
+
+> **Say the current model names (reconciled 2026-07-25).** The frozen hosted set is
+> `orchestrator=anthropic/claude-opus-4.8`, `red_team=qwen/qwen3.5-397b-a17b`,
+> **`judge=google/gemini-2.5-pro`**, `documentation=openai/gpt-5.4`
+> (`src/agentforge/agents/hosted.py:31-38`, rejected on deviation at `:352-353`). The vendor-separation
+> conclusion still holds — Google Judge vs OpenAI Documentation — but do **not** reach it via
+> "the Judge is Anthropic Sonnet": that premise is stale, and a reviewer who checks `hosted.py` will
+> catch it.
+>
+> **If pushed on enforcement, concede immediately.** The `Judge.vendor != Documentation.vendor` check is
+> **specified but not implemented** — no such check exists in `src/agentforge/agents/**` and no test
+> references it. The property holds *by configuration*, and one provider (`openrouter`) fronts all four
+> roles, so provider-level correlated failure is not mitigated. Say that plainly; it is recorded in
+> `ARCHITECTURE.md` §20 and the drift register.
 
 **Why it holds.** Each role's model is chosen for the property that role must guarantee, and vendor
 diversity across Judge and Documentation breaks correlated failure.

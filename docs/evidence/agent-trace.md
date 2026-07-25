@@ -2,8 +2,44 @@
 
 **Target:** `https://agent-production-9f62.up.railway.app` (OpenEMR Clinical Co-Pilot, synthetic data only)
 **Surface:** `/chat` (`copilot_chat` profile) · **Corpus:** `m11-seed-corpus-v1` (`corpus_sha 011d2f2f…`)
-**Provenance:** human-approved (`approver != launcher`); credentials by reference; synthetic-only.
+**Provenance:** approved by a **stand-in** two-person record, not two authenticated principals — see the
+corrections note; credentials by reference; synthetic-only.
 **Captured:** 2026-07-24. This document is the orchestration proof requested for the final submission.
+
+> ## Corrections — 2026-07-25, base `2069036`
+>
+> **Model identifiers — already corrected upstream.** PR #44 (`2069036`) retired the standalone
+> DeepSeek generator and rewrote this document's references to the canonical traced qwen component, so
+> the stale `deepseek/deepseek-chat-v3-0324` naming is gone. For reference, the frozen role set is
+> `orchestrator=anthropic/claude-opus-4.8`, `red_team=qwen/qwen3.5-397b-a17b`,
+> `judge=google/gemini-2.5-pro`, `documentation=openai/gpt-5.4`
+> (`src/agentforge/agents/hosted.py:31-38`, rejected on deviation at `:352-353`).
+>
+> **"Human-approved (`approver != launcher`)" overstates the record.** `approval.json` labels itself
+> "Stand-in for the Clerk two-person Approver service (not yet wired)". The recorded parties are one
+> human plus one AI agent, identified by free-text strings with no user IDs, session IDs, or distinct
+> authenticated principals. The `launcher != approver` control **is** correctly implemented in code; it
+> was not exercised here.
+>
+> **"Ran end-to-end" rests on thinner evidence than it sounds.** The five committed attempt manifests
+> contain content hashes but no HTTP status, no target response, no timestamp, and no cost. This
+> document's own "5 of 9" figure (§3) is the accurate one — it is
+> `evals/results/platform-live-run-20260724/COMBINED_SUMMARY.md` that claims 9/9, and that claim is
+> corrected there. Note also that `docs/vulnerabilities/README.md` states the full autonomous
+> orchestration was **not** exercised; that sibling doc and the "full five-agent pipeline" phrasing here
+> cannot both be right, and the manifests support the narrower reading.
+>
+> **Report authorship, for the record:** all six `AF-VULN-2026-0724-*` reports are human-drafted. This
+> document is correct that the runtime Documentation agent drafted nothing (`exploit_confirmed = 0`);
+> **all six** reports' header lines claim autonomous drafting and all six are wrong (001–003 say
+> "Drafted autonomously"; 004–006 add "by the Documentation agent").
+> Provenance, precisely: 001–003 cite the **adapter-boundary scan** results in
+> `evals/results/live-campaign-20260724*/`; 004–006 come from the **external Bruno client**. **No
+> report cites the coordinator run** — `grep -rn platform-live-run-20260724 docs/vulnerabilities/`
+> returns zero hits — so "the platform campaign" must not be read as the `SecureCampaignCoordinator`
+> run described in this document.
+>
+> Context: [`docs/security/RED_TEAMING_COVERAGE_REVIEW_2026-07-25.md`](../security/RED_TEAMING_COVERAGE_REVIEW_2026-07-25.md).
 
 > **Honesty note (read first).** The captured live campaign exercised the **full five-agent
 > pipeline** against **week1** using the **authored seed corpus** as the Red Team source
@@ -111,9 +147,16 @@ publish/remediation gate.
   (`approver != launcher`), rate-limited to 1 req/2 s, synthetic-only; the independent deterministic
   Judge returned `INDETERMINATE` on all captured cases and **confirmed zero exploits** — the Judge
   invariant (never approve a confirmed exploit; never confirm without decisive evidence) held.
-- The canonical **traced qwen component** exists with deterministic test coverage, but it was
-  **not composed into the governed production Runner or exercised by this live run**; the
-  human-approved run used seed replay.
+- The **Red Team hosted generator** is the canonical traced qwen component
+  (`src/agentforge/agents/red_team/hosted_generation.py`); it is deterministically tested but was
+  **not** used as the live source, and the run used seed replay. The standalone `HostedProvider` route
+  is **retired to a fail-closed shell** — it runs its preflight, refuses without explicit
+  authorization, and then raises `ProviderPreflightError` unconditionally rather than building a client
+  (`src/agentforge/agents/red_team/providers.py:216-250`). Generation is also **structurally
+  undispatchable** today: the coordinator requires every proposal to equal the reviewed seed
+  byte-for-byte (`src/agentforge/campaign/coordinator.py:393-397`), because the authorization's
+  operation hash binds the corpus hash. Making generation live is an architecture decision, not a
+  wiring task.
 - A **week2** coordinator run and any **fresh hosted-generation** live run are **scoped but not
   approved** — the agent emitted the `scope` requests and **did not self-authorize** live traffic,
   preserving the two-person human-approval gate.

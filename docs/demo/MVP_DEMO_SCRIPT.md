@@ -85,17 +85,39 @@ Click **Request exact campaign authorization**.
 
 **Open:** **Findings**
 
-> “Headshot also ingested a live OWASP ZAP passive baseline. It recorded missing
-> HSTS, missing X-Content-Type-Options, and cache-control review. These are
-> publication-gated Low, Low, and Informational findings—not confirmed exploits.”
+> “Headshot also **normalized** a live OWASP ZAP passive baseline against the authorized
+> target. It recorded missing HSTS, missing X-Content-Type-Options, and cache-control
+> review. These are publication-gated Low, Low, and Informational findings—not confirmed
+> exploits. Alongside them sit six draft vulnerability reports; the highest is a control
+> weakness on a session identifier carried in a URL query string. All six are DRAFT, none
+> is published, and none has an independent reproduction yet.”
+
+*Severity, precisely:* that report reads **Medium–High** in this tree
+(`docs/vulnerabilities/AF-VULN-2026-0724-004-…md:11`). An independent offline re-validation on lane
+`redteam/judge-calibration-corpus-evidence` (`507d032`, PR #33) downgrades it to **Medium** — because
+there is no negative control proving the server actually *reads* the `session_id` parameter — but that
+lane is **not merged into this base**. If asked for a number, say "Medium–High as written, Medium after
+independent re-validation, and the re-validation isn't merged yet." Do not say a bare "Medium".
+
+*Wording note:* say **normalized**, not "ingested". Nothing in the repository ingests the committed
+ZAP artifact into Postgres — the only `SecurityToolEvidenceRepository.ingest` calls are in tests. And
+name the six AF-VULN drafts: this beat previously presented the three ZAP records as the whole
+findings set, which understates the Medium finding a reviewer will ask about.
 
 ## 3:30 — Show observability and cost
 
 **Open:** **Traces**, then **Costs**
 
 > “Every physical request has a correlation trace, measured latency, status, and
-> Langfuse export state. The completed nine-request campaign cost nine cents,
-> averaged one cent per request, and took about 321 seconds.”
+> Langfuse export state.”
+
+*Do not read the old cost line* ("nine-request campaign cost nine cents, averaged one cent per
+request, ~321 seconds"). Two problems, both verified 2026-07-25: only **five** attempt manifests are
+committed, not nine; and **no cost value is recorded in any result artifact** — the attempt manifests
+have no cost field. The per-request figure came from a configured constant in the outbound telemetry
+layer, which is an accounting cap, not a measurement. If asked about cost, say the caps: `$1.00`
+budget, 40 attempts, 60 physical requests, 0.5 req/s, 1800 s
+(`docs/evidence/authorization-requests/caps.json`) — and that measured spend is unrecorded.
 
 ## 4:05 — Close
 

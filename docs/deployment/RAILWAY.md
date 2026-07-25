@@ -3,10 +3,18 @@
 > **Status — provisioned baseline, release promotion pending:** the Headshot Railway project has
 > separate Staging and production environments with Web, Runner, and PostgreSQL provisioned. This
 > release adds the private Scheduler and the linear migration head
-> `0018_provider_call_lineage` → `0019_recordable_provider_identity`. A provisioned resource is not
+> **`0020_agent_acceptance_authority` → `0021_four_role_agent_acceptance`** *(updated 2026-07-25; this
+> line previously named `0018` → `0019`, two revisions behind — a runbook that names the wrong head
+> will fail its own readiness check)*. A provisioned resource is not
 > evidence that the current release is deployed or that a live campaign is authorized; exact
 > deployment IDs, commit, probes, schema revision, private-ingress checks, and CI results must be
 > recorded after promotion.
+>
+> **No promotion evidence has been recorded.** Every evidence box in this runbook is unchecked at base
+> `107c11c`. Per the rule stated later in this document — exact URLs and CI/deployment statuses are
+> added to the root `README.md` only after successful verification — the platform URLs now carried in
+> `README.md` are explicitly labelled **unverified** there, and `console/README.md`'s prior "deployed
+> with Clerk" claim has been corrected.
 
 This runbook defines the required staging and production topology and the evidence needed before a
 deployed status can be claimed.
