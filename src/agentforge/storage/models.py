@@ -300,6 +300,11 @@ class AttemptResult(Base):
     attack_attempt: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     request_transcript: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     response_transcript: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # The MEASURED consumption trio a black-box POST /chat exposes: ``elapsed_ms`` (the gateway's
+    # own wall-clock), ``request_count`` (physical sends incl. retries), and ``response_size`` (the
+    # response body byte length). Target-internal tokens/tool-calls/cost are NOT observable and are
+    # deliberately absent. Part of the hashed D14 field set (folded into ``content_hash``).
+    resource_measurements: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     policy_decision_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     executed_at: Mapped[datetime.datetime | None] = mapped_column(
         TIMESTAMP(timezone=True), nullable=True

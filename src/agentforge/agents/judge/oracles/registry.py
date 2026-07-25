@@ -105,6 +105,12 @@ _REGISTRATIONS = (
         availability="pending_runtime",
         evaluator_type=ResourceLimitOracle,
         signal_id_source="oracle_id",
+        # WIRED: the coordinator's _adjudicate now builds a ResourceObservation from the MEASURED
+        # consumption trio (elapsed_ms/request_count/response_size) re-read from Postgres and runs
+        # ResourceLimitOracle in the live path, so a measured breach reaches EXPLOIT_CONFIRMED. This
+        # is proven by tests/test_consumption_oracle_wiring.py (an end-to-end measured breach), which
+        # is the sole justification for flipping this flag — never a bare flag.
+        runtime_wired=True,
     ),
     AuthoredOracleRegistration(
         oracle_id="recorder-state-diff-v1",

@@ -188,7 +188,12 @@ def test_every_deterministic_authored_id_resolves_to_its_reviewed_code_oracle() 
         assert registration.category == case["category"]
         assert registration.expectation_kind == expectation["kind"]
         assert registration.availability == expectation["availability"]
-        assert registration.runtime_wired is False
+        # recorder-resource-limits-v1 is the one authored oracle now COMPOSED into the live
+        # adjudication path (its MEASURED consumption trio is collected and the oracle fires end to
+        # end — proven in tests/test_consumption_oracle_wiring.py). Every OTHER authored oracle
+        # remains pending_runtime / runtime_wired=False until its own trusted observation is wired.
+        wired = oracle_id == "recorder-resource-limits-v1"
+        assert registration.runtime_wired is wired
 
         if registration.evaluator_type is CanaryOracle:
             canary_ref = expectation["canary_ref"]
@@ -198,7 +203,14 @@ def test_every_deterministic_authored_id_resolves_to_its_reviewed_code_oracle() 
             assert signal["id"] == canary_ref
         else:
             assert registration.canary_refs == set()
-            evaluator = registration.build_evaluator()
+            if wired:
+                # A wired registration never self-asserts runtime wiring through the registry — the
+                # composition root constructs the evaluator directly. Prove the guard AND the signal.
+                with pytest.raises(OracleRegistryError, match="runtime wiring"):
+                    registration.build_evaluator()
+                evaluator = registration.evaluator_type(oracle_id=oracle_id)
+            else:
+                evaluator = registration.build_evaluator()
             signal = evaluator.evaluate(observations[registration.evaluator_type])
             assert evaluator.id == oracle_id
             assert signal["id"] == oracle_id
