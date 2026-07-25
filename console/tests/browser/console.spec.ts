@@ -41,13 +41,7 @@ test("direct routes and browser history restore authoritative screens", async ({
   await expect(page.getByRole("button", {
     name: "Open four-role authorization",
   })).toBeEnabled();
-  await expect(page.getByRole("button", {
-    name: "Activate deterministic role engine",
-  })).toBeDisabled();
-  await page.getByLabel("Rationale").fill("Restore the reviewed deterministic planner engine.");
-  await expect(page.getByRole("button", {
-    name: "Activate deterministic role engine",
-  })).toBeEnabled();
+  await expect(page.getByText(/There is no per-role or deterministic fallback/i)).toBeVisible();
 });
 
 test("390px navigation exposes every screen without application overflow", async ({ page }) => {

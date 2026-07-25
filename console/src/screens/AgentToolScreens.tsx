@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 
 import type { ApiClient } from "../api/client";
 import type { Principal } from "../api/contracts";
-import { COMMAND_PATHS, RESOURCE_PATHS } from "../api/paths";
+import { RESOURCE_PATHS } from "../api/paths";
 import {
   decodeAgentActivity,
   decodeAgentPrompt,
@@ -23,7 +23,6 @@ import {
   time,
   Timeline,
 } from "../components/Analytics";
-import { CommandButton } from "../components/CommandButton";
 import { RecordTable, ResourceView, StateNotice } from "../components/ResourceView";
 import {
   LIVE_RESOURCE_POLL_INTERVAL_MS,
@@ -76,13 +75,6 @@ export const selectAgentPromptIdentity = (
 };
 
 const roleDisplayOrder: AgentRole[] = ["orchestrator", "red_team", "judge", "documentation"];
-
-const deterministicModels: Record<AgentRole, string[]> = {
-  orchestrator: ["coverage-governor-v1"],
-  red_team: ["full-scan-corpus-v1", "corpus-replay-v1"],
-  judge: ["oracle-precedence-v1"],
-  documentation: ["evidence-report-v1", "concise-evidence-report-v1"],
-};
 
 const statusTone = (status: string): "success" | "failure" | "queued" =>
   status === "failed" ? "failure" : status === "running" ? "queued" : "success";
@@ -247,27 +239,7 @@ export function AgentsScreen({
   );
   const [selectedRole, setSelectedRole] = useState<AgentRole>("orchestrator");
   const selected = agents.result.data?.find((agent) => agent.role === selectedRole) ?? null;
-  const [executionMode, setExecutionMode] = useState<"deterministic" | "hosted_advisory">(
-    "deterministic",
-  );
-  const [provider, setProvider] = useState("headshot");
-  const [model, setModel] = useState(deterministicModels.orchestrator[0]);
-  const [rationale, setRationale] = useState("");
-  const selectedAssignment = selected?.active_assignment;
   const promptIdentity = selectAgentPromptIdentity(selected);
-
-  useEffect(() => {
-    if (!selectedAssignment) return;
-    setExecutionMode(selectedAssignment.execution_mode);
-    setProvider(selectedAssignment.provider);
-    setModel(selectedAssignment.model);
-    setRationale("");
-  }, [
-    selectedRole,
-    selectedAssignment?.execution_mode,
-    selectedAssignment?.provider,
-    selectedAssignment?.model,
-  ]);
 
   const records = agents.result.data ?? [];
   const activities = activity.result.data ?? [];
@@ -307,25 +279,6 @@ export function AgentsScreen({
       agent.staged_assignment !== null
       || agent.active_assignment.execution_mode === "hosted_advisory",
   );
-  const normalizedRationale = rationale.trim();
-  const deterministicActivationReady =
-    canConfigure
-    && executionMode === "deterministic"
-    && provider === "headshot"
-    && deterministicModels[selectedRole].includes(model)
-    && normalizedRationale.length > 0
-    && normalizedRationale.length <= 2_000;
-
-  const changeMode = (value: "deterministic" | "hosted_advisory") => {
-    setExecutionMode(value);
-    if (value === "deterministic") {
-      setProvider("headshot");
-      setModel(deterministicModels[selectedRole][0]);
-    } else {
-      setProvider("openrouter");
-      setModel("");
-    }
-  };
 
   return (
     <div className="screen-stack">
@@ -525,92 +478,14 @@ export function AgentsScreen({
           )}
         </Panel>
 
-        <Panel title="Engine assignment" meta={selectedRole} eyebrow="CONTROLLED CONFIGURATION">
-          <label className="form-field">
-            Execution mode
-            <select
-              value={executionMode}
-              disabled={!canConfigure}
-              onChange={(event) => changeMode(event.target.value as "deterministic" | "hosted_advisory")}
-            >
-              <option value="deterministic">Server-owned deterministic engine</option>
-              {executionMode === "hosted_advisory" && (
-                <option value="hosted_advisory" disabled>
-                  Hosted role assignment · managed as an atomic four-role set
-                </option>
-              )}
-            </select>
-          </label>
-          <label className="form-field">
-            Configured provider
-            <select
-              value={provider}
-              disabled
-              onChange={(event) => setProvider(event.target.value)}
-            >
-              {executionMode === "deterministic"
-                ? <option value="headshot">Headshot</option>
-                : <>
-                    <option value="openrouter">OpenRouter</option>
-                    <option value="together">Together</option>
-                    <option value="anthropic">Anthropic</option>
-                  </>}
-            </select>
-          </label>
-          <label className="form-field">
-            Configured model / engine
-            {executionMode === "deterministic" ? (
-              <select
-                disabled={!canConfigure}
-                value={model}
-                onChange={(event) => setModel(event.target.value)}
-              >
-                {deterministicModels[selectedRole].map((item) => <option key={item}>{item}</option>)}
-              </select>
-            ) : (
-              <input
-                value={model}
-                disabled
-                onChange={(event) => setModel(event.target.value)}
-                placeholder="Configured provider model identifier"
-                autoComplete="off"
-              />
-            )}
-          </label>
-          <label className="form-field">
-            Rationale
-            <textarea
-              value={rationale}
-              disabled={!canConfigure || executionMode !== "deterministic"}
-              maxLength={2000}
-              onChange={(event) => setRationale(event.target.value)}
-              placeholder="Required audit rationale for restoring this server-owned engine"
-            />
-          </label>
+        <Panel title="Hosted role assignment" meta={selectedRole} eyebrow="ATOMIC FOUR-ROLE CONFIGURATION">
+          <StateNotice
+            state={hostedSetAvailable ? "ready" : "degraded"}
+            detail={hostedSetAvailable
+              ? "All four runtime roles are staged as one server-owned LLM-backed configuration set. Exact target and corpus authorization activates the complete set."
+              : "No atomic four-role LLM configuration is staged. Campaign authorization and launch remain unavailable until the protected configuration flow supplies all four roles."}
+          />
           <div className="command-row">
-            <CommandButton
-              client={client}
-              path={COMMAND_PATHS.configureAgent(selectedRole)}
-              payload={{
-                provider,
-                model: model.trim(),
-                execution_mode: executionMode,
-                rationale: normalizedRationale,
-              }}
-              label="Activate deterministic role engine"
-              allowed={deterministicActivationReady}
-              unavailableReason={!canConfigure
-                ? PERMISSIONS.configManage
-                : executionMode !== "deterministic"
-                  ? "selecting the server-owned deterministic engine first"
-                  : normalizedRationale.length === 0
-                    ? "an audit rationale"
-                    : "a server-owned engine for this role"}
-              onAcknowledged={() => {
-                setRationale("");
-                agents.refresh();
-              }}
-            />
             <button
               type="button"
               className="button button-primary"
@@ -624,10 +499,10 @@ export function AgentsScreen({
             </button>
           </div>
           <p className="data-note">
-            This per-role control can only restore a reviewed, server-owned deterministic engine.
-            A staged hosted set becomes active only through the exact target/corpus authorization
-            on Targets and a distinct human approval. The browser cannot select role models,
-            provider credentials, or partial hosted authority.
+            There is no per-role or deterministic fallback. The Orchestrator, Red Team, Judge,
+            and Documentation roles are all LLM-backed and become active together only through
+            exact target/corpus authorization and distinct human approval. The browser cannot
+            select role models, provider credentials, or partial hosted authority.
           </p>
         </Panel>
       </div>

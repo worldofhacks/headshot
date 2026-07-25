@@ -909,6 +909,57 @@ describe("approval execution visibility", () => {
     expect(within(panel as HTMLElement).getByText(new RegExp(selectedModel))).toBeTruthy();
     expect(within(panel as HTMLElement).queryByText(new RegExp(unrelatedModel))).toBeNull();
   });
+
+  it("never offers launch when an approval lacks the atomic four-role hosted binding", async () => {
+    const legacyApproval = {
+      ...approval,
+      hosted_run: null,
+      consumed: false,
+    };
+    const client = {
+      read: vi.fn(async (path: string) => {
+        if (path === "approvals") {
+          return { state: "ready" as const, data: [legacyApproval] };
+        }
+        if (path === "approvals/approval-1") {
+          return {
+            state: "ready" as const,
+            data: {
+              ...legacyApproval,
+              campaign_run_id: null,
+              verification_chain: [],
+            },
+          };
+        }
+        if (path === "agent-activity") {
+          return { state: "ready" as const, data: [] };
+        }
+        throw new Error(`Unexpected read: ${path}`);
+      }),
+      command: vi.fn(),
+    } as unknown as ApiClient;
+    const launchPrincipal: Principal = {
+      ...principal,
+      organization_permissions: [
+        ...principal.organization_permissions,
+        PERMISSIONS.campaignLaunch,
+      ],
+    };
+
+    render(
+      <ApprovalsScreen
+        client={client}
+        principal={launchPrincipal}
+        entityId="approval-1"
+        getToken={async () => "session"}
+      />,
+    );
+
+    expect(await screen.findByText(/not launchable.*all four LLM-backed roles/i)).toBeTruthy();
+    expect((screen.getByRole("button", {
+      name: "Launch approved campaign",
+    }) as HTMLButtonElement).disabled).toBe(true);
+  });
 });
 
 describe("finding decision operability", () => {

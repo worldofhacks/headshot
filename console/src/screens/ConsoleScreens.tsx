@@ -1090,8 +1090,8 @@ export function ApprovalsScreen({ client, principal, entityId }: ScreenProps) {
             </div>
           ) : (
             <StateNotice
-              state="empty"
-              detail="This authorization does not permit hosted role model calls."
+              state="unavailable"
+              detail="This authorization is not launchable. The platform requires one atomic hosted configuration containing all four LLM-backed roles."
             />
           )}
           <RecordDetails
@@ -1174,10 +1174,15 @@ export function ApprovalsScreen({ client, principal, entityId }: ScreenProps) {
               path={COMMAND_PATHS.launchCampaign}
               payload={{ authorization_request_id: requestId }}
               label="Launch approved campaign"
-              allowed={hasPermission(principal, PERMISSIONS.campaignLaunch) && approved && isLauncher}
+              allowed={hasPermission(principal, PERMISSIONS.campaignLaunch)
+                && approved
+                && isLauncher
+                && selected.hosted_run !== null}
               unavailableReason={
                 !approved
                   ? "an approved authorization request"
+                  : selected.hosted_run === null
+                    ? "an atomic hosted configuration containing all four LLM-backed roles"
                   : isLauncher
                     ? PERMISSIONS.campaignLaunch
                     : "the persisted campaign launcher"
