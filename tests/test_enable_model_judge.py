@@ -211,8 +211,11 @@ def _args(tmp_path: Path, **overrides: Any) -> Any:
         expected_configuration_sha256=overrides.pop(
             "expected_sha", configuration.configuration_sha256
         ),
-        ground_truth_attestation=paths["attestation"],
-        provenance_attestation=paths["provenance"],
+        ground_truth_attestation=overrides.pop("gt_attestation_path", paths["attestation"]),
+        provenance_attestation=overrides.pop("prov_path", paths["provenance"]),
+        captured_results=None,
+        accept_ground_truth_tier=overrides.pop("accept_gt", "human_two_person"),
+        accept_provider_tier=overrides.pop("accept_prov", "usage_export_reconciled"),
         approver_ref=overrides.pop("approver_ref", "headshot:approver-morgan"),
         slice_dir=_GROUND_TRUTH,
         output=tmp_path / "out.json",
@@ -233,7 +236,10 @@ def test_enablement_succeeds_for_the_deployed_identity_with_two_person_ground_tr
     assert enabled["state"] == "passed"
     assert enabled["human_approved"] is True
     assert enabled["runtime_enabled"] is True
-    assert enabled["approver_ref"] == "headshot:approver-morgan"
+    assert (
+        enabled["approver_ref"]
+        == "gt=human_two_person;prov=usage_export_reconciled;by=headshot:approver-morgan"
+    )
     # Identity is the deployment's, re-derived rather than copied from the artifact.
     assert enabled["judge_identity"] == hosted_judge_identity(_staged_set()).payload()
 
@@ -307,8 +313,8 @@ def test_enablement_refuses_a_configuration_the_operator_did_not_attest(tmp_path
 # --- ground-truth refusals ---------------------------------------------------------------
 
 
-def test_enablement_refuses_ground_truth_with_no_human_labeler(tmp_path: Path) -> None:
-    """Today's committed slices are rule-authored; this is the refusal they produce."""
+def test_enablement_refuses_a_baseline_weaker_than_the_accepted_floor(tmp_path: Path) -> None:
+    """Rule-derived labels no longer fail closed — they fail the FLOOR the approver named."""
 
     module = _module()
     configuration = _staged_set()
@@ -316,28 +322,61 @@ def test_enablement_refuses_ground_truth_with_no_human_labeler(tmp_path: Path) -
     unattested = _attestation(calibration)
     unattested["human_labeler"] = None
 
-    with pytest.raises(module.EnablementRefused, match="no human_labeler"):
-        module._enable(_args(tmp_path, configuration=configuration, attestation=unattested))
+    with pytest.raises(module.EnablementRefused, match="weaker than the accepted floor"):
+        module._enable(
+            _args(
+                tmp_path,
+                configuration=configuration,
+                attestation=unattested,
+                accept_gt="human_two_person",
+            )
+        )
 
 
-def test_enablement_refuses_a_single_human_attesting_as_both_roles(tmp_path: Path) -> None:
+def test_enablement_accepts_the_rule_derived_baseline_when_that_floor_is_named(
+    tmp_path: Path,
+) -> None:
+    """The deadline path: a weaker baseline is allowed once a human names it explicitly."""
+
     module = _module()
     configuration = _staged_set()
     calibration = _passing_calibration(configuration)
-    solo = _attestation(calibration, labeler="headshot:alex", reviewer="headshot:alex")
+    unattested = _attestation(calibration)
+    unattested["human_labeler"] = None
 
-    with pytest.raises(module.EnablementRefused, match="two distinct authorized humans"):
-        module._enable(_args(tmp_path, configuration=configuration, attestation=solo))
+    enabled = module._enable(
+        _args(
+            tmp_path,
+            configuration=configuration,
+            attestation=unattested,
+            accept_gt="rule_derived",
+        )
+    )
+
+    assert enabled["runtime_enabled"] is True
+    # And the downgrade travels inside the artifact.
+    assert enabled["approver_ref"].startswith("gt=rule_derived;")
 
 
-def test_enablement_refuses_labels_attested_after_seeing_judge_output(tmp_path: Path) -> None:
+def test_a_solo_or_unblinded_attestation_falls_through_rather_than_being_honoured(
+    tmp_path: Path,
+) -> None:
     module = _module()
     configuration = _staged_set()
     calibration = _passing_calibration(configuration)
-    unblinded = _attestation(calibration, blind=False)
-
-    with pytest.raises(module.EnablementRefused, match="blind to Judge output"):
-        module._enable(_args(tmp_path, configuration=configuration, attestation=unblinded))
+    for broken in (
+        _attestation(calibration, labeler="headshot:alex", reviewer="headshot:alex"),
+        _attestation(calibration, blind=False),
+    ):
+        with pytest.raises(module.EnablementRefused, match="weaker than the accepted floor"):
+            module._enable(
+                _args(
+                    tmp_path,
+                    configuration=configuration,
+                    attestation=broken,
+                    accept_gt="human_two_person",
+                )
+            )
 
 
 def test_enablement_refuses_an_attestation_bound_to_another_slice_set(tmp_path: Path) -> None:
