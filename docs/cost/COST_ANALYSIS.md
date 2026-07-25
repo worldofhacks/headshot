@@ -1,258 +1,281 @@
 # Headshot cost analysis
 
-## Status and evidence boundary
+## Status and accounting boundary
 
-This document implements the method locked by
-[DECISIONS.md D17](../planning/DECISIONS.md) and
-[ARCHITECTURE.md §11](../../ARCHITECTURE.md) for **100, 1,000, 10,000, and 100,000 complete
-test-runs**. A test-run is a bounded campaign execution, not an individual test case, model call, or
-attempt. The number of attempts and agent calls inside a run must be measured rather than assumed.
+This is an evidence-bounded interim analysis for the 2026-07-24 release candidate. It contains
+actual attributable spend that can be reconciled today and numeric scale sensitivities for 100,
+1,000, 10,000, and 100,000 test runs. It is not a final production quote: the frozen 100-case
+campaign, its Langfuse query-back, and the account-owner billing values listed below do not yet
+exist in this branch.
 
-At the 2026-07-23 release-candidate audit, the repository contains offline deterministic evidence and
-a provisioned Railway baseline but no authorized live result, provider billing export, token trace,
-local-capacity benchmark, deployed-platform invoice, or utilization measurement. Consequently:
+For this analysis, one **test run** is one completed logical adversarial evaluation: one
+authorization-bound case dispatched once to the target and adjudicated once. A campaign may contain
+many test runs. This definition aligns the four requested tiers with the required 100-case evidence;
+it does not count a retry, model call, trace, or entire multi-case campaign as another test run.
 
-- present MVP dollar spend is **TBD — unmeasured**;
-- every tier total below is **projected, unmeasured**;
-- symbols are required inputs, not disguised estimates; and
-- test fixtures such as fake accounting values are not cost measurements.
+The method follows [DECISIONS.md D17](../planning/DECISIONS.md): measured provider usage,
+capacity-priced inference, and platform operations remain separate. A cache discount, batch
+discount, local-compute price, zero-dollar provider call, or per-run infrastructure cost appears
+only when evidence supports it. Budgets and token ceilings are controls, not spend.
 
-The integration evidence states that no hosted model or live target was called. That establishes an
-execution boundary, not a monetary total: developer tooling, hardware, labor, CI, and hosting invoices
-have not been supplied.
+Primary evidence:
 
-## D17 method
+- [cost-input evidence](../evidence/cost/COST_INPUTS_2026-07-24.md);
+- [pre-run Railway metrics](../evidence/performance/PRE_RUN_RAILWAY_METRICS_2026-07-24.md);
+- [pre-run PostgreSQL/storage baseline](../evidence/performance/PRE_RUN_STORAGE_BASELINE_2026-07-24.md);
+- [Langfuse predeployment baseline](../evidence/langfuse/PREDEPLOYMENT_BASELINE_2026-07-24.md); and
+- the security owner's measured Judge-calibration bundle at commit
+  `8ce852be79212d184d49c9f84c593c9495629332`, which remains
+  owner-controlled until its final evidence commit is integrated.
 
-Three cost families remain independent because they scale differently:
+## Actual development spend observed so far
 
-1. **Hosted-token inference** uses measured input/output tokens and the current provider's applicable
-   on-demand, cached-input, and batch rates. Throughput is a latency/capacity constraint, not a token
-   price divisor.
-2. **Local or capacity-priced hosted-OSS inference** uses hardware amortization, power, operator time,
-   reserved/burst accelerator time, and measured sustained capacity.
-3. **Platform operations** keeps application hosting, Postgres/storage, observability, egress, and
-   CI/development as separate fixed and variable lines.
+| Item | USD | Evidence state | Included in attributable subtotal |
+|---|---:|---|---|
+| Headshot Railway July resource usage | 0.8168202853840123 | Measured by Railway CLI for the Headshot project | Yes |
+| Reconciled 54-call Judge calibration | 0.75823375 | Provider-reported per-call cost sums exactly to the capture ledger | Yes |
+| Open-source security-tool licenses | 0.00 | No paid scanner license found | Yes |
+| Public-repository GitHub-hosted CI compute | 0.00 | GitHub documents these standard runner minutes as non-billable | Yes |
+| Additional configured-key usage | 0.22988625 | Arithmetic difference between key usage `0.98812000` and the reconciled calibration; no durable workload lineage yet | No |
+| Langfuse Cloud invoice | Unavailable | Public API exposes observations, not the account plan or invoice | No; owner input required |
+| Development AI subscriptions/API use outside the configured key | Unavailable | Repository and runtime have no billing access | No; owner input required |
+| Human labor and local hardware/power allocation | Unavailable | No approved hours, rates, power measurement, or allocation policy | No; owner input required |
 
-Do not add token-priced and capacity-priced charges for the same inference workload. They are alternative
-execution modes unless a measured run actually used both.
+The **confirmed attributable cash-usage subtotal is
+`$1.5750540353840123`** (`$0.8168202853840123 + $0.75823375`). This is a measured
+subtotal, not the complete development spend. The same configured OpenRouter key reported
+`$0.00` at the pre-run baseline and `$0.98812000` at the later read-only check. If the owner
+confirms that the key was dedicated to Headshot for that interval, the provider line becomes
+`$0.98812000` and the known subtotal becomes **`$1.8049402853840123`**. Until that
+confirmation, the `$0.22988625` difference remains unreconciled rather than being silently assigned
+to Headshot or treated as zero.
 
-The forbidden shortcut is any form of `list price × assumed tokens × N` or
-`list price / throughput`. Tier estimates must use measured aggregate workload for complete runs, current
-rate snapshots, observed cache/batch classification, and measured infrastructure use.
+The deployed target project's `$21.7638898181247` Railway usage is excluded. It is a separately
+deployed system under test, not Headshot platform spend.
 
-## Required measurement inputs
+## Measured Judge calibration proxy
 
-Every input in this table is currently **TBD — projected, unmeasured** unless an owner supplies a dated,
-authoritative measurement.
+The only complete provider-cost distribution currently available is the security owner's
+54-sample Judge calibration:
 
-| Symbol | Required measured input |
-|---|---|
-| `N` | Complete test-runs in the tier: 100, 1,000, 10,000, or 100,000. |
-| `A_N` | Total attempts adjudicated across the `N` complete runs. |
-| `D_N` | Attempts conclusively decided by a trusted deterministic oracle/canary, requiring no primary LLM Judge call. |
-| `X_N` | Attempts conclusively stopped before any LLM request by missing/malformed evidence, integrity failure, an uncalibrated category gate, or a pre-Judge timeout. Post-request timeouts, contradictions, and disagreements are not skips. |
-| `E_N = A_N - D_N - X_N` | Measured attempts eligible for a primary LLM Judge request; validate that the three buckets are disjoint. Every initiated or billed request remains in the role call/token aggregates even when it times out or ends `INDETERMINATE`. |
-| `s_N` | Approved, measured dual-judge sampling fraction over eligible non-oracle attempts; never implicitly 100%. |
-| `Q_N` | Threshold-near/disputed attempts selected for secondary judging outside the random sample. |
-| `G_N` | Actual total model-call count for scheduled ground-truth calibration at the tier/cadence, including every primary and independent calibration call. |
-| `R_N`, `J_N`, `Doc_N`, `O_N` | Actual Red Team, Judge, Documentation, and Orchestrator model-call counts. |
-| `U`, `C`, `Out` by role/mode | Measured uncached-input, cached-input, and output token aggregates. |
-| `B` by provider/model/mode/date | Published token billing unit for the applicable rate; do not assume that every quote uses the same unit. |
-| `P` by provider/model/mode/date | Current reporting-currency price per `B` input, cached-input, output, or batch tokens, captured with source/date and any dated FX conversion. |
-| `W_r,N` | Measured role workload in one declared unit (for example, generated tokens at a fixed context mix) across the tier. |
-| `Cap_r` | Measured sustained capacity in the same `W` units per accelerator-hour at the selected model, hardware, concurrency, and context mix. |
-| `K_r,N`, `u_r,N` | Parallel accelerators assigned to the role and measured schedulable utilization in `(0, 1]`; `K × u` is effective parallel capacity for elapsed-time checks. |
-| `F_N` | Confirmed, approved findings that trigger Documentation; do not substitute an assumed exploit rate. |
-| `DBRows_N`, `DBIngestBytes_N` | Measured database rows and newly written database bytes. |
-| `DBRetainedByteMonths_N`, `BackupByteMonths_N` | Measured database and backup byte-time over the projection accounting window. |
-| `ObsEvents_N`, `ObsIngestBytes_N`, `ObsRetainedByteMonths_N` | Measured observability event count, ingested bytes, and retained byte-time. |
-| `EgressBytes_N` | Measured billable outbound bytes, classified by destination/rate class. |
-| `Peak_N`, `Window_N` | Measured peak concurrency and required completion window. |
+- 54 started, 54 succeeded, 54 physical attempts, 0 retries, and no unresolved exposure;
+- 54,707 input tokens, 9,675 visible output tokens, and 59,310 reasoning tokens;
+- provider-reported spend `$0.75823375`; and
+- requested/returned model `google/gemini-2.5-pro`.
 
-Record distributions (at least median and tail), not only averages: long contexts, mutation loops, retries,
-and multi-turn cases can make an average run non-representative.
+| Measurement per physical call | Minimum | p10 | Median | Mean | p90 | p95 | Maximum |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Input tokens | 868 | 900 | 1,004 | 1,013.0926 | 1,134 | 1,201 | 1,233 |
+| Visible output tokens | 121 | 133 | 186 | 179.1667 | 216 | 235 | 256 |
+| Reasoning tokens | 467 | 605 | 1,071 | 1,098.3333 | 1,597 | 1,636 | 2,195 |
+| Cost (USD) | 0.007135 | 0.008995 | 0.0136175 | 0.0140413657407 | 0.0193475 | 0.01980125 | 0.02519 |
 
-## Family 1 — hosted-token inference
+For the same calibration workload, the conventional 95% confidence interval around the mean is
+`$0.0130996629` to `$0.0149830686` per call. That interval covers sampling variation inside this
+54-item calibration only; it does not cover production corpus mix, prompt-size drift, price changes,
+or a different upstream route.
 
-For each role `r` and pricing mode `m ∈ {on_demand, batch}`, use the measured token buckets for the
-projected tier:
+This proxy has **low confidence for production projection**. It is calibration traffic, not the
+missing frozen 100-case campaign. Its recorded Judge route identity and Red-Team identity also
+differ from the release candidate's exact `google-vertex/global` and `atlas-cloud/fp8` routes.
+The calibration is valid evidence of development spend, but it cannot prove current-route cost,
+runtime enablement, or live performance.
+
+## Actual runtime call model
+
+Let:
+
+- `N` be completed logical test runs;
+- `F`, where `0 ≤ F ≤ N`, be deterministic confirmed findings that trigger Documentation;
+- `C`, where `1 ≤ C ≤ N`, be the number of campaign traces containing those runs; and
+- `P` be physical provider attempts, including charged failures and retries.
+
+The registered hosted generation policy requires:
 
 ```text
-Hosted_r(N) = Σ_m [
-    (U_r,m,N   / B_input_r,m,date)  × P_input_r,m,date
-  + (C_r,m,N   / B_cache_r,m,date)  × P_cached_input_r,m,date
-  + (Out_r,m,N / B_output_r,m,date) × P_output_r,m,date
-  + measured_request_or_tool_fees_r,m,N
-]
+logical Orchestrator calls = N
+logical Red Team calls      = N
+logical Judge calls         = N, except a malformed/integrity ERROR can stop before provider I/O
+logical Documentation calls = F
+logical model calls L       = 3N + F
+physical model calls P      = L through 2L because the closed retry cap is one
+target calls                = N, with zero target retries in the exact workload
 ```
 
-Cache and batch effects appear only when traces show that input was actually cache-eligible/hit and work
-was actually accepted in the applicable batch mode. No cache rate, discount, eligibility fraction, or
-provider price is assumed here.
+Deterministic-oracle precedence determines verdict authority; it does **not** currently eliminate a
+valid hosted Judge call. The runtime evaluates deterministic evidence first, calls the model for
+every non-ERROR case, and then reconciles with the deterministic result remaining decisive. A cost
+model that subtracts all oracle-decided cases from Judge calls would undercount the implementation.
 
-| Role | Workload accounting | Hosted cost status |
+Documentation is conditional on a deterministic confirmed finding. A model-only
+`EXPLOIT_LIKELY`, advisory assessment, or failed calibration cannot create that cost path.
+
+## Langfuse billable-unit model
+
+For each logical hosted role execution, the current projection creates one AGENT observation and
+one logical runtime GENERATION. Each physical provider attempt creates another GENERATION, including
+retries and charged failures. One unique trace is billed per campaign trace; the current code does
+not create Langfuse scores.
+
+```text
+Langfuse units U = 2L + P + C
+                 = 2(3N + F) + P + C
+
+minimum current shape = 9N + 1
+maximum authorized shape = 17N
+```
+
+The minimum uses no findings, no retries, and one campaign. The maximum uses a Documentation call
+and one retry for every run, with one trace per run. If the final query-back finds scores or a
+different trace grouping, its exact observed count replaces this envelope.
+
+The July 2026 published plan snapshot used for sensitivity is Hobby at `$0` with 50,000 included
+units, and Core at `$29/month` with 100,000 included units plus `$8/100,000` additional units.
+The actual account plan and invoice remain unavailable. A workload above the Hobby allowance is
+**blocked on Hobby**, not a zero-dollar overage. The Core figures below linearly prorate the
+published additional-unit rate; invoice rounding, credits, tax, and contractual terms require the
+owner's billing record.
+
+## Provider exact-route price sensitivity
+
+The [redacted public-catalog preflight](../evidence/provider/OPENROUTER_CATALOG_PREFLIGHT_2026-07-24.md)
+passed for all four exact endpoint tags on 2026-07-24. The table below applies its observed
+endpoint rates to the policy's per-call input, visible-output, and reasoning bounds. These are
+dated **rate sensitivities**, not provider-reported usage, an invoice, deployment evidence, or
+campaign authorization.
+
+| Role | Input/output/reasoning token bound | Maximum first-attempt cost at observed exact-route rates |
+|---|---:|---:|
+| Orchestrator | 65,536 / 2,048 / 8,192 | $0.64204800 |
+| Red Team | 4,096 / 2,048 / 1,024 | $0.01300480 |
+| Judge | 100,000 / 2,048 / 8,192 | $0.22740000 |
+| Documentation | 16,384 / 4,096 / 4,096 | $0.18022400 |
+
+At those dated public rates, three unconditional roles total `$0.88245280` per run. Documentation
+on every run raises that to `$1.06267680`; retrying every call would raise the respective
+sensitivity figures to `$1.76490560` and `$2.12535360`. The preflight separately verifies the
+looser configured price ceilings and role caps used for authorization. Those reservations are
+safety controls and must not be presented as expected spend. Real requests are billed from
+provider-reported physical-attempt usage and reconciled after the run.
+
+## Interim numeric scale sensitivity
+
+This table is deliberately multi-dimensional. The Judge column is an empirical proxy; the provider
+column is a token-ceiling control envelope; and the Langfuse column is a plan sensitivity. Adding
+them would mix an observed mean with mutually exclusive ceilings, so none is labeled a production
+total.
+
+| Completed test runs | Logical model calls | Physical provider calls | Judge-only proxy, p10 / mean / p90 (USD) | Provider token-ceiling scenario, no-doc/no-retry → all-doc/all-retry (USD) | Langfuse units | Published-plan sensitivity |
+|---:|---:|---:|---:|---:|---:|---|
+| 100 | 300–400 | 300–800 | 0.8995 / 1.4041 / 1.9348 | 88.25–212.54 | 901–1,700 | Hobby `$0` if the actual plan is confirmed |
+| 1,000 | 3,000–4,000 | 3,000–8,000 | 8.9950 / 14.0414 / 19.3475 | 882.45–2,125.35 | 9,001–17,000 | Hobby `$0` if the actual plan is confirmed |
+| 10,000 | 30,000–40,000 | 30,000–80,000 | 89.9500 / 140.4137 / 193.4750 | 8,824.53–21,253.54 | 90,001–170,000 | Hobby cannot cover it; Core scenario `$29.00–$34.60` |
+| 100,000 | 300,000–400,000 | 300,000–800,000 | 899.5000 / 1,404.1366 / 1,934.7500 | 88,245.28–212,535.36 | 900,001–1,700,000 | Hobby cannot cover it; Core scenario `$93.00–$157.00` |
+
+The Judge proxy multiplies the observed calibration p10/mean/p90 only to show sensitivity of that
+single role. It is not the required nonlinear total. The provider envelope changes with findings
+and retries and retains all four roles. The eventual total must add measured platform, storage,
+egress, observability, security-tool execution, and operations without double counting.
+
+## Platform, storage, egress, and operational assumptions
+
+| Cost family | Measured input | Current treatment |
 |---|---|---|
-| Red Team | `R_N` includes only model-backed generation/mutation. Deterministic seed replay creates no inference call. Apply the hosted formula only when the Red Team uses token-priced hosted OSS. | `Hosted_RT(N)` = **TBD — projected, unmeasured** |
-| Judge | Primary live subjects are `E_N`. Secondary live subjects are the deduplicated union of the approved sample from `E_N` and `Q_N`; never all live cases by default. Add the separate measured calibration calls `G_N`. Use actual billed calls, including only measured retries/fallbacks. Deterministic `D_N` and fail-closed `X_N` cases skip primary LLM judging. | `Hosted_Judge(N)` = **TBD — projected, unmeasured** |
-| Documentation | `Doc_N = F_N` only when each approved finding produces one draft; otherwise use measured drafts/revisions. It scales with confirmed approved findings, not directly with `N`. | `Hosted_Doc(N)` = **TBD — projected, unmeasured** |
-| Orchestrator | Use measured planning/prioritization calls `O_N`, including retry or fallback calls only when observed. Do not assume one call per run. | `Hosted_Orch(N)` = **TBD — projected, unmeasured** |
+| Railway platform | `$0.8168202853840123` Headshot July resource usage | Actual development spend. It is neither a monthly minimum nor a per-tier fixed fee; the CLI project breakdown does not expose attributable per-meter amounts. |
+| CPU and memory | Seven-day summary plus point-in-time idle samples | Baseline only. They are not utilization distributions, load capacity, or replica-sizing evidence. |
+| PostgreSQL | 11,425,471-byte pre-run database on migration `0013` | Delta baseline only. The final 100-case run must provide database and named-relation growth before bytes/run or retention costs can be projected. |
+| Backup/PITR | No Headshot-specific bill or byte-month allocation | Unavailable; must remain separate from database storage. Production is release-blocked without a confirmed database rollback binding. |
+| Observability | Zero predeployment Headshot staging observations | No run cost can be inferred from zero activity. Use exact query-back units and the owner-confirmed plan. |
+| Egress | Workspace meter exists, but Headshot project allocation is absent | Unavailable; do not copy the workspace total or infer it from idle traffic. |
+| Target traffic | Exact workload requires one target call per run and no target retry | Target-side Railway spend is excluded. Any contracted per-request target fee is unavailable; the code's configurable per-request amount is a budget estimate, not an invoice. |
+| Security tools | OSS licenses and eligible public GitHub CI are `$0.00` direct | Tool execution still consumes runner/platform compute and operator time. Those inputs are unavailable, not zero. |
+| Labor and operations | No hours/rates/on-call allocation | Unavailable. Do not apply an arbitrary percentage uplift. |
+| Local/capacity inference | No measured accelerator throughput, power, duty cycle, or hosted-GPU invoice | Not selected in the numeric table. “Local” never means free; add it only after a same-workload benchmark. |
 
-```text
-HostedInference(S, N) = Σ_r∈S Hosted_r(N)
+All projections use USD. The accounting window for a final tier must be explicit. A service that
+cannot be prorated receives its whole minimum billing period; a one-time July usage subtotal must
+not be copied into every tier as a fictional fixed charge.
 
-R_hosted(N) = the explicitly selected set of token-priced hosted roles
-HostedInferenceSelected(N) = HostedInference(R_hosted(N), N)
-```
+## Architecture at each scale
 
-If the Red Team uses local or capacity-priced hosted OSS, set its hosted-token line to “not selected” and
-carry that workload in Family 2; do not call its price zero.
+| Completed test runs | Required architecture and accounting treatment |
+|---:|---|
+| 100 | Candidate source admits exactly 400 physical calls for the zero-provider-retry worst case; one retry everywhere would require 800 and is refused. Stage and authorize the exact frozen-corpus call/token/USD/time envelope. Use the final campaign to measure the existing Web/Runner/Scheduler/Postgres footprint, queue wait, storage growth, egress, and Langfuse units. |
+| 1,000 | Process durable, bounded waves through PostgreSQL backpressure. Do not claim a completion window from the present concurrency of one; size concurrency only from measured role/target latency and upstream rate limits. Hobby can fit the observation envelope, but the actual plan still requires confirmation. |
+| 10,000 | Upgrade observability capacity before the run, partition/time-bound evidence retention, and add worker capacity only from measured utilization. A hosted-OSS/local Red-Team switch is a candidate optimization, but has no numeric price until the same workload is benchmarked for accelerator-hours, power, and operator time. |
+| 100,000 | Project and execute 100,000 complete logical runs for the required tier. Dedicated workers, queue partitions, storage lifecycle, indexed/time-partitioned PostgreSQL, and an approved completion window require measurement-based sizing. A stratified regression schedule may be reported separately as an operational optimization; it is not a substitute for the 100,000-run projection. |
 
-## Family 2 — local or hosted-OSS capacity
+No prompt-cache or provider-batch discount is applied because no trace proves a cache hit or
+accepted batch request. Their sensitivity may be added only with measured hit/acceptance rates,
+latency effects, and the exact dated rate. Concurrency changes elapsed time and platform capacity;
+it does not divide token price.
 
-Throughput determines how much capacity and elapsed time are required. It does not alter a provider's
-token price.
+## Final projection method after the frozen 100-case result
 
-```text
-RequiredAcceleratorHours_r(N) =
-    W_r,N [work-units] / Cap_r [work-units / accelerator-hour]
+The final calculation must resample **whole case bundles**, preserving correlated Orchestrator,
+Red-Team, Judge, conditional Documentation, retry, error, target, storage, and observability
+behavior. For each tier:
 
-EffectiveParallelAccelerators_r(N) = K_r,N × u_r,N
-ElapsedHours_r(N) = RequiredAcceleratorHours_r(N)
-                    / EffectiveParallelAccelerators_r(N)
+1. Stratify the frozen 100 cases by category and outcome without changing their observed
+   proportions.
+2. Bootstrap complete case bundles to produce p05, median, and p95 provider, latency, storage,
+   egress, and Langfuse totals.
+3. Add the fixed service commitment for the declared accounting window once.
+4. Size worker/database capacity from measured utilization and the required completion window.
+5. Apply no cache, batch, local-capacity, or retry improvement unless a separate measured scenario
+   supports it.
+6. Reconcile provider physical-request rows, Langfuse observations, and PostgreSQL IDs before
+   accepting the cost totals.
 
-AllocatedComputeHours_r(N) = measured capacity-hours assigned to the tier
-                             and MUST be >= RequiredAcceleratorHours_r(N)
+This method is nonlinear: findings trigger Documentation, failures and retries add physical calls,
+Langfuse changes plan tier, retention creates byte-months, and worker/database capacity changes at
+scale. It is not “tokens per average case × N.”
 
-LocalFixed_r(N) = (hardware_purchase_price - residual_value)
-                  / measured_useful_service_hours
-                  × AllocatedComputeHours_r,N
-LocalVariable_r(N) = measured_kWh_r,N × current_power_rate
-                   + measured_operator_hours_r,N × approved_labor_rate
+## Confidence and sensitivity
 
-HostedOSSFixed_r(N) = reserved_accelerator_hours_r,N × current_reserved_rate
-HostedOSSVariable_r(N) = burst_accelerator_hours_r,N × current_burst_rate
-                       + measured_operator_hours_r,N × approved_labor_rate
+| Result | Confidence | Main sensitivity |
+|---|---|---|
+| `$1.5750540353840123` attributable subtotal | High for the two included usage sources; incomplete as total development spend | Account invoice adjustments and the excluded owner inputs |
+| Judge calibration distribution | High for the captured 54 calls; low as a current production proxy | Corpus mix, prompt size, exact route, price drift |
+| Runtime call-count envelope | Medium-high | Finding fraction, integrity-error skips, retry rate, campaign grouping |
+| Langfuse unit envelope | Medium | Exact query-back shape, retries, traces, future scores, actual account plan |
+| Provider token-ceiling envelope | Low as a forecast; useful only as a safety bound | Dated public endpoint snapshot, deliberately loose token ceilings, finding/retry extremes |
+| Railway/storage/egress/operations tier totals | Unavailable | Missing final-run deltas, accounting window, capacity SLO, invoices, labor |
 
-CapacityFixed(N) = Σ_r [selected LocalFixed_r(N) or HostedOSSFixed_r(N)]
-CapacityVariable(N) = Σ_r [selected LocalVariable_r(N) or HostedOSSVariable_r(N)]
-CapacityInference(N) = CapacityFixed(N) + CapacityVariable(N)
+Sensitivity variables retained in the final model are finding fraction `F/N`, role-specific retry
+rate, physical-call failure cost, campaign count `C`, provider price/route drift, cache/batch state,
+completion window, worker concurrency/utilization, database and backup retention, Langfuse units,
+egress class, and operator hours. Missing values remain unavailable; they are never coerced to zero.
 
-CapacityInference_RT(N) = selected full local or hosted-OSS Red Team capacity cost
-```
+## Exact external inputs still required
 
-Hardware price, service life, residual value, power draw, labor rate, sustained capacity, context mix,
-accelerator count/utilization, and hosted GPU rates are all **TBD — projected, unmeasured**. Report both
-the capacity cost and whether `ElapsedHours_r(N) ≤ Window_N`; a cheap configuration that misses the
-campaign window is not viable.
+From the security owner’s final 100-case evidence:
 
-For the current architecture, Family 2 primarily models the Red Team switch. Any future local/capacity
-deployment of Judge, Documentation, or Orchestrator must be measured and listed as a separate role rather
-than silently pooled.
+- frozen corpus identity/hash, completed count, and whole-case ordering;
+- per-role logical calls and physical attempts, including charged failures and retries;
+- input/output/reasoning tokens, returned route/model, and provider-reported cost per attempt;
+- confirmed-finding count and Documentation call count;
+- target requests, queue/orchestration/provider/database/end-to-end latency, and concurrency;
+- database/relation/artifact growth, Langfuse trace/observation/score totals, and egress; and
+- the owner-authored bottleneck and architecture recommendation, consumed without re-derivation.
 
-## Family 3 — platform, storage, observability, and egress
+From the account owner:
 
-Keep fixed commitments separate from usage-driven charges:
+- Langfuse Cloud plan plus the actual billed amount, credits, overage, tax, and billing window;
+- confirmation whether the configured OpenRouter key was Headshot-dedicated for the measured
+  interval and attribution of the `$0.22988625` difference;
+- actual development AI-tool/API/subscription spend outside that key;
+- the intended labor/hardware/power accounting policy and exact amounts, including an explicit
+  zero if those families are intentionally excluded; and
+- the final Railway invoice if credits, subscription allocation, or tax differ from resource usage.
 
-Assign every invoice SKU and labor hour to exactly one family. Family 3 worker/compute lines exclude
-inference accelerators charged in Family 2, and its CI/development labor excludes inference operator
-labor charged in Family 2. Shared charges require a documented allocation rule; they must never be
-copied into both families.
+From final staging acceptance:
 
-```text
-Allocation_N = projection_accounting_window_N / each_service_billing_period
+- a redacted exact-endpoint price/cap snapshot for the deployed configuration;
+- exact provider/PostgreSQL/Langfuse reconciliation;
+- post-run Railway utilization and database/storage deltas; and
+- the declared completion and retention windows for each projection tier.
 
-PlatformFixed(N) = Σ_service [minimum_commitment_service × Allocation_N,service]
-                 + fixed_CI_and_dev_allocated_to_the_same_window
-
-PlatformVariable(N) = measured_compute_overage(Peak_N, Window_N)
-                    + measured_postgres_compute_overage
-                    + (DBRows_N / B_db_rows) × P_db_rows
-                    + (DBIngestBytes_N / B_db_ingest) × P_db_ingest
-                    + (DBRetainedByteMonths_N / B_db_byte_month) × P_db_retention
-                    + (BackupByteMonths_N / B_backup_byte_month) × P_backup
-                    + (ObsEvents_N / B_obs_events) × P_obs_events
-                    + (ObsIngestBytes_N / B_obs_ingest) × P_obs_ingest
-                    + (ObsRetainedByteMonths_N / B_obs_byte_month) × P_obs_retention
-                    + (EgressBytes_N / B_egress) × P_egress
-                    + measured_CI_and_dev_overage
-
-Platform(N) = PlatformFixed(N) + PlatformVariable(N)
-```
-
-Each platform `B_*` is the provider's published billing unit for that meter; each `P_*` is the
-dated reporting-currency price per corresponding unit. A service with no row/event fee marks that line
-“not applicable” rather than forcing it to zero or blending it into byte storage.
-
-The projection accounting window must be stated for every tier. If a service cannot be prorated, allocate
-its full minimum billing period rather than inventing a fractional charge. Normalize all lines into one
-declared reporting currency using a dated, sourced conversion where providers bill in different currencies.
-
-Database rows, evidence/transcript bytes, retention and PITR windows, trace volume, target/provider egress,
-CI minutes, service sizes, utilization, and current prices are **TBD — projected, unmeasured**. Synthetic
-data does not make storage or observability free; it makes the data posture permissible.
-
-## Tier projections
-
-Each row is a different architecture, not the same bill multiplied by volume. All monetary cells are
-**TBD — projected, unmeasured**.
-
-```text
-TierFixed(N) = PlatformFixed(N) + CapacityFixed(N)
-TierVariable(N) = HostedInferenceSelected(N)
-                + CapacityVariable(N)
-                + PlatformVariable(N)
-TierTotal(N) = TierFixed(N) + TierVariable(N)
-```
-
-| Complete test-runs | Required architectural change | Fixed costs | Variable costs and formula | Projected total |
-|---:|---|---|---|---|
-| 100 | Baseline secure run. Instrument per-role tokens/calls, oracle skips, attempt distribution, latency, storage bytes, and peak concurrency. Keep one bounded worker/app and Postgres/observability baseline only after measurement confirms capacity. | `PlatformFixed(100) + CapacityFixed(100)` for the selected mode. **TBD — projected, unmeasured.** | Hosted inference for selected roles, `CapacityVariable(100)`, and `PlatformVariable(100)`. Preserve separate role lines. **TBD — projected, unmeasured.** | `TierTotal(100)` = **TBD — projected, unmeasured** |
-| 1,000 | Add shared-context prompt caching where traces prove reuse and provider semantics permit it; route eligible asynchronous work through Batch. Measure hit/acceptance rates and latency impact. | Baseline commitments plus any minimum batch/worker capacity. **TBD — projected, unmeasured.** | Apply actual cached/uncached/batch token buckets, measured Judge skips and sampled dual-judging, storage/trace growth, and egress. **TBD — projected, unmeasured.** | `TierTotal(1K)` = **TBD — projected, unmeasured** |
-| 10,000 | Move Red Team generation fully off frontier to measured hosted-OSS or local capacity; add durable queue backpressure and time-range partition the exploit database. Size capacity to the completion window. | Reserved/local accelerator capacity, worker floor, partitioned Postgres, platform/observability base. **TBD — projected, unmeasured.** | Capacity hours/power/operator time; hosted Judge/Documentation/Orchestrator tokens; queue/storage/observability/egress use. **TBD — projected, unmeasured.** | `TierTotal(10K)` = **TBD — projected, unmeasured** |
-| 100,000 | Use stratified regression: every critical and recently reopened case on target change, sampled lower-risk cases, and a scheduled full suite. Add BRIN on timestamp, partial B-tree indexes on hot partitions, a dedicated worker, and bounded verdict caching keyed by target version plus case-content hash. | Dedicated worker/reserved capacity, partitioned/indexed Postgres, platform and observability commitments. **TBD — projected, unmeasured.** | Measured stratified workload rather than a 100K full-suite assumption; invalidated-cache misses, capacity hours, eligible hosted inference, retained evidence/traces, and egress. **TBD — projected, unmeasured.** | `TierTotal(100K)` = **TBD — projected, unmeasured** |
-
-For each tier, report two totals when both deployment choices remain viable:
-
-```text
-R_all = {RT, Judge, Doc, Orch}
-R_without_RT = {Judge, Doc, Orch}
-
-TokenHostedScenario(N) = HostedInference(R_all, N) + Platform(N)
-
-CapacityRedTeamScenario(N) = CapacityInference_RT(N)
-                           + HostedInference(R_without_RT, N)
-                           + Platform(N)
-```
-
-Neither scenario is currently populated because its authoritative inputs are unavailable.
-
-## Present MVP cost versus future scale
-
-### Present MVP at the 2026-07-23 release candidate
-
-- Offline corpus validation, deterministic fake execution, and tests do not invoke hosted inference.
-- No live campaign has produced attempts, Judge usage, Documentation drafts, or Orchestrator calls.
-- No dated provider-rate snapshot, token/cache/batch trace, hardware/power allocation, labor record,
-  platform invoice, Postgres utilization, observability usage, or egress record is committed.
-- Therefore actual development spend and current deployed-run cost are **TBD — unmeasured**, not zero.
-
-### Future projections
-
-The four tiers become numeric only after a representative authorized synthetic-data campaign captures
-the inputs above. Recompute from measurements at each tier; do not extrapolate a single average across
-architecture changes. Preserve the deterministic/oracle skip ratio and sampled dual-judge policy in the
-measurement export so cost optimization cannot silently weaken Judge safety.
-
-## Inputs required to replace TBDs
-
-1. Dated billing/rate snapshots and trace exports with per-role input, cached-input, output, batch,
-   request, retry, and model/provider fields.
-2. Complete-run distributions: attempts, mutation depth, deterministic confirmations, eligible Judge
-   calls, sampled secondary judgments, disputed cases, findings, and agent calls.
-3. Local/dedicated benchmark: exact model and hardware, sustained capacity by context/concurrency,
-   measured power, duty cycle, useful service life, operator time, and completion SLO.
-4. Platform invoices and usage: app/worker compute, Postgres compute/storage/PITR, observability
-   ingest/retention, CI/dev, and egress.
-5. Retention policy and measured bytes per attempt, Verdict, trace, and result artifact.
-
-Until those inputs exist, this document is a transparent projection model, not a cost quote.
+Until those inputs are supplied, the numeric table above is the most specific defensible
+sensitivity analysis. It must not be relabeled as a measured 100-case result, an invoice, or a
+production total.
