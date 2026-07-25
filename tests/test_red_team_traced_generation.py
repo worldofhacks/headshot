@@ -282,8 +282,16 @@ def test_short_generation_closes_the_started_execution_never_dangling() -> None:
     assert len(lifecycle.finished) == 1, "the started execution must be finished, not dangling"
     finish = lifecycle.finished[0]
     assert finish["status"] == "failed"
-    assert finish["lineage"] is None
     assert finish["error_code"]  # a non-empty typed error code the recorder can persist
+    # The observation SURVIVES the failure. This assertion used to require the opposite, and that
+    # was the defect: discarding the lineage makes the store derive cost_measurement_state=
+    # 'not_observed', which asserts no provider call was made — for a call that was made, billed,
+    # and whose request id was in hand. A short generation is unusable CONTENT, never a free call.
+    lineage = finish["lineage"]
+    assert lineage is not None
+    assert lineage.provider_request_id == "or-req-123"
+    assert lineage.measured_cost_usd == "0.0031"
+    assert lineage.physical_attempts == 1
 
 
 def test_traced_provider_is_a_drop_in_for_the_two_stage_mutate_loop() -> None:

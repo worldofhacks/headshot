@@ -23,6 +23,7 @@ review -> authorization -> dispatch through the Policy Gateway.
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from decimal import Decimal
@@ -33,6 +34,24 @@ from agentforge.agents.red_team.providers import _collect_usable
 
 _GENERATION_SCHEMA_NAME = "red_team_variants"
 _MAX_VARIANTS = 16
+
+# The store accepts only a lowercase typed reason. Normalizing before the FIRST write matters:
+# an exception carrying anything else would be refused on both the write and its one retry,
+# spending the fallback on a record that could never have been accepted either.
+_TYPED_REASON = re.compile(r"\A[a-z][a-z0-9_-]{0,63}\Z")
+_GENERATION_FAILED = "red-team-generation-failed"
+# A successful generation whose terminal record the store refused. The generation happened; only
+# its output could not be persisted, and the two must not be reported as the same failure.
+_TERMINAL_RECORD_REFUSED = "red-team-terminal-record-refused"
+
+
+def _typed_reason(code: Any) -> str:
+    """Normalize an exception's code to the shape the store will accept."""
+
+    if isinstance(code, str) and _TYPED_REASON.fullmatch(code) is not None:
+        return code
+    return _GENERATION_FAILED
+
 
 # The Red Team per-role measured-spend subcap ceiling. The shared HostedUsageLedger enforces the
 # configured red_team ``limits.max_usd`` on every call; this ceiling is the policy bound the
@@ -239,6 +258,89 @@ class TracedHostedRedTeamProvider:
             physical_attempts=result.physical_attempts,
         )
 
+    def _observed_lineage(self, execution_id: str, result: Any) -> HostedExecutionLineage | None:
+        """Preserve the exact charged usage of a call that happened, without trusting its output.
+
+        Structural rather than isinstance-checked, because this module deliberately reaches the
+        transport through a Protocol. Anything that will not assemble yields ``None`` so the
+        caller degrades to a smaller record instead of writing a guess — and, unlike the previous
+        inline construction, a provider-controlled value that cannot be formatted can no longer
+        raise on the success path with the execution already open and nothing closing it.
+        """
+
+        if result is None:
+            return None
+        try:
+            measured_cost_usd = result.measured_cost_usd
+            return HostedExecutionLineage(
+                execution_id=execution_id,
+                parent_execution_id=self._parent_execution_id,
+                role="red_team",
+                parent_request_id=self._parent_request_id,
+                requested_model=result.requested_model,
+                returned_model=result.returned_model,
+                upstream_provider=result.upstream_provider,
+                provider_request_id=result.request_id,
+                input_tokens=result.input_tokens,
+                output_tokens=result.output_tokens,
+                reasoning_tokens=result.reasoning_tokens,
+                # The amount is separable from the identity and usage. An unusable cost must not
+                # take the rest of the evidence down with it; the store records that case as
+                # cost_measurement_state='invalid' with a NULL value.
+                measured_cost_usd=(
+                    format(measured_cost_usd, "f") if measured_cost_usd is not None else None
+                ),
+                configuration_sha256=result.configuration_sha256,
+                role_configuration_sha256=result.role_configuration_sha256,
+                generation_policy_sha256=result.generation_policy_sha256,
+                physical_attempts=result.physical_attempts,
+            )
+        except (AttributeError, TypeError, ValueError):
+            return None
+
+    def _terminalize_failure(
+        self,
+        *,
+        execution_id: str,
+        error_code: str,
+        lineage: HostedExecutionLineage | None,
+        physical_attempts: int | None,
+    ) -> None:
+        """Close the execution, surrendering the observation before surrendering the record.
+
+        Mirrors ``HostedRoleRuntime._record_failure``. The store can refuse the observation itself
+        — a token count beyond the column, an output that trips credential screening, a payload
+        over the size bound. Leaving the row ``running`` is the worst outcome available: no
+        terminal record, no audit event, and nothing that can ever close it. So a refused write
+        degrades to the smallest record the store cannot refuse. What is lost is the observation,
+        never the fact that the call ended.
+        """
+
+        terminal: dict[str, Any] = {
+            "execution_id": execution_id,
+            "status": "failed",
+            "output_payload": {"status": "failed"},
+            "lineage": lineage,
+            "error_code": error_code,
+        }
+        # The lifecycle refuses both together, so the one retry the fallback has must not be spent
+        # on a combination the runner rejects before it ever reaches the store.
+        if lineage is None and physical_attempts is not None:
+            terminal["failed_physical_attempts"] = physical_attempts
+        try:
+            self._lifecycle.finish(**terminal)
+        except Exception:
+            if lineage is None:
+                raise
+            # Keep the attempt count: it is what tells the store this call was physically made,
+            # so the degraded record reads as an unusable amount rather than as no call at all.
+            self._terminalize_failure(
+                execution_id=execution_id,
+                error_code=error_code,
+                lineage=None,
+                physical_attempts=lineage.physical_attempts,
+            )
+
     def generate(self, seed: dict[str, Any], *, count: int, category: str) -> list[dict[str, Any]]:
         """Generate ``count`` variant continuations as one SELF-RECORDED traced red_team execution.
 
@@ -266,6 +368,7 @@ class TracedHostedRedTeamProvider:
         if not isinstance(execution_id, str) or not execution_id:
             raise TracedRedTeamGenerationError("execution lifecycle returned no identity")
 
+        result: Any = None
         try:
             result = self._invoke_transport(seed, count, category)
             # _collect_usable stays INSIDE the try: a short/exhausted generation raises
@@ -275,22 +378,32 @@ class TracedHostedRedTeamProvider:
             # lineage.
             variants = _collect_usable(seed, list(result.output.get("variants", [])), count)
         except Exception as exc:
-            error_code = getattr(exc, "code", None)
-            if not isinstance(error_code, str) or not error_code:
-                error_code = "red-team-generation-failed"
+            # A rejected response still carries its measurements: the transport surrenders them on
+            # the exception precisely so a refusal cannot make a billed call look like it never
+            # happened. Falling back to `result` covers a failure AFTER a clean invoke, e.g. an
+            # exhausted generation, where the call succeeded and only its content was unusable.
+            observed = getattr(exc, "observed_result", None)
+            if observed is None:
+                observed = result
+            physical_attempts = getattr(exc, "physical_attempts", None)
+            if (
+                isinstance(physical_attempts, bool)
+                or not isinstance(physical_attempts, int)
+                or physical_attempts <= 0
+            ):
+                physical_attempts = None
             try:
-                self._lifecycle.finish(
+                self._terminalize_failure(
                     execution_id=execution_id,
-                    status="failed",
-                    output_payload={"status": "failed"},
-                    lineage=None,
-                    error_code=error_code,
+                    error_code=_typed_reason(getattr(exc, "code", None)),
+                    lineage=self._observed_lineage(execution_id, observed),
+                    physical_attempts=physical_attempts,
                 )
             except Exception as lifecycle_exc:
                 # The durable/Langfuse write of the failed finish ITSELF failed. Do not let that
                 # replace the root cause: raise a typed terminal-record error whose __cause__ is the
                 # ORIGINAL provider failure (preserving its .code), mirroring the four-role runtime
-                # guard (hosted_runtime.py:413-426) so all four agents fail uniformly.
+                # guard so all four agents fail uniformly.
                 failure = TracedRedTeamGenerationError(
                     "traced red_team generation failure could not be terminally recorded"
                 )
@@ -298,25 +411,12 @@ class TracedHostedRedTeamProvider:
                 raise failure from exc
             raise
 
-        record = HostedExecutionLineage(
-            execution_id=execution_id,
-            parent_execution_id=self._parent_execution_id,
-            role="red_team",
-            parent_request_id=self._parent_request_id,
-            requested_model=result.requested_model,
-            returned_model=result.returned_model,
-            upstream_provider=result.upstream_provider,
-            provider_request_id=result.request_id,
-            input_tokens=result.input_tokens,
-            output_tokens=result.output_tokens,
-            reasoning_tokens=result.reasoning_tokens,
-            measured_cost_usd=format(result.measured_cost_usd, "f"),
-            configuration_sha256=result.configuration_sha256,
-            role_configuration_sha256=result.role_configuration_sha256,
-            generation_policy_sha256=result.generation_policy_sha256,
-            physical_attempts=result.physical_attempts,
-        )
+        record = self._observed_lineage(execution_id, result)
         try:
+            if record is None:
+                raise TracedRedTeamGenerationError(
+                    "traced red_team generation produced no usable provider lineage"
+                )
             self._lifecycle.finish(
                 execution_id=execution_id,
                 status="succeeded",
@@ -326,13 +426,31 @@ class TracedHostedRedTeamProvider:
             )
         except Exception as lifecycle_exc:
             # The terminal SUCCESS write itself failed — a real, cost-incurred qwen generation whose
-            # durable/Langfuse record was lost. Do not return it as if recorded: raise a typed
-            # terminal-record error (mirrors hosted_runtime.py:359-372) so the loss is loud and the
-            # red_team execution fails uniformly with the other three roles.
+            # durable record the store would not take. The store screens agent output for
+            # credential material and bounds its size, and producing credential-shaped payloads is
+            # this agent's ENTIRE JOB, so this is honest, in-contract model output, not a defect.
+            # Re-labelling the exception and returning was leaving the row 'running' with
+            # 'agent.started' as its only audit event and nothing able to close it: the platform
+            # stranded its fourth agent the first time the model wrote a credible payload.
+            #
+            # So the execution terminalizes as a FAILURE carrying the reason and the observation.
+            # The result is still not returned as if it had been recorded — the caller gets the
+            # typed error — but the execution is closed and its cost is on the books.
             failure = TracedRedTeamGenerationError(
                 "traced red_team generation result could not be terminally recorded"
             )
             failure.add_note(f"lifecycle failure type: {type(lifecycle_exc).__name__}")
+            try:
+                self._terminalize_failure(
+                    execution_id=execution_id,
+                    error_code=_TERMINAL_RECORD_REFUSED,
+                    lineage=record,
+                    physical_attempts=(None if record is None else record.physical_attempts),
+                )
+            except Exception as fallback_exc:
+                failure.add_note(
+                    f"fallback terminalization failure type: {type(fallback_exc).__name__}"
+                )
             raise failure from lifecycle_exc
         return variants
 

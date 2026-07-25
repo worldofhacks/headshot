@@ -2203,7 +2203,16 @@ class ControlPlaneStore:
         # No observation at all is "not_observed"; an observed call whose amount we could not use
         # is "invalid". Collapsing the two would lose the difference between "no call was made"
         # and "a call was billed and the provider would not tell us what it cost".
-        cost_measurement_state = "invalid" if has_provider_lineage else "not_observed"
+        #
+        # A physical attempt is that difference on its own. When a terminal write is refused, the
+        # caller's only recovery is to degrade to the smallest record the store will accept, and
+        # that record drops the measurement tuple — but not the attempt count. Deriving the state
+        # from the tuple alone made every degraded record assert that NO provider call was made,
+        # for a call that was dispatched, billed, and whose request id we were holding a moment
+        # earlier. An attempt we counted is evidence the call happened; only its amount is lost.
+        cost_measurement_state = (
+            "invalid" if has_provider_lineage or physical_attempts is not None else "not_observed"
+        )
         if measured_cost_usd is not None:
             if not isinstance(measured_cost_usd, str) or _USD.fullmatch(measured_cost_usd) is None:
                 raise InvalidControlPlaneInput("hosted measured cost must be canonical USD text")

@@ -36,6 +36,32 @@ _MILLION = Decimal(1_000_000)
 _RETRYABLE_STATUS = frozenset({429, 502, 503})
 
 
+class _DuplicateStructuredKey(ValueError):
+    """A model response repeated an object key, so its content is not single-valued."""
+
+
+def _pairs_without_duplicates(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    """Refuse a repeated object key rather than silently keeping the last value.
+
+    ``json.loads`` keeps the LAST value for a repeated key, while a schema validator that already
+    ran over the decoded document approves whatever survived that collapse. So a response can
+    present one document to validation and a different one to credential screening, hashing and
+    storage, and the ``output_sha256`` we retain no longer identifies what the model actually
+    said. For an UNTRUSTED generator whose whole job is smuggling payloads, that gap is a channel.
+
+    The eval-corpus loader has always rejected duplicate keys for exactly this reason
+    (``evals/validation.py``); the provider wire is where the untrusted text actually arrives, so
+    the same rule belongs here. Ambiguity is refused, never resolved by parser convention.
+    """
+
+    decoded: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in decoded:
+            raise _DuplicateStructuredKey("structured output repeated an object key")
+        decoded[key] = value
+    return decoded
+
+
 class HostedProviderError(RuntimeError):
     """A typed terminal provider refusal with no credential or prompt content."""
 
@@ -773,9 +799,13 @@ class OpenRouterTransport:
     ) -> Mapping[str, Any]:
         try:
             content = payload["choices"][0]["message"]["content"]  # type: ignore[index]
-            decoded = json.loads(content)
+            decoded = json.loads(content, object_pairs_hook=_pairs_without_duplicates)
             Draft202012Validator.check_schema(dict(output_schema))
             Draft202012Validator(dict(output_schema)).validate(decoded)
+        except _DuplicateStructuredKey as exc:
+            raise HostedProviderError(
+                "OpenRouter structured output repeated an object key"
+            ) from exc
         except Exception as exc:
             raise HostedProviderError("OpenRouter structured output failed validation") from exc
         if not isinstance(decoded, Mapping):
