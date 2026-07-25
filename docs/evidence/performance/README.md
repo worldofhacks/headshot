@@ -14,7 +14,8 @@ authorized live-load result. It must report orchestration, provider/tool, queue,
 and end-to-end metrics; identify authorization and whether traffic was simulated or live; and publish
 the owner's bottleneck and architecture recommendation without re-deriving or upgrading it.
 
-The current hosted ceiling is also incompatible with the required workload: conservative preflight
-reserves 400 logical provider calls for 100 cases before retries, while the closed global maximum is
-56 physical calls. A reviewed exact-workload limit change and new authorization are required before a
-live performance run; bypassing preflight would invalidate the evidence.
+Candidate source admits exactly 400 logical/physical provider calls for the zero-provider-retry
+100-case envelope and refuses its 800-call retry-expanded shape. That limit is neither deployed nor
+an authorization. The exact frozen-corpus token, USD, rate, timeout, and call ceilings still require
+a staged configuration, catalog preflight, and new approval before a live performance run; bypassing
+preflight would invalidate the evidence.

@@ -98,7 +98,7 @@ SDK flush, replay planning, taxonomy mapping, or source tests as live evidence.
 | OPT-15 | partial | Data model documents ingestion, validation, lineage, access, reporting, and publication | ATO flow/auth artifacts exist; bind them to final live lineage, grants, retention, and publication evidence. |
 | OPT-16 | partial | Indexes and reproducible query/regression SLOs are verified | Measure and enforce query and regression SLOs in CI. |
 | OPT-17 | partial | CPU, memory, latency, and throughput baseline exists for 100 cases/full regression | Pre-run Railway/storage baselines exist; integrate the owner's representative 100-case result. |
-| OPT-18 | blocked | Authorized 100-case live stress run records required metrics and scaling change | Current 56-call hosted ceiling cannot satisfy the 400-call pre-retry reservation; review/test exact frozen-workload limits, then obtain explicit load authorization and distinct approval. |
+| OPT-18 | blocked | Authorized 100-case live stress run records required metrics and scaling change | Candidate source accepts the exact 400-call zero-retry shape and refuses retry expansion; the frozen corpus, final token/USD/time configuration, deployment, explicit load authorization, and distinct approval remain unavailable. |
 
 ## User deployment constraints
 

@@ -27,8 +27,8 @@ Stop before every provider or target call unless all of these checks pass:
 - two distinct Headshot organization users requested and approved the exact scope;
 - the authorization covers campaign start plus the full run timeout;
 - the authorization binds the configuration set, generation policy, corpus, target and surface,
-  SMART session generation, 56-call maximum, measured $5 maximum, one retry, concurrency one, and
-  provider timeout;
+  SMART session generation, exact physical-call and measured-spend limits, exact retry policy,
+  concurrency one, and provider timeout;
 - the SMART lease covers campaign start plus the full run timeout;
 - all fixtures are synthetic.
 
@@ -51,8 +51,11 @@ authorized campaign:
 5. Record an issuer-verified expiry only when the issuer supplied it. Otherwise use
    `operator_conservative_lease`.
 6. Restart only the existing private Runner and verify that no previous generation overlaps.
-7. Launch within five minutes, set authorization expiry within twenty minutes, and keep the
-   campaign timeout at fifteen minutes or less.
+7. Launch within five minutes. Set authorization expiry strictly beyond the exact campaign timeout
+   plus its bounded queue/start margin, and keep the target credential lease valid for that whole
+   window. The current 3,600-second browser/API authorization maximum is not evidence that a
+   100-case workload fits; stop until measured latency supports the selected timeout or a reviewed,
+   still-bounded hard ceiling is released.
 
 Resolve the session once into one campaign HTTP client. Session expiry terminates the campaign;
 there is no refresh, substitution, or retry. Never place the identifier or its digest in the Web

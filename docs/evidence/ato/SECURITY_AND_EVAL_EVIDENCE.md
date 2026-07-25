@@ -134,8 +134,9 @@ authoritative GitHub CI on the final SHA.
 
 - exact final-commit scanner artifacts and CI URLs;
 - a security-owner frozen 100-case corpus hash, final authorized campaign ID, and evidence ID;
-- reviewed role/global hosted-call ceilings compatible with the exact 100-case workload and retry
-  policy (the current closed 56-call maximum cannot satisfy the 400-call pre-retry reservation);
+- an exact staged 100-case hosted configuration and authorization: candidate source accepts the
+  400-call zero-provider-retry shape and refuses its 800-call retry expansion, but its final
+  token/USD/rate/timeout ceilings are not deployed or live-verified;
 - an exact-runtime-identity model-Judge enablement (the model remains advisory without it);
 - complete ordered deployed agent execution rows;
 - Langfuse expected, observed, missing, extra, token, cost, and error totals;

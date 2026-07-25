@@ -173,11 +173,11 @@ These are source-level tests, not the complete final release suite or authoritat
 [`../evidence/agent-trace.md`](../evidence/agent-trace.md) and existing `evals/results/` artifacts do
 not establish a current `0018`, four-agent, Langfuse-reconciled release. No frozen 100-case corpus or
 representative 100-case result has been integrated, and no candidate campaign has been deployed or
-query-reconciled. The current hosted safety maximum of 56 physical calls cannot satisfy the
-conservative 400 logical-call reservation for a 100-case four-role workload before retries; its
-role/global ceilings must be reviewed against the exact frozen workload, changed, tested, and
-reauthorized rather than bypassed. Final cost inputs, demo URL, social-post URL, production deploy
-grant, and confirmed database rollback binding are also unavailable.
+query-reconciled. Candidate source now admits exactly 400 hosted calls for the zero-provider-retry
+100-case shape and refuses its 800-call retry expansion. The final role/global token, USD, rate,
+timeout, and call ceilings still require the exact frozen corpus, a staged configuration, catalog
+preflight, deployment, and new authorization. Final cost inputs, demo URL, social-post URL,
+production deploy grant, and confirmed database rollback binding are also unavailable.
 
 The required proof remains one newly authorized campaign on the exact staging release and the
 security owner's frozen corpus, with ordered durable executions, target request lineage,

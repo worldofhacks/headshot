@@ -12,11 +12,11 @@ provider lineage, or Langfuse reconciliation. Use the wording below only after t
 green in authoritative GitHub CI, mirrored to GitLab, deployed to staging, migrated through `0018`, and
 used for the authorized frozen 100-case campaign.
 
-The candidate is also not yet capacity-compatible with that workload: hosted preflight conservatively
-reserves four role calls per case, while the closed global maximum is 56 physical calls. A 100-case
-run needs authority for at least 400 calls before provider retries. The reviewed limit change must be
-derived from the exact frozen workload and retry policy, tested, and included in the new authorization;
-do not weaken or bypass preflight.
+Candidate source now admits the exact 400-call four-role envelope for 100 cases with zero provider
+retries and refuses the 800-call retry-expanded shape. That is source/test evidence only: it is not
+deployed, and no exact frozen-corpus configuration or authorization exists. The final role/global
+token, USD, rate, timeout, and call ceilings must be staged, preflighted, and included in the new
+authorization; do not weaken or bypass preflight.
 
 ## 1. Identity permits a request; exact policy authorizes traffic
 
