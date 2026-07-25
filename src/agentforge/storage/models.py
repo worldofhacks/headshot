@@ -1224,6 +1224,78 @@ class CampaignAuthorizationDecisionRecord(Base):
     )
 
 
+def _acceptance_limits_version_sql(
+    *,
+    version: str,
+    roles: tuple[str, ...],
+    usd_caps: tuple[str, ...],
+) -> str:
+    cap_operator = "=" if version == "2" else "<="
+    role_array = ",".join(f"'{role}'" for role in roles)
+    role_json = ",".join(f'"{role}"' for role in roles)
+    call_types = " AND ".join(
+        f"jsonb_typeof(acceptance_limits->'role_call_caps'->'{role}') = 'number'" for role in roles
+    )
+    call_values = " AND ".join(
+        f"(acceptance_limits->'role_call_caps'->>'{role}')::numeric = 1" for role in roles
+    )
+    usd_types = " AND ".join(
+        f"jsonb_typeof(acceptance_limits->'role_usd_caps'->'{role}') = 'string'" for role in roles
+    )
+    usd_values = " AND ".join(
+        (
+            f"acceptance_limits->'role_usd_caps'->>'{role}' "
+            "~ '^(0|[1-9][0-9]*)(\\.[0-9]+)?$' "
+            f"AND (acceptance_limits->'role_usd_caps'->>'{role}')::numeric > 0 "
+            f"AND (acceptance_limits->'role_usd_caps'->>'{role}')::numeric "
+            f"{cap_operator} {cap}"
+        )
+        for role, cap in zip(roles, usd_caps, strict=True)
+    )
+    return (
+        f"(acceptance_limits->>'schema_version' = '{version}' "
+        f"AND jsonb_array_length(acceptance_limits->'allowed_roles') = {len(roles)} "
+        f"AND acceptance_limits->'allowed_roles' @> '[{role_json}]'::jsonb "
+        "AND jsonb_typeof(acceptance_limits->'role_call_caps') = 'object' "
+        f"AND (acceptance_limits->'role_call_caps') - ARRAY[{role_array}] = '{{}}'::jsonb "
+        f"AND {call_types} AND {call_values} "
+        "AND jsonb_typeof(acceptance_limits->'role_usd_caps') = 'object' "
+        f"AND (acceptance_limits->'role_usd_caps') - ARRAY[{role_array}] = '{{}}'::jsonb "
+        f"AND {usd_types} AND {usd_values} "
+        "AND jsonb_typeof(acceptance_limits->'global_call_cap') = 'number' "
+        f"AND (acceptance_limits->>'global_call_cap')::numeric = {len(roles)} "
+        + ("AND (acceptance_limits->>'global_usd_cap')::numeric = 10)" if version == "2" else ")")
+    )
+
+
+_AGENT_ACCEPTANCE_V1_LIMITS_SQL = _acceptance_limits_version_sql(
+    version="1",
+    roles=("orchestrator", "judge", "documentation"),
+    usd_caps=("1.5", "4", "1"),
+)
+_AGENT_ACCEPTANCE_V2_LIMITS_SQL = _acceptance_limits_version_sql(
+    version="2",
+    roles=("orchestrator", "red_team", "judge", "documentation"),
+    usd_caps=("1.5", "1", "4", "1"),
+)
+_AGENT_ACCEPTANCE_LIMITS_SQL = (
+    "acceptance_limits IS NULL OR "
+    "(jsonb_typeof(acceptance_limits) = 'object' "
+    "AND acceptance_limits - "
+    "ARRAY['schema_version','network_scope','target_call_limit','allowed_roles',"
+    "'role_call_caps','role_usd_caps','global_call_cap','global_usd_cap'] = '{}'::jsonb "
+    "AND acceptance_limits->>'network_scope' = 'openrouter_langfuse_only' "
+    "AND jsonb_typeof(acceptance_limits->'target_call_limit') = 'number' "
+    "AND (acceptance_limits->>'target_call_limit')::numeric = 0 "
+    "AND jsonb_typeof(acceptance_limits->'allowed_roles') = 'array' "
+    "AND jsonb_typeof(acceptance_limits->'global_usd_cap') = 'string' "
+    "AND acceptance_limits->>'global_usd_cap' ~ '^(0|[1-9][0-9]*)(\\.[0-9]+)?$' "
+    "AND (acceptance_limits->>'global_usd_cap')::numeric > 0 "
+    "AND (acceptance_limits->>'global_usd_cap')::numeric <= 10 "
+    f"AND ({_AGENT_ACCEPTANCE_V1_LIMITS_SQL} OR {_AGENT_ACCEPTANCE_V2_LIMITS_SQL}))"
+)
+
+
 class CampaignRunRecord(Base):
     __tablename__ = "campaign_runs"
 
@@ -1344,53 +1416,7 @@ class CampaignRunRecord(Base):
             name="campaign_run_acceptance_provenance",
         ),
         CheckConstraint(
-            "acceptance_limits IS NULL OR "
-            "(jsonb_typeof(acceptance_limits) = 'object' "
-            "AND acceptance_limits - "
-            "ARRAY['schema_version','network_scope','target_call_limit','allowed_roles',"
-            "'role_call_caps','role_usd_caps','global_call_cap','global_usd_cap'] = '{}'::jsonb "
-            "AND acceptance_limits->>'schema_version' = '1' "
-            "AND acceptance_limits->>'network_scope' = 'openrouter_langfuse_only' "
-            "AND jsonb_typeof(acceptance_limits->'target_call_limit') = 'number' "
-            "AND (acceptance_limits->>'target_call_limit')::numeric = 0 "
-            "AND jsonb_typeof(acceptance_limits->'allowed_roles') = 'array' "
-            "AND jsonb_array_length(acceptance_limits->'allowed_roles') = 3 "
-            "AND acceptance_limits->'allowed_roles' "
-            '@> \'["orchestrator","judge","documentation"]\'::jsonb '
-            "AND jsonb_typeof(acceptance_limits->'role_call_caps') = 'object' "
-            "AND (acceptance_limits->'role_call_caps') - "
-            "ARRAY['orchestrator','judge','documentation'] = '{}'::jsonb "
-            "AND jsonb_typeof(acceptance_limits->'role_call_caps'->'orchestrator') = 'number' "
-            "AND jsonb_typeof(acceptance_limits->'role_call_caps'->'judge') = 'number' "
-            "AND jsonb_typeof(acceptance_limits->'role_call_caps'->'documentation') = 'number' "
-            "AND (acceptance_limits->'role_call_caps'->>'orchestrator')::numeric = 1 "
-            "AND (acceptance_limits->'role_call_caps'->>'judge')::numeric = 1 "
-            "AND (acceptance_limits->'role_call_caps'->>'documentation')::numeric = 1 "
-            "AND jsonb_typeof(acceptance_limits->'role_usd_caps') = 'object' "
-            "AND (acceptance_limits->'role_usd_caps') - "
-            "ARRAY['orchestrator','judge','documentation'] = '{}'::jsonb "
-            "AND jsonb_typeof(acceptance_limits->'role_usd_caps'->'orchestrator') = 'string' "
-            "AND jsonb_typeof(acceptance_limits->'role_usd_caps'->'judge') = 'string' "
-            "AND jsonb_typeof(acceptance_limits->'role_usd_caps'->'documentation') = 'string' "
-            "AND acceptance_limits->'role_usd_caps'->>'orchestrator' "
-            "~ '^(0|[1-9][0-9]*)(\\.[0-9]+)?$' "
-            "AND acceptance_limits->'role_usd_caps'->>'judge' "
-            "~ '^(0|[1-9][0-9]*)(\\.[0-9]+)?$' "
-            "AND acceptance_limits->'role_usd_caps'->>'documentation' "
-            "~ '^(0|[1-9][0-9]*)(\\.[0-9]+)?$' "
-            "AND (acceptance_limits->'role_usd_caps'->>'orchestrator')::numeric > 0 "
-            "AND (acceptance_limits->'role_usd_caps'->>'orchestrator')::numeric <= 1.5 "
-            "AND (acceptance_limits->'role_usd_caps'->>'judge')::numeric > 0 "
-            "AND (acceptance_limits->'role_usd_caps'->>'judge')::numeric <= 4 "
-            "AND (acceptance_limits->'role_usd_caps'->>'documentation')::numeric > 0 "
-            "AND (acceptance_limits->'role_usd_caps'->>'documentation')::numeric <= 1 "
-            "AND jsonb_typeof(acceptance_limits->'global_call_cap') = 'number' "
-            "AND (acceptance_limits->>'global_call_cap')::numeric = 3 "
-            "AND jsonb_typeof(acceptance_limits->'global_usd_cap') = 'string' "
-            "AND acceptance_limits->>'global_usd_cap' "
-            "~ '^(0|[1-9][0-9]*)(\\.[0-9]+)?$' "
-            "AND (acceptance_limits->>'global_usd_cap')::numeric > 0 "
-            "AND (acceptance_limits->>'global_usd_cap')::numeric <= 10)",
+            _AGENT_ACCEPTANCE_LIMITS_SQL,
             name="campaign_run_acceptance_limits",
         ),
         Index(

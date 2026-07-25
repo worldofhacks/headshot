@@ -1002,7 +1002,7 @@ class AgentAcceptanceExecutionReadModel(_ReadModel):
     """Latest provider evidence from the target-free agent acceptance authority."""
 
     scope: Literal["agent_acceptance"]
-    agent_role: Literal["orchestrator", "judge", "documentation"]
+    agent_role: Literal["orchestrator", "red_team", "judge", "documentation"]
     acceptance_run_id: str = Field(pattern=r"^AR-")
     acceptance_attempt_id: str = Field(pattern=r"^[0-9a-f]{64}$")
     execution_id: str

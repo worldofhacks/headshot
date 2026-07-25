@@ -99,7 +99,7 @@ def main() -> int:
     parser.add_argument(
         "--record-verification",
         action="store_true",
-        help="atomically mark exactly the three reconciled agent rows exported",
+        help="atomically mark exactly the four reconciled agent rows exported",
     )
     args = parser.parse_args()
     if args.timeout_seconds <= 0 or args.poll_seconds <= 0:

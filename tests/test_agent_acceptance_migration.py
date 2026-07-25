@@ -50,6 +50,26 @@ _LIMITS = {
     "global_call_cap": 3,
     "global_usd_cap": "10",
 }
+_LIMITS_V2 = {
+    "schema_version": "2",
+    "network_scope": "openrouter_langfuse_only",
+    "target_call_limit": 0,
+    "allowed_roles": ["orchestrator", "red_team", "judge", "documentation"],
+    "role_call_caps": {
+        "orchestrator": 1,
+        "red_team": 1,
+        "judge": 1,
+        "documentation": 1,
+    },
+    "role_usd_caps": {
+        "orchestrator": "1.5",
+        "red_team": "1",
+        "judge": "4",
+        "documentation": "1",
+    },
+    "global_call_cap": 4,
+    "global_usd_cap": "10",
+}
 
 
 def _acceptance_attempt_id(run_id: str) -> str:
@@ -166,7 +186,7 @@ def _insert_agent_execution(
     execution_id = uuid.uuid4().hex
     models = {
         "orchestrator": "anthropic/claude-opus-4.8",
-        "red_team": "qwen/qwen3-235b-a22b",
+        "red_team": "qwen/qwen3.5-397b-a17b",
         "judge": "google/gemini-2.5-pro",
         "documentation": "openai/gpt-5.4",
     }
@@ -258,7 +278,8 @@ def _seed_authorized_campaign(engine: Engine, suffix: str) -> str:
 
 def test_agent_acceptance_migration_is_the_only_head() -> None:
     script = ScriptDirectory.from_config(_db.alembic_config(_db.admin_url()))
-    assert script.get_heads() == ["0020"]
+    assert script.get_heads() == ["0021"]
+    assert script.get_revision("0021").down_revision == "0020"
     assert script.get_revision("0020").down_revision == "0019"
     assert script.get_revision("0019").down_revision == "0018"
 
@@ -283,7 +304,7 @@ def test_campaign_run_model_matches_discriminated_acceptance_authority() -> None
         assert columns[name].nullable is True
 
 
-def test_runner_uses_locked_0020_guards_without_campaign_run_update_privilege(
+def test_runner_uses_locked_versioned_guards_without_campaign_run_update_privilege(
     migrated_db: Engine,
 ) -> None:
     configuration_sha256 = uuid.uuid4().hex + uuid.uuid4().hex
@@ -559,6 +580,161 @@ def test_0020_backfills_campaign_and_round_trips_without_weakening_campaign_gate
         _db.drop_database(admin_url, database_name)
 
 
+def test_0021_preserves_populated_v1_acceptance_and_round_trips(
+    admin_url: str,
+) -> None:
+    database_name = f"agentforge_acceptance_v1_upgrade_{uuid.uuid4().hex[:12]}"
+    base, _ = _db.split_db(admin_url)
+    database_url = f"{base}/{database_name}"
+    _db.create_fresh_database(admin_url, database_name)
+    engine: Engine | None = None
+    try:
+        _db.alembic_upgrade(database_url, "0020")
+        engine = _db.build_engine(database_url)
+        configuration_sha256 = uuid.uuid4().hex + uuid.uuid4().hex
+        _seed_hosted_configuration(
+            engine,
+            configuration_sha256=configuration_sha256,
+        )
+        run_id = _insert_acceptance(
+            engine,
+            configuration_sha256=configuration_sha256,
+        )
+        attempt_id = _acceptance_attempt_id(run_id)
+        orchestrator_id = _insert_agent_execution(
+            engine,
+            run_id=run_id,
+            configuration_sha256=configuration_sha256,
+            role="orchestrator",
+            parent_execution_id=None,
+            attempt_id=attempt_id,
+        )
+        judge_id = _insert_agent_execution(
+            engine,
+            run_id=run_id,
+            configuration_sha256=configuration_sha256,
+            role="judge",
+            parent_execution_id=orchestrator_id,
+            attempt_id=attempt_id,
+        )
+        documentation_id = _insert_agent_execution(
+            engine,
+            run_id=run_id,
+            configuration_sha256=configuration_sha256,
+            role="documentation",
+            parent_execution_id=judge_id,
+            attempt_id=attempt_id,
+        )
+
+        _db.alembic_upgrade(database_url, "0021")
+        with engine.connect() as connection:
+            row = (
+                connection.execute(
+                    text(
+                        "SELECT acceptance_limits, acceptance_attempt_id "
+                        "FROM campaign_runs WHERE run_id = :run"
+                    ),
+                    {"run": run_id},
+                )
+                .mappings()
+                .one()
+            )
+            executions = list(
+                connection.execute(
+                    text(
+                        "SELECT execution_id, agent_role, parent_execution_id "
+                        "FROM agent_executions WHERE campaign_run_id = :run ORDER BY id"
+                    ),
+                    {"run": run_id},
+                ).mappings()
+            )
+        assert row["acceptance_limits"] == _LIMITS
+        assert row["acceptance_attempt_id"] == attempt_id
+        assert [item["execution_id"] for item in executions] == [
+            orchestrator_id,
+            judge_id,
+            documentation_id,
+        ]
+        assert [item["parent_execution_id"] for item in executions] == [
+            None,
+            orchestrator_id,
+            judge_id,
+        ]
+        with pytest.raises(DBAPIError, match="outside its role or attempt authority"):
+            _insert_agent_execution(
+                engine,
+                run_id=run_id,
+                configuration_sha256=configuration_sha256,
+                role="red_team",
+                parent_execution_id=orchestrator_id,
+                attempt_id=attempt_id,
+            )
+
+        _db.alembic_downgrade(database_url, "0020")
+        with engine.connect() as connection:
+            assert (
+                connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+                == "0020"
+            )
+            assert (
+                connection.execute(
+                    text("SELECT acceptance_limits FROM campaign_runs WHERE run_id = :run"),
+                    {"run": run_id},
+                ).scalar_one()
+                == _LIMITS
+            )
+    finally:
+        if engine is not None:
+            engine.dispose()
+        _db.drop_database(admin_url, database_name)
+
+
+def test_0021_downgrade_refuses_populated_v2_authority(
+    admin_url: str,
+) -> None:
+    database_name = f"agentforge_acceptance_v2_downgrade_{uuid.uuid4().hex[:12]}"
+    base, _ = _db.split_db(admin_url)
+    database_url = f"{base}/{database_name}"
+    _db.create_fresh_database(admin_url, database_name)
+    engine: Engine | None = None
+    try:
+        _db.alembic_upgrade(database_url, "0021")
+        engine = _db.build_engine(database_url)
+        configuration_sha256 = uuid.uuid4().hex + uuid.uuid4().hex
+        _seed_hosted_configuration(
+            engine,
+            configuration_sha256=configuration_sha256,
+        )
+        run_id = _insert_acceptance(
+            engine,
+            configuration_sha256=configuration_sha256,
+            limits=_LIMITS_V2,
+        )
+
+        with pytest.raises(
+            DBAPIError,
+            match="cannot downgrade 0021 while immutable four-role acceptance lineage exists",
+        ):
+            _db.alembic_downgrade(database_url, "0020")
+
+        with engine.connect() as connection:
+            assert (
+                connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+                == "0021"
+            )
+            assert (
+                connection.execute(
+                    text("SELECT acceptance_limits FROM campaign_runs WHERE run_id = :run"),
+                    {"run": run_id},
+                ).scalar_one()
+                == _LIMITS_V2
+            )
+    finally:
+        if engine is not None:
+            engine.dispose()
+        _db.drop_database(admin_url, database_name)
+
+
 def test_valid_agent_acceptance_is_no_target_and_append_only(migrated_db: Engine) -> None:
     configuration_sha256 = uuid.uuid4().hex + uuid.uuid4().hex
     _seed_hosted_configuration(
@@ -777,6 +953,84 @@ def test_database_guards_acceptance_execution_attempt_parentage_and_judge(
                 "output_hash": "4" * 64,
             },
         )
+
+
+def test_database_guards_v2_four_role_execution_parentage(
+    migrated_db: Engine,
+) -> None:
+    configuration_sha256 = uuid.uuid4().hex + uuid.uuid4().hex
+    _seed_hosted_configuration(
+        migrated_db,
+        configuration_sha256=configuration_sha256,
+    )
+    run_id = _insert_acceptance(
+        migrated_db,
+        configuration_sha256=configuration_sha256,
+        limits=_LIMITS_V2,
+    )
+    attempt_id = _acceptance_attempt_id(run_id)
+    orchestrator_id = _insert_agent_execution(
+        migrated_db,
+        run_id=run_id,
+        configuration_sha256=configuration_sha256,
+        role="orchestrator",
+        parent_execution_id=None,
+        attempt_id=attempt_id,
+    )
+
+    with pytest.raises(DBAPIError, match="requires its exact parent"):
+        _insert_agent_execution(
+            migrated_db,
+            run_id=run_id,
+            configuration_sha256=configuration_sha256,
+            role="red_team",
+            parent_execution_id=None,
+            attempt_id=attempt_id,
+        )
+    red_team_id = _insert_agent_execution(
+        migrated_db,
+        run_id=run_id,
+        configuration_sha256=configuration_sha256,
+        role="red_team",
+        parent_execution_id=orchestrator_id,
+        attempt_id=attempt_id,
+    )
+
+    with pytest.raises(DBAPIError, match="requires its exact parent"):
+        _insert_agent_execution(
+            migrated_db,
+            run_id=run_id,
+            configuration_sha256=configuration_sha256,
+            role="judge",
+            parent_execution_id=orchestrator_id,
+            attempt_id=attempt_id,
+        )
+    judge_id = _insert_agent_execution(
+        migrated_db,
+        run_id=run_id,
+        configuration_sha256=configuration_sha256,
+        role="judge",
+        parent_execution_id=red_team_id,
+        attempt_id=attempt_id,
+    )
+
+    with pytest.raises(DBAPIError, match="requires its exact parent"):
+        _insert_agent_execution(
+            migrated_db,
+            run_id=run_id,
+            configuration_sha256=configuration_sha256,
+            role="documentation",
+            parent_execution_id=red_team_id,
+            attempt_id=attempt_id,
+        )
+    _insert_agent_execution(
+        migrated_db,
+        run_id=run_id,
+        configuration_sha256=configuration_sha256,
+        role="documentation",
+        parent_execution_id=judge_id,
+        attempt_id=attempt_id,
+    )
 
 
 def test_runner_cannot_reassign_acceptance_execution_identity(
@@ -1034,6 +1288,41 @@ def test_agent_acceptance_rejects_unbounded_or_generator_limits(
         configuration_sha256=configuration_sha256,
     )
     limits = deepcopy(_LIMITS)
+    mutate(limits)
+
+    with pytest.raises(DBAPIError):
+        _insert_acceptance(
+            migrated_db,
+            configuration_sha256=configuration_sha256,
+            limits=limits,
+        )
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda limits: limits["allowed_roles"].remove("red_team"),
+        lambda limits: limits["allowed_roles"].append("unexpected"),
+        lambda limits: limits["role_call_caps"].update({"red_team": 2}),
+        lambda limits: limits["role_usd_caps"].update({"red_team": "0.99"}),
+        lambda limits: limits["role_usd_caps"].update({"red_team": "1.01"}),
+        lambda limits: limits.update({"global_call_cap": 3}),
+        lambda limits: limits.update({"global_call_cap": 5}),
+        lambda limits: limits.update({"global_usd_cap": "9.99"}),
+        lambda limits: limits.update({"target_call_limit": 1}),
+        lambda limits: limits.update({"schema_version": "3"}),
+    ],
+)
+def test_agent_acceptance_v2_requires_the_exact_four_call_envelope(
+    migrated_db: Engine,
+    mutate,
+) -> None:
+    configuration_sha256 = uuid.uuid4().hex + uuid.uuid4().hex
+    _seed_hosted_configuration(
+        migrated_db,
+        configuration_sha256=configuration_sha256,
+    )
+    limits = deepcopy(_LIMITS_V2)
     mutate(limits)
 
     with pytest.raises(DBAPIError):

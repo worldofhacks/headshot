@@ -1,7 +1,7 @@
-"""Bounded, target-free live acceptance for the three platform-owned hosted roles.
+"""Bounded, target-free live acceptance for all four platform-owned hosted roles.
 
-This module deliberately imports no campaign coordinator, gateway, target adapter, or Red Team
-implementation. It can call only OpenRouter and Langfuse, and it persists every logical and
+This module deliberately imports no campaign coordinator, gateway, or target adapter. It can call
+only OpenRouter and Langfuse, keeps Red Team output quarantined, and persists every logical and
 physical provider fact through the canonical agent-execution lineage.
 """
 
@@ -12,6 +12,7 @@ import datetime
 import hashlib
 import inspect
 import json
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from decimal import Decimal
@@ -30,6 +31,11 @@ from agentforge.agents.hosted_runtime import (
 from agentforge.agents.judge import HostedEvaluator, reconcile_judge_assessment
 from agentforge.agents.judge.envelope import EvidenceEnvelopeBuilder
 from agentforge.agents.orchestrator import HostedPlanner
+from agentforge.agents.red_team.hosted_generation import (
+    RedTeamRoleIdentity,
+    TracedHostedRedTeamProvider,
+    require_red_team_subcap,
+)
 from agentforge.control_plane.store import ControlPlaneStore
 from agentforge.policy.scoped_credentials import (
     CredentialResolutionError,
@@ -40,9 +46,10 @@ from agentforge.providers.openrouter import HostedUsageLedger, OpenRouterTranspo
 from agentforge.target.spec import HostedRunBinding
 from agentforge.telemetry import OutboundHttpTelemetry
 
-_OWNED_ROLES = ("orchestrator", "judge", "documentation")
+_OWNED_ROLES = ("orchestrator", "red_team", "judge", "documentation")
 _GLOBAL_USD_CAP = Decimal("10")
-_GLOBAL_CALL_CAP = 3
+_GLOBAL_CALL_CAP = 4
+_SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
 
 def _digest(value: Any) -> str:
@@ -60,13 +67,14 @@ def acceptance_limits() -> dict[str, Any]:
     """Return the exact non-target authority persisted for one acceptance run."""
 
     return {
-        "schema_version": "1",
+        "schema_version": "2",
         "network_scope": "openrouter_langfuse_only",
         "target_call_limit": 0,
         "allowed_roles": list(_OWNED_ROLES),
         "role_call_caps": {role: 1 for role in _OWNED_ROLES},
         "role_usd_caps": {
             "orchestrator": "1.5",
+            "red_team": "1",
             "judge": "4",
             "documentation": "1",
         },
@@ -144,7 +152,7 @@ class AgentAcceptanceResult:
     run_id: str
     attempt_id: str
     organization_id: str
-    execution_ids: tuple[str, str, str]
+    execution_ids: tuple[str, str, str, str]
     trace_id: str
 
 
@@ -252,7 +260,7 @@ class _AcceptanceLifecycle:
         error_code: str | None,
         failed_physical_attempts: int | None = None,
     ) -> None:
-        role = self._roles.pop(execution_id, None)
+        role = self._roles.get(execution_id)
         if role is None:
             raise HostedCompositionError("acceptance execution context is unavailable")
         if status == "succeeded" and lineage is None:
@@ -291,6 +299,28 @@ class _AcceptanceLifecycle:
                     "model_decisive": False,
                 }
             )
+        if status == "succeeded" and role == "red_team":
+            generated_output_sha256 = output_payload.get("generated_output_sha256")
+            generated_variant_count = output_payload.get("generated_variant_count")
+            if (
+                not isinstance(generated_output_sha256, str)
+                or _SHA256.fullmatch(generated_output_sha256) is None
+                or type(generated_variant_count) is not int
+                or generated_variant_count != 1
+                or output_payload.get("generated_output_disposition")
+                != "quarantined_not_dispatched"
+                or output_payload.get("target_call_limit") != 0
+            ):
+                raise HostedCompositionError(
+                    "acceptance Red Team output is not durably quarantined"
+                )
+            detail.update(
+                {
+                    "generated_output_sha256": generated_output_sha256,
+                    "generated_variant_count": generated_variant_count,
+                    "generated_output_disposition": "quarantined_not_dispatched",
+                }
+            )
         provider_lineage: dict[str, Any] = {}
         if lineage is not None:
             if lineage.execution_id != execution_id or lineage.role != role:
@@ -326,6 +356,7 @@ class _AcceptanceLifecycle:
             error_code=error_code,
         )
         self._telemetry.flush()
+        self._roles.pop(execution_id, None)
 
 
 def run_agent_acceptance(
@@ -337,7 +368,7 @@ def run_agent_acceptance(
     release_sha256: str,
     credential_environment_variable: str = "OPENROUTER_API_KEY",
 ) -> AgentAcceptanceResult:
-    """Execute exactly Planner → advisory Evaluator → draft-only Report-writer.
+    """Execute exactly Planner → quarantined Red Team → Evaluator → Report-writer.
 
     The four-role configuration must already exist under the supplied organization through the
     authenticated CONFIG_MANAGE staging path. This command cannot create or alter it.
@@ -346,7 +377,7 @@ def run_agent_acceptance(
     _require_canonical_provider_writer()
     generation_policy = acceptance_generation_policy()
     context = {
-        "schema_version": "1",
+        "schema_version": "2",
         "purpose": "agent_only_live_acceptance",
         "synthetic": True,
         "target_scope": "none",
@@ -492,6 +523,115 @@ def run_agent_acceptance(
                 "previous_category": None,
             }
         )
+        red_team_role = next(role for role in configuration.roles if role.role == "red_team")
+        require_red_team_subcap(configuration)
+        red_team_provider = TracedHostedRedTeamProvider(
+            transport=transport,
+            lifecycle=lifecycle,
+            role_identity=RedTeamRoleIdentity(
+                provider=red_team_role.provider,
+                model=red_team_role.model_id,
+                upstream_provider=red_team_role.upstream_provider,
+                prompt_version=red_team_role.prompt_version,
+                prompt_sha256=red_team_role.prompt_sha256,
+                role_configuration_sha256=red_team_role.configuration_sha256,
+            ),
+            configuration_sha256=configuration.configuration_sha256,
+            generation_policy_sha256=generation_policy.policy_sha256,
+            call_bounds=generation_policy.call_bounds["red_team"],
+            parent_execution_id=planner.execution_id,
+            parent_request_id=planner.provider_request_id,
+        )
+        red_team_execution_id = lifecycle.start(
+            role="red_team",
+            parent_execution_id=planner.execution_id,
+            input_payload={
+                "synthetic": True,
+                "seed_case_ref": "synthetic-acceptance-seed",
+                "category": "prompt_injection",
+                "generated_output_disposition": "quarantined_not_dispatched",
+                "target_call_limit": 0,
+            },
+            provider=red_team_role.provider,
+            model=red_team_role.model_id,
+            upstream_provider=red_team_role.upstream_provider,
+            configuration_sha256=configuration.configuration_sha256,
+            role_configuration_sha256=red_team_role.configuration_sha256,
+            generation_policy_sha256=generation_policy.policy_sha256,
+            judge_calibration_id=None,
+        )
+        try:
+            red_team_generation = red_team_provider.generate_traced(
+                {
+                    "case_ref": "synthetic-acceptance-seed",
+                    "input_sequence": [
+                        "Synthetic acceptance seed; propose one test-only continuation."
+                    ],
+                },
+                count=1,
+                category="prompt_injection",
+                execution_id=red_team_execution_id,
+            )
+        except Exception as exc:
+            error_code = getattr(exc, "code", None)
+            try:
+                lifecycle.finish(
+                    execution_id=red_team_execution_id,
+                    status="failed",
+                    output_payload={
+                        "status": "failed",
+                        "generated_output_disposition": "quarantined_not_dispatched",
+                    },
+                    lineage=None,
+                    error_code=(
+                        error_code
+                        if isinstance(error_code, str) and error_code
+                        else "hosted-red-team-generation-failed"
+                    ),
+                    failed_physical_attempts=(
+                        exc.physical_attempts
+                        if type(getattr(exc, "physical_attempts", None)) is int
+                        and exc.physical_attempts > 0
+                        else None
+                    ),
+                )
+            except Exception as lifecycle_exc:
+                failure = HostedCompositionError(
+                    "acceptance Red Team failure could not be terminally recorded"
+                )
+                failure.add_note(f"terminal lifecycle failure type: {type(lifecycle_exc).__name__}")
+                raise failure from exc
+            raise
+        red_team_lineage = HostedExecutionLineage(
+            execution_id=red_team_execution_id,
+            parent_execution_id=planner.execution_id,
+            role="red_team",
+            parent_request_id=planner.provider_request_id,
+            requested_model=red_team_role.model_id,
+            returned_model=red_team_generation.returned_model,
+            upstream_provider=red_team_generation.upstream_provider,
+            provider_request_id=red_team_generation.provider_request_id,
+            input_tokens=red_team_generation.input_tokens,
+            output_tokens=red_team_generation.output_tokens,
+            reasoning_tokens=red_team_generation.reasoning_tokens,
+            measured_cost_usd=red_team_generation.measured_cost_usd,
+            configuration_sha256=configuration.configuration_sha256,
+            role_configuration_sha256=red_team_role.configuration_sha256,
+            generation_policy_sha256=generation_policy.policy_sha256,
+            physical_attempts=red_team_generation.physical_attempts,
+        )
+        lifecycle.finish(
+            execution_id=red_team_execution_id,
+            status="succeeded",
+            output_payload={
+                "generated_variant_count": len(red_team_generation.variants),
+                "generated_output_sha256": _digest({"variants": red_team_generation.variants}),
+                "generated_output_disposition": "quarantined_not_dispatched",
+                "target_call_limit": 0,
+            },
+            lineage=red_team_lineage,
+            error_code=None,
+        )
         envelope = EvidenceEnvelopeBuilder().build(
             campaign_run_id=run_id,
             attempt_id=attempt_id,
@@ -518,8 +658,8 @@ def run_agent_acceptance(
             integrity_ok=True,
             sanitized=True,
             judge_calibration_id=calibration_id,
-            parent_execution_id=planner.execution_id,
-            parent_request_id=planner.provider_request_id,
+            parent_execution_id=red_team_execution_id,
+            parent_request_id=red_team_generation.provider_request_id,
         )
         report = HostedReportWriter(runtime=runtime).draft(
             verdict=deterministic_verdict,
@@ -561,6 +701,7 @@ def run_agent_acceptance(
             organization_id=organization_id,
             execution_ids=(
                 planner.execution_id,
+                red_team_execution_id,
                 evaluator.execution_id,
                 report.execution_id,
             ),

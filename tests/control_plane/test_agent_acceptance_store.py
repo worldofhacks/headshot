@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime
 import hashlib
+from dataclasses import replace
 from decimal import Decimal
 
 import pytest
@@ -17,7 +18,11 @@ from agentforge.agents.hosted import (
 )
 from agentforge.agents.prompts import load_prompt_registry
 from agentforge.auth.principal import Principal
-from agentforge.control_plane.errors import AuthorizationDeniedError, RecordConflictError
+from agentforge.control_plane.errors import (
+    AuthorizationDeniedError,
+    InvalidControlPlaneInput,
+    RecordConflictError,
+)
 from agentforge.control_plane.store import (
     AgentAcceptanceRunIdentity,
     ControlPlaneStore,
@@ -53,6 +58,12 @@ _USD_CAPS = {
     "judge": Decimal("4"),
     "documentation": Decimal("1"),
 }
+_TOKEN_CAPS = {
+    "orchestrator": (8_192, 512, 1_024),
+    "red_team": (4_096, 512, 512),
+    "judge": (8_192, 512, 1_024),
+    "documentation": (8_192, 512, 1_024),
+}
 
 
 def _prompt(role: str):
@@ -77,9 +88,9 @@ def _configuration() -> HostedConfigurationSet:
                 ),
                 limits=HostedLimits(
                     max_calls=1,
-                    max_input_tokens=8_192,
-                    max_output_tokens=512,
-                    max_reasoning_tokens=1_024,
+                    max_input_tokens=_TOKEN_CAPS[role][0],
+                    max_output_tokens=_TOKEN_CAPS[role][1],
+                    max_reasoning_tokens=_TOKEN_CAPS[role][2],
                     max_usd=_USD_CAPS[role],
                     max_retries=0,
                     max_requests_per_second=Decimal("0.5"),
@@ -89,10 +100,10 @@ def _configuration() -> HostedConfigurationSet:
             for role in ("orchestrator", "red_team", "judge", "documentation")
         ),
         global_limits=HostedLimits(
-            max_calls=3,
-            max_input_tokens=24_576,
-            max_output_tokens=1_536,
-            max_reasoning_tokens=3_072,
+            max_calls=4,
+            max_input_tokens=28_672,
+            max_output_tokens=2_048,
+            max_reasoning_tokens=3_584,
             max_usd=Decimal("10"),
             max_retries=0,
             max_requests_per_second=Decimal("0.5"),
@@ -142,7 +153,7 @@ def _create(
         configuration_set_sha256=configuration.configuration_sha256,
         generation_policy_sha256=_GENERATION_POLICY_SHA256,
         acceptance_context={
-            "fixture": "synthetic-agent-acceptance-v1",
+            "fixture": "synthetic-agent-acceptance-v2",
             "synthetic_data_only": True,
             "target_traffic": "forbidden",
         },
@@ -164,7 +175,7 @@ def _start(
     return store.start_acceptance_agent_execution(
         run_id=identity.run_id,
         agent_role=role,  # type: ignore[arg-type]
-        input_payload={"fixture": "synthetic-agent-acceptance-v1", "role": role},
+        input_payload={"fixture": "synthetic-agent-acceptance-v2", "role": role},
         provider=role_configuration.provider,
         model=role_configuration.model_id,
         upstream_provider=role_configuration.upstream_provider,
@@ -214,7 +225,7 @@ def _succeed(
     store.finish_hosted_agent_execution(
         execution_id=execution_id,
         status="succeeded",
-        output_payload={"fixture": "synthetic-agent-acceptance-v1", "role": role},
+        output_payload={"fixture": "synthetic-agent-acceptance-v2", "role": role},
         returned_model=logical.requested_model,
         upstream_provider=_SERVED_UPSTREAM[role],
         provider_request_id=f"acceptance-provider-request-{role}",
@@ -274,6 +285,60 @@ def test_acceptance_atomically_creates_one_canonical_attempt(
     assert attempts[0]["fixture_provenance"]["contains_real_phi"] is False
 
 
+def test_four_call_authority_uses_exact_v2_roles_costs_and_token_totals() -> None:
+    configuration = _configuration()
+
+    assert canonical_agent_acceptance_limits(configuration) == {
+        "schema_version": "2",
+        "network_scope": "openrouter_langfuse_only",
+        "target_call_limit": 0,
+        "allowed_roles": ["orchestrator", "red_team", "judge", "documentation"],
+        "role_call_caps": {
+            "orchestrator": 1,
+            "red_team": 1,
+            "judge": 1,
+            "documentation": 1,
+        },
+        "role_usd_caps": {
+            "orchestrator": "1.5",
+            "red_team": "1",
+            "judge": "4",
+            "documentation": "1",
+        },
+        "global_call_cap": 4,
+        "global_usd_cap": "10",
+    }
+    assert (
+        configuration.global_limits.max_input_tokens,
+        configuration.global_limits.max_output_tokens,
+        configuration.global_limits.max_reasoning_tokens,
+    ) == (28_672, 2_048, 3_584)
+
+    red_team = next(role for role in configuration.roles if role.role == "red_team")
+    wrong_red_team = replace(
+        red_team,
+        limits=replace(red_team.limits, max_input_tokens=4_097),
+    )
+    wrong_role_tokens = replace(
+        configuration,
+        roles=tuple(
+            wrong_red_team if role.role == "red_team" else role for role in configuration.roles
+        ),
+    )
+    with pytest.raises(InvalidControlPlaneInput, match="red_team acceptance token limits"):
+        canonical_agent_acceptance_limits(wrong_role_tokens)
+
+    wrong_global_tokens = replace(
+        configuration,
+        global_limits=replace(
+            configuration.global_limits,
+            max_reasoning_tokens=3_585,
+        ),
+    )
+    with pytest.raises(InvalidControlPlaneInput, match="global acceptance token limits"):
+        canonical_agent_acceptance_limits(wrong_global_tokens)
+
+
 def test_acceptance_configuration_load_is_bound_to_the_reviewed_release(
     migrated_db: Engine,
 ) -> None:
@@ -300,12 +365,19 @@ def test_acceptance_binds_all_owned_roles_to_the_same_non_null_attempt(
 ) -> None:
     store, identity, configuration = _create(migrated_db)
     planner = _start(store, identity, configuration, "orchestrator")
+    generator = _start(
+        store,
+        identity,
+        configuration,
+        "red_team",
+        parent_execution_id=planner,
+    )
     evaluator = _start(
         store,
         identity,
         configuration,
         "judge",
-        parent_execution_id=planner,
+        parent_execution_id=generator,
     )
     report_writer = _start(
         store,
@@ -329,34 +401,38 @@ def test_acceptance_binds_all_owned_roles_to_the_same_non_null_attempt(
         )
     assert [row["agent_role"] for row in rows] == [
         "orchestrator",
+        "red_team",
         "judge",
         "documentation",
     ]
     assert {row["attempt_id"] for row in rows} == {identity.attempt_id}
     assert rows[0]["parent_execution_id"] is None
     assert rows[1]["parent_execution_id"] == planner
-    assert rows[2]["parent_execution_id"] == evaluator
-    assert report_writer == rows[2]["execution_id"]
-
-    with pytest.raises(AuthorizationDeniedError, match="outside.*allowlist"):
-        store.load_acceptance_role_for_execution(
-            run_id=identity.run_id,
-            agent_role="red_team",
-        )
+    assert rows[2]["parent_execution_id"] == generator
+    assert rows[3]["parent_execution_id"] == evaluator
+    assert report_writer == rows[3]["execution_id"]
 
 
-def test_acceptance_completes_after_three_final_provider_events_and_oracle_reconciliation(
+def test_acceptance_completes_after_four_final_provider_events_and_oracle_reconciliation(
     migrated_db: Engine,
 ) -> None:
     store, identity, configuration = _create(migrated_db)
     planner = _start(store, identity, configuration, "orchestrator")
     _succeed(store, planner, configuration, "orchestrator")
+    generator = _start(
+        store,
+        identity,
+        configuration,
+        "red_team",
+        parent_execution_id=planner,
+    )
+    _succeed(store, generator, configuration, "red_team")
     evaluator = _start(
         store,
         identity,
         configuration,
         "judge",
-        parent_execution_id=planner,
+        parent_execution_id=generator,
     )
     _succeed(store, evaluator, configuration, "judge")
     report_writer = _start(
@@ -403,12 +479,20 @@ def test_acceptance_completion_rejects_cross_projected_provider_event(
     store, identity, configuration = _create(migrated_db)
     planner = _start(store, identity, configuration, "orchestrator")
     _succeed(store, planner, configuration, "orchestrator")
+    generator = _start(
+        store,
+        identity,
+        configuration,
+        "red_team",
+        parent_execution_id=planner,
+    )
+    _succeed(store, generator, configuration, "red_team")
     evaluator = _start(
         store,
         identity,
         configuration,
         "judge",
-        parent_execution_id=planner,
+        parent_execution_id=generator,
     )
     _succeed(store, evaluator, configuration, "judge")
     report_writer = _start(
@@ -500,11 +584,11 @@ def test_acceptance_pre_send_rechecks_concurrency_call_caps_and_kill_switch(
 ) -> None:
     store, identity, configuration = _create(migrated_db)
     planner = _start(store, identity, configuration, "orchestrator")
-    evaluator = _start(
+    generator = _start(
         store,
         identity,
         configuration,
-        "judge",
+        "red_team",
         parent_execution_id=planner,
     )
     planner_prompt = _prompt("orchestrator")
@@ -513,15 +597,15 @@ def test_acceptance_pre_send_rechecks_concurrency_call_caps_and_kill_switch(
         prompt_version=planner_prompt.version,
         prompt_sha256=planner_prompt.sha256,
     )
-    evaluator_prompt = _prompt("judge")
-    evaluator_logical = store.provider_logical_context(
-        execution_id=evaluator,
-        prompt_version=evaluator_prompt.version,
-        prompt_sha256=evaluator_prompt.sha256,
+    generator_prompt = _prompt("red_team")
+    generator_logical = store.provider_logical_context(
+        execution_id=generator,
+        prompt_version=generator_prompt.version,
+        prompt_sha256=generator_prompt.sha256,
     )
     invocation = store.begin_physical_attempt(planner_logical, 1)
     with pytest.raises(AuthorizationDeniedError, match="concurrency cap is exhausted"):
-        store.begin_physical_attempt(evaluator_logical, 1)
+        store.begin_physical_attempt(generator_logical, 1)
     store.finish_physical_attempt(
         invocation,
         ProviderTerminalEventV1(
@@ -548,7 +632,7 @@ def test_acceptance_pre_send_rechecks_concurrency_call_caps_and_kill_switch(
         reason_code="operator_kill_switch",
     )
     with pytest.raises(AuthorizationDeniedError, match="not executable"):
-        store.begin_physical_attempt(evaluator_logical, 1)
+        store.begin_physical_attempt(generator_logical, 1)
 
 
 def test_acceptance_refuses_missing_staged_configuration_and_nonfailed_judge(
@@ -562,7 +646,7 @@ def test_acceptance_refuses_missing_staged_configuration_and_nonfailed_judge(
             organization_id=_ORGANIZATION_ID,
             configuration_set_sha256=configuration.configuration_sha256,
             generation_policy_sha256=_GENERATION_POLICY_SHA256,
-            acceptance_context={"fixture": "synthetic-agent-acceptance-v1"},
+            acceptance_context={"fixture": "synthetic-agent-acceptance-v2"},
             expires_at=datetime.datetime.now(datetime.UTC) + datetime.timedelta(minutes=10),
             limits=canonical_agent_acceptance_limits(configuration),
         )
@@ -572,7 +656,7 @@ def test_acceptance_refuses_missing_staged_configuration_and_nonfailed_judge(
         organization_id=_ORGANIZATION_ID,
         configuration_set_sha256=configuration.configuration_sha256,
         generation_policy_sha256=_GENERATION_POLICY_SHA256,
-        acceptance_context={"fixture": "synthetic-agent-acceptance-v1"},
+        acceptance_context={"fixture": "synthetic-agent-acceptance-v2"},
         expires_at=datetime.datetime.now(datetime.UTC) + datetime.timedelta(minutes=10),
         limits=canonical_agent_acceptance_limits(configuration),
     )

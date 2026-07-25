@@ -129,7 +129,6 @@ _FINDING_HISTORY_LIMIT = 50
 # Hosted credential readiness is refreshed on a 30-second cadence. Give one missed refresh room
 # without allowing an old Runner observation to become durable launch authority.
 _HOSTED_RUNTIME_HEARTBEAT_FRESHNESS_SECONDS = 90
-_AGENT_ACCEPTANCE_BUDGET_ROLES = frozenset({"orchestrator", "judge", "documentation"})
 _SAFE_ACCOUNTING_COUNTERS = frozenset(
     {
         "input_tokens",
@@ -339,14 +338,16 @@ def _budget_run_for_role(
     *,
     role: str,
 ) -> Mapping[str, Any] | None:
-    """Keep a three-role acceptance run from claiming generator budget authority."""
+    """Expose only the exact roles authorized by this acceptance envelope version."""
 
-    if (
-        run is not None
-        and run.get("budget_status") == "agent_acceptance"
-        and role not in _AGENT_ACCEPTANCE_BUDGET_ROLES
-    ):
-        return None
+    if run is not None and run.get("budget_status") == "agent_acceptance":
+        allowed_roles = run.get("acceptance_allowed_roles")
+        if (
+            not isinstance(allowed_roles, list)
+            or any(not isinstance(item, str) for item in allowed_roles)
+            or role not in allowed_roles
+        ):
+            return None
     return run
 
 
@@ -1397,7 +1398,8 @@ class PostgresApiBackend(ApiBackend):
                         "ORDER BY state_event.id DESC LIMIT 1) = 'complete' "
                         "ORDER BY candidate.created_at DESC, candidate.run_id DESC LIMIT 1"
                         ") "
-                        "AND e.agent_role IN ('orchestrator', 'judge', 'documentation') "
+                        "AND e.agent_role IN "
+                        "('orchestrator', 'red_team', 'judge', 'documentation') "
                         "AND e.attempt_id = r.acceptance_attempt_id "
                         "AND e.status = 'succeeded' "
                         "AND e.cost_measurement_state = 'measured' "
@@ -1472,7 +1474,8 @@ class PostgresApiBackend(ApiBackend):
                         connection,
                         "SELECT DISTINCT ON (acceptance_configuration_sha256) "
                         "acceptance_configuration_sha256 AS configuration_sha256, "
-                        "run_id, created_at, 'agent_acceptance'::text AS budget_status "
+                        "run_id, created_at, 'agent_acceptance'::text AS budget_status, "
+                        "acceptance_limits->'allowed_roles' AS acceptance_allowed_roles "
                         "FROM campaign_runs WHERE organization_id = :org "
                         "AND run_kind = 'agent_acceptance' "
                         "ORDER BY acceptance_configuration_sha256, created_at DESC",

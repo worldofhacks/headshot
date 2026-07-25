@@ -1,4 +1,4 @@
-"""Target-free authority and cap tests for the three-role live acceptance command."""
+"""Target-free authority and cap tests for the four-role live acceptance command."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import inspect
 import pytest
 
 import agentforge.agent_acceptance as acceptance
-from agentforge.agents.hosted_runtime import HostedExecutionLineage
+from agentforge.agents.hosted_runtime import HostedCompositionError, HostedExecutionLineage
 from agentforge.policy.scoped_credentials import CredentialResolutionError
 
 
@@ -64,6 +64,7 @@ def test_acceptance_preflight_requires_every_sealed_binding_and_langfuse_authent
 
     references = (
         "secretref://acceptance/orchestrator",
+        "secretref://acceptance/red-team",
         "secretref://acceptance/judge",
         "secretref://acceptance/documentation",
     )
@@ -172,21 +173,192 @@ def test_acceptance_lifecycle_projects_complete_provider_lineage() -> None:
         assert store.terminal[key] == expected
 
 
-def test_acceptance_authority_forbids_generator_and_target_calls() -> None:
+def test_acceptance_lifecycle_keeps_context_until_invalid_red_team_output_is_failed() -> None:
+    class Store:
+        terminals: list[dict[str, object]]
+
+        def __init__(self) -> None:
+            self.terminals = []
+
+        def start_acceptance_agent_execution(self, **_values: object) -> str:
+            return "execution-red-team"
+
+        def finish_hosted_agent_execution(self, **values: object) -> None:
+            self.terminals.append(values)
+
+    class Telemetry:
+        def begin_agent(self, **_values: object) -> bool:
+            return True
+
+        def finish_agent(self, **_values: object) -> None:
+            return None
+
+        def flush(self) -> None:
+            return None
+
+    store = Store()
+    lifecycle = acceptance._AcceptanceLifecycle(
+        store=store,  # type: ignore[arg-type]
+        telemetry=Telemetry(),  # type: ignore[arg-type]
+        run_id="AR-red-team-validation",
+        attempt_id="a" * 64,
+        calibration_id=f"JC-{'b' * 64}",
+        deterministic_verdict={"state": "EXPLOIT_CONFIRMED"},
+    )
+    execution_id = lifecycle.start(
+        role="red_team",
+        parent_execution_id="execution-orchestrator",
+        input_payload={"synthetic": True},
+        provider="openrouter",
+        model="qwen/qwen3.5-397b-a17b",
+        upstream_provider="atlas-cloud",
+        configuration_sha256="c" * 64,
+        role_configuration_sha256="d" * 64,
+        generation_policy_sha256="e" * 64,
+        judge_calibration_id=None,
+    )
+    lineage = HostedExecutionLineage(
+        execution_id=execution_id,
+        parent_execution_id="execution-orchestrator",
+        role="red_team",
+        parent_request_id="provider-request-orchestrator",
+        requested_model="qwen/qwen3.5-397b-a17b",
+        returned_model="qwen/qwen3.5-397b-a17b",
+        upstream_provider="AtlasCloud",
+        provider_request_id="provider-request-red-team",
+        input_tokens=10,
+        output_tokens=5,
+        reasoning_tokens=2,
+        measured_cost_usd="0.0123",
+        configuration_sha256="c" * 64,
+        role_configuration_sha256="d" * 64,
+        generation_policy_sha256="e" * 64,
+        physical_attempts=1,
+    )
+
+    with pytest.raises(HostedCompositionError, match="not durably quarantined"):
+        lifecycle.finish(
+            execution_id=execution_id,
+            status="succeeded",
+            output_payload={
+                "generated_output_sha256": "g" * 64,
+                "generated_variant_count": 1,
+                "generated_output_disposition": "quarantined_not_dispatched",
+                "target_call_limit": 0,
+            },
+            lineage=lineage,
+            error_code=None,
+        )
+    assert store.terminals == []
+
+    lifecycle.finish(
+        execution_id=execution_id,
+        status="failed",
+        output_payload={"status": "failed"},
+        lineage=None,
+        error_code="red-team-output-invalid",
+    )
+    assert store.terminals[0]["status"] == "failed"
+
+
+def test_acceptance_lifecycle_can_retry_a_failed_terminal_write() -> None:
+    class Store:
+        finish_calls = 0
+
+        def start_acceptance_agent_execution(self, **_values: object) -> str:
+            return "execution-orchestrator"
+
+        def finish_hosted_agent_execution(self, **_values: object) -> None:
+            self.finish_calls += 1
+            if self.finish_calls == 1:
+                raise RuntimeError("synthetic storage outage")
+
+    class Telemetry:
+        def begin_agent(self, **_values: object) -> bool:
+            return True
+
+        def finish_agent(self, **_values: object) -> None:
+            return None
+
+        def flush(self) -> None:
+            return None
+
+    store = Store()
+    lifecycle = acceptance._AcceptanceLifecycle(
+        store=store,  # type: ignore[arg-type]
+        telemetry=Telemetry(),  # type: ignore[arg-type]
+        run_id="AR-terminal-retry",
+        attempt_id="a" * 64,
+        calibration_id=f"JC-{'b' * 64}",
+        deterministic_verdict={"state": "EXPLOIT_CONFIRMED"},
+    )
+    execution_id = lifecycle.start(
+        role="orchestrator",
+        parent_execution_id=None,
+        input_payload={"synthetic": True},
+        provider="openrouter",
+        model="anthropic/claude-opus-4.8",
+        upstream_provider="anthropic",
+        configuration_sha256="c" * 64,
+        role_configuration_sha256="d" * 64,
+        generation_policy_sha256="e" * 64,
+        judge_calibration_id=None,
+    )
+    lineage = HostedExecutionLineage(
+        execution_id=execution_id,
+        parent_execution_id=None,
+        role="orchestrator",
+        parent_request_id=None,
+        requested_model="anthropic/claude-opus-4.8",
+        returned_model="anthropic/claude-opus-4.8",
+        upstream_provider="Anthropic",
+        provider_request_id="provider-request",
+        input_tokens=10,
+        output_tokens=5,
+        reasoning_tokens=2,
+        measured_cost_usd="0.0123",
+        configuration_sha256="c" * 64,
+        role_configuration_sha256="d" * 64,
+        generation_policy_sha256="e" * 64,
+        physical_attempts=1,
+    )
+    finish = {
+        "execution_id": execution_id,
+        "status": "succeeded",
+        "output_payload": {"selected": "synthetic"},
+        "lineage": lineage,
+        "error_code": None,
+    }
+
+    with pytest.raises(RuntimeError, match="storage outage"):
+        lifecycle.finish(**finish)
+    lifecycle.finish(**finish)
+    assert store.finish_calls == 2
+
+
+def test_acceptance_authority_allows_each_hosted_role_once_and_forbids_target_calls() -> None:
     limits = acceptance.acceptance_limits()
 
+    assert limits["schema_version"] == "2"
     assert limits["network_scope"] == "openrouter_langfuse_only"
     assert limits["target_call_limit"] == 0
     assert limits["allowed_roles"] == [
         "orchestrator",
+        "red_team",
         "judge",
         "documentation",
     ]
-    assert "red_team" not in limits["role_call_caps"]
-    assert limits["global_call_cap"] == 3
+    assert limits["role_call_caps"] == {
+        "orchestrator": 1,
+        "red_team": 1,
+        "judge": 1,
+        "documentation": 1,
+    }
+    assert limits["role_usd_caps"]["red_team"] == "1"
+    assert limits["global_call_cap"] == 4
 
 
-def test_acceptance_module_has_no_generator_scanner_or_target_dispatch_import() -> None:
+def test_acceptance_module_has_no_scanner_or_target_dispatch_import() -> None:
     tree = ast.parse(inspect.getsource(acceptance))
     imported = {
         alias.name
@@ -201,7 +373,6 @@ def test_acceptance_module_has_no_generator_scanner_or_target_dispatch_import() 
     )
 
     forbidden = (
-        "agentforge.agents.red_team",
         "agentforge.security_tools",
         "agentforge.campaign.coordinator",
         "agentforge.policy.gateway",

@@ -1,9 +1,9 @@
 """Exact PostgreSQL/Langfuse reconciliation for one agent-only acceptance run.
 
-The verifier is deliberately target-free. It accepts only the three-role
-Orchestrator -> Judge -> Documentation chain, exactly one canonical provider event per role,
-and zero durable target requests. Remote Langfuse observations are evidence only after every
-typed agent/generation pair reconciles with the canonical 0017/0018-0019 lineage.
+The verifier is deliberately target-free. It accepts only the four-role
+Orchestrator -> Red Team -> Judge -> Documentation chain, exactly one canonical provider event
+per role, and zero durable target requests. Remote Langfuse observations are evidence only after
+every typed agent/generation pair reconciles with the canonical 0017/0018-0021 lineage.
 """
 
 from __future__ import annotations
@@ -20,20 +20,21 @@ from sqlalchemy import Connection, Engine, text
 from agentforge.correlation import campaign_trace_id
 from agentforge.providers.lineage import served_provider_matches_configured
 
-ACCEPTANCE_ROLES = ("orchestrator", "judge", "documentation")
+ACCEPTANCE_ROLES = ("orchestrator", "red_team", "judge", "documentation")
 OBSERVATION_FIELDS = "core,basic,io,usage,metadata,model"
 _EXPECTED_LIMITS = {
-    "schema_version": "1",
+    "schema_version": "2",
     "network_scope": "openrouter_langfuse_only",
     "target_call_limit": 0,
     "allowed_roles": list(ACCEPTANCE_ROLES),
     "role_call_caps": {role: 1 for role in ACCEPTANCE_ROLES},
     "role_usd_caps": {
         "orchestrator": "1.5",
+        "red_team": "1",
         "judge": "4",
         "documentation": "1",
     },
-    "global_call_cap": 3,
+    "global_call_cap": 4,
     "global_usd_cap": "10",
 }
 _PROVIDER_EVENT_ID = re.compile(r"^[0-9a-f]{64}$")
@@ -260,7 +261,7 @@ def load_acceptance_snapshot(
 
 
 def assert_durable_acceptance(snapshot: AcceptanceSnapshot) -> dict[str, dict[str, Any]]:
-    """Require exactly three successful logical/physical calls and no target traffic."""
+    """Require exactly four successful logical/physical calls and no target traffic."""
 
     run = snapshot.run
     if run["run_kind"] != "agent_acceptance" or run["state"] != "complete":
@@ -301,7 +302,7 @@ def assert_durable_acceptance(snapshot: AcceptanceSnapshot) -> dict[str, dict[st
     ):
         raise AssertionError("agent acceptance canonical synthetic attempt is invalid")
     if len(snapshot.agents) != len(ACCEPTANCE_ROLES):
-        raise AssertionError("agent acceptance requires exactly three logical executions")
+        raise AssertionError("agent acceptance requires exactly four logical executions")
     roles = [str(row["agent_role"]) for row in snapshot.agents]
     if Counter(roles) != Counter(ACCEPTANCE_ROLES):
         raise AssertionError("agent acceptance logical role coverage is invalid")
@@ -311,15 +312,18 @@ def assert_durable_acceptance(snapshot: AcceptanceSnapshot) -> dict[str, dict[st
         raise AssertionError("agent acceptance execution identities are duplicated")
 
     orchestrator = by_role["orchestrator"]
+    red_team = by_role["red_team"]
     judge = by_role["judge"]
     documentation = by_role["documentation"]
     if (
         orchestrator["parent_execution_id"] is not None
-        or judge["parent_execution_id"] != orchestrator["execution_id"]
+        or red_team["parent_execution_id"] != orchestrator["execution_id"]
+        or judge["parent_execution_id"] != red_team["execution_id"]
         or documentation["parent_execution_id"] != judge["execution_id"]
     ):
         raise AssertionError(
-            "agent acceptance parent chain must be Orchestrator -> Judge -> Documentation"
+            "agent acceptance parent chain must be "
+            "Orchestrator -> Red Team -> Judge -> Documentation"
         )
 
     for row in snapshot.agents:
@@ -368,7 +372,7 @@ def assert_durable_acceptance(snapshot: AcceptanceSnapshot) -> dict[str, dict[st
         or type(judge["oracle_agreement"]) is not bool
     ):
         raise AssertionError("agent acceptance Judge is not advisory and oracle-decisive")
-    for role in ("orchestrator", "documentation"):
+    for role in ("orchestrator", "red_team", "documentation"):
         row = by_role[role]
         if (
             row["judge_calibration_id"] is not None
@@ -377,9 +381,18 @@ def assert_durable_acceptance(snapshot: AcceptanceSnapshot) -> dict[str, dict[st
             or row["oracle_agreement"] is not None
         ):
             raise AssertionError(f"{role}: non-Judge execution carries Judge authority")
+    red_team_detail = red_team["detail"]
+    if (
+        not isinstance(red_team_detail, dict)
+        or red_team_detail.get("generated_output_disposition") != "quarantined_not_dispatched"
+        or red_team_detail.get("generated_variant_count") != 1
+        or _PROVIDER_EVENT_ID.fullmatch(str(red_team_detail.get("generated_output_sha256", "")))
+        is None
+    ):
+        raise AssertionError("agent acceptance Red Team output is not quarantined")
 
     if len(snapshot.provider_calls) != len(ACCEPTANCE_ROLES):
-        raise AssertionError("agent acceptance requires exactly three provider invocations/events")
+        raise AssertionError("agent acceptance requires exactly four provider invocations/events")
     physical_by_execution: dict[str, dict[str, Any]] = {}
     event_ids: set[str] = set()
     for call in snapshot.provider_calls:
@@ -514,11 +527,11 @@ def assert_remote_acceptance(
     *,
     expected_environment: str,
 ) -> dict[str, tuple[str, str]]:
-    """Reconcile exactly three typed Langfuse agent/generation pairs."""
+    """Reconcile exactly four typed Langfuse agent/generation pairs."""
 
     assert_durable_acceptance(snapshot)
     if len(observations) != len(ACCEPTANCE_ROLES) * 2:
-        raise AssertionError("Langfuse acceptance trace must contain exactly three role pairs")
+        raise AssertionError("Langfuse acceptance trace must contain exactly four role pairs")
     rows_by_execution = {str(row["execution_id"]): row for row in snapshot.agents}
     observations_by_execution: defaultdict[str, list[Any]] = defaultdict(list)
     observation_ids: set[str] = set()
@@ -630,7 +643,7 @@ def record_queryback_verification(
     run_id: str,
     execution_ids: list[str],
 ) -> None:
-    """Atomically mark exactly the remotely reconciled three executions exported."""
+    """Atomically mark exactly the remotely reconciled four executions exported."""
 
     if len(execution_ids) != len(ACCEPTANCE_ROLES) or len(set(execution_ids)) != len(
         ACCEPTANCE_ROLES
@@ -665,7 +678,7 @@ def record_queryback_verification(
         )
         if recorded_ids != expected_ids:
             raise AssertionError(
-                "acceptance Langfuse verification persistence did not match all three executions"
+                "acceptance Langfuse verification persistence did not match all four executions"
             )
 
 

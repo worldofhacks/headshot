@@ -52,7 +52,7 @@ dependencies = [
 [project.optional-dependencies]
 # Local dev tooling only. (httpx is now a runtime dep — the OpenEMR adapter uses it; it also
 # backs fastapi's TestClient used by the health tests.)
-dev = ["ruff>=0.6", "pytest>=8", "pre-commit>=3"]
+dev = ["ruff==0.16.0", "pytest>=8", "pre-commit>=3"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

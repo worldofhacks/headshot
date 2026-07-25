@@ -2020,7 +2020,12 @@ const decodeAgentAcceptanceExecution = (
     "finished_at",
   ], name);
   literal(result, "scope", ["agent_acceptance"], name);
-  literal(result, "agent_role", ["orchestrator", "judge", "documentation"], name);
+  literal(
+    result,
+    "agent_role",
+    ["orchestrator", "red_team", "judge", "documentation"],
+    name,
+  );
   for (const key of [
     "acceptance_run_id",
     "execution_id",

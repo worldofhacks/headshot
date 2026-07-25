@@ -168,10 +168,10 @@ def _acceptance_provider_budget() -> dict[str, object]:
         "global_usd_spent": 0.03,
         "global_usd_remaining": 9.97,
         "global_usd_remaining_upper_bound": 9.97,
-        "global_call_cap": 3,
+        "global_call_cap": 4,
         "global_physical_calls": 1,
         "global_call_count_state": "exact",
-        "global_calls_remaining": 2,
+        "global_calls_remaining": 3,
     }
 
 
@@ -187,16 +187,36 @@ def test_agent_acceptance_budget_requires_run_identity_and_preserves_caps() -> N
         AgentBudgetReadModel(**{**payload, "campaign_run_id": "campaign-1"})
 
 
-def test_agent_acceptance_budget_never_claims_generator_authority() -> None:
-    acceptance_run = {
+def test_agent_acceptance_budget_projects_only_roles_in_its_versioned_authority() -> None:
+    legacy_acceptance_run = {
         "run_id": "AR-live-acceptance",
         "budget_status": "agent_acceptance",
+        "acceptance_allowed_roles": ["orchestrator", "judge", "documentation"],
+    }
+    four_role_acceptance_run = {
+        **legacy_acceptance_run,
+        "acceptance_allowed_roles": [
+            "orchestrator",
+            "red_team",
+            "judge",
+            "documentation",
+        ],
     }
 
-    assert _budget_run_for_role(acceptance_run, role="orchestrator") == acceptance_run
-    assert _budget_run_for_role(acceptance_run, role="judge") == acceptance_run
-    assert _budget_run_for_role(acceptance_run, role="documentation") == acceptance_run
-    assert _budget_run_for_role(acceptance_run, role="red_team") is None
+    assert _budget_run_for_role(legacy_acceptance_run, role="orchestrator") == (
+        legacy_acceptance_run
+    )
+    assert _budget_run_for_role(legacy_acceptance_run, role="red_team") is None
+    assert _budget_run_for_role(four_role_acceptance_run, role="red_team") == (
+        four_role_acceptance_run
+    )
+    assert (
+        _budget_run_for_role(
+            {"run_id": "AR-malformed", "budget_status": "agent_acceptance"},
+            role="orchestrator",
+        )
+        is None
+    )
 
 
 def test_agent_acceptance_execution_requires_canonical_measured_remote_lineage() -> None:
@@ -225,9 +245,19 @@ def test_agent_acceptance_execution_requires_canonical_measured_remote_lineage()
     evidence = AgentAcceptanceExecutionReadModel(**payload)
     assert evidence.scope == "agent_acceptance"
     assert evidence.returned_model == "anthropic/claude-opus-4.8"
+    red_team_evidence = AgentAcceptanceExecutionReadModel(
+        **{
+            **payload,
+            "agent_role": "red_team",
+            "parent_execution_id": "acceptance-execution-planner",
+            "returned_model": "qwen/qwen3.5-397b-a17b",
+            "upstream_provider": "Together",
+        }
+    )
+    assert red_team_evidence.agent_role == "red_team"
 
     for malformed in (
-        {**payload, "agent_role": "red_team"},
+        {**payload, "agent_role": "unreviewed_generator"},
         {**payload, "acceptance_run_id": "campaign-1"},
         {**payload, "acceptance_attempt_id": "not-an-attempt"},
         {**payload, "cost_measurement_state": "partial"},
