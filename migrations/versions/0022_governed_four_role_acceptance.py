@@ -77,16 +77,23 @@ def _target_free_limits_sql(
 
 
 def _governed_limits_sql() -> str:
-    """v3 governed limits: target-BOUND (target_call_limit=1), four roles, one call each."""
+    """v3 governed limits: STRUCTURAL — the four-role shape + the ABSOLUTE one-dispatch invariant.
+
+    target_call_limit=1 and network_scope=policy_gateway_target are pinned here (never derived),
+    so a relaxed budget can never relax the dispatch ceiling. The per-role/global call+spend BUDGET
+    is config-DERIVED and validated for positivity/shape only (global calls bounded by the 56
+    platform ceiling; global spend by the outer <=10 bound); its exact values are matched to the
+    staged, content-hashed config by the store. This accepts the closed 4-call harness config AND
+    the 56-call production config alike, while the one-dispatch guarantee stays absolute.
+    """
     roles = _GOVERNED_ROLES
-    usd_caps = ("1.5", "1", "4", "1")
     role_array = ",".join(f"'{role}'" for role in roles)
     role_json = ",".join(f'"{role}"' for role in roles)
     call_types = " AND ".join(
         f"jsonb_typeof(acceptance_limits->'role_call_caps'->'{role}') = 'number'" for role in roles
     )
     call_values = " AND ".join(
-        f"(acceptance_limits->'role_call_caps'->>'{role}')::numeric = 1" for role in roles
+        f"(acceptance_limits->'role_call_caps'->>'{role}')::numeric >= 1" for role in roles
     )
     usd_types = " AND ".join(
         f"jsonb_typeof(acceptance_limits->'role_usd_caps'->'{role}') = 'string'" for role in roles
@@ -95,10 +102,9 @@ def _governed_limits_sql() -> str:
         (
             f"acceptance_limits->'role_usd_caps'->>'{role}' "
             "~ '^(0|[1-9][0-9]*)(\\.[0-9]+)?$' "
-            f"AND (acceptance_limits->'role_usd_caps'->>'{role}')::numeric > 0 "
-            f"AND (acceptance_limits->'role_usd_caps'->>'{role}')::numeric = {cap}"
+            f"AND (acceptance_limits->'role_usd_caps'->>'{role}')::numeric > 0"
         )
-        for role, cap in zip(roles, usd_caps, strict=True)
+        for role in roles
     )
     return (
         "(acceptance_limits->>'network_scope' = 'policy_gateway_target' "
@@ -114,8 +120,8 @@ def _governed_limits_sql() -> str:
         f"AND (acceptance_limits->'role_usd_caps') - ARRAY[{role_array}] = '{{}}'::jsonb "
         f"AND {usd_types} AND {usd_values} "
         "AND jsonb_typeof(acceptance_limits->'global_call_cap') = 'number' "
-        f"AND (acceptance_limits->>'global_call_cap')::numeric = {len(roles)} "
-        "AND (acceptance_limits->>'global_usd_cap')::numeric = 10)"
+        f"AND (acceptance_limits->>'global_call_cap')::numeric >= {len(roles)} "
+        "AND (acceptance_limits->>'global_call_cap')::numeric <= 56)"
     )
 
 

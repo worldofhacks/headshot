@@ -10,7 +10,7 @@ import re
 import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from types import SimpleNamespace
 from typing import Any
 
@@ -240,22 +240,75 @@ _GOVERNED_ACCEPTANCE_ROLES: tuple[AgentRole, ...] = (
 _GOVERNED_ACCEPTANCE_RUN_PREFIX = "GA-"
 
 
-def _closed_governed_acceptance_limits() -> dict[str, Any]:
-    """The one v3 governed envelope: four roles, one call each, exactly one bounded dispatch."""
-
-    roles = _GOVERNED_ACCEPTANCE_ROLES
-    return {
-        "schema_version": "3",
-        "network_scope": "policy_gateway_target",
-        "target_call_limit": 1,
-        "allowed_roles": list(roles),
-        "role_call_caps": {role: 1 for role in roles},
-        "role_usd_caps": {
-            role: format(_AGENT_ACCEPTANCE_ROLE_USD_CAPS[role], "f") for role in roles
-        },
-        "global_call_cap": len(roles),
-        "global_usd_cap": format(_AGENT_ACCEPTANCE_GLOBAL_USD_CAP, "f"),
+# The platform physical-call ceiling (agents.hosted.HOSTED_MAX_PHYSICAL_CALLS); the governed
+# global call budget is config-DERIVED but can never exceed this absolute platform bound.
+_GOVERNED_GLOBAL_CALL_CEILING = 56
+_GOVERNED_LIMIT_KEYS = frozenset(
+    {
+        "schema_version",
+        "network_scope",
+        "target_call_limit",
+        "allowed_roles",
+        "role_call_caps",
+        "role_usd_caps",
+        "global_call_cap",
+        "global_usd_cap",
     }
+)
+
+
+def _governed_limits_shape_ok(limits: Mapping[str, Any]) -> bool:
+    """Structural validity of a governed envelope: the four-role shape + the ABSOLUTE one-dispatch
+    invariant. The per-role/global call+spend BUDGET is validated for positivity/shape only; its
+    EXACT values are config-DERIVED and matched to the staged config by the role authorizer.
+
+    The one-dispatch invariant (``target_call_limit=1`` + ``network_scope=policy_gateway_target``)
+    is pinned here by construction and is NEVER among the derived values — a relaxed budget cannot
+    relax the dispatch ceiling.
+    """
+
+    if not isinstance(limits, Mapping) or set(limits) != _GOVERNED_LIMIT_KEYS:
+        return False
+    roles = _GOVERNED_ACCEPTANCE_ROLES
+    if (
+        limits.get("schema_version") != "3"
+        or limits.get("network_scope") != "policy_gateway_target"  # ABSOLUTE
+        or limits.get("target_call_limit") != 1  # ABSOLUTE
+        or limits.get("allowed_roles") != list(roles)
+    ):
+        return False
+    call_caps = limits.get("role_call_caps")
+    usd_caps = limits.get("role_usd_caps")
+    if (
+        not isinstance(call_caps, Mapping)
+        or set(call_caps) != set(roles)
+        or not isinstance(usd_caps, Mapping)
+        or set(usd_caps) != set(roles)
+    ):
+        return False
+    if any(type(call_caps[role]) is not int or call_caps[role] < 1 for role in roles):
+        return False
+    try:
+        if any(
+            not isinstance(usd_caps[role], str)
+            or _USD.fullmatch(usd_caps[role]) is None
+            or Decimal(usd_caps[role]) <= 0
+            for role in roles
+        ):
+            return False
+        global_calls = limits.get("global_call_cap")
+        global_usd = limits.get("global_usd_cap")
+        if (
+            type(global_calls) is not int
+            or not (len(roles) <= global_calls <= _GOVERNED_GLOBAL_CALL_CEILING)
+            or not isinstance(global_usd, str)
+            or _USD.fullmatch(global_usd) is None
+            or not (Decimal("0") < Decimal(global_usd) <= _AGENT_ACCEPTANCE_GLOBAL_USD_CAP)
+        ):
+            return False
+    except (InvalidOperation, TypeError):
+        return False
+    return True
 
 
 def _canonical_agent_acceptance_limits_for_configuration(
@@ -329,28 +382,49 @@ def canonical_agent_acceptance_limits(
 def canonical_governed_acceptance_limits(
     configuration: HostedConfigurationSet,
 ) -> dict[str, Any]:
-    """Return the v3 governed envelope: the four-role caps of v2, but target-BOUND (one dispatch).
+    """DERIVE the v3 governed envelope from the staged, reviewed four-role configuration.
 
-    A governed run reuses the exact four-role call/spend envelope the target-free v2 acceptance
-    validates, so it must be staged on the same four-role configuration; only the network scope and
-    the single permitted target dispatch differ.
+    The per-role/global call+spend BUDGET is the config's own reviewed budget (so a governed run is
+    bounded by exactly the authorized configuration — the closed 4-call harness config OR the
+    56-call production config, whichever is staged). The one-dispatch invariant
+    (``target_call_limit=1`` + ``network_scope=policy_gateway_target``) is PINNED here by
+    construction and is never among the derived values. Retries live only at the agent-reasoning
+    (provider) level in the config; they can never add a second target dispatch because the dispatch
+    ceiling is structural, not derived.
     """
 
-    envelope = _canonical_agent_acceptance_limits_for_configuration(configuration)
-    if envelope["schema_version"] != "2":
-        raise InvalidControlPlaneInput("governed acceptance requires the four-role call envelope")
-    governed = _closed_governed_acceptance_limits()
-    if (
-        envelope["allowed_roles"] != governed["allowed_roles"]
-        or envelope["role_call_caps"] != governed["role_call_caps"]
-        or envelope["role_usd_caps"] != governed["role_usd_caps"]
-        or envelope["global_call_cap"] != governed["global_call_cap"]
-        or envelope["global_usd_cap"] != governed["global_usd_cap"]
+    validate_hosted_configuration_set(configuration)
+    roles = _GOVERNED_ACCEPTANCE_ROLES
+    role_map = {role.role: role for role in configuration.roles}
+    if set(role_map) != set(roles):
+        raise InvalidControlPlaneInput(
+            "governed acceptance requires the exact four-role configuration"
+        )
+    global_calls = configuration.global_limits.max_calls
+    if type(global_calls) is not int or not (
+        len(roles) <= global_calls <= _GOVERNED_GLOBAL_CALL_CEILING
     ):
         raise InvalidControlPlaneInput(
-            "governed acceptance caps differ from the four-role configuration envelope"
+            "governed acceptance global call budget is outside the platform ceiling"
         )
-    return governed
+    if configuration.global_limits.max_usd > _AGENT_ACCEPTANCE_GLOBAL_USD_CAP:
+        raise InvalidControlPlaneInput(
+            "governed acceptance global spend budget exceeds the platform ceiling"
+        )
+    for role in roles:
+        limits = role_map[role].limits
+        if type(limits.max_calls) is not int or limits.max_calls < 1 or limits.max_usd <= 0:
+            raise InvalidControlPlaneInput(f"{role} governed call/spend budget is invalid")
+    return {
+        "schema_version": "3",
+        "network_scope": "policy_gateway_target",  # ABSOLUTE — pinned, never derived
+        "target_call_limit": 1,  # ABSOLUTE — pinned, never derived
+        "allowed_roles": list(roles),
+        "role_call_caps": {role: role_map[role].limits.max_calls for role in roles},
+        "role_usd_caps": {role: format(role_map[role].limits.max_usd, "f") for role in roles},
+        "global_call_cap": global_calls,
+        "global_usd_cap": format(configuration.global_limits.max_usd, "f"),
+    }
 
 
 class ControlPlaneStore:
@@ -2838,9 +2912,10 @@ class ControlPlaneStore:
             or len(reviewed_category) > 64
         ):
             raise InvalidControlPlaneInput("governed acceptance category is invalid")
-        supplied_limits = self._bounded_agent_payload(
-            dict(limits) if limits is not None else _closed_governed_acceptance_limits(),
-            label="governed acceptance limits",
+        supplied_limits = (
+            self._bounded_agent_payload(dict(limits), label="governed acceptance limits")
+            if limits is not None
+            else None
         )
         if (
             not isinstance(expires_at, datetime.datetime)
@@ -2872,10 +2947,12 @@ class ControlPlaneStore:
                 raise AuthorizationDeniedError(
                     "governed acceptance requires an existing human-staged configuration"
                 ) from exc
+            # The stored budget is DERIVED from the staged, content-hashed config (guardrail 2:
+            # no unreviewed dispatch); a supplied envelope, if any, must match it exactly.
             expected_limits = canonical_governed_acceptance_limits(configuration)
-            if supplied_limits != expected_limits:
+            if supplied_limits is not None and supplied_limits != expected_limits:
                 raise AuthorizationDeniedError(
-                    "governed acceptance limits differ from the closed governed envelope"
+                    "governed acceptance limits differ from the configuration-derived envelope"
                 )
             authorization = (
                 connection.execute(
@@ -3361,10 +3438,9 @@ class ControlPlaneStore:
             if not isinstance(row[column], str) or _SHA256.fullmatch(row[column]) is None:
                 raise AuthorizationDeniedError("governed acceptance authority hash is invalid")
         raw_limits = row["acceptance_limits"]
-        if (
-            not isinstance(raw_limits, Mapping)
-            or dict(raw_limits) != _closed_governed_acceptance_limits()
-        ):
+        # Row-level check is STRUCTURAL (four-role shape + the absolute one-dispatch invariant); the
+        # EXACT config-derived budget is matched against the staged config by the role authorizer.
+        if not isinstance(raw_limits, Mapping) or not _governed_limits_shape_ok(raw_limits):
             raise AuthorizationDeniedError(
                 "governed acceptance limits differ from the closed governed envelope"
             )
