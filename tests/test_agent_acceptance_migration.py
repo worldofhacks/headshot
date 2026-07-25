@@ -176,11 +176,13 @@ def _insert_agent_execution(
                 "INSERT INTO agent_executions "
                 "(execution_id, organization_id, campaign_run_id, attempt_id, "
                 "parent_execution_id, agent_role, provider, model, execution_mode, "
-                "configuration_version, input_sha256, trace_id, configuration_set_sha256, "
+                "configuration_version, input_sha256, trace_id, detail, "
+                "configuration_set_sha256, "
                 "role_configuration_sha256, generation_policy_sha256, "
                 "judge_calibration_id, judge_calibration_state) VALUES "
                 "(:execution, :org, :run, :attempt, :parent, :role, 'openrouter', "
                 ":model, 'hosted_advisory', 1, :input_hash, :trace_id, "
+                '\'{"provider_lineage_state":"canonical_physical"}\'::jsonb, '
                 ":configuration, :role_configuration, :generation_policy, "
                 ":calibration, :calibration_state)"
             ),
