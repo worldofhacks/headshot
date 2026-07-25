@@ -50,9 +50,12 @@ Two columns, deliberately, because they do not yet agree:
   observation of a control that held rather than a defect — but "predates the enum alignment" is a
   reason, not an exemption.
 - **Reconciled severity** is the outcome of an independent offline re-validation of 004–006, recorded
-  on lane `redteam/judge-calibration-corpus-evidence` (commit `507d032`, PR #33). **Those corrected
-  report bodies are not on this base.** Carry the reconciled values in any summary, cost, or
-  requirements document; the report bodies themselves are corrected by that lane, not here.
+  on lane `redteam/judge-calibration-corpus-evidence` (commit `507d032`). **Those corrected report
+  bodies are not on this base, and that lane has no open PR to the integration base** — so no work
+  currently in flight lands them. PR #33 (`codex/integration-l-findings-grounding`) is a *different*
+  lane: it grounds captured session evidence for 004 and 005 and leaves both severities unchanged.
+  Carry the reconciled values in any summary, cost, or requirements document, and treat the enum
+  violations below as open until `507d032` or an equivalent is proposed.
 
 The re-validation's substantive changes, summarised so the two columns can be reconciled without
 re-reading the lane: 004 was downgraded because there is **no negative control** — it is not
