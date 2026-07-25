@@ -1310,6 +1310,33 @@ class ControlPlaneStore:
         with self._engine.connect() as connection:
             return self._campaign_run(connection, principal.organization_id, run_id)
 
+    def load_authorization_request(
+        self,
+        *,
+        organization_id: str,
+        request_id: str,
+    ) -> AuthorizationRequestRecord:
+        """Read one authorization request, revalidating its scope integrity.
+
+        A composition root that has to build a run's dependencies BEFORE the run row exists (the
+        governed acceptance entrypoint) needs the approved scope, its hash, and the launcher
+        identity. This is a read-only view over the same verified path the write flows use — the
+        recomputed ``scope_hash`` must equal the stored one — and it grants no authority by itself:
+        the approval decision and two-person control are still enforced where the run is created.
+        """
+
+        if (
+            not isinstance(organization_id, str)
+            or not organization_id
+            or len(organization_id) > 64
+            or not isinstance(request_id, str)
+            or not request_id
+            or len(request_id) > 128
+        ):
+            raise InvalidControlPlaneInput("authorization request identity is invalid")
+        with self._engine.connect() as connection:
+            return self._authorization_request(connection, organization_id, request_id)
+
     def load_run_for_execution(self, run_id: str) -> AuthorizedRunRecord:
         """Load and revalidate a persisted human authorization without accepting browser state."""
 
