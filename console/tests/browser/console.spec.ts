@@ -37,7 +37,10 @@ test("direct routes and browser history restore authoritative screens", async ({
   await expect(page.getByText("Active configured provider", { exact: true })).toBeVisible();
   await expect(page.getByText("Active assignment served model", { exact: true })).toBeVisible();
   await expect(page.getByText("unavailable — no campaign execution recorded", { exact: true }).first()).toBeVisible();
-  await expect(page.getByLabel("Execution mode")).toBeEnabled();
+  await expect(page.getByRole("heading", {
+    name: "Hosted role assignment",
+    exact: true,
+  })).toBeVisible();
   await expect(page.getByRole("button", {
     name: "Open four-role authorization",
   })).toBeEnabled();
