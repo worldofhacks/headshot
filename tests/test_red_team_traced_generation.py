@@ -1,4 +1,4 @@
-"""RED tests for the traced hosted Red Team generation (qwen as the fourth live agent).
+"""Tests for the traced hosted Red Team component pending governed production composition.
 
 The two-stage loop's GENERATION is the Red Team's LLM work. It must route through the SAME
 OpenRouter transport as the other three roles and emit through the SAME execution lifecycle
@@ -12,6 +12,7 @@ provider never opens its own network exit.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import socket
 from dataclasses import replace
@@ -31,6 +32,7 @@ from agentforge.agents.red_team.hosted_generation import (
     variants_output_schema,
 )
 from agentforge.agents.red_team.providers import ProviderExhaustedError
+from agentforge.providers.lineage import ProviderLogicalContextV1
 from agentforge.providers.openrouter import (
     HostedBudgetExceeded,
     HostedProviderError,
@@ -97,6 +99,7 @@ class _FakeLifecycle:
         self._execution_id = execution_id
         self.started: list[dict] = []
         self.finished: list[dict] = []
+        self.context_requests: list[dict] = []
 
     def start(self, **kwargs) -> str:
         self.started.append(kwargs)
@@ -104,6 +107,50 @@ class _FakeLifecycle:
 
     def finish(self, **kwargs) -> None:
         self.finished.append(kwargs)
+
+    def provider_context(self, **kwargs) -> ProviderLogicalContextV1:
+        self.context_requests.append(kwargs)
+        prompt = RED_TEAM_PROMPT
+        return ProviderLogicalContextV1(
+            organization_id="org-red-team-generation",
+            campaign_run_id="run-red-team-generation",
+            campaign_attempt_id=None,
+            logical_execution_id=kwargs["execution_id"],
+            parent_execution_id="exec-orchestrator-9",
+            agent_role="red_team",
+            requested_model=ROLE.model,
+            configured_upstream=ROLE.upstream_provider,
+            prompt_version=prompt.version,
+            prompt_sha256=prompt.sha256,
+            configuration_set_sha256=CONFIG_SHA,
+            role_configuration_sha256=ROLE.role_configuration_sha256,
+            generation_policy_sha256=POLICY_SHA,
+        )
+
+
+class _ContextLifecycle(_FakeLifecycle):
+    def __init__(self, execution_id: str = "exec-rt-1") -> None:
+        super().__init__(execution_id)
+        self.context_requests: list[dict] = []
+
+    def provider_context(self, **kwargs) -> ProviderLogicalContextV1:
+        self.context_requests.append(kwargs)
+        prompt = RED_TEAM_PROMPT
+        return ProviderLogicalContextV1(
+            organization_id="org-red-team-generation",
+            campaign_run_id="run-red-team-generation",
+            campaign_attempt_id=None,
+            logical_execution_id=kwargs["execution_id"],
+            parent_execution_id="exec-orchestrator-9",
+            agent_role="red_team",
+            requested_model=ROLE.model,
+            configured_upstream=ROLE.upstream_provider,
+            prompt_version=prompt.version,
+            prompt_sha256=prompt.sha256,
+            configuration_set_sha256=CONFIG_SHA,
+            role_configuration_sha256=ROLE.role_configuration_sha256,
+            generation_policy_sha256=POLICY_SHA,
+        )
 
 
 def _provider(transport, lifecycle, *, parent="exec-orchestrator-9", role_identity=ROLE):
@@ -144,6 +191,55 @@ def test_generation_routes_through_the_transport_as_the_red_team_role() -> None:
     schema = call["output_schema"]
     assert schema["properties"]["variants"]["minItems"] == 2
     assert schema["additionalProperties"] is False
+
+
+def test_generation_passes_durable_provider_context_to_the_shared_transport() -> None:
+    transport = _FakeTransport(result=_result(["cont-a", "cont-b"]))
+    lifecycle = _ContextLifecycle()
+
+    _provider(transport, lifecycle).generate(SEED, count=2, category="prompt_injection")
+
+    assert lifecycle.context_requests == [
+        {
+            "execution_id": "exec-rt-1",
+            "prompt_version": RED_TEAM_PROMPT.version,
+            "prompt_sha256": RED_TEAM_PROMPT.sha256,
+        }
+    ]
+    provider_context = transport.calls[0]["provider_context"]
+    assert isinstance(provider_context, ProviderLogicalContextV1)
+    assert provider_context.logical_execution_id == "exec-rt-1"
+    assert provider_context.agent_role == "red_team"
+    assert provider_context.requested_model == ROLE.model
+    system_message = transport.calls[0]["messages"][0]
+    assert system_message == {
+        "role": "system",
+        "content": RED_TEAM_PROMPT.content,
+    }
+    assert (
+        hashlib.sha256(system_message["content"].encode()).hexdigest()
+        == provider_context.prompt_sha256
+        == RED_TEAM_PROMPT.sha256
+    )
+
+
+def test_generate_traced_requires_callers_logical_identity_when_lifecycle_can_resolve_it() -> None:
+    transport = _FakeTransport(result=_result(["cont-a"]))
+    lifecycle = _ContextLifecycle()
+    provider = _provider(transport, lifecycle)
+
+    with pytest.raises(TracedRedTeamGenerationError, match="logical execution identity"):
+        provider.generate_traced(SEED, count=1, category="prompt_injection")
+
+    assert transport.calls == []
+    result = provider.generate_traced(
+        SEED,
+        count=1,
+        category="prompt_injection",
+        execution_id="exec-rt-1",
+    )
+    assert result.variants == [{"input_sequence": ["seed turn one", "cont-a"]}]
+    assert transport.calls[0]["provider_context"].logical_execution_id == "exec-rt-1"
 
 
 def test_finish_emits_the_identical_lineage_shape() -> None:
@@ -371,7 +467,10 @@ def test_generate_traced_returns_cost_and_token_metadata_for_the_recorder() -> N
     # The composition root (runner) records via the store seam and needs measured_cost + tokens.
     transport = _FakeTransport(result=_result(["cont-a", "cont-b"]))
     result = _provider(transport, _FakeLifecycle()).generate_traced(
-        SEED, count=2, category="prompt_injection"
+        SEED,
+        count=2,
+        category="prompt_injection",
+        execution_id="exec-rt-1",
     )
     assert result.variants == [
         {"input_sequence": ["seed turn one", "cont-a"]},
@@ -395,7 +494,12 @@ def test_generate_traced_propagates_typed_budget_refusal_without_self_recording(
     transport = _FakeTransport(error=HostedBudgetExceeded("role measured-spend cap exhausted"))
     lifecycle = _FakeLifecycle()
     with pytest.raises(HostedBudgetExceeded) as excinfo:
-        _provider(transport, lifecycle).generate_traced(SEED, count=2, category="prompt_injection")
+        _provider(transport, lifecycle).generate_traced(
+            SEED,
+            count=2,
+            category="prompt_injection",
+            execution_id="exec-rt-1",
+        )
     assert excinfo.value.code == "hosted-budget-exceeded"
     assert lifecycle.started == [] and lifecycle.finished == []
 
@@ -406,7 +510,12 @@ def test_generate_traced_surfaces_short_generation_to_the_composition_root() -> 
     transport = _FakeTransport(result=_result(["only-one"]))
     lifecycle = _FakeLifecycle()
     with pytest.raises(ProviderExhaustedError):
-        _provider(transport, lifecycle).generate_traced(SEED, count=3, category="prompt_injection")
+        _provider(transport, lifecycle).generate_traced(
+            SEED,
+            count=3,
+            category="prompt_injection",
+            execution_id="exec-rt-1",
+        )
     assert lifecycle.started == [] and lifecycle.finished == []
 
 
@@ -443,10 +552,16 @@ def test_generation_messages_use_exact_authority_bytes_and_user_json_only() -> N
     )
     assert system["role"] == "system" and user["role"] == "user"
     assert system["content"].encode("utf-8") == RED_TEAM_PROMPT.content.encode("utf-8")
+    assert hashlib.sha256(system["content"].encode()).hexdigest() == (RED_TEAM_PROMPT.sha256)
     payload = json.loads(user["content"])
     assert payload == {
         "category": "prompt_injection",
         "count": 2,
+        "output_contract": {
+            "field": "variants",
+            "item_kind": "proposed_next_attacker_turn",
+            "required_distinct_items": 2,
+        },
         "seed_case_ref": SEED["case_ref"],
         "seed_turns": SEED["input_sequence"],
     }
@@ -509,6 +624,42 @@ def test_construction_refuses_an_uncallable_transport_or_lifecycle() -> None:
             generation_policy_sha256=POLICY_SHA,
             call_bounds=BOUNDS,
         )
+
+    class LifecycleWithoutProviderContext:
+        def start(self, **_kwargs) -> str:
+            return "exec-untraceable"
+
+        def finish(self, **_kwargs) -> None:
+            return None
+
+    transport = _FakeTransport(result=_result(["x"]))
+    with pytest.raises(TracedRedTeamGenerationError, match="lifecycle"):
+        TracedHostedRedTeamProvider(
+            transport=transport,
+            lifecycle=LifecycleWithoutProviderContext(),  # type: ignore[arg-type]
+            role_identity=ROLE,
+            configuration_sha256=CONFIG_SHA,
+            generation_policy_sha256=POLICY_SHA,
+            call_bounds=BOUNDS,
+        )
+    assert transport.calls == []
+
+
+def test_invalid_provider_context_refuses_before_q_transport() -> None:
+    class InvalidContextLifecycle(_FakeLifecycle):
+        def provider_context(self, **_kwargs):  # type: ignore[no-untyped-def]
+            return None
+
+    transport = _FakeTransport(result=_result(["x"]))
+    lifecycle = InvalidContextLifecycle()
+    with pytest.raises(TracedRedTeamGenerationError, match="context"):
+        _provider(transport, lifecycle).generate(
+            SEED,
+            count=1,
+            category="prompt_injection",
+        )
+    assert transport.calls == []
+    assert lifecycle.finished[0]["status"] == "failed"
 
 
 def test_provider_opens_no_socket(monkeypatch: pytest.MonkeyPatch) -> None:

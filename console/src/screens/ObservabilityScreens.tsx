@@ -12,7 +12,9 @@ import {
   money,
   Panel,
   percent,
+  providerEventStatusLabel,
   ScreenHeading,
+  servedModel,
   shortId,
   TagMatrix,
   time,
@@ -29,6 +31,39 @@ import type {
 } from "../types";
 
 const sum = (values: number[]) => values.reduce((total, value) => total + value, 0);
+const knownCost = (value: number | null) => value ?? 0;
+const providerCallCountValue = (record: CostReadModel) =>
+  record.physical_call_count_state === "not_applicable"
+    ? "Not applicable"
+    : record.physical_call_count_state === "lower_bound"
+    ? record.physical_call_count === 0
+      ? "Unavailable—historical count incomplete"
+      : `≥${count(record.physical_call_count)} known`
+    : count(record.physical_call_count);
+const remainingCallValue = (
+  budget: NonNullable<CostReadModel["provider_budget"]>,
+  scope: "role" | "global",
+) => {
+  const state = scope === "role"
+    ? budget.role_call_count_state
+    : budget.global_call_count_state;
+  const remaining = scope === "role"
+    ? budget.role_calls_remaining
+    : budget.global_calls_remaining;
+  const known = scope === "role"
+    ? budget.role_physical_calls
+    : budget.global_physical_calls;
+  if (state === null) return "calls unavailable";
+  const conservative = remaining === null
+    ? "conservative headroom unavailable"
+    : `${count(remaining)} conservative calls remaining`;
+  if (state === "lower_bound") {
+    return known === 0
+      ? `${conservative} · historical count incomplete`
+      : `${conservative} · ≥${count(known)} observed`;
+  }
+  return `${conservative} · exact observed count`;
+};
 
 export const percentile = (values: number[], quantile: number): number => {
   if (values.length === 0) return 0;
@@ -80,8 +115,25 @@ const langfuseDeliveryLabel = (trace: TraceReadModel) => {
     : trace.langfuse_status.replaceAll("_", " ");
 };
 
-const traceCostValue = (trace: TraceReadModel) =>
-  trace.accounting_status === "unavailable" ? "Unavailable" : money(trace.measured_cost);
+const traceCostValue = (trace: TraceReadModel) => {
+  if (trace.accounting_status === "unavailable" || trace.measured_cost === null) {
+    return "Unavailable";
+  }
+  if (trace.accounting_status === "partial") {
+    return `${money(trace.measured_cost)} known · partial`;
+  }
+  return money(trace.measured_cost);
+};
+
+const compactTraceCostValue = (trace: TraceReadModel) => {
+  if (trace.accounting_status === "unavailable" || trace.measured_cost === null) {
+    return "unavailable";
+  }
+  if (trace.accounting_status === "partial") {
+    return `${compactMoney(trace.measured_cost)} known · partial`;
+  }
+  return compactMoney(trace.measured_cost);
+};
 
 const roleLatencyValue = (
   p50DurationMs: number | null,
@@ -94,6 +146,7 @@ const roleLatencyValue = (
 
 const costValue = (record: CostReadModel) => {
   if (record.accounting_status === "unavailable") return "Unavailable";
+  if (record.measured_cost === null) return "Not applicable";
   if (record.accounting_status === "partial") return `${money(record.measured_cost)} known`;
   return money(record.measured_cost);
 };
@@ -109,11 +162,11 @@ const roleBudgetValue = (
 ) => {
   const budget = record.provider_budget;
   if (budget === null || budget.status === "unavailable") return "Not available";
-  const value = budget[field];
-  if (value === null) return "Not available";
   const formatted = field === "role_usd_remaining"
-    ? money(value)
-    : count(value);
+    ? budget.role_usd_remaining === null
+      ? `Conservative headroom unavailable · ≤ ${money(budget.role_usd_remaining_upper_bound ?? 0)} known-spend bound`
+      : `${money(budget.role_usd_remaining)} conservative · ≤ ${money(budget.role_usd_remaining_upper_bound ?? 0)} known-spend bound`
+    : remainingCallValue(budget, "role");
   return budget.status === "historical"
     ? `${formatted} unused at close`
     : formatted;
@@ -149,7 +202,7 @@ export const summarizeTraces = (traces: TraceReadModel[]): TraceSummary => {
     requestCount: requests.length,
     averageLatencyMs: requests.length ? sum(latencies) / requests.length : 0,
     p95LatencyMs: percentile(latencies, 0.95),
-    totalCost: sum(requests.map((trace) => trace.measured_cost)),
+    totalCost: sum(requests.map((trace) => knownCost(trace.measured_cost))),
     totalBytes: sum(requests.map((trace) => trace.request_bytes + (trace.response_bytes ?? 0))),
     successRate: requests.length ? succeeded / requests.length : 0,
     langfuseCoverage: requests.length ? verified / requests.length : 0,
@@ -218,10 +271,47 @@ function TraceDetails({ trace }: { trace: TraceReadModel }) {
         <div><dt>HTTP status</dt><dd className="mono">{isAgent ? "Not applicable" : trace.status_code ?? "—"}</dd></div>
         <div><dt>Measured cost</dt><dd className="mono">{traceCostValue(trace)}</dd></div>
         {isAgent && <div><dt>Provider</dt><dd className="mono">{trace.provider}</dd></div>}
-        {isAgent && <div><dt>Requested model</dt><dd className="mono">{trace.model}</dd></div>}
-        {isAgent && <div><dt>Provider-served model</dt><dd className="mono">{trace.returned_model ?? "unavailable"}</dd></div>}
+        {isAgent && <div><dt>Requested model</dt><dd className="mono">{trace.requested_model ?? trace.model ?? "unavailable"}</dd></div>}
+        {isAgent && (
+          <div>
+            <dt>Provider-served model</dt>
+            <dd className="mono">
+              {trace.returned_model === null
+                || trace.returned_model.startsWith("unsafe-provider-text-")
+                ? `unavailable · ${providerEventStatusLabel(trace.provider_event_status)}`
+                : trace.returned_model}
+            </dd>
+          </div>
+        )}
+        {isAgent && (
+          <div>
+            <dt>Requested → served</dt>
+            <dd className="mono">
+              {servedModel({
+                model: trace.requested_model ?? "unavailable",
+                returned_model: trace.returned_model,
+                model_substituted: trace.model_substituted,
+                execution_mode: trace.execution_mode ?? "deterministic",
+                provider_event_status: trace.provider_event_status,
+              })}
+            </dd>
+          </div>
+        )}
         {isAgent && <div><dt>Provider-served upstream</dt><dd className="mono">{trace.upstream_provider ?? "unavailable"}</dd></div>}
         {isAgent && <div><dt>Provider request</dt><dd className="mono">{trace.provider_request_id ?? "unavailable"}</dd></div>}
+        {isAgent && <div><dt>Provider event status</dt><dd className="mono">{providerEventStatusLabel(trace.provider_event_status)}</dd></div>}
+        {isAgent && (
+          <div>
+            <dt>Provider event lineage</dt>
+            <dd className="mono">
+              {trace.provider_lineage_state === "historical_not_instrumented"
+                ? "Historical—not instrumented"
+                : trace.provider_lineage_state === "canonical_physical"
+                  ? `${count(trace.provider_event_ids.length)} canonical event(s)`
+                  : "Not applicable"}
+            </dd>
+          </div>
+        )}
         {isAgent && (
           <div>
             <dt>Campaign role p50 / p95</dt>
@@ -287,7 +377,9 @@ function TraceDashboard({ traces }: { traces: TraceReadModel[] }) {
   const notAttempted = observations.filter(
     (trace) => trace.langfuse_status === "not_attempted",
   ).length;
-  const observationCost = sum(observations.map((trace) => trace.measured_cost));
+  const observationCost = sum(
+    observations.map((trace) => knownCost(trace.measured_cost)),
+  );
   const unavailableAccounting = observations.filter(
     (trace) => trace.accounting_status === "unavailable",
   ).length;
@@ -337,9 +429,9 @@ function TraceDashboard({ traces }: { traces: TraceReadModel[] }) {
                 onClick={() => setSelectedId(traceIdentity(trace))}
               >
                 <span className={`status-dot ${trace.status === "succeeded" ? "live" : "idle"}`} />
-                <span><strong className="mono">{shortId(trace.trace_id)}</strong><small>{trace.operation} · {time(trace.started_at)}</small></span>
+                <span><strong className="mono">{shortId(trace.trace_id)}</strong><small>{trace.operation}{trace.agent_role ? ` · ${providerEventStatusLabel(trace.provider_event_status)}` : ""} · {time(trace.started_at)}</small></span>
                 <span className="mono">{trace.duration_ms === null ? "running" : duration(trace.duration_ms)}</span>
-                <span className="mono">{trace.accounting_status === "unavailable" ? "unavailable" : compactMoney(trace.measured_cost)}</span>
+                <span className="mono">{compactTraceCostValue(trace)}</span>
               </button>
             ))}
           </div>
@@ -360,12 +452,12 @@ function CostBars({ costs }: { costs: CostReadModel[] }) {
   const cap = (record: CostReadModel) => {
     const roleCap = record.provider_budget?.role_usd_cap;
     return roleCap === null || roleCap === undefined
-      ? record.budget_usd ?? record.measured_cost
+      ? record.budget_usd ?? knownCost(record.measured_cost)
       : roleCap + (record.provider_budget?.role_usd_overrun ?? 0);
   };
   const knownSpend = (record: CostReadModel) =>
     record.provider_budget?.role_usd_spent
-    ?? record.measured_cost;
+    ?? knownCost(record.measured_cost);
   const unresolvedExposure = (record: CostReadModel) =>
     record.provider_budget?.role_unresolved_usd_exposure
     ?? 0;
@@ -384,15 +476,17 @@ function CostBars({ costs }: { costs: CostReadModel[] }) {
         : `${percent(record.budget_utilization ?? 0)} of ${money(record.budget_usd)} cap`;
     }
     if (budget.status === "unavailable") return "No authorized hosted subcap";
-    const remainingUsd = money(budget.role_usd_remaining ?? 0);
-    const remainingCalls = count(budget.role_calls_remaining ?? 0);
+    const remainingUsd = budget.role_usd_remaining === null
+      ? `conservative headroom unavailable · ≤ ${money(budget.role_usd_remaining_upper_bound ?? 0)} known-spend bound`
+      : `${money(budget.role_usd_remaining)} conservative · ≤ ${money(budget.role_usd_remaining_upper_bound ?? 0)} known-spend bound`;
+    const remainingCalls = remainingCallValue(budget, "role");
     if (budget.status === "historical") {
-      return `${remainingUsd} and ${remainingCalls} calls unused at close · historical authorization`;
+      return `${remainingUsd} at close · ${remainingCalls} · historical authorization`;
     }
     if (budget.status === "staged_pending_authorization") {
-      return `${remainingUsd} and ${remainingCalls} calls staged · not active`;
+      return `${remainingUsd} staged · ${remainingCalls} · not active`;
     }
-    return `${remainingUsd} role budget remaining · ${remainingCalls} calls remaining`;
+    return `${remainingUsd} · ${remainingCalls}`;
   };
 
   return (
@@ -475,7 +569,7 @@ function CostTable({ costs }: { costs: CostReadModel[] }) {
               <td>{record.agent_role?.replace("_", " ") ?? record.provider}</td>
               <td>{record.execution_profile}</td>
               <td className="mono">{record.agent_role ? "Not applicable" : count(record.request_count)}</td>
-              <td className="mono">{record.agent_role ? count(record.physical_call_count) : "Not applicable"}</td>
+              <td className="mono">{record.agent_role ? providerCallCountValue(record) : "Not applicable"}</td>
               <td className="mono">{count(record.execution_count)}</td>
               <td className="mono">{count(record.attempt_count)}</td>
               <td className="mono">{record.agent_role ? "Not applicable" : count(record.confirmed_finding_count)}</td>
@@ -484,8 +578,20 @@ function CostTable({ costs }: { costs: CostReadModel[] }) {
               <td className="mono">{roleBudgetValue(record, "role_usd_remaining")}</td>
               <td className="mono">{costRoleLatencyValue(record, "p50_duration_ms")}</td>
               <td className="mono">{costRoleLatencyValue(record, "p95_duration_ms")}</td>
-              <td className="mono">{record.agent_role ? "Not applicable" : money(record.average_cost_per_request)}</td>
-              <td className="mono">{record.agent_role ? money(record.average_cost_per_request) : "Not applicable"}</td>
+              <td className="mono">{record.agent_role
+                ? "Not applicable"
+                : record.average_cost_per_request === null
+                  ? "Unavailable"
+                  : money(record.average_cost_per_request)}</td>
+              <td className="mono">{record.agent_role
+                ? record.average_cost_per_request === null
+                  ? record.physical_call_count_state === "lower_bound"
+                    ? "Unavailable—historical count incomplete"
+                    : record.physical_call_count === 0
+                      ? "Not applicable"
+                      : "Unavailable"
+                  : money(record.average_cost_per_request)
+                : "Not applicable"}</td>
               <td className="mono">{costValue(record)}</td>
               <td className="mono">{duration(record.duration_ms)}</td>
               <td>{record.provider_budget ? budgetStateLabel(record.provider_budget) : "Not applicable"}</td>
@@ -508,9 +614,11 @@ function traceData(result: ResourceResult<TraceReadModel[]>) {
 }
 
 function CostDashboard({ costs, traces, traceState }: { costs: CostReadModel[]; traces: TraceReadModel[]; traceState: string }) {
-  const totalCost = sum(costs.map((record) => record.measured_cost));
+  const totalCost = sum(costs.map((record) => knownCost(record.measured_cost)));
   const campaignCosts = costs.filter((record) => record.record_kind === "campaign");
-  const campaignSpend = sum(campaignCosts.map((record) => record.measured_cost));
+  const campaignSpend = sum(
+    campaignCosts.map((record) => knownCost(record.measured_cost)),
+  );
   const totalRequests = sum(campaignCosts.map((record) => record.request_count));
   const confirmedFindings = sum(
     campaignCosts.map((record) => record.confirmed_finding_count),
@@ -525,10 +633,14 @@ function CostDashboard({ costs, traces, traceState }: { costs: CostReadModel[]; 
     }
   }
   const totalBudget = sum([...campaignBudgets.values()]);
-  const budgetedSpend = sum(campaignCosts.filter((record) => record.budget_usd !== null).map((record) => record.measured_cost));
+  const budgetedSpend = sum(campaignCosts
+    .filter((record) => record.budget_usd !== null)
+    .map((record) => knownCost(record.measured_cost)));
   const requestLedger = physicalRequests(traces);
   const agentCosts = costs.filter((record) => record.record_kind === "agent");
-  const agentSpend = sum(agentCosts.map((record) => record.measured_cost));
+  const agentSpend = sum(
+    agentCosts.map((record) => knownCost(record.measured_cost)),
+  );
   const unresolvedAgentExposure = sum(agentCosts.map(
     (record) => record.provider_budget?.role_unresolved_usd_exposure ?? 0,
   ));
@@ -550,14 +662,19 @@ function CostDashboard({ costs, traces, traceState }: { costs: CostReadModel[]; 
     }
   }
   const activeProviderBudgets = [...currentBudgetsByRole.values()];
-  const roleBudgetRemaining = sum(activeProviderBudgets.map(
-    (budget) => budget.role_usd_remaining ?? 0,
+  const roleBudgetRemainingUpperBound = sum(activeProviderBudgets.map(
+    (budget) => budget.role_usd_remaining_upper_bound ?? 0,
   ));
+  const roleBudgetsMeasured = activeProviderBudgets.every(
+    (budget) => budget.role_cost_measurement_state === "measured",
+  );
   const globalBudget = activeProviderBudgets[0] ?? null;
   const incompleteAgentAccounting = agentCosts.filter(
     (record) => ["partial", "unavailable"].includes(record.accounting_status),
   ).length;
-  const requestCost = sum(requestLedger.map((trace) => trace.measured_cost));
+  const requestCost = sum(
+    requestLedger.map((trace) => knownCost(trace.measured_cost)),
+  );
   const reconciliationDelta = campaignSpend - requestCost;
 
   return (
@@ -579,9 +696,13 @@ function CostDashboard({ costs, traces, traceState }: { costs: CostReadModel[]; 
         },
         {
           label: "Provider budget remaining",
-          value: activeProviderBudgets.length > 0 ? money(roleBudgetRemaining) : "—",
+          value: activeProviderBudgets.length > 0
+            ? `${roleBudgetsMeasured ? "" : "≤ "}${money(roleBudgetRemainingUpperBound)}`
+            : "—",
           note: globalBudget
-            ? `${money(globalBudget.global_usd_remaining ?? 0)} global · ${count(globalBudget.global_calls_remaining ?? 0)} calls · after unresolved exposure`
+            ? `${globalBudget.global_usd_remaining === null
+              ? "Conservative global headroom unavailable"
+              : `${money(globalBudget.global_usd_remaining)} conservative global headroom`} · ≤ ${money(globalBudget.global_usd_remaining_upper_bound ?? 0)} known-spend bound · ${remainingCallValue(globalBudget, "global")} · latest active run`
             : "No active hosted budget",
         },
         { label: "Approved budget used", value: totalBudget ? percent(budgetedSpend / totalBudget) : "—", note: totalBudget ? `${money(budgetedSpend)} of ${money(totalBudget)}` : "No budget projection available" },

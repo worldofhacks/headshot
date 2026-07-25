@@ -2,7 +2,8 @@
 
 > **Status — provisioned baseline, release promotion pending:** the Headshot Railway project has
 > separate Staging and production environments with Web, Runner, and PostgreSQL provisioned. This
-> release adds the private Scheduler and migrations through `0016`. A provisioned resource is not
+> release adds the private Scheduler and the linear migration head
+> `0018_provider_call_lineage` → `0019_recordable_provider_identity`. A provisioned resource is not
 > evidence that the current release is deployed or that a live campaign is authorized; exact
 > deployment IDs, commit, probes, schema revision, private-ingress checks, and CI results must be
 > recorded after promotion.
@@ -121,34 +122,84 @@ Judge, and Red Team data boundaries.
 
 Deploy the same reviewed commit through staging before production.
 
-1. Require green unit, integration, contract, corpus, lint, formatting, secret-scan, and package checks
-   for the commit. Record actual results; never infer green from a local run.
-2. Build the repository's production image from that commit. Do not inject secrets at image-build time.
-3. Quiesce/drain the environment: stop new schedules and launches, allow active leases to finish or
-   abort safely, and verify queue/checkpoint compatibility.
-4. Confirm PostgreSQL backup/PITR posture and the current migration revision.
-5. Run the single pre-deploy schema apply path:
+In this runbook, **deploy** means make an exact artifact available to a service while it remains
+unable to claim work or receive public traffic. **Activate** means permit that artifact to perform
+its service function: exact-head Runner work consumption, Scheduler enqueue, or Web public
+promotion. A successful Railway build or process start is deployment evidence, not activation
+evidence.
+
+The `0017` → `0018` → `0019` seam is Runner-first and requires this exact order. In the final
+release, `H` below means the exact packaged Alembic head (which may include later serialized
+revisions such as `0020`):
+
+1. Freeze one release commit and image digest. Require green unit, integration, contract, corpus,
+   lint, formatting, secret-scan, and package checks in GitHub CI for that exact commit; then verify
+   the exact commit is mirrored to GitLab `main` (GitLab has no required runner pipeline). Record
+   actual results; never infer green from a local run.
+2. For the named environment, obtain a signed human deployment grant binding the release commit and
+   image, environment, exact public Web origin, Web/Runner/Scheduler service IDs, current revision
+   and target packaged head `H`, execution window, and rollback owner. The production grant is a
+   human-only gate and cannot be reused from staging.
+3. Quiesce the environment. Disable public launch admission and scheduler enqueue, drain or safely
+   abort active work, then prove and record all three zero counts:
+   - active `agent_work` leases;
+   - `running` hosted `agent_executions`; and
+   - queued work whose campaign authorization is still dispatchable.
+4. Scale the old private Runner deployment to zero and prove its process has stopped. Runner
+   `overlapSeconds: 30` is unsafe during this migration: a normal rolling replacement can keep the
+   `0017` consumer alive while the new consumer starts. Do not rely on overlap, lease expiry, or a
+   new Runner's schema gate to contain the old process.
+5. Deploy the new Runner artifact **first**, still against schema `0017`. Because its packaged exact
+   head is `H`, it must remain in the exact-head wait state. Prove that it does not publish a runtime
+   heartbeat, recover provider work, claim/reclaim a lease, mutate a job/campaign, or perform
+   provider/target I/O. This is deployed, not activated.
+6. Stage the new Web artifact without promoting it to the public domain. Using Web's narrowly
+   privileged pre-deploy binding and the signed grant, run the sole schema writer:
 
    ```bash
    alembic upgrade head
    ```
 
-6. Deploy private runner and scheduler plus the public Web service using version-compatible job and
-   checkpoint payloads. Use expand/contract migrations; never deploy a destructive contraction with a
-   consumer that still needs the old schema.
-7. Gate promotion on `/health`, `/ready`, an unauthenticated-denial smoke test, an authenticated
-   least-privilege smoke test, exact Organization/origin checks, and a private-service exposure check.
-8. Re-enable scheduling only after readiness, queue, error-rate, and auth-denial signals are healthy.
-9. Promote the same commit to production with explicit human authorization and repeat the gates.
+   Capture evidence that the single linear graph applied `0018` and then `0019`. Revision `0018`
+   takes an exclusive `agent_executions` lock and independently refuses any running hosted row;
+   `0019` then makes observed model substitution recordable without permitting it on a successful
+   execution. A refusal, timeout, partial revision, unexpected head, or second migrator stops the
+   release. If the Railway workflow cannot hold the candidate Web deployment from public traffic,
+   stop rather than changing this order.
+7. Verify PostgreSQL reports the one exact packaged head `H`, the old Web remains compatible with
+   the additive schema, migration authority is absent from runtime roles, and the zero-work
+   conditions still hold.
+8. Activate the new private Runner **before** public Web promotion. Prove the exact artifact now
+   passes its schema/runtime check and emits a current heartbeat while launch remains closed and the
+   queue remains empty. A heartbeat must not claim that q is production-composed: Red Team remains
+   deterministic selection until the governed q generation workflow ships.
+9. Deploy/activate the private Scheduler only after Runner readiness is established, but keep
+   scheduling disabled. Then promote the already-staged Web artifact to public traffic and gate it
+   on `/health`, `/ready`, unauthenticated denial, authenticated least privilege, exact
+   Organization/origin, and private-service exposure checks.
+10. A different human supplies a signed-in production session for the live page audit. Verify real
+    served model, cost, prompt digest/version, physical lineage state, controls, and the absence of
+    unsupported four-live claims. Stop at `/sign-in` if that session is unavailable; do not bypass
+    Clerk or substitute staging/local evidence.
+11. Re-enable scheduling and launch admission only after all deployment signals are healthy.
+    Deployment grant, authentication, or service readiness never authorizes a campaign; every live
+    run still needs its own exact target authorization, distinct approver, synthetic-data checks,
+    budget/rate caps, and abort controls.
+
+Repeat the complete sequence in production with the same reviewed artifact only after staging
+passes. “Runner before Web” therefore means both that the new Runner artifact is deployed first in
+an inert exact-head wait state and that Runner is activated before the new Web revision receives
+public traffic. Web remains the only schema writer between those two Runner states.
 
 The private Runner owns outbound telemetry. Configure `LANGFUSE_PUBLIC_KEY`,
 `LANGFUSE_SECRET_KEY`, `LANGFUSE_BASE_URL`, and `LANGFUSE_TRACING_ENVIRONMENT` on Runner only.
 `LANGFUSE_BASE_URL` must be an exact HTTPS origin without a path, user information, query parameters,
 or a fragment. `LANGFUSE_TRACING_ENVIRONMENT` must exactly equal `AGENTFORGE_ENVIRONMENT` in that
-Runner. Every Orchestrator, Red Team, Judge, and Documentation execution and every physical target
-request is first recorded in PostgreSQL, then projected asynchronously to one campaign-correlated
-Langfuse trace. Each agent is represented by a typed `agent` observation with a child `generation`
-observation so role-local latency, token usage, and cost remain queryable. Cross-agent
+Runner. Every durable Orchestrator, Red Team, Judge, and Documentation execution and every physical
+target request is first recorded in PostgreSQL, then projected asynchronously to one
+campaign-correlated Langfuse trace. Hosted calls include their typed generation facts so role-local
+latency, token usage, and cost remain queryable. The current deterministic Red Team corpus-selection
+row has no provider generation facts and is not evidence of q execution. Cross-agent
 `parent_execution_id` lineage is also native Langfuse parentage.
 
 Langfuse receives hashes, byte counts, stable identifiers, timing, usage, cost, and bounded status
@@ -177,9 +228,10 @@ python scripts/verify_langfuse_campaign.py \
 
 The verifier is read-only unless `--record-verification` is explicitly supplied. It rejects non-live
 or incomplete campaigns and succeeds only when every durable agent execution is query-visible with
-its typed agent/generation pair, terminal state, native parentage, exact usage, and reconciled cost,
-and every physical target request is query-visible one-for-one with its request/response hashes and
-target/surface/version lineage. The required `--expected-environment` must exactly match both deployed
+its correct typed observation shape, terminal state, native parentage, exact usage, and reconciled
+cost, and every physical target request is query-visible one-for-one with its request/response
+hashes and target/surface/version lineage. It must not require or invent a hosted generation for a
+deterministic execution. The required `--expected-environment` must exactly match both deployed
 Runner environment variables, every agent and target observation's
 `deployment.environment` metadata, and Langfuse's native observation environment before
 verification can be recorded. A hosted generation with missing provider-returned token or
@@ -194,12 +246,14 @@ queued rows unchanged and cannot be mistaken for persisted observation. Store th
 deployment evidence; do not substitute local fixtures or an SDK `flush()` result for this query-back
 check.
 
-Migration `0016` and a newly authorized live campaign are both required before this evidence can
-exist. Historical campaigns that predate `agent_executions.langfuse_status` are not reconstructed or
-backfilled into Langfuse: doing so would manufacture observations for work the deployed Runner did not
-trace. Until a post-`0016` live run passes the query-back verifier, the console must keep remote
-Langfuse visibility—and any metric with no durable execution row—explicitly unavailable rather than
-infer either from fixtures or manifests.
+Migration `0016` and a newly authorized live campaign are both required before remote Langfuse
+evidence can exist. Migration `0018` adds authoritative physical-provider lineage and `0019`
+preserves rejected provider-model substitutions as non-success evidence. Historical campaigns that
+predate `agent_executions.langfuse_status` are not reconstructed or backfilled into Langfuse, and
+pre-`0018` hosted rows remain explicitly `historical_not_instrumented` with no fabricated physical
+events. Until a post-`0019` live run passes the query-back verifier, the console must keep remote
+visibility—and any metric with no durable execution row—explicitly unavailable rather than infer
+either from fixtures or manifests. A q component test is never a post-`0019` production trace.
 
 The process commands are fixed in the repository artifact table above. A command's presence is not
 evidence that its external Railway service exists or is healthy. The former one-shot
@@ -210,8 +264,9 @@ authorized `agent_work` jobs.
 Only Web owns the schema-changing pre-deploy command. Runner and Scheduler must check that the database
 is already at the integrated Alembic head before consuming or producing work and must wait or exit
 fail-closed when it is not. This avoids concurrent Alembic writers if Railway builds the three services
-at the same time. For the first deployment and every migration-bearing release: deploy Web's pre-deploy
-migration, verify `/ready`, then activate Runner and Scheduler.
+at the same time. For this migration-bearing release, follow the Runner-first sequence above:
+deploy the inert new Runner, apply the Web-owned migration, activate and verify Runner, and only then
+promote Web publicly. Do not interpret migration ownership as permission to make Web public first.
 
 ## Pre-deploy migrations
 
@@ -389,6 +444,15 @@ authentication to recover availability.
 - [ ] Environment-scoped variables and least-privilege database roles are verified.
 - [ ] Staging cannot resolve production target credentials or accept production Clerk configuration.
 - [ ] Every live session reference is versioned, its Runner-only metadata covers the bounded campaign window, and rotation creates a new target version and approval scope.
+- [ ] The environment-specific signed human deployment grant binds the exact release commit/image,
+      environment, public Web origin, service IDs, window, and target packaged head (including the
+      `0018` → `0019` seam).
+- [ ] Quiescence evidence shows zero active `agent_work` leases, running hosted executions, and
+      queued dispatchable authorizations before migration.
+- [ ] The old Runner was scaled to zero; Railway's 30-second Runner overlap was not used during the
+      migration.
+- [ ] The new Runner artifact was deployed first, proven inert at `0017`, and activated only after
+      the Web-owned migration reached the one exact packaged head.
 - [ ] Alembic migration and revision evidence is captured without credentials.
 - [ ] The Web service uses `/railway/web.json`; Runner and Scheduler use their respective private config paths.
 - [ ] The built image contains `/app/alembic.ini`, the complete migration tree, and compiled console assets, and contains no Node/npm/source maps.
@@ -399,6 +463,10 @@ authentication to recover availability.
 - [ ] Clerk restricted enrollment, Headshot Organization, MFA, roles, permissions, and add-on are verified.
 - [ ] Missing/wrong auth, wrong Organization, missing permission, and same-user approval are denied.
 - [ ] A different authorized approver succeeds without bypassing the Policy Gateway.
+- [ ] The new Web artifact received public traffic only after Runner activation, and a human-provided
+      signed-in production session completed the live console audit.
+- [ ] The console identifies deterministic Red Team selection honestly and does not claim a
+      production q trace or four live hosted roles.
 - [ ] Rollback is exercised in staging and both code and database recovery limits are recorded.
 - [ ] Exact staging/production URLs and actual CI/deployment statuses are added to README only after
       successful verification.

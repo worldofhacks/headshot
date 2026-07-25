@@ -341,13 +341,13 @@ def test_birdseye_projects_security_outcomes_and_recorded_agent_causality(
                     "(execution_id, organization_id, campaign_run_id, attempt_id, "
                     "parent_execution_id, agent_role, status, provider, model, execution_mode, "
                     "configuration_version, input_sha256, output_sha256, input_tokens, "
-                    "output_tokens, measured_cost, "
+                    "output_tokens, measured_cost, cost_measurement_state, "
                     "trace_id, langfuse_status, langfuse_verified_at, detail, started_at, "
                     "finished_at, "
                     "duration_ms) VALUES "
                     "(:execution, :org, :run, :attempt, :parent, :role, 'succeeded', "
                     "'headshot', 'fixture-engine-v1', 'deterministic', 1, :input_hash, "
-                    ":output_hash, :input_tokens, :output_tokens, :cost, :trace, "
+                    ":output_hash, :input_tokens, :output_tokens, :cost, 'measured', :trace, "
                     ":langfuse_status, CASE WHEN :langfuse_verified "
                     "THEN clock_timestamp() ELSE NULL END, "
                     '\'{"phase":"recorded_fixture"}\'::jsonb, '
@@ -373,10 +373,16 @@ def test_birdseye_projects_security_outcomes_and_recorded_agent_causality(
                     "langfuse_verified": role != "orchestrator",
                 },
             )
+        # Seed the migration-owned historical state explicitly. Production inserts can only
+        # create canonical physical lineage; this fixture represents a pre-0018 terminal row.
+        connection.execute(text("SET LOCAL session_replication_role = replica"))
         connection.execute(
             text(
                 "UPDATE agent_executions SET execution_mode = 'hosted_advisory', "
-                "input_tokens = NULL, output_tokens = NULL "
+                "input_tokens = NULL, output_tokens = NULL, measured_cost = NULL, "
+                "cost_measurement_state = 'not_observed', "
+                "detail = detail || "
+                '\'{"provider_lineage_state":"historical_not_instrumented"}\'::jsonb '
                 "WHERE execution_id = 'birdseye-exec-judge'"
             )
         )
@@ -385,7 +391,9 @@ def test_birdseye_projects_security_outcomes_and_recorded_agent_causality(
                 "UPDATE agent_executions SET provider = 'openrouter', "
                 "model = 'openai/gpt-5.4', execution_mode = 'hosted_advisory', "
                 "returned_model = 'openai/gpt-5.4', upstream_provider = 'OpenAI', "
-                "provider_request_id = 'birdseye-provider-request-documentation' "
+                "provider_request_id = 'birdseye-provider-request-documentation', "
+                "cost_measurement_state = 'partial', detail = detail || "
+                '\'{"provider_lineage_state":"historical_not_instrumented"}\'::jsonb '
                 "WHERE execution_id = 'birdseye-exec-documentation'"
             )
         )
@@ -434,7 +442,7 @@ def test_birdseye_projects_security_outcomes_and_recorded_agent_causality(
     assert nodes["agent:judge"]["measured_cost_usd"] == 0.0
     assert nodes["agent:judge"]["accounting_status"] == "unavailable"
     assert nodes["agent:documentation"]["measured_cost_usd"] == 0.01
-    assert nodes["agent:documentation"]["accounting_status"] == "measured"
+    assert nodes["agent:documentation"]["accounting_status"] == "partial"
     assert nodes["agent:documentation"]["detail"] == "OpenAI/openai/gpt-5.4 · hosted_advisory"
     assert nodes["agent:documentation"]["execution_count"] == 1
     assert nodes["agent:documentation"]["input_tokens"] == 40
