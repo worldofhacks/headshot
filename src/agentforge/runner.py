@@ -106,6 +106,10 @@ _DEFAULT_POLL_SECONDS = 1.0
 _PROVIDER_RECOVERY_INTERVAL_SECONDS = 30.0
 _PROVIDER_RECOVERY_LIMIT = 32
 _PROVIDER_RECOVERY_STALE_AFTER_SECONDS = _DEFAULT_LEASE.total_seconds() + 60.0
+# Keep reviewed-replay narrative generation inside a small release-owned bound. Further confirmed
+# findings are still documented by the deterministic Documentation agent, so the campaign never
+# exceeds the exact hosted authority reserved at preflight.
+_REVIEWED_REPLAY_HOSTED_REPORT_LIMIT = 3
 
 
 class DispatchUnavailable(RuntimeError):
@@ -215,10 +219,17 @@ def _require_hosted_workload_capacity(
     configuration: HostedConfigurationSet,
     generation_policy: HostedGenerationPolicy,
     case_count: int,
+    reviewed_replay: bool = False,
 ) -> None:
     """Refuse a workload whose cumulative call or token authority is insufficient."""
 
-    required_calls = generation_policy.required_logical_calls(case_count=case_count)
+    required_calls = generation_policy.required_logical_calls(
+        case_count=case_count,
+        confirmed_finding_limit=(
+            min(case_count, _REVIEWED_REPLAY_HOSTED_REPORT_LIMIT) if reviewed_replay else None
+        ),
+        reviewed_replay=reviewed_replay,
+    )
     roles = {role.role: role for role in configuration.roles}
 
     global_required = {"input": 0, "output": 0, "reasoning": 0}
@@ -816,6 +827,7 @@ class DurableCampaignRunner:
     ) -> None:
         self.engine = engine
         self.environment = environment
+        self._corpus_fixed = corpus is not None
         self.corpus = corpus or resolve_workload()
         self.catalog = catalog or TrustedTargetCatalog.from_environment(environment)
         self.credentials = credentials or SealedEnvironmentCredentialResolver.from_environment()
@@ -1198,18 +1210,25 @@ class DurableCampaignRunner:
             blockers.append("self_approval_override_disabled")
         if scope.scope_hash() != authorized.run.scope_hash:
             blockers.append("operation_hash_mismatch")
-        if (
-            scope.corpus_id != self.corpus.corpus_id
-            or scope.corpus_hash != self.corpus.content_hash
-        ):
-            blockers.append("corpus_hash_mismatch")
+        run_corpus = self.corpus
+        if scope.corpus_id != run_corpus.corpus_id or scope.corpus_hash != run_corpus.content_hash:
+            if self._corpus_fixed:
+                blockers.append("corpus_hash_mismatch")
+            else:
+                try:
+                    run_corpus = resolve_workload(
+                        scope.corpus_id,
+                        expected_content_hash=scope.corpus_hash,
+                    )
+                except Exception:
+                    blockers.append("corpus_hash_mismatch")
         verified_payloads: tuple[dict[str, Any], ...] = ()
         try:
-            verified_payloads = tuple(verified_case_payload(case) for case in self.corpus.cases)
+            verified_payloads = tuple(verified_case_payload(case) for case in run_corpus.cases)
         except Exception:
             blockers.append("corpus_content_mismatch")
-        if len(self.corpus.cases) < MVP_CASE_COUNT or not MVP_CATEGORIES.issubset(
-            self.corpus.categories
+        if len(run_corpus.cases) < MVP_CASE_COUNT or not MVP_CATEGORIES.issubset(
+            run_corpus.categories
         ):
             blockers.append("corpus_not_complete")
 
@@ -1296,18 +1315,19 @@ class DurableCampaignRunner:
                 blockers.append("live_profile_cannot_use_cassette")
 
         caps = scope.caps
-        if caps.max_attempts_per_run < len(self.corpus.cases) or not caps.is_within(
+        if caps.max_attempts_per_run < len(run_corpus.cases) or not caps.is_within(
             entry.target.safety_caps if entry is not None else caps
         ):
             blockers.append("campaign_caps_incompatible")
-        if self.corpus.corpus_id in _EXACT_MANIFEST_WORKLOAD_IDS:
+        if run_corpus.corpus_id in _EXACT_MANIFEST_WORKLOAD_IDS:
             expected_physical = (
                 sum(len(payload["input_sequence"]) for payload in verified_payloads)
                 if verified_payloads
                 else -1
             )
             if (
-                caps.logical_case_limit != len(self.corpus.cases)
+                caps.max_attempts_per_run != len(run_corpus.cases)
+                or caps.logical_case_limit != len(run_corpus.cases)
                 or caps.physical_request_limit != expected_physical
                 or caps.target_retries_per_turn != 0
             ):
@@ -1350,7 +1370,8 @@ class DurableCampaignRunner:
                 _require_hosted_workload_capacity(
                     configuration=configuration,
                     generation_policy=generation_policy,
-                    case_count=len(self.corpus.cases),
+                    case_count=len(run_corpus.cases),
+                    reviewed_replay=run_corpus.corpus_id in _EXACT_MANIFEST_WORKLOAD_IDS,
                 )
                 for role_configuration in configuration.roles:
                     bounds = generation_policy.call_bounds[role_configuration.role]
@@ -1381,7 +1402,7 @@ class DurableCampaignRunner:
                 authorized=authorized,
                 entry=entry,
                 surface=surface,
-                corpus=self.corpus,
+                corpus=run_corpus,
                 hosted=hosted,
             )
             if report.ready and entry is not None and surface is not None
@@ -1507,6 +1528,7 @@ class DurableCampaignRunner:
         hosted_planner: HostedPlanner | None = None
         hosted_evaluator: HostedEvaluator | None = None
         hosted_report_writer: HostedReportWriter | None = None
+        hosted_documentation_calls = 0
         if prepared.hosted is not None:
             hosted_lifecycle = _DurableHostedExecutionLifecycle(
                 store=self.store,
@@ -1576,9 +1598,17 @@ class DurableCampaignRunner:
             orchestrator_execution: str
             orchestrator_failure_code = "orchestrator_execution_failed"
             orchestrator_failure_output: dict[str, Any] = {"cycle": orchestration_cycle}
+            use_hosted_planner = (
+                hosted_planner is not None
+                and hosted_lifecycle is not None
+                and (
+                    prepared.corpus.corpus_id not in _EXACT_MANIFEST_WORKLOAD_IDS
+                    or orchestration_cycle == 0
+                )
+            )
             try:
                 try:
-                    if hosted_planner is None or hosted_lifecycle is None:
+                    if not use_hosted_planner:
                         orchestrator_execution = self._start_agent_execution(
                             run_id=authorized.run.run_id,
                             agent_role="orchestrator",
@@ -1661,7 +1691,7 @@ class DurableCampaignRunner:
                         regression_triggers=decision.regression_triggers,
                     )
                     first_decision_recorded = True
-                if hosted_planner is None:
+                if not use_hosted_planner:
                     self._finish_agent_execution(
                         execution_id=orchestrator_execution,
                         status="succeeded",
@@ -1957,8 +1987,16 @@ class DurableCampaignRunner:
                         effective_verdict.get("confirmation_source", "trusted evidence")
                     ),
                 )
+                use_hosted_report_writer = (
+                    hosted_report_writer is not None
+                    and hosted_lifecycle is not None
+                    and (
+                        prepared.corpus.corpus_id not in _EXACT_MANIFEST_WORKLOAD_IDS
+                        or hosted_documentation_calls < _REVIEWED_REPLAY_HOSTED_REPORT_LIMIT
+                    )
+                )
                 documentation_execution: str | None = None
-                if hosted_report_writer is None or hosted_lifecycle is None:
+                if not use_hosted_report_writer:
                     documentation_execution = self._start_agent_execution(
                         run_id=authorized.run.run_id,
                         agent_role="documentation",
@@ -1976,12 +2014,13 @@ class DurableCampaignRunner:
                         },
                     )
                 try:
-                    if hosted_report_writer is None or hosted_lifecycle is None:
+                    if not use_hosted_report_writer:
                         report = self.documentation.draft(
                             verdict=effective_verdict,
                             report_input=report_input,
                         )
                     else:
+                        hosted_documentation_calls += 1
                         with hosted_lifecycle.invocation(
                             role="documentation",
                             attempt_id=attempt.attempt_id,

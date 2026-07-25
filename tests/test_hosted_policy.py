@@ -43,6 +43,30 @@ def test_policy_reserves_one_planner_generator_and_evaluator_call_per_case() -> 
     }
 
 
+@pytest.mark.parametrize(
+    ("case_count", "expected_total"),
+    ((34, 38), (33, 37)),
+)
+def test_reviewed_replay_reservation_matches_bounded_runtime(
+    case_count: int,
+    expected_total: int,
+) -> None:
+    required = DEFAULT_HOSTED_GENERATION_POLICY.required_logical_calls(
+        case_count=case_count,
+        confirmed_finding_limit=3,
+        reviewed_replay=True,
+    )
+
+    assert required == {
+        "orchestrator": 1,
+        "red_team": 0,
+        "judge": case_count,
+        "documentation": 3,
+    }
+    assert sum(required.values()) == expected_total
+    assert expected_total <= 56
+
+
 @pytest.mark.parametrize("identity", ["f" * 64, "not-a-digest", ""])
 def test_unregistered_or_invalid_policy_identity_fails_closed(identity: str) -> None:
     with pytest.raises(HostedGenerationPolicyError):

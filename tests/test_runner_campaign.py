@@ -1451,6 +1451,73 @@ def test_global_fifty_six_call_cap_requires_zero_retry_nine_case_floor() -> None
         )
 
 
+@pytest.mark.parametrize("case_count", (34, 33, 33))
+def test_reviewed_batch_fits_fifty_six_call_cap_only_without_retries(
+    case_count: int,
+) -> None:
+    policy = DEFAULT_HOSTED_GENERATION_POLICY
+    required_calls = policy.required_logical_calls(
+        case_count=case_count,
+        confirmed_finding_limit=3,
+        reviewed_replay=True,
+    )
+    roles = []
+    global_tokens = {"input": 0, "output": 0, "reasoning": 0}
+    for role, required in required_calls.items():
+        bounds = policy.call_bounds[role]
+        totals = {
+            "input": bounds.input_tokens * required,
+            "output": bounds.output_tokens * required,
+            "reasoning": bounds.reasoning_tokens * required,
+        }
+        for token_kind, token_count in totals.items():
+            global_tokens[token_kind] += token_count
+        roles.append(
+            SimpleNamespace(
+                role=role,
+                limits=SimpleNamespace(
+                    max_calls=max(1, required),
+                    max_input_tokens=max(bounds.input_tokens, totals["input"]),
+                    max_output_tokens=max(bounds.output_tokens, totals["output"]),
+                    max_reasoning_tokens=max(bounds.reasoning_tokens, totals["reasoning"]),
+                    max_retries=0,
+                ),
+            )
+        )
+    configuration = SimpleNamespace(
+        roles=tuple(roles),
+        global_limits=SimpleNamespace(
+            max_calls=56,
+            max_input_tokens=global_tokens["input"],
+            max_output_tokens=global_tokens["output"],
+            max_reasoning_tokens=global_tokens["reasoning"],
+            max_retries=0,
+        ),
+    )
+
+    _require_hosted_workload_capacity(
+        configuration=configuration,  # type: ignore[arg-type]
+        generation_policy=policy,
+        case_count=case_count,
+        reviewed_replay=True,
+    )
+
+    configuration.global_limits.max_retries = 1
+    for role_configuration in configuration.roles:
+        role_configuration.limits.max_retries = 1
+        role_configuration.limits.max_calls *= 2
+        role_configuration.limits.max_input_tokens *= 2
+        role_configuration.limits.max_output_tokens *= 2
+        role_configuration.limits.max_reasoning_tokens *= 2
+    with pytest.raises(DispatchUnavailable, match="hosted_global_call_cap_incompatible"):
+        _require_hosted_workload_capacity(
+            configuration=configuration,  # type: ignore[arg-type]
+            generation_policy=policy,
+            case_count=case_count,
+            reviewed_replay=True,
+        )
+
+
 def test_corpus_hash_drift_refuses_before_adapter_construction(
     migrated_db: Engine,
     tmp_path,

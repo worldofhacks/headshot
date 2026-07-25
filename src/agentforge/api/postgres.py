@@ -33,7 +33,16 @@ from agentforge.api.birdseye import build_birdseye_snapshot
 from agentforge.api.read_models import validate_ready_data
 from agentforge.api.schemas import CommandResult, EventBatch, ResourceResult
 from agentforge.auth.errors import AuthorizationError
-from agentforge.campaign.corpus import AuthoredCorpus, resolve_workload, verified_case_payload
+from agentforge.campaign.corpus import (
+    LIVE_100_BATCH_IDS,
+    LIVE_100_BATCH_SPECS,
+    LIVE_100_CATEGORY_COUNTS,
+    LIVE_100_CORPUS_ID,
+    LIVE_100_PHYSICAL_REQUEST_COUNT,
+    AuthoredCorpus,
+    resolve_workload,
+    verified_case_payload,
+)
 from agentforge.contracts import validate as validate_contract
 from agentforge.control_plane import ControlPlaneStore
 from agentforge.control_plane.errors import (
@@ -3883,8 +3892,14 @@ class PostgresApiBackend(ApiBackend):
                             surface_payload.pop("target_id", None)
                             surface.update(surface_payload)
                         row["campaign_template"] = None
+                        row["campaign_suite_templates"] = []
                         if self._corpus is not None and row["surfaces"]:
                             surface = row["surfaces"][0]
+                            hosted_run = self._latest_hosted_run_binding(
+                                connection,
+                                organization_id=principal.organization_id,
+                                target_payload=payload,
+                            )
                             row["campaign_template"] = {
                                 "target_id": row["target_id"],
                                 "target_version": row["version"],
@@ -3898,12 +3913,61 @@ class PostgresApiBackend(ApiBackend):
                                 if row["target_id"] == SYNTHETIC_TARGET_ID
                                 else "live",
                                 "maximum_caps": row["safety_caps"],
-                                "hosted_run": self._latest_hosted_run_binding(
-                                    connection,
-                                    organization_id=principal.organization_id,
-                                    target_payload=payload,
-                                ),
+                                "hosted_run": hosted_run,
                             }
+                            suite_batches = []
+                            for ordinal, batch_id in enumerate(LIVE_100_BATCH_IDS, start=1):
+                                batch = resolve_workload(batch_id)
+                                spec = LIVE_100_BATCH_SPECS[batch_id]
+                                exact_caps = dict(row["safety_caps"])
+                                exact_caps.update(
+                                    {
+                                        "max_attempts_per_run": spec["case_count"],
+                                        "logical_case_limit": spec["case_count"],
+                                        "physical_request_limit": spec["physical"],
+                                        "target_retries_per_turn": 0,
+                                    }
+                                )
+                                suite_batches.append(
+                                    {
+                                        "ordinal": ordinal,
+                                        "batch_id": batch_id,
+                                        "target_id": row["target_id"],
+                                        "target_version": row["version"],
+                                        "surface_id": surface["surface_id"],
+                                        "surface_version": surface["version"],
+                                        "corpus_id": batch.corpus_id,
+                                        "corpus_hash": batch.content_hash,
+                                        "case_count": len(batch.cases),
+                                        "physical_request_count": spec["physical"],
+                                        "tool_sources": list(batch.tool_sources),
+                                        "execution_profile": (
+                                            "synthetic"
+                                            if row["target_id"] == SYNTHETIC_TARGET_ID
+                                            else "live"
+                                        ),
+                                        "maximum_caps": exact_caps,
+                                        "hosted_run": hosted_run,
+                                    }
+                                )
+                            row["campaign_suite_templates"] = [
+                                {
+                                    "suite_id": LIVE_100_CORPUS_ID,
+                                    "title": "Full 100-case suite",
+                                    "case_count": sum(
+                                        int(spec["case_count"])
+                                        for spec in LIVE_100_BATCH_SPECS.values()
+                                    ),
+                                    "physical_request_count": (LIVE_100_PHYSICAL_REQUEST_COUNT),
+                                    "categories": list(LIVE_100_CATEGORY_COUNTS),
+                                    "batches": suite_batches,
+                                }
+                            ]
+                            if (
+                                row["target_id"] == SYNTHETIC_TARGET_ID
+                                or int(row["safety_caps"]["max_attempts_per_run"]) < 34
+                            ):
+                                row["campaign_suite_templates"] = []
                 elif resource == "target_catalog":
                     rows = self._target_catalog_projection(
                         connection,
@@ -4017,10 +4081,29 @@ class PostgresApiBackend(ApiBackend):
                 )
                 return CommandResult.completed(surface.version, resource_id=surface.surface_id)
             if command == "request_campaign_authorization":
-                if self._corpus is not None:
+                requested_corpus_id = payload.get("corpus_id")
+                trusted_corpus = self._corpus
+                if requested_corpus_id in LIVE_100_BATCH_IDS:
+                    try:
+                        trusted_corpus = resolve_workload(
+                            str(requested_corpus_id),
+                            expected_content_hash=str(payload.get("corpus_hash", "")),
+                        )
+                    except Exception as exc:
+                        raise ApiConflict("campaign corpus differs from trusted content") from exc
+                    spec = LIVE_100_BATCH_SPECS[str(requested_corpus_id)]
+                    submitted_caps = dict(payload.get("caps") or {})
                     if (
-                        payload.get("corpus_id") != self._corpus.corpus_id
-                        or payload.get("corpus_hash") != self._corpus.content_hash
+                        submitted_caps.get("max_attempts_per_run") != spec["case_count"]
+                        or submitted_caps.get("logical_case_limit") != spec["case_count"]
+                        or submitted_caps.get("physical_request_limit") != spec["physical"]
+                        or submitted_caps.get("target_retries_per_turn") != 0
+                    ):
+                        raise ApiConflict("campaign caps differ from trusted batch")
+                if trusted_corpus is not None:
+                    if (
+                        payload.get("corpus_id") != trusted_corpus.corpus_id
+                        or payload.get("corpus_hash") != trusted_corpus.content_hash
                     ):
                         raise ApiConflict("campaign corpus differs from trusted content")
                     expected_profile = (

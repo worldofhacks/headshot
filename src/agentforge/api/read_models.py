@@ -202,6 +202,21 @@ class CampaignTemplateReadModel(_ReadModel):
     hosted_run: HostedRunBindingReadModel | None
 
 
+class CampaignSuiteBatchReadModel(CampaignTemplateReadModel):
+    ordinal: int = Field(gt=0)
+    batch_id: str
+    physical_request_count: int = Field(gt=0)
+
+
+class CampaignSuiteTemplateReadModel(_ReadModel):
+    suite_id: str
+    title: str
+    case_count: int = Field(gt=0)
+    physical_request_count: int = Field(gt=0)
+    categories: tuple[str, ...]
+    batches: tuple[CampaignSuiteBatchReadModel, ...]
+
+
 class TargetReadModel(_ReadModel):
     target_id: str
     version: str
@@ -218,6 +233,7 @@ class TargetReadModel(_ReadModel):
     allowed_lifecycle_transitions: list[str]
     surfaces: list[SurfaceReadModel]
     campaign_template: CampaignTemplateReadModel | None = None
+    campaign_suite_templates: list[CampaignSuiteTemplateReadModel] = Field(default_factory=list)
     created_at: datetime.datetime
 
 
