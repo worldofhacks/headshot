@@ -141,6 +141,16 @@ sample count, so it too is constant across sub-runs and the merged bundle has on
 The aggregate over all batches is the number that governs. Per-batch metrics are reported alongside
 so a degraded sub-run stays visible instead of being averaged away.
 
+> **Carry this into the real run.** On the rehearsal split of the committed 54-sample bundle, the
+> two halves were not equivalent: batch-0 scored non-oracle agreement **0.9524** and batch-1
+> **0.8571**, against a 0.9048 aggregate that shows neither. That spread is a property of which
+> labels landed in which half — batches are cut from the corpus sorted by `label_id`, so a batch
+> can concentrate one category's hard cases. **Report the per-batch table with the real numbers,
+> and if one batch sits near or under `min_agreement_rate` while the aggregate passes, say so
+> explicitly rather than letting the aggregate speak for it.** A batch that fails on its own is
+> not automatically disqualifying — the aggregate is the defined gate — but it is a finding, and
+> it is the kind of thing an aggregate is designed to hide.
+
 **Cost:** one physical Judge call per label. The 54-label slice set measured $0.75823375, so budget
 **~$0.014/label** — about **$2.80 for a 200-label corpus** across 4 batches of 56/56/56/32.
 

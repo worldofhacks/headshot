@@ -14,12 +14,20 @@ from agentforge.agents.hosted_runtime import (
     HostedRoleRuntime,
     require_safe_model_text,
 )
+from agentforge.agents.judge.model_authority import (
+    MODEL_ASSESSMENT_STATES,
+    ModelAuthorityViolation,
+    model_may_decide,
+    sanitize_model_state,
+)
 from agentforge.contracts import validate
 
 MAX_EVALUATOR_TRANSCRIPT_CHARS = 24_000
 MAX_EVALUATOR_SIGNALS_PER_KIND = 16
 _CALIBRATION_POLICY_DECISION = "authorized-synthetic-calibration-evaluation"
-_ASSESSMENT_STATES = frozenset({"EXPLOIT_LIKELY", "NO_EXPLOIT_OBSERVED", "INDETERMINATE", "ERROR"})
+#: The one canonical vocabulary, shared with the four-role composition root so the two model-Judge
+#: chokepoints cannot disagree about what a model may assert.
+_ASSESSMENT_STATES = MODEL_ASSESSMENT_STATES
 CalibrationAuthorityState = Literal[
     "unavailable",
     "failed",
@@ -147,8 +155,15 @@ def reconcile_judge_assessment(
         "enabled",
     }:
         raise HostedEvaluatorError("Evaluator calibration authority state is invalid")
-    if type(model_authority_allowed) is not bool:
-        raise HostedEvaluatorError("Evaluator model-authority permission is invalid")
+    try:
+        # One shared definition of "may the model decide", reading only caller-held values —
+        # never anything the model reported about itself.
+        model_is_decisive = model_may_decide(
+            calibration_state=calibration_state,
+            model_authority_allowed=model_authority_allowed,
+        )
+    except ModelAuthorityViolation as exc:
+        raise HostedEvaluatorError("Evaluator model-authority permission is invalid") from exc
     evaluated = dict(_validate_assessment(assessment))
     ground_truth = dict(deterministic_verdict)
     try:
@@ -176,7 +191,7 @@ def reconcile_judge_assessment(
             model_decisive=False,
             ground_truth_agreement=agreement,
         )
-    if calibration_state != "enabled" or not model_authority_allowed:
+    if not model_is_decisive:
         return JudgeReconciliation(
             effective_verdict=ground_truth,
             decision_authority="deterministic_ground_truth",
@@ -315,9 +330,13 @@ def _assessment_schema() -> dict[str, Any]:
 def _validate_assessment(raw: Mapping[str, Any]) -> Mapping[str, Any]:
     if set(raw) != {"state", "confidence", "rationale", "criteria_hits", "error_code"}:
         raise HostedEvaluatorError("Evaluator response has an invalid shape")
-    state = raw.get("state")
-    if state not in _ASSESSMENT_STATES:
-        raise HostedEvaluatorError("Evaluator response state is invalid")
+    try:
+        # 'refuse', not 'downgrade': this is a single evaluation, and a response that violates the
+        # schema it was given makes the whole invocation suspect. The four-role campaign root
+        # chooses the other disposition for reasons stated there; both go through one guard.
+        state, _substitution = sanitize_model_state(raw.get("state"), on_confirmation="refuse")
+    except ModelAuthorityViolation as exc:
+        raise HostedEvaluatorError("Evaluator response state is invalid") from exc
     confidence = raw.get("confidence")
     if (
         isinstance(confidence, bool)
