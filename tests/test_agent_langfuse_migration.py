@@ -518,6 +518,9 @@ def test_populated_0017_upgrade_exposes_truthful_historical_provider_lineage(
         assert secret_identity["provider_event_status"] is None
         assert secret_identity["detail"]["provider_identity_redacted"] is True
 
+        # Exercise the complete populated deployment path before current-head
+        # read models query columns introduced by 0020.
+        _db.alembic_upgrade(database_url, "0020")
         principal = Principal(
             user_id="user_migration",
             session_id="sess_migration",

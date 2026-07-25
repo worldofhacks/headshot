@@ -123,6 +123,32 @@ _JUDGE_CALIBRATION_STATES = frozenset({"unavailable", "failed", "passed", "inval
 _DECISION_AUTHORITIES = frozenset({"oracle", "model", "none"})
 _JUDGE_CALIBRATION_ID = re.compile(r"\AJC-[0-9a-f]{64}\Z")
 _USD = re.compile(r"\A(?:0|[1-9][0-9]*)(?:\.[0-9]{1,12})?\Z")
+_AGENT_ACCEPTANCE_ROLES: tuple[AgentRole, ...] = (
+    "orchestrator",
+    "judge",
+    "documentation",
+)
+_AGENT_ACCEPTANCE_ACTOR_ID = "system:live-acceptance"
+_AGENT_ACCEPTANCE_ACTOR = re.compile(r"\Asystem:[A-Za-z0-9][A-Za-z0-9._:-]{0,120}\Z")
+_AGENT_ACCEPTANCE_MAX_LIFETIME = datetime.timedelta(minutes=30)
+_AGENT_ACCEPTANCE_CASE_ID = "agentforge-hosted-acceptance-v1"
+_AGENT_ACCEPTANCE_FIXTURE = {
+    "classification": "synthetic",
+    "contains_real_phi": False,
+    "schema_version": "1",
+    "source": "agentforge.live_acceptance",
+}
+_AGENT_ACCEPTANCE_PROVENANCE = {
+    "actor_type": "system",
+    "source": "agentforge.live_acceptance",
+    "schema_version": "1",
+}
+_AGENT_ACCEPTANCE_ROLE_USD_CAPS: Mapping[AgentRole, Decimal] = {
+    "orchestrator": Decimal("1.5"),
+    "judge": Decimal("4"),
+    "documentation": Decimal("1"),
+}
+_AGENT_ACCEPTANCE_GLOBAL_USD_CAP = Decimal("10")
 
 
 @dataclass(frozen=True, slots=True)
@@ -134,6 +160,75 @@ class AuthorizedHostedRoleConfiguration:
     configuration: HostedConfigurationSet
     role_configuration: HostedRoleConfiguration
     authorization: HostedRunBinding
+
+
+@dataclass(frozen=True, slots=True)
+class AgentAcceptanceRunIdentity:
+    """The run and singleton synthetic attempt created in one transaction."""
+
+    run_id: str
+    attempt_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class AuthorizedAgentAcceptanceRoleConfiguration:
+    """One non-target role resolved from a short-lived acceptance authority."""
+
+    organization_id: str
+    run_id: str
+    acceptance_attempt_id: str
+    configuration: HostedConfigurationSet
+    role_configuration: HostedRoleConfiguration
+    generation_policy_sha256: str
+    acceptance_context_sha256: str
+    limits: Mapping[str, Any]
+    expires_at: datetime.datetime
+
+
+def _closed_agent_acceptance_limits() -> dict[str, Any]:
+    return {
+        "schema_version": "1",
+        "network_scope": "openrouter_langfuse_only",
+        "target_call_limit": 0,
+        "allowed_roles": list(_AGENT_ACCEPTANCE_ROLES),
+        "role_call_caps": {role: 1 for role in _AGENT_ACCEPTANCE_ROLES},
+        "role_usd_caps": {
+            role: format(_AGENT_ACCEPTANCE_ROLE_USD_CAPS[role], "f")
+            for role in _AGENT_ACCEPTANCE_ROLES
+        },
+        "global_call_cap": len(_AGENT_ACCEPTANCE_ROLES),
+        "global_usd_cap": format(_AGENT_ACCEPTANCE_GLOBAL_USD_CAP, "f"),
+    }
+
+
+def canonical_agent_acceptance_limits(
+    configuration: HostedConfigurationSet,
+) -> dict[str, Any]:
+    """Return the only accepted three-call, zero-target runtime envelope."""
+
+    validate_hosted_configuration_set(configuration)
+    roles = {role.role: role for role in configuration.roles}
+    for role_name in _AGENT_ACCEPTANCE_ROLES:
+        role = roles[role_name]
+        if (
+            role.limits.max_calls != 1
+            or role.limits.max_usd != _AGENT_ACCEPTANCE_ROLE_USD_CAPS[role_name]
+            or role.limits.max_retries != 0
+            or role.limits.max_concurrency != 1
+        ):
+            raise InvalidControlPlaneInput(
+                f"{role_name} acceptance limits differ from the closed one-call envelope"
+            )
+    if (
+        configuration.global_limits.max_calls != len(_AGENT_ACCEPTANCE_ROLES)
+        or configuration.global_limits.max_usd != _AGENT_ACCEPTANCE_GLOBAL_USD_CAP
+        or configuration.global_limits.max_retries != 0
+        or configuration.global_limits.max_concurrency != 1
+    ):
+        raise InvalidControlPlaneInput(
+            "global acceptance limits differ from the closed three-call envelope"
+        )
+    return _closed_agent_acceptance_limits()
 
 
 class ControlPlaneStore:
@@ -1775,6 +1870,208 @@ class ControlPlaneStore:
             )
             return configuration.configuration_sha256
 
+    def create_agent_acceptance_run(
+        self,
+        *,
+        organization_id: str,
+        configuration_set_sha256: str,
+        generation_policy_sha256: str,
+        acceptance_context: Mapping[str, Any],
+        expires_at: datetime.datetime,
+        limits: Mapping[str, Any],
+        acceptance_actor_id: str = _AGENT_ACCEPTANCE_ACTOR_ID,
+    ) -> AgentAcceptanceRunIdentity:
+        """Create one short-lived zero-target run and its singleton attempt atomically.
+
+        The four-role configuration must already have crossed the human CONFIG_MANAGE gate.
+        This method grants provider-call authority only to the three platform-owned roles.
+        """
+
+        if not isinstance(organization_id, str) or not organization_id or len(organization_id) > 64:
+            raise InvalidControlPlaneInput("acceptance organization identity is invalid")
+        if (
+            not isinstance(configuration_set_sha256, str)
+            or _SHA256.fullmatch(configuration_set_sha256) is None
+        ):
+            raise InvalidControlPlaneInput("acceptance configuration hash is invalid")
+        if (
+            not isinstance(generation_policy_sha256, str)
+            or _SHA256.fullmatch(generation_policy_sha256) is None
+        ):
+            raise InvalidControlPlaneInput("acceptance generation policy hash is invalid")
+        context_sha256 = self._agent_payload_sha256(
+            acceptance_context,
+            label="agent acceptance context",
+        )
+        supplied_limits = self._bounded_agent_payload(
+            limits,
+            label="agent acceptance limits",
+        )
+        if (
+            not isinstance(acceptance_actor_id, str)
+            or _AGENT_ACCEPTANCE_ACTOR.fullmatch(acceptance_actor_id) is None
+        ):
+            raise InvalidControlPlaneInput(
+                "agent acceptance actor must be a non-human system identity"
+            )
+        if (
+            not isinstance(expires_at, datetime.datetime)
+            or expires_at.tzinfo is None
+            or expires_at.utcoffset() is None
+        ):
+            raise InvalidControlPlaneInput("agent acceptance expiry must be timezone-aware")
+        normalized_expiry = expires_at.astimezone(datetime.UTC)
+        now = datetime.datetime.now(datetime.UTC)
+        if normalized_expiry <= now or normalized_expiry > now + _AGENT_ACCEPTANCE_MAX_LIFETIME:
+            raise AuthorizationDeniedError("agent acceptance expiry is outside the closed lifetime")
+
+        run_id = f"AR-{uuid.uuid4().hex}"
+        attempt_id = hashlib.sha256(
+            f"m1d-attempt:v1\0{run_id}\0{0}\0{_AGENT_ACCEPTANCE_CASE_ID}".encode()
+        ).hexdigest()
+        with self._engine.begin() as connection:
+            self._aggregate_lock(
+                connection,
+                f"agent-acceptance-create:{organization_id}",
+            )
+            try:
+                configuration = self._stored_hosted_configuration(
+                    connection,
+                    organization_id=organization_id,
+                    configuration_sha256=configuration_set_sha256,
+                )
+            except (AuthorizationDeniedError, RecordNotFoundError) as exc:
+                raise AuthorizationDeniedError(
+                    "agent acceptance requires an existing human-staged configuration"
+                ) from exc
+            expected_limits = canonical_agent_acceptance_limits(configuration)
+            if supplied_limits != expected_limits:
+                raise AuthorizationDeniedError(
+                    "agent acceptance limits differ from the closed runtime envelope"
+                )
+
+            connection.execute(
+                text(
+                    "INSERT INTO campaign_runs "
+                    "(run_id, organization_id, authorization_request_id, scope_hash, "
+                    "launcher_user_id, launcher_session_id, run_kind, "
+                    "acceptance_configuration_sha256, "
+                    "acceptance_generation_policy_sha256, acceptance_context_sha256, "
+                    "acceptance_attempt_id, acceptance_limits, acceptance_expires_at, "
+                    "acceptance_actor_id, acceptance_provenance) VALUES "
+                    "(:run_id, :org, NULL, NULL, NULL, NULL, 'agent_acceptance', "
+                    ":configuration, :generation_policy, :context, :attempt, "
+                    "CAST(:limits AS jsonb), :expires_at, :actor, CAST(:provenance AS jsonb))"
+                ),
+                {
+                    "run_id": run_id,
+                    "org": organization_id,
+                    "configuration": configuration.configuration_sha256,
+                    "generation_policy": generation_policy_sha256,
+                    "context": context_sha256,
+                    "attempt": attempt_id,
+                    "limits": canonical_json(expected_limits),
+                    "expires_at": normalized_expiry,
+                    "actor": acceptance_actor_id,
+                    "provenance": canonical_json(_AGENT_ACCEPTANCE_PROVENANCE),
+                },
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO campaign_attempts "
+                    "(organization_id, run_id, attempt_id, ordinal, case_id, "
+                    "case_content_hash, category, severity, attack_class, owasp_mappings, "
+                    "fixture_provenance, source_tool, source_technique) VALUES "
+                    "(:org, :run_id, :attempt, 0, :case_id, :context, "
+                    "NULL, NULL, NULL, NULL, CAST(:fixture AS jsonb), NULL, NULL)"
+                ),
+                {
+                    "org": organization_id,
+                    "run_id": run_id,
+                    "attempt": attempt_id,
+                    "case_id": _AGENT_ACCEPTANCE_CASE_ID,
+                    "context": context_sha256,
+                    "fixture": canonical_json(_AGENT_ACCEPTANCE_FIXTURE),
+                },
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO campaign_run_events "
+                    "(organization_id, run_id, state, actor_user_id, actor_session_id) "
+                    "VALUES (:org, :run_id, 'running', :actor, :session)"
+                ),
+                {
+                    "org": organization_id,
+                    "run_id": run_id,
+                    "actor": acceptance_actor_id,
+                    "session": "runner:live-acceptance",
+                },
+            )
+            self._audit(
+                connection,
+                organization_id,
+                "agent_acceptance.started",
+                "campaign_run",
+                run_id,
+                None,
+                {
+                    "run_kind": "agent_acceptance",
+                    "attempt_id": attempt_id,
+                    "configuration_set_sha256": configuration.configuration_sha256,
+                    "generation_policy_sha256": generation_policy_sha256,
+                    "acceptance_context_sha256": context_sha256,
+                    "acceptance_limits": expected_limits,
+                    "network_scope": "openrouter_langfuse_only",
+                    "target_call_limit": 0,
+                    "expires_at": normalized_expiry.isoformat(),
+                },
+                actor_user_id=acceptance_actor_id,
+                actor_session_id="runner:live-acceptance",
+            )
+        return AgentAcceptanceRunIdentity(run_id=run_id, attempt_id=attempt_id)
+
+    def load_hosted_configuration_set(
+        self,
+        *,
+        organization_id: str,
+        configuration_set_sha256: str,
+        release_sha256: str,
+    ) -> HostedConfigurationSet:
+        """Load one exact CONFIG_MANAGE-staged four-role set for one reviewed release."""
+
+        if (
+            not isinstance(organization_id, str)
+            or not organization_id
+            or len(organization_id) > 64
+            or not isinstance(configuration_set_sha256, str)
+            or _SHA256.fullmatch(configuration_set_sha256) is None
+            or not isinstance(release_sha256, str)
+            or _SHA256.fullmatch(release_sha256) is None
+        ):
+            raise InvalidControlPlaneInput("hosted configuration identity is invalid")
+        with self._engine.connect() as connection:
+            return self._stored_hosted_configuration(
+                connection,
+                organization_id=organization_id,
+                configuration_sha256=configuration_set_sha256,
+                expected_release_sha256=release_sha256,
+            )
+
+    def load_acceptance_role_for_execution(
+        self,
+        *,
+        run_id: str,
+        agent_role: AgentRole,
+    ) -> AuthorizedAgentAcceptanceRoleConfiguration:
+        """Resolve one still-live role from a system acceptance run."""
+
+        with self._engine.connect() as connection:
+            return self._authorized_agent_acceptance_role(
+                connection,
+                run_id=run_id,
+                agent_role=agent_role,
+            )
+
     def active_agent_assignment(self, *, organization_id: str, agent_role: str) -> AgentAssignment:
         """Return the latest active assignment or the code-owned deterministic default."""
 
@@ -1943,6 +2240,426 @@ class ControlPlaneStore:
             )
             return execution_id
 
+    def start_acceptance_agent_execution(
+        self,
+        *,
+        run_id: str,
+        agent_role: AgentRole,
+        input_payload: Mapping[str, Any],
+        provider: str,
+        model: str,
+        upstream_provider: str,
+        configuration_set_sha256: str,
+        role_configuration_sha256: str,
+        generation_policy_sha256: str,
+        judge_calibration_id: str | None = None,
+        judge_calibration_state: str | None = None,
+        parent_execution_id: str | None = None,
+        detail: Mapping[str, Any] | None = None,
+    ) -> str:
+        """Start one logical call under the zero-target acceptance authority."""
+
+        if agent_role not in _AGENT_ACCEPTANCE_ROLES:
+            raise AuthorizationDeniedError("agent role is outside the live-acceptance allowlist")
+        if agent_role == "judge" and judge_calibration_state != "failed":
+            raise AuthorizationDeniedError(
+                "agent acceptance Judge must start with failed calibration"
+            )
+        self._validate_judge_calibration_lineage(
+            agent_role=agent_role,
+            calibration_id=judge_calibration_id,
+            calibration_state=judge_calibration_state,
+        )
+        input_sha256 = self._agent_payload_sha256(
+            input_payload,
+            label="agent acceptance input",
+        )
+        sanitized_detail = self._bounded_agent_payload(
+            detail or {},
+            label="agent acceptance detail",
+        )
+        if "provider_lineage_state" in sanitized_detail:
+            raise InvalidControlPlaneInput("provider lineage state is server-owned")
+        sanitized_detail.update(
+            {
+                "acceptance_id": run_id,
+                "run_kind": "agent_acceptance",
+                "telemetry_contract": "hosted-agent-execution-v1",
+                "provider_lineage_state": "canonical_physical",
+            }
+        )
+        with self._engine.begin() as connection:
+            self._aggregate_lock(connection, f"agent-acceptance:{run_id}")
+            authority = self._authorized_agent_acceptance_role(
+                connection,
+                run_id=run_id,
+                agent_role=agent_role,
+                for_update=True,
+            )
+            role = authority.role_configuration
+            if (
+                provider != role.provider
+                or model != role.model_id
+                or upstream_provider != role.upstream_provider
+                or configuration_set_sha256 != authority.configuration.configuration_sha256
+                or role_configuration_sha256 != role.configuration_sha256
+                or generation_policy_sha256 != authority.generation_policy_sha256
+            ):
+                raise AuthorizationDeniedError(
+                    "hosted execution identity differs from the acceptance authority"
+                )
+            self._assert_agent_acceptance_has_no_target_traffic(
+                connection,
+                organization_id=authority.organization_id,
+                run_id=run_id,
+            )
+            self._assert_agent_acceptance_call_available(
+                connection,
+                authority=authority,
+            )
+            self._validate_acceptance_parent(
+                connection,
+                authority=authority,
+                agent_role=agent_role,
+                parent_execution_id=parent_execution_id,
+            )
+            prior = connection.execute(
+                text(
+                    "SELECT count(*) FROM agent_executions "
+                    "WHERE organization_id = :org AND campaign_run_id = :run "
+                    "AND agent_role = :role"
+                ),
+                {
+                    "org": authority.organization_id,
+                    "run": run_id,
+                    "role": agent_role,
+                },
+            ).scalar_one()
+            if prior:
+                raise RecordConflictError("acceptance role already has a logical execution")
+
+            execution_id = uuid.uuid4().hex
+            trace_id = campaign_trace_id(run_id)
+            connection.execute(
+                text(
+                    "INSERT INTO agent_executions "
+                    "(execution_id, organization_id, campaign_run_id, attempt_id, "
+                    "parent_execution_id, agent_role, provider, model, execution_mode, "
+                    "configuration_version, input_sha256, trace_id, detail, "
+                    "configuration_set_sha256, role_configuration_sha256, "
+                    "generation_policy_sha256, judge_calibration_id, "
+                    "judge_calibration_state) VALUES "
+                    "(:execution, :org, :run_id, :attempt, :parent, :role, :provider, "
+                    ":model, 'hosted_advisory', :version, :input_hash, :trace_id, "
+                    "CAST(:detail AS jsonb), :configuration, :role_configuration, "
+                    ":generation_policy, :calibration_id, :calibration_state)"
+                ),
+                {
+                    "execution": execution_id,
+                    "org": authority.organization_id,
+                    "run_id": run_id,
+                    "attempt": authority.acceptance_attempt_id,
+                    "parent": parent_execution_id,
+                    "role": role.role,
+                    "provider": role.provider,
+                    "model": role.model_id,
+                    "version": int(authority.configuration.schema_version),
+                    "input_hash": input_sha256,
+                    "trace_id": trace_id,
+                    "detail": canonical_json(sanitized_detail),
+                    "configuration": authority.configuration.configuration_sha256,
+                    "role_configuration": role.configuration_sha256,
+                    "generation_policy": authority.generation_policy_sha256,
+                    "calibration_id": judge_calibration_id,
+                    "calibration_state": judge_calibration_state,
+                },
+            )
+            self._audit(
+                connection,
+                authority.organization_id,
+                "agent.started",
+                "agent_execution",
+                execution_id,
+                None,
+                {
+                    "acceptance_id": run_id,
+                    "run_kind": "agent_acceptance",
+                    "attempt_id": authority.acceptance_attempt_id,
+                    "parent_execution_id": parent_execution_id,
+                    "agent_role": role.role,
+                    "provider": role.provider,
+                    "requested_model": role.model_id,
+                    "requested_upstream_provider": role.upstream_provider,
+                    "execution_mode": "hosted_advisory",
+                    "configuration_set_sha256": authority.configuration.configuration_sha256,
+                    "role_configuration_sha256": role.configuration_sha256,
+                    "generation_policy_sha256": authority.generation_policy_sha256,
+                    "judge_calibration_id": judge_calibration_id,
+                    "judge_calibration_state": judge_calibration_state,
+                    "input_sha256": input_sha256,
+                    "trace_id": trace_id,
+                    "network_scope": "openrouter_langfuse_only",
+                },
+                actor_user_id=f"agent:{role.role}",
+                actor_session_id="runner:live-acceptance",
+            )
+            return execution_id
+
+    def complete_agent_acceptance_run(self, *, run_id: str) -> str:
+        """Close a successful acceptance after three reconciled calls and zero target I/O."""
+
+        with self._engine.begin() as connection:
+            self._aggregate_lock(connection, f"agent-acceptance:{run_id}")
+            row = self._agent_acceptance_run_row(
+                connection,
+                run_id=run_id,
+                for_update=True,
+            )
+            self._assert_agent_acceptance_has_no_target_traffic(
+                connection,
+                organization_id=str(row["organization_id"]),
+                run_id=run_id,
+            )
+            if row["state"] == "complete":
+                return run_id
+            if row["state"] != "running":
+                raise RecordConflictError("agent acceptance run is no longer completable")
+            if not row["acceptance_live"]:
+                raise AuthorizationDeniedError("agent acceptance authority has expired")
+            attempts = (
+                connection.execute(
+                    text(
+                        "SELECT attempt_id, ordinal, case_id FROM campaign_attempts "
+                        "WHERE organization_id = :org AND run_id = :run ORDER BY ordinal"
+                    ),
+                    {"org": row["organization_id"], "run": run_id},
+                )
+                .mappings()
+                .all()
+            )
+            if (
+                len(attempts) != 1
+                or attempts[0]["attempt_id"] != row["acceptance_attempt_id"]
+                or attempts[0]["ordinal"] != 0
+                or attempts[0]["case_id"] != _AGENT_ACCEPTANCE_CASE_ID
+            ):
+                raise RecordConflictError(
+                    "agent acceptance completion requires its singleton synthetic attempt"
+                )
+            executions = (
+                connection.execute(
+                    text(
+                        "SELECT execution_id, agent_role, attempt_id, status, "
+                        "returned_model, upstream_provider, provider_request_id, "
+                        "input_tokens, output_tokens, reasoning_tokens, "
+                        "cost_measurement_state, measured_cost, provider_event_ids, "
+                        "physical_attempts, judge_calibration_id, "
+                        "judge_calibration_state, oracle_agreement, decision_authority "
+                        "FROM agent_executions "
+                        "WHERE organization_id = :org AND campaign_run_id = :run "
+                        "ORDER BY id"
+                    ),
+                    {
+                        "org": row["organization_id"],
+                        "run": run_id,
+                    },
+                )
+                .mappings()
+                .all()
+            )
+            if (
+                len(executions) != len(_AGENT_ACCEPTANCE_ROLES)
+                or {item["agent_role"] for item in executions} != set(_AGENT_ACCEPTANCE_ROLES)
+                or any(
+                    item["attempt_id"] != row["acceptance_attempt_id"]
+                    or item["status"] != "succeeded"
+                    or item["cost_measurement_state"] != "measured"
+                    or item["measured_cost"] is None
+                    or item["physical_attempts"] != 1
+                    for item in executions
+                )
+            ):
+                raise RecordConflictError(
+                    "agent acceptance completion requires three measured successful calls"
+                )
+            judge = next(item for item in executions if item["agent_role"] == "judge")
+            if (
+                judge["judge_calibration_id"] is None
+                or judge["judge_calibration_state"] != "failed"
+                or judge["decision_authority"] != "oracle"
+                or judge["oracle_agreement"] is None
+            ):
+                raise RecordConflictError(
+                    "agent acceptance completion requires fail-closed Judge oracle reconciliation"
+                )
+            events = (
+                connection.execute(
+                    text(
+                        "SELECT event_id, logical_execution_id, agent_role, "
+                        "campaign_attempt_id, status, returned_model, "
+                        "upstream_provider, provider_request_id, input_tokens, "
+                        "output_tokens, reasoning_tokens, cost_measurement_state, "
+                        "measured_cost_usd "
+                        "FROM provider_call_events WHERE organization_id = :org "
+                        "AND campaign_run_id = :run ORDER BY finished_at, event_id"
+                    ),
+                    {
+                        "org": row["organization_id"],
+                        "run": run_id,
+                    },
+                )
+                .mappings()
+                .all()
+            )
+            if (
+                len(events) != len(_AGENT_ACCEPTANCE_ROLES)
+                or {item["agent_role"] for item in events} != set(_AGENT_ACCEPTANCE_ROLES)
+                or any(
+                    item["campaign_attempt_id"] != row["acceptance_attempt_id"]
+                    or item["status"] != "succeeded"
+                    or item["cost_measurement_state"] != "measured"
+                    or item["measured_cost_usd"] is None
+                    for item in events
+                )
+            ):
+                raise RecordConflictError(
+                    "agent acceptance completion requires three durable provider events"
+                )
+            events_by_execution = {str(item["logical_execution_id"]): item for item in events}
+            if len(events_by_execution) != len(_AGENT_ACCEPTANCE_ROLES):
+                raise RecordConflictError(
+                    "agent acceptance provider events do not map one-to-one to executions"
+                )
+            for execution in executions:
+                event = events_by_execution.get(str(execution["execution_id"]))
+                event_id = event["event_id"] if event is not None else None
+                if (
+                    event is None
+                    or not isinstance(event_id, str)
+                    or _SHA256.fullmatch(event_id) is None
+                    or event["agent_role"] != execution["agent_role"]
+                    or execution["provider_event_ids"] != [event_id]
+                    or event["returned_model"] != execution["returned_model"]
+                    or event["upstream_provider"] != execution["upstream_provider"]
+                    or event["provider_request_id"] != execution["provider_request_id"]
+                    or event["input_tokens"] != execution["input_tokens"]
+                    or event["output_tokens"] != execution["output_tokens"]
+                    or event["reasoning_tokens"] != execution["reasoning_tokens"]
+                    or event["measured_cost_usd"] != execution["measured_cost"]
+                ):
+                    raise RecordConflictError(
+                        "agent acceptance provider events do not reconcile to logical executions"
+                    )
+            limits = self._agent_acceptance_limits_from_row(row)
+            total_cost = sum(
+                (Decimal(str(item["measured_cost_usd"])) for item in events),
+                Decimal(0),
+            )
+            if total_cost > Decimal(str(limits["global_usd_cap"])):
+                raise AuthorizationDeniedError("agent acceptance global spend cap was exceeded")
+            for role_name in _AGENT_ACCEPTANCE_ROLES:
+                role_cost = sum(
+                    (
+                        Decimal(str(item["measured_cost_usd"]))
+                        for item in events
+                        if item["agent_role"] == role_name
+                    ),
+                    Decimal(0),
+                )
+                if role_cost > Decimal(str(limits["role_usd_caps"][role_name])):
+                    raise AuthorizationDeniedError(f"{role_name} acceptance spend cap was exceeded")
+            connection.execute(
+                text(
+                    "INSERT INTO campaign_run_events "
+                    "(organization_id, run_id, state, actor_user_id, actor_session_id) "
+                    "VALUES (:org, :run, 'complete', :actor, :session)"
+                ),
+                {
+                    "org": row["organization_id"],
+                    "run": run_id,
+                    "actor": row["acceptance_actor_id"],
+                    "session": "runner:live-acceptance",
+                },
+            )
+            self._audit(
+                connection,
+                str(row["organization_id"]),
+                "agent_acceptance.complete",
+                "campaign_run",
+                run_id,
+                None,
+                {
+                    "run_kind": "agent_acceptance",
+                    "attempt_id": row["acceptance_attempt_id"],
+                    "agent_execution_count": len(executions),
+                    "provider_call_count": len(events),
+                    "measured_cost_usd": format(total_cost, "f"),
+                    "target_request_count": 0,
+                },
+                actor_user_id=str(row["acceptance_actor_id"]),
+                actor_session_id="runner:live-acceptance",
+            )
+        return run_id
+
+    def abort_agent_acceptance_run(
+        self,
+        *,
+        run_id: str,
+        reason_code: str,
+    ) -> str:
+        """Trip the acceptance kill switch without creating target or human authority."""
+
+        if not isinstance(reason_code, str) or _REASON_CODE.fullmatch(reason_code) is None:
+            raise InvalidControlPlaneInput("acceptance abort reason code is invalid")
+        with self._engine.begin() as connection:
+            self._aggregate_lock(connection, f"agent-acceptance:{run_id}")
+            row = self._agent_acceptance_run_row(
+                connection,
+                run_id=run_id,
+                for_update=True,
+            )
+            self._assert_agent_acceptance_has_no_target_traffic(
+                connection,
+                organization_id=str(row["organization_id"]),
+                run_id=run_id,
+            )
+            if row["state"] == "aborted":
+                return run_id
+            if row["state"] != "running":
+                raise RecordConflictError("agent acceptance run can no longer be aborted")
+            connection.execute(
+                text(
+                    "INSERT INTO campaign_run_events "
+                    "(organization_id, run_id, state, actor_user_id, actor_session_id, "
+                    "reason_code) VALUES "
+                    "(:org, :run, 'aborted', :actor, :session, :reason)"
+                ),
+                {
+                    "org": row["organization_id"],
+                    "run": run_id,
+                    "actor": row["acceptance_actor_id"],
+                    "session": "runner:live-acceptance",
+                    "reason": reason_code,
+                },
+            )
+            self._audit(
+                connection,
+                str(row["organization_id"]),
+                "agent_acceptance.aborted",
+                "campaign_run",
+                run_id,
+                None,
+                {
+                    "run_kind": "agent_acceptance",
+                    "attempt_id": row["acceptance_attempt_id"],
+                    "reason_code": reason_code,
+                    "target_request_count": 0,
+                },
+                actor_user_id=str(row["acceptance_actor_id"]),
+                actor_session_id="runner:live-acceptance",
+            )
+        return run_id
+
     # ------------------------------------------------------- provider physical-call lineage
 
     def provider_logical_context(
@@ -2073,6 +2790,21 @@ class ControlPlaneStore:
         )
         try:
             with self._engine.begin() as connection:
+                run_kind = connection.execute(
+                    text(
+                        "SELECT run_kind FROM campaign_runs "
+                        "WHERE organization_id = :org AND run_id = :run"
+                    ),
+                    {
+                        "org": invocation.organization_id,
+                        "run": invocation.campaign_run_id,
+                    },
+                ).scalar_one_or_none()
+                if run_kind == "agent_acceptance":
+                    self._aggregate_lock(
+                        connection,
+                        f"agent-acceptance:{invocation.campaign_run_id}",
+                    )
                 logical = (
                     connection.execute(
                         text(
@@ -2134,6 +2866,41 @@ class ControlPlaneStore:
                 ):
                     raise AuthorizationDeniedError(
                         "physical provider identity differs from hosted authority"
+                    )
+                if run_kind == "agent_acceptance":
+                    acceptance_authority = self._authorized_agent_acceptance_role(
+                        connection,
+                        run_id=invocation.campaign_run_id,
+                        agent_role=invocation.agent_role,  # type: ignore[arg-type]
+                        for_update=True,
+                    )
+                    if (
+                        invocation.campaign_attempt_id != acceptance_authority.acceptance_attempt_id
+                        or acceptance_authority.organization_id != invocation.organization_id
+                        or acceptance_authority.configuration.configuration_sha256
+                        != invocation.configuration_set_sha256
+                        or acceptance_authority.role_configuration.configuration_sha256
+                        != invocation.role_configuration_sha256
+                        or acceptance_authority.generation_policy_sha256
+                        != invocation.generation_policy_sha256
+                        or acceptance_authority.role_configuration.model_id
+                        != invocation.requested_model
+                        or acceptance_authority.role_configuration.upstream_provider
+                        != invocation.configured_upstream
+                        or trusted_prompt.version != invocation.prompt_version
+                        or trusted_prompt.sha256 != invocation.prompt_sha256
+                    ):
+                        raise AuthorizationDeniedError(
+                            "physical provider context differs from acceptance authority"
+                        )
+                    self._assert_agent_acceptance_has_no_target_traffic(
+                        connection,
+                        organization_id=invocation.organization_id,
+                        run_id=invocation.campaign_run_id,
+                    )
+                    self._assert_agent_acceptance_call_available(
+                        connection,
+                        authority=acceptance_authority,
                     )
                 has_open_invocation = connection.execute(
                     text(
@@ -4993,28 +5760,270 @@ class ControlPlaneStore:
             and row["decision_authority"] == decision_authority
         )
 
+    def _agent_acceptance_run_row(
+        self,
+        connection: Connection,
+        *,
+        run_id: str,
+        for_update: bool,
+    ) -> Mapping[str, Any]:
+        if not isinstance(run_id, str) or not run_id.startswith("AR-"):
+            raise InvalidControlPlaneInput("agent acceptance run identity is invalid")
+        lock_clause = " FOR UPDATE OF r" if for_update else ""
+        row = (
+            connection.execute(
+                text(
+                    "SELECT r.*, "
+                    "(r.acceptance_expires_at > clock_timestamp()) AS acceptance_live, "
+                    "(SELECT state FROM campaign_run_events e "
+                    "WHERE e.organization_id = r.organization_id "
+                    "AND e.run_id = r.run_id ORDER BY e.id DESC LIMIT 1) AS state "
+                    "FROM campaign_runs r WHERE r.run_id = :run_id" + lock_clause
+                ),
+                {"run_id": run_id},
+            )
+            .mappings()
+            .one_or_none()
+        )
+        if row is None:
+            raise RecordNotFoundError("agent acceptance run does not exist")
+        if (
+            row["run_kind"] != "agent_acceptance"
+            or row["authorization_request_id"] is not None
+            or row["scope_hash"] is not None
+            or row["launcher_user_id"] is not None
+            or row["launcher_session_id"] is not None
+            or not isinstance(row["acceptance_actor_id"], str)
+            or _AGENT_ACCEPTANCE_ACTOR.fullmatch(row["acceptance_actor_id"]) is None
+            or not isinstance(row["acceptance_expires_at"], datetime.datetime)
+            or row["state"] is None
+        ):
+            raise AuthorizationDeniedError("agent acceptance authority is malformed")
+        for column in (
+            "acceptance_configuration_sha256",
+            "acceptance_generation_policy_sha256",
+            "acceptance_context_sha256",
+            "acceptance_attempt_id",
+        ):
+            if not isinstance(row[column], str) or _SHA256.fullmatch(row[column]) is None:
+                raise AuthorizationDeniedError("agent acceptance authority hash is invalid")
+        provenance = row["acceptance_provenance"]
+        if not isinstance(provenance, Mapping) or dict(provenance) != _AGENT_ACCEPTANCE_PROVENANCE:
+            raise AuthorizationDeniedError("agent acceptance provenance is invalid")
+        self._agent_acceptance_limits_from_row(row)
+        return row
+
+    @staticmethod
+    def _agent_acceptance_limits_from_row(row: Mapping[str, Any]) -> dict[str, Any]:
+        raw_limits = row["acceptance_limits"]
+        if not isinstance(raw_limits, Mapping):
+            raise AuthorizationDeniedError("agent acceptance limits are invalid")
+        limits = dict(raw_limits)
+        if limits != _closed_agent_acceptance_limits():
+            raise AuthorizationDeniedError(
+                "agent acceptance limits differ from the closed runtime envelope"
+            )
+        return limits
+
+    def _authorized_agent_acceptance_role(
+        self,
+        connection: Connection,
+        *,
+        run_id: str,
+        agent_role: AgentRole,
+        for_update: bool = False,
+    ) -> AuthorizedAgentAcceptanceRoleConfiguration:
+        if agent_role not in _AGENT_ACCEPTANCE_ROLES:
+            raise AuthorizationDeniedError("agent role is outside the live-acceptance allowlist")
+        row = self._agent_acceptance_run_row(
+            connection,
+            run_id=run_id,
+            for_update=for_update,
+        )
+        if row["state"] != "running":
+            raise AuthorizationDeniedError("agent acceptance run is not executable")
+        if not row["acceptance_live"]:
+            raise AuthorizationDeniedError("agent acceptance authority has expired")
+        configuration = self._stored_hosted_configuration(
+            connection,
+            organization_id=str(row["organization_id"]),
+            configuration_sha256=str(row["acceptance_configuration_sha256"]),
+        )
+        expected_limits = canonical_agent_acceptance_limits(configuration)
+        limits = self._agent_acceptance_limits_from_row(row)
+        if limits != expected_limits:
+            raise AuthorizationDeniedError(
+                "agent acceptance limits differ from hosted configuration"
+            )
+        role = next(
+            (item for item in configuration.roles if item.role == agent_role),
+            None,
+        )
+        if role is None:
+            raise AuthorizationDeniedError(
+                "agent role is absent from the acceptance configuration set"
+            )
+        return AuthorizedAgentAcceptanceRoleConfiguration(
+            organization_id=str(row["organization_id"]),
+            run_id=run_id,
+            acceptance_attempt_id=str(row["acceptance_attempt_id"]),
+            configuration=configuration,
+            role_configuration=role,
+            generation_policy_sha256=str(row["acceptance_generation_policy_sha256"]),
+            acceptance_context_sha256=str(row["acceptance_context_sha256"]),
+            limits=limits,
+            expires_at=row["acceptance_expires_at"],
+        )
+
+    @staticmethod
+    def _validate_acceptance_parent(
+        connection: Connection,
+        *,
+        authority: AuthorizedAgentAcceptanceRoleConfiguration,
+        agent_role: AgentRole,
+        parent_execution_id: str | None,
+    ) -> None:
+        expected_parent_role = {
+            "orchestrator": None,
+            "judge": "orchestrator",
+            "documentation": "judge",
+        }[agent_role]
+        if expected_parent_role is None:
+            if parent_execution_id is not None:
+                raise InvalidControlPlaneInput(
+                    "acceptance planner must be the execution lineage root"
+                )
+            return
+        if parent_execution_id is None:
+            raise InvalidControlPlaneInput("acceptance child requires its exact parent")
+        parent = (
+            connection.execute(
+                text(
+                    "SELECT organization_id, campaign_run_id, attempt_id, agent_role "
+                    "FROM agent_executions WHERE execution_id = :execution_id"
+                ),
+                {"execution_id": parent_execution_id},
+            )
+            .mappings()
+            .one_or_none()
+        )
+        if (
+            parent is None
+            or parent["organization_id"] != authority.organization_id
+            or parent["campaign_run_id"] != authority.run_id
+            or parent["attempt_id"] != authority.acceptance_attempt_id
+            or parent["agent_role"] != expected_parent_role
+        ):
+            raise InvalidControlPlaneInput("acceptance child requires its exact parent")
+
+    @staticmethod
+    def _assert_agent_acceptance_has_no_target_traffic(
+        connection: Connection,
+        *,
+        organization_id: str,
+        run_id: str,
+    ) -> None:
+        target_requests = connection.execute(
+            text(
+                "SELECT count(*) FROM outbound_http_requests "
+                "WHERE organization_id = :org AND campaign_run_id = :run"
+            ),
+            {
+                "org": organization_id,
+                "run": run_id,
+            },
+        ).scalar_one()
+        if target_requests:
+            raise AuthorizationDeniedError("agent acceptance run has forbidden target traffic")
+
+    @staticmethod
+    def _assert_agent_acceptance_call_available(
+        connection: Connection,
+        *,
+        authority: AuthorizedAgentAcceptanceRoleConfiguration,
+    ) -> None:
+        role_name = authority.role_configuration.role
+        stats = (
+            connection.execute(
+                text(
+                    "SELECT count(i.invocation_id) AS global_calls, "
+                    "count(i.invocation_id) FILTER "
+                    "(WHERE i.agent_role = :role) AS role_calls, "
+                    "coalesce(sum(e.measured_cost_usd), 0) AS global_cost, "
+                    "coalesce(sum(e.measured_cost_usd) FILTER "
+                    "(WHERE i.agent_role = :role), 0) AS role_cost, "
+                    "count(i.invocation_id) FILTER "
+                    "(WHERE e.event_id IS NULL) AS open_calls, "
+                    "count(e.event_id) FILTER "
+                    "(WHERE e.cost_measurement_state <> 'measured') AS unknown_costs "
+                    "FROM provider_call_invocations i "
+                    "LEFT JOIN provider_call_events e "
+                    "ON e.organization_id = i.organization_id "
+                    "AND e.invocation_id = i.invocation_id "
+                    "WHERE i.organization_id = :org AND i.campaign_run_id = :run"
+                ),
+                {
+                    "org": authority.organization_id,
+                    "run": authority.run_id,
+                    "role": role_name,
+                },
+            )
+            .mappings()
+            .one()
+        )
+        limits = authority.limits
+        if int(stats["open_calls"]) > 0:
+            raise AuthorizationDeniedError("agent acceptance global concurrency cap is exhausted")
+        if int(stats["unknown_costs"]) > 0:
+            raise AuthorizationDeniedError("agent acceptance spend is no longer fully measurable")
+        if int(stats["global_calls"]) >= int(limits["global_call_cap"]):
+            raise AuthorizationDeniedError("agent acceptance global call cap is exhausted")
+        if int(stats["role_calls"]) >= int(limits["role_call_caps"][role_name]):
+            raise AuthorizationDeniedError(f"{role_name} acceptance call cap is exhausted")
+        global_cost = Decimal(str(stats["global_cost"]))
+        role_cost = Decimal(str(stats["role_cost"]))
+        global_cap = Decimal(str(limits["global_usd_cap"]))
+        role_cap = Decimal(str(limits["role_usd_caps"][role_name]))
+        if global_cost + authority.role_configuration.limits.max_usd > global_cap:
+            raise AuthorizationDeniedError(
+                "agent acceptance global spend reservation exceeds its cap"
+            )
+        if role_cost + authority.role_configuration.limits.max_usd > role_cap:
+            raise AuthorizationDeniedError(
+                f"{role_name} acceptance spend reservation exceeds its cap"
+            )
+
     @staticmethod
     def _stored_hosted_configuration(
         connection: Connection,
         *,
         organization_id: str,
         configuration_sha256: str,
+        expected_release_sha256: str | None = None,
     ) -> HostedConfigurationSet:
-        payload = connection.execute(
-            text(
-                "SELECT payload FROM hosted_configuration_sets "
-                "WHERE organization_id = :org "
-                "AND configuration_sha256 = :configuration"
-            ),
-            {
-                "org": organization_id,
-                "configuration": configuration_sha256,
-            },
-        ).scalar_one_or_none()
-        if payload is None:
+        row = (
+            connection.execute(
+                text(
+                    "SELECT payload, release_sha256 FROM hosted_configuration_sets "
+                    "WHERE organization_id = :org "
+                    "AND configuration_sha256 = :configuration"
+                ),
+                {
+                    "org": organization_id,
+                    "configuration": configuration_sha256,
+                },
+            )
+            .mappings()
+            .one_or_none()
+        )
+        if row is None:
             raise AuthorizationDeniedError("hosted configuration set is not staged")
+        if expected_release_sha256 is not None and row["release_sha256"] != expected_release_sha256:
+            raise AuthorizationDeniedError(
+                "hosted configuration set belongs to a different reviewed release"
+            )
         try:
-            configuration = HostedConfigurationSet.from_payload(dict(payload))
+            configuration = HostedConfigurationSet.from_payload(dict(row["payload"]))
             validate_hosted_configuration_set(configuration)
         except (TypeError, ValueError) as exc:
             raise AuthorizationDeniedError(
@@ -5787,4 +6796,9 @@ class ControlPlaneStore:
         )
 
 
-__all__ = ["ControlPlaneStore"]
+__all__ = [
+    "AgentAcceptanceRunIdentity",
+    "AuthorizedAgentAcceptanceRoleConfiguration",
+    "ControlPlaneStore",
+    "canonical_agent_acceptance_limits",
+]
