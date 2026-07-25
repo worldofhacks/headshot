@@ -558,7 +558,7 @@ export type AgentAssignmentReadModel = AgentAssignmentReadModelBase & (
 
 export interface AgentAcceptanceExecutionReadModel extends JsonRecord {
   scope: "agent_acceptance";
-  agent_role: "orchestrator" | "judge" | "documentation";
+  agent_role: "orchestrator" | "red_team" | "judge" | "documentation";
   acceptance_run_id: string;
   acceptance_attempt_id: string;
   execution_id: string;

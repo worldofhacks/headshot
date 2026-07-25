@@ -31,7 +31,7 @@ def _database_url() -> str:
 def _arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Run three target-free hosted agents against an existing human-staged "
+            "Run four target-free hosted agents against an existing human-staged "
             "four-role configuration."
         )
     )

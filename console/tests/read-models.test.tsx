@@ -1211,12 +1211,34 @@ describe("v1 read-model decoders", () => {
       ...agent,
       latest_acceptance_execution: acceptance,
     };
+    const redTeamObserved = {
+      ...agent,
+      role: "red_team",
+      active_assignment: {
+        ...(agent.active_assignment as Record<string, unknown>),
+        role: "red_team",
+      },
+      staged_assignment: agent.staged_assignment === null
+        ? null
+        : {
+          ...(agent.staged_assignment as Record<string, unknown>),
+          role: "red_team",
+        },
+      latest_acceptance_execution: {
+        ...acceptance,
+        agent_role: "red_team",
+        parent_execution_id: "acceptance-execution-planner",
+        returned_model: "qwen/qwen3.5-397b-a17b",
+        upstream_provider: "Together",
+      },
+    };
 
     expect(decodeAgents([observed])).toEqual([observed]);
+    expect(decodeAgents([redTeamObserved])).toEqual([redTeamObserved]);
     expect(observed.active_assignment).toEqual(agent.active_assignment);
     for (const malformed of [
       { ...acceptance, scope: "campaign" },
-      { ...acceptance, agent_role: "red_team" },
+      { ...acceptance, agent_role: "unreviewed_generator" },
       { ...acceptance, acceptance_run_id: "campaign-1" },
       { ...acceptance, acceptance_attempt_id: "not-an-attempt" },
       { ...acceptance, provider_event_ids: [] },

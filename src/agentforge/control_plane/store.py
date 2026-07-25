@@ -123,8 +123,14 @@ _JUDGE_CALIBRATION_STATES = frozenset({"unavailable", "failed", "passed", "inval
 _DECISION_AUTHORITIES = frozenset({"oracle", "model", "none"})
 _JUDGE_CALIBRATION_ID = re.compile(r"\AJC-[0-9a-f]{64}\Z")
 _USD = re.compile(r"\A(?:0|[1-9][0-9]*)(?:\.[0-9]{1,12})?\Z")
+_LEGACY_AGENT_ACCEPTANCE_ROLES: tuple[AgentRole, ...] = (
+    "orchestrator",
+    "judge",
+    "documentation",
+)
 _AGENT_ACCEPTANCE_ROLES: tuple[AgentRole, ...] = (
     "orchestrator",
+    "red_team",
     "judge",
     "documentation",
 )
@@ -145,10 +151,18 @@ _AGENT_ACCEPTANCE_PROVENANCE = {
 }
 _AGENT_ACCEPTANCE_ROLE_USD_CAPS: Mapping[AgentRole, Decimal] = {
     "orchestrator": Decimal("1.5"),
+    "red_team": Decimal("1"),
     "judge": Decimal("4"),
     "documentation": Decimal("1"),
 }
 _AGENT_ACCEPTANCE_GLOBAL_USD_CAP = Decimal("10")
+_AGENT_ACCEPTANCE_ROLE_TOKEN_CAPS: Mapping[AgentRole, tuple[int, int, int]] = {
+    "orchestrator": (8_192, 512, 1_024),
+    "red_team": (4_096, 512, 512),
+    "judge": (8_192, 512, 1_024),
+    "documentation": (8_192, 512, 1_024),
+}
+_AGENT_ACCEPTANCE_GLOBAL_TOKEN_CAPS = (28_672, 2_048, 3_584)
 
 
 @dataclass(frozen=True, slots=True)
@@ -185,30 +199,45 @@ class AuthorizedAgentAcceptanceRoleConfiguration:
     expires_at: datetime.datetime
 
 
-def _closed_agent_acceptance_limits() -> dict[str, Any]:
+def _agent_acceptance_roles_for_version(version: str) -> tuple[AgentRole, ...]:
+    if version == "1":
+        return _LEGACY_AGENT_ACCEPTANCE_ROLES
+    if version == "2":
+        return _AGENT_ACCEPTANCE_ROLES
+    raise AuthorizationDeniedError("agent acceptance limits version is unavailable")
+
+
+def _closed_agent_acceptance_limits(version: str = "2") -> dict[str, Any]:
+    roles = _agent_acceptance_roles_for_version(version)
     return {
-        "schema_version": "1",
+        "schema_version": version,
         "network_scope": "openrouter_langfuse_only",
         "target_call_limit": 0,
-        "allowed_roles": list(_AGENT_ACCEPTANCE_ROLES),
-        "role_call_caps": {role: 1 for role in _AGENT_ACCEPTANCE_ROLES},
+        "allowed_roles": list(roles),
+        "role_call_caps": {role: 1 for role in roles},
         "role_usd_caps": {
-            role: format(_AGENT_ACCEPTANCE_ROLE_USD_CAPS[role], "f")
-            for role in _AGENT_ACCEPTANCE_ROLES
+            role: format(_AGENT_ACCEPTANCE_ROLE_USD_CAPS[role], "f") for role in roles
         },
-        "global_call_cap": len(_AGENT_ACCEPTANCE_ROLES),
+        "global_call_cap": len(roles),
         "global_usd_cap": format(_AGENT_ACCEPTANCE_GLOBAL_USD_CAP, "f"),
     }
 
 
-def canonical_agent_acceptance_limits(
+def _canonical_agent_acceptance_limits_for_configuration(
     configuration: HostedConfigurationSet,
 ) -> dict[str, Any]:
-    """Return the only accepted three-call, zero-target runtime envelope."""
-
     validate_hosted_configuration_set(configuration)
+    if configuration.global_limits.max_calls == len(_LEGACY_AGENT_ACCEPTANCE_ROLES):
+        version = "1"
+    elif configuration.global_limits.max_calls == len(_AGENT_ACCEPTANCE_ROLES):
+        version = "2"
+    else:
+        raise InvalidControlPlaneInput(
+            "global acceptance limits differ from the closed call envelope"
+        )
+    acceptance_roles = _agent_acceptance_roles_for_version(version)
     roles = {role.role: role for role in configuration.roles}
-    for role_name in _AGENT_ACCEPTANCE_ROLES:
+    for role_name in acceptance_roles:
         role = roles[role_name]
         if (
             role.limits.max_calls != 1
@@ -219,16 +248,47 @@ def canonical_agent_acceptance_limits(
             raise InvalidControlPlaneInput(
                 f"{role_name} acceptance limits differ from the closed one-call envelope"
             )
+        if (
+            version == "2"
+            and (
+                role.limits.max_input_tokens,
+                role.limits.max_output_tokens,
+                role.limits.max_reasoning_tokens,
+            )
+            != _AGENT_ACCEPTANCE_ROLE_TOKEN_CAPS[role_name]
+        ):
+            raise InvalidControlPlaneInput(
+                f"{role_name} acceptance token limits differ from the closed one-call envelope"
+            )
     if (
-        configuration.global_limits.max_calls != len(_AGENT_ACCEPTANCE_ROLES)
-        or configuration.global_limits.max_usd != _AGENT_ACCEPTANCE_GLOBAL_USD_CAP
+        configuration.global_limits.max_usd != _AGENT_ACCEPTANCE_GLOBAL_USD_CAP
         or configuration.global_limits.max_retries != 0
         or configuration.global_limits.max_concurrency != 1
     ):
         raise InvalidControlPlaneInput(
-            "global acceptance limits differ from the closed three-call envelope"
+            "global acceptance limits differ from the closed runtime envelope"
         )
-    return _closed_agent_acceptance_limits()
+    if (
+        version == "2"
+        and (
+            configuration.global_limits.max_input_tokens,
+            configuration.global_limits.max_output_tokens,
+            configuration.global_limits.max_reasoning_tokens,
+        )
+        != _AGENT_ACCEPTANCE_GLOBAL_TOKEN_CAPS
+    ):
+        raise InvalidControlPlaneInput(
+            "global acceptance token limits differ from the closed four-call envelope"
+        )
+    return _closed_agent_acceptance_limits(version)
+
+
+def canonical_agent_acceptance_limits(
+    configuration: HostedConfigurationSet,
+) -> dict[str, Any]:
+    """Return the exact versioned, zero-target runtime envelope for a staged configuration."""
+
+    return _canonical_agent_acceptance_limits_for_configuration(configuration)
 
 
 class ControlPlaneStore:
@@ -1884,7 +1944,8 @@ class ControlPlaneStore:
         """Create one short-lived zero-target run and its singleton attempt atomically.
 
         The four-role configuration must already have crossed the human CONFIG_MANAGE gate.
-        This method grants provider-call authority only to the three platform-owned roles.
+        New authority always uses the four-call v2 envelope. Populated v1 rows remain readable
+        and completable, but this method cannot mint another legacy three-call authority.
         """
 
         if not isinstance(organization_id, str) or not organization_id or len(organization_id) > 64:
@@ -1945,6 +2006,10 @@ class ControlPlaneStore:
                     "agent acceptance requires an existing human-staged configuration"
                 ) from exc
             expected_limits = canonical_agent_acceptance_limits(configuration)
+            if expected_limits["schema_version"] != "2":
+                raise AuthorizationDeniedError(
+                    "new agent acceptance requires the closed four-call runtime envelope"
+                )
             if supplied_limits != expected_limits:
                 raise AuthorizationDeniedError(
                     "agent acceptance limits differ from the closed runtime envelope"
@@ -2406,7 +2471,7 @@ class ControlPlaneStore:
             return execution_id
 
     def complete_agent_acceptance_run(self, *, run_id: str) -> str:
-        """Close a successful acceptance after three reconciled calls and zero target I/O."""
+        """Close a successful versioned acceptance after exact calls and zero target I/O."""
 
         with self._engine.begin() as connection:
             self._aggregate_lock(connection, f"agent-acceptance:{run_id}")
@@ -2426,6 +2491,8 @@ class ControlPlaneStore:
                 raise RecordConflictError("agent acceptance run is no longer completable")
             if not row["acceptance_live"]:
                 raise AuthorizationDeniedError("agent acceptance authority has expired")
+            limits = self._agent_acceptance_limits_from_row(row)
+            acceptance_roles = _agent_acceptance_roles_for_version(str(limits["schema_version"]))
             attempts = (
                 connection.execute(
                     text(
@@ -2468,8 +2535,8 @@ class ControlPlaneStore:
                 .all()
             )
             if (
-                len(executions) != len(_AGENT_ACCEPTANCE_ROLES)
-                or {item["agent_role"] for item in executions} != set(_AGENT_ACCEPTANCE_ROLES)
+                len(executions) != len(acceptance_roles)
+                or {item["agent_role"] for item in executions} != set(acceptance_roles)
                 or any(
                     item["attempt_id"] != row["acceptance_attempt_id"]
                     or item["status"] != "succeeded"
@@ -2480,7 +2547,7 @@ class ControlPlaneStore:
                 )
             ):
                 raise RecordConflictError(
-                    "agent acceptance completion requires three measured successful calls"
+                    "agent acceptance completion requires its exact measured successful calls"
                 )
             judge = next(item for item in executions if item["agent_role"] == "judge")
             if (
@@ -2512,8 +2579,8 @@ class ControlPlaneStore:
                 .all()
             )
             if (
-                len(events) != len(_AGENT_ACCEPTANCE_ROLES)
-                or {item["agent_role"] for item in events} != set(_AGENT_ACCEPTANCE_ROLES)
+                len(events) != len(acceptance_roles)
+                or {item["agent_role"] for item in events} != set(acceptance_roles)
                 or any(
                     item["campaign_attempt_id"] != row["acceptance_attempt_id"]
                     or item["status"] != "succeeded"
@@ -2523,10 +2590,10 @@ class ControlPlaneStore:
                 )
             ):
                 raise RecordConflictError(
-                    "agent acceptance completion requires three durable provider events"
+                    "agent acceptance completion requires its exact durable provider events"
                 )
             events_by_execution = {str(item["logical_execution_id"]): item for item in events}
-            if len(events_by_execution) != len(_AGENT_ACCEPTANCE_ROLES):
+            if len(events_by_execution) != len(acceptance_roles):
                 raise RecordConflictError(
                     "agent acceptance provider events do not map one-to-one to executions"
                 )
@@ -2550,14 +2617,13 @@ class ControlPlaneStore:
                     raise RecordConflictError(
                         "agent acceptance provider events do not reconcile to logical executions"
                     )
-            limits = self._agent_acceptance_limits_from_row(row)
             total_cost = sum(
                 (Decimal(str(item["measured_cost_usd"])) for item in events),
                 Decimal(0),
             )
             if total_cost > Decimal(str(limits["global_usd_cap"])):
                 raise AuthorizationDeniedError("agent acceptance global spend cap was exceeded")
-            for role_name in _AGENT_ACCEPTANCE_ROLES:
+            for role_name in acceptance_roles:
                 role_cost = sum(
                     (
                         Decimal(str(item["measured_cost_usd"]))
@@ -5819,7 +5885,8 @@ class ControlPlaneStore:
         if not isinstance(raw_limits, Mapping):
             raise AuthorizationDeniedError("agent acceptance limits are invalid")
         limits = dict(raw_limits)
-        if limits != _closed_agent_acceptance_limits():
+        version = limits.get("schema_version")
+        if not isinstance(version, str) or limits != _closed_agent_acceptance_limits(version):
             raise AuthorizationDeniedError(
                 "agent acceptance limits differ from the closed runtime envelope"
             )
@@ -5833,13 +5900,15 @@ class ControlPlaneStore:
         agent_role: AgentRole,
         for_update: bool = False,
     ) -> AuthorizedAgentAcceptanceRoleConfiguration:
-        if agent_role not in _AGENT_ACCEPTANCE_ROLES:
-            raise AuthorizationDeniedError("agent role is outside the live-acceptance allowlist")
         row = self._agent_acceptance_run_row(
             connection,
             run_id=run_id,
             for_update=for_update,
         )
+        limits = self._agent_acceptance_limits_from_row(row)
+        acceptance_roles = _agent_acceptance_roles_for_version(str(limits["schema_version"]))
+        if agent_role not in acceptance_roles:
+            raise AuthorizationDeniedError("agent role is outside the live-acceptance allowlist")
         if row["state"] != "running":
             raise AuthorizationDeniedError("agent acceptance run is not executable")
         if not row["acceptance_live"]:
@@ -5849,8 +5918,7 @@ class ControlPlaneStore:
             organization_id=str(row["organization_id"]),
             configuration_sha256=str(row["acceptance_configuration_sha256"]),
         )
-        expected_limits = canonical_agent_acceptance_limits(configuration)
-        limits = self._agent_acceptance_limits_from_row(row)
+        expected_limits = _canonical_agent_acceptance_limits_for_configuration(configuration)
         if limits != expected_limits:
             raise AuthorizationDeniedError(
                 "agent acceptance limits differ from hosted configuration"
@@ -5883,11 +5951,26 @@ class ControlPlaneStore:
         agent_role: AgentRole,
         parent_execution_id: str | None,
     ) -> None:
-        expected_parent_role = {
-            "orchestrator": None,
-            "judge": "orchestrator",
-            "documentation": "judge",
-        }[agent_role]
+        version = str(authority.limits["schema_version"])
+        if version == "1":
+            parent_roles: Mapping[AgentRole, AgentRole | None] = {
+                "orchestrator": None,
+                "judge": "orchestrator",
+                "documentation": "judge",
+            }
+        else:
+            parent_roles = {
+                "orchestrator": None,
+                "red_team": "orchestrator",
+                "judge": "red_team",
+                "documentation": "judge",
+            }
+        try:
+            expected_parent_role = parent_roles[agent_role]
+        except KeyError as exc:
+            raise AuthorizationDeniedError(
+                "agent role is outside the live-acceptance allowlist"
+            ) from exc
         if expected_parent_role is None:
             if parent_execution_id is not None:
                 raise InvalidControlPlaneInput(

@@ -1,4 +1,4 @@
-"""Exact, target-free Langfuse query-back for the three-role acceptance chain."""
+"""Exact, target-free Langfuse query-back for the four-role acceptance chain."""
 
 from __future__ import annotations
 
@@ -36,7 +36,7 @@ _ORGANIZATION_ID = "org_acceptance_verifier"
 _TRACE_ID = campaign_trace_id(_RUN_ID)
 _CALIBRATION_ID = f"JC-{'c' * 64}"
 _ATTEMPT_ID = "e" * 64
-_ROLES = ("orchestrator", "judge", "documentation")
+_ROLES = ("orchestrator", "red_team", "judge", "documentation")
 _MODELS = {
     "orchestrator": "anthropic/claude-opus-4.8",
     "red_team": "qwen/qwen3.5-397b-a17b",
@@ -54,6 +54,18 @@ _ROLE_CAPS = {
     "red_team": Decimal("1"),
     "judge": Decimal("4"),
     "documentation": Decimal("1"),
+}
+_ROLE_INPUT_CAPS = {
+    "orchestrator": 8_192,
+    "red_team": 4_096,
+    "judge": 8_192,
+    "documentation": 8_192,
+}
+_ROLE_REASONING_CAPS = {
+    "orchestrator": 1_024,
+    "red_team": 512,
+    "judge": 1_024,
+    "documentation": 1_024,
 }
 
 
@@ -79,9 +91,9 @@ def _configuration() -> HostedConfigurationSet:
                 ),
                 limits=HostedLimits(
                     max_calls=1,
-                    max_input_tokens=8_192,
+                    max_input_tokens=_ROLE_INPUT_CAPS[role],
                     max_output_tokens=512,
-                    max_reasoning_tokens=1_024,
+                    max_reasoning_tokens=_ROLE_REASONING_CAPS[role],
                     max_usd=_ROLE_CAPS[role],
                     max_retries=0,
                     max_requests_per_second=Decimal("0.5"),
@@ -91,10 +103,10 @@ def _configuration() -> HostedConfigurationSet:
             for role in ("orchestrator", "red_team", "judge", "documentation")
         ),
         global_limits=HostedLimits(
-            max_calls=3,
-            max_input_tokens=24_576,
-            max_output_tokens=1_536,
-            max_reasoning_tokens=3_072,
+            max_calls=4,
+            max_input_tokens=28_672,
+            max_output_tokens=2_048,
+            max_reasoning_tokens=3_584,
             max_usd=Decimal("10"),
             max_retries=0,
             max_requests_per_second=Decimal("0.5"),
@@ -112,14 +124,30 @@ def _logical_row(
     judge = role == "judge"
     model = {
         "orchestrator": "anthropic/claude-opus-4.8",
+        "red_team": "qwen/qwen3.5-397b-a17b",
         "judge": "google/gemini-2.5-pro",
         "documentation": "openai/gpt-5.4",
     }[role]
     upstream = {
         "orchestrator": "Anthropic",
+        "red_team": "Together",
         "judge": "Google Vertex",
         "documentation": "OpenAI",
     }[role]
+    detail = {
+        "acceptance_id": _RUN_ID,
+        "run_kind": "agent_acceptance",
+        "synthetic": True,
+        "target_call_limit": 0,
+    }
+    if role == "red_team":
+        detail.update(
+            {
+                "generated_output_sha256": "f" * 64,
+                "generated_variant_count": 1,
+                "generated_output_disposition": "quarantined_not_dispatched",
+            }
+        )
     return {
         "execution_id": execution_id,
         "organization_id": _ORGANIZATION_ID,
@@ -157,12 +185,7 @@ def _logical_row(
         "trace_id": _TRACE_ID,
         "langfuse_status": "queued",
         "langfuse_verified_at": None,
-        "detail": {
-            "acceptance_id": _RUN_ID,
-            "run_kind": "agent_acceptance",
-            "synthetic": True,
-            "target_call_limit": 0,
-        },
+        "detail": detail,
     }
 
 
@@ -172,17 +195,22 @@ def _snapshot() -> AcceptanceSnapshot:
         "execution-orchestrator",
         parent_execution_id=None,
     )
+    red_team = _logical_row(
+        "red_team",
+        "execution-red-team",
+        parent_execution_id=orchestrator["execution_id"],
+    )
     judge = _logical_row(
         "judge",
         "execution-judge",
-        parent_execution_id=orchestrator["execution_id"],
+        parent_execution_id=red_team["execution_id"],
     )
     documentation = _logical_row(
         "documentation",
         "execution-documentation",
         parent_execution_id=judge["execution_id"],
     )
-    agents = (orchestrator, judge, documentation)
+    agents = (orchestrator, red_team, judge, documentation)
     provider_calls = tuple(
         {
             "invocation_id": f"invocation-{row['agent_role']}",
@@ -196,6 +224,7 @@ def _snapshot() -> AcceptanceSnapshot:
             "requested_model": row["model"],
             "configured_upstream": {
                 "orchestrator": "anthropic",
+                "red_team": "together",
                 "judge": "google-vertex",
                 "documentation": "openai",
             }[row["agent_role"]],
@@ -371,7 +400,7 @@ def test_exact_acceptance_reconciles_durable_and_remote_lineage() -> None:
             "parent chain",
         ),
         (
-            lambda value: value.agents[1].update(
+            lambda value: value.agents[2].update(
                 {
                     "judge_calibration_state": "enabled",
                     "decision_authority": "model",
@@ -383,7 +412,7 @@ def test_exact_acceptance_reconciles_durable_and_remote_lineage() -> None:
             lambda value: object.__setattr__(
                 value, "provider_calls", (*value.provider_calls, value.provider_calls[0])
             ),
-            "exactly three provider",
+            "exactly four provider",
         ),
         (
             lambda value: value.agents[1].update({"upstream_provider": "api_key=not-telemetry"}),
@@ -410,7 +439,7 @@ def test_durable_acceptance_rejects_scope_authority_or_lineage_drift(
     [
         (
             lambda rows: rows.pop(),
-            "exactly three role pairs",
+            "exactly four role pairs",
         ),
         (
             lambda rows: rows[3]["usage_details"].update({"reasoning": 99, "total": 114}),
@@ -477,7 +506,7 @@ def _seed_completed_acceptance(engine: Engine) -> str:
         configuration_set_sha256=configuration.configuration_sha256,
         generation_policy_sha256=generation_policy.policy_sha256,
         acceptance_context={
-            "schema_version": "1",
+            "schema_version": "2",
             "synthetic": True,
             "target_scope": "none",
         },
@@ -488,6 +517,7 @@ def _seed_completed_acceptance(engine: Engine) -> str:
     parent_execution_id: str | None = None
     served_upstreams = {
         "orchestrator": "Anthropic",
+        "red_team": "Together",
         "judge": "Google",
         "documentation": "OpenAI",
     }
@@ -538,10 +568,32 @@ def _seed_completed_acceptance(engine: Engine) -> str:
                 finished_at=datetime.datetime.now(datetime.UTC),
             ),
         )
+        output_payload = {"fixture": "acceptance-verifier", "role": role}
+        detail = {
+            "synthetic": True,
+            "target_call_limit": 0,
+            "phase": "agent_only_live_acceptance",
+        }
+        if role == "red_team":
+            output_payload.update(
+                {
+                    "generated_output_sha256": "f" * 64,
+                    "generated_variant_count": 1,
+                    "generated_output_disposition": "quarantined_not_dispatched",
+                    "target_call_limit": 0,
+                }
+            )
+            detail.update(
+                {
+                    "generated_output_sha256": "f" * 64,
+                    "generated_variant_count": 1,
+                    "generated_output_disposition": "quarantined_not_dispatched",
+                }
+            )
         store.finish_hosted_agent_execution(
             execution_id=execution_id,
             status="succeeded",
-            output_payload={"fixture": "acceptance-verifier", "role": role},
+            output_payload=output_payload,
             returned_model=logical.requested_model,
             upstream_provider=served_upstreams[role],
             provider_request_id=f"provider-request-{role}",
@@ -555,11 +607,7 @@ def _seed_completed_acceptance(engine: Engine) -> str:
             physical_attempts=1,
             oracle_agreement=True if judge else None,
             decision_authority="oracle" if judge else None,
-            detail={
-                "synthetic": True,
-                "target_call_limit": 0,
-                "phase": "agent_only_live_acceptance",
-            },
+            detail=detail,
         )
         parent_execution_id = execution_id
     store.complete_agent_acceptance_run(run_id=run_id)
@@ -585,7 +633,7 @@ def test_queryback_marking_is_exact_and_atomic(migrated_db: Engine) -> None:
         record_queryback_verification(
             migrated_db,
             run_id=run_id,
-            execution_ids=[*execution_ids[:2], "unknown-execution"],
+            execution_ids=[*execution_ids[:3], "unknown-execution"],
         )
     with migrated_db.connect() as connection:
         assert set(
