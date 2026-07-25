@@ -39,8 +39,11 @@ and all of these checks pass:
 - two distinct Headshot organization users requested and approved the exact scope;
 - the authorization covers campaign start plus the full run timeout;
 - the authorization binds the configuration set, generation policy, corpus, target and surface,
-  SMART session generation, 56-call maximum, measured $5 maximum, one retry, concurrency one, and
-  provider timeout;
+  SMART session generation, 56-call maximum, **measured $10 maximum**, one retry, concurrency one, and
+  provider timeout; *(corrected 2026-07-25 from "$5" — the enforced ceiling is
+  `HOSTED_MAX_MEASURED_USD = Decimal("10")` at `src/agentforge/agents/hosted.py:28`, with per-role
+  ceilings of $1.50 / $1.00 / $4.00 / $1.00 at `:39-45` summing to $7.50 inside it. The 56-call,
+  one-retry and concurrency-one figures match `hosted.py:27,29,30` exactly.)*
 - the SMART lease covers campaign start plus the full run timeout;
 - all fixtures are synthetic.
 

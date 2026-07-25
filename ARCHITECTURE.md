@@ -52,11 +52,12 @@ offensive work; deployed default is hosted, local Mac is a dev/cost-baseline swi
 Judge). We configure/wrap Garak, PyRIT, Giskard, Promptfoo, ZAP and Semgrep and build only the four
 capabilities no tool delivers.
 
-**Human identity and hosting boundary (locally integrated; not deployed).** The intended full console
-and API run on a public Railway **Web** service; runner, scheduler, and Postgres services remain on
-Railway's private network. This integration branch packages that topology and composes the protected
-same-origin console/API locally, but it has not provisioned or verified Railway or Clerk. **Clerk** is
-the managed human IdP: restricted/invitation-only enrollment, one required
+**Human identity and hosting boundary (deployed on staging; signed-in Clerk proof pending).** The full
+console and API now run on a public Railway **Web** service in staging; runner, scheduler, and Postgres
+remain on Railway's private network. The exact `2069036e` candidate was deployed Runner-first, migrated
+from `0013` to the single `0021` head, and passed public liveness/readiness, authentication-boundary,
+console-shell, and sign-in-shell smoke checks. Production promotion and the signed-in two-real-user Clerk
+audit remain pending. **Clerk** is the managed human IdP: restricted/invitation-only enrollment, one required
 Headshot Organization, personal accounts and user-created organizations disabled, and MFA required for
 every user (TOTP plus backup codes preferred; SMS is never the only factor). The Web service verifies
 only Clerk `session_token` JWTs networklessly with a configured PEM key, binds them to explicit
@@ -64,9 +65,10 @@ environment-specific authorized parties and the exact Headshot Organization, and
 from verified custom organization permissions. This is human **authentication and application RBAC**;
 it never replaces the separate Policy Gateway authorization required to execute a live campaign.
 Revision `0005` persists immutable launcher identity, exact-scope authorization decisions, target/surface
-versions, and append-only audit history. Live campaign launch remains fail-closed unavailable until the
-private runner's trusted credential resolver and surface-bound execution composition exist. The
-immutable registry primitives are server-side only: public target/surface authoring remains typed
+versions, and append-only audit history. The launch endpoint exists, but a live campaign remains
+fail-closed until every governed composition, exact-scope authorization, distinct-approver, credential,
+and deployment precondition holds. The immutable registry primitives are server-side only: public
+target/surface authoring remains typed
 unavailable until a trusted catalog exists, so browser-provided hosts, adapters, credential references,
 or endpoints cannot become dispatch authority. Existing server-authored versions still support audited
 lifecycle and enable/disable transitions.
@@ -76,7 +78,7 @@ errors and both-sided contract tests. Adversarial content is quarantined and tre
 even by the Judge and Documentation agents. Credentials are bound to their target; every live campaign
 passes a runtime allowlist + synthetic-data + budget/rate gate with hard abort; critical findings and any
 remediation require a human approver distinct from the run's launcher. Cost is modeled at 100/1K/10K/100K
-**runs** as two independent line families — never tokens × N — each tier naming the architectural change
+**runs** as three independent line families — never tokens × N — each tier naming the architectural change
 it forces. Numbers are deliberately deferred to measurement (§11, §17).
 
 ---
@@ -88,11 +90,13 @@ it forces. Numbers are deliberately deferred to measurement (§11, §17).
   Policy Gateway.
 - **Out of scope (external):** the OpenEMR Clinical Co-Pilot (**target**, attacked over its live URL — no
   target code here); the human's Browser; Clerk (managed IdP); model providers; Railway; GitHub.
-- **Human request boundary (locally integrated; deployment unverified):** Browser → public Railway Web → Clerk session
-  verification and custom-permission authorization → application handler. Only liveness/readiness and
-  the minimal Clerk sign-in/callback shell are public; console data, APIs, evidence, findings, event
-  streams, campaigns, and approvals default to protected. The local composition is implemented and
-  offline-testable; Clerk Dashboard and Railway integration are not claimed deployed.
+- **Human request boundary (staging-deployed; signed-in verification pending):** Browser → public Railway
+  Web → Clerk session verification and custom-permission authorization → application handler. Only
+  liveness/readiness and the minimal Clerk sign-in/callback shell are public; console data, APIs,
+  evidence, findings, event streams, campaigns, and approvals default to protected. Staging proves
+  `/health` and `/ready` return `200`, the console and `/sign-in` shells load, and an unauthenticated
+  protected API request returns `401`. Clerk Dashboard policy, signed-in custom permissions,
+  cross-Organization denial, and the two-real-user flow are not yet externally verified.
 - **Target reach:** a pluggable `TargetAdapter` invoked **only** through the trusted Policy Gateway
   (§5) behind an **allowlist**; API-primary, with a thin UI/browser path for evidence/e2e. Only target
   #1 (OpenEMR) is wired this week (`simplification`); the interface stays generic. **Generalize the
@@ -140,7 +144,8 @@ loop the platform runs attacks randomly; with it, coverage compounds. The loop c
 
 ## §4. Inter-Agent Contracts (versioned, framework-neutral)
 
-- **Format:** versioned **JSON Schema** in `contracts/v1/` (minimum v1), framework-neutral so the stack
+- **Format:** versioned **JSON Schema** in `src/agentforge/contracts/v1/` (minimum v1; 18 schemas at
+  `107c11c` — there is no repo-root `contracts/` directory), framework-neutral so the stack
   choice never forces a rewrite (D10). Any breaking change → version bump + migration note + updated
   contract tests (all three, or the run fails — enforced by `contract-steward`). Owned by us; LangGraph
   never owns the contract (§7).
@@ -188,10 +193,11 @@ loop the platform runs attacks randomly; with it, coverage compounds. The loop c
 regression / observability = **governed**; **Red Team + all adversarial content = untrusted / quarantined**;
 target + providers = **external**.
 
-### Human authentication and application RBAC — `implemented locally; deployment unverified`
+### Human authentication and application RBAC — `staging-deployed; signed-in verification pending`
 
-Clerk is the selected managed identity provider. The React and FastAPI bearer boundaries are composed on
-this branch, but authenticated Railway deployment and real-user verification are not complete.
+Clerk is the selected managed identity provider. The React and FastAPI bearer boundaries are deployed on
+Railway staging, where the public/authentication-shell boundary passed unauthenticated smoke checks.
+Signed-in Railway verification and the distinct two-real-user Clerk flow are not complete.
 Enrollment is **restricted/invitation-only** into the one required
 Headshot Organization for that environment. Personal accounts and user-created organizations are
 disabled. Every member must enroll MFA, preferring TOTP plus backup codes; SMS must not be the sole
@@ -461,6 +467,33 @@ F5), because nodes **replay on resume** and pause is not authorization. **Judge 
 
 A **different model per role**, sized to its refusal-vs-capability need `locked` (D8, amended):
 
+> **Reconciled 2026-07-25 (`107c11c`): the hosted role set below is superseded by the frozen mapping in
+> code.** The design intent — one model per role, sized to refusal-vs-capability need, cross-vendor as
+> defense-in-depth — is unchanged. The identifiers are not. `HOSTED_ROLE_MODELS`
+> (`src/agentforge/agents/hosted.py:31-38`) is authoritative and any deviation is rejected at
+> composition (`:352-353`). See [`DECISIONS.md` D8, revision 2026-07-25](docs/planning/DECISIONS.md).
+
+**Authoritative (code, `107c11c`):**
+
+| Role | Frozen model ID | Role spend ceiling |
+|---|---|---|
+| **Red Team** | `qwen/qwen3.5-397b-a17b` | $1.00 |
+| **Judge** | `google/gemini-2.5-pro` | $4.00 |
+| **Orchestrator** | `anthropic/claude-opus-4.8` | $1.50 |
+| **Documentation** | `openai/gpt-5.4` | $1.00 |
+
+Single provider for all four roles: `HOSTED_PROVIDER = "openrouter"` (`hosted.py:26`).
+`deepseek/deepseek-chat-v3-0324` is a **documented, unconfigured fallback**
+(`docs/agents/RED_TEAM_MODEL_RESOLUTION.md`), not the configured Red Team model. The one document that
+named it as the generator (`docs/evidence/agent-trace.md`) was corrected upstream by PR #44
+(`2069036`), which also retired the standalone `HostedProvider` route to a fail-closed shell
+(`src/agentforge/agents/red_team/providers.py:216-250`). The single governed generator is
+`TracedHostedRedTeamProvider`
+(`src/agentforge/agents/red_team/hosted_generation.py::TracedHostedRedTeamProvider`, currently line 204),
+and it is not composed into the production Runner.
+
+**Design intent (retained, identifiers superseded):**
+
 | Role | Model | Why |
 |---|---|---|
 | **Red Team** | Uncensored open-weights. **Deployed default = hosted OSS** (OpenRouter/Together uncensored, e.g. Dolphin 3.0 / Euryale 70B); **local 24–33B on the Mac** (Dolphin-Mixtral / WhiteRabbitNeo-33B) is a **config switch** for dev + local cost-baseline (F7) | Frontier models refuse authorized offensive generation. Hosted default makes continuous/unattended runs real on Railway; local is ~$0 marginal for development. Never Claude/GPT here |
@@ -468,14 +501,30 @@ A **different model per role**, sized to its refusal-vs-capability need `locked`
 | **Orchestrator** | **Claude Opus 4.8** (economize to Sonnet/Gemini when hot) | Planning-grade reasoning; low call volume makes frontier affordable |
 | **Documentation** | **GPT-5.4** | *Deliberately a different vendor from the Judge* → no single-vendor correlated failure on the trust chain; output schema-gated by the vuln-report validator regardless of model |
 
+Three intents the frozen set does **not** honor: the Judge is Google, not Anthropic; the Red Team is a
+397B MoE, not a local 24–33B Mac workload (the local switch is configured nowhere in `src/`); and
+"selected by measured calibration" is aspirational. The only calibration ever measured at this base is
+of the **deterministic oracle-precedence Judge**, not of any hosted model — `judge_provider =
+"deterministic-code"`, `judge_model = "oracle-precedence"` — and it **fails**: 30 labels, 18 agreements,
+6 false negatives, 0 false positives, 18 abstentions
+(`tests/test_judge_calibration.py:44-58`). **No hosted model has ever been calibrated**, because doing
+so needs a captured-results bundle and none is committed. See
+`docs/security/RED_TEAMING_COVERAGE_REVIEW_2026-07-25.md`.
+
 **Cross-vendor is defense-in-depth, not the invariant (D8 amended).** Refusal behavior is a model
 *characteristic and potential failure mode*, not a security control.
 
-**S5 — vendor-disjoint failover (runtime invariant).** D8's fallback is `Judge → GPT-5.4`, and Documentation
-*is* GPT-5.4 — a naïve failover collapses the cross-vendor chain. The platform enforces `Judge.vendor !=
-Documentation.vendor` at run start (fail-closed on violation): if the primary Judge (Anthropic) is unhealthy,
-fail over to a **third vendor** (e.g. Gemini) **or** temporarily reassign Documentation off GPT-5.4 while the
-Judge is on it.
+**S5 — vendor-disjoint failover (runtime invariant) — `specified, NOT implemented`.** D8's fallback is
+`Judge → GPT-5.4`, and Documentation *is* GPT-5.4 — a naïve failover collapses the cross-vendor chain.
+The design is: enforce `Judge.vendor != Documentation.vendor` at run start (fail-closed on violation);
+if the primary Judge is unhealthy, fail over to a **third vendor** **or** temporarily reassign
+Documentation off GPT-5.4 while the Judge is on it.
+
+**No such check exists.** There is no `Judge.vendor != Documentation.vendor` enforcement anywhere in
+`src/agentforge/agents/**` and no test references it. The property happens to hold for the frozen set
+(Google Judge vs OpenAI Documentation), but it holds **by configuration, not by enforcement**, and a
+single provider (`openrouter`) fronts all four roles, so provider-level correlated failure is not
+mitigated at all. §20's S5 row is corrected accordingly.
 
 Per-agent token profiles + Mac tok/s + `exploit_rate` are **measured at MVP** before any cost number is
 presented (`open question`, §17).
@@ -537,7 +586,10 @@ cost attribution; append-only; the data substrate the Orchestrator reads (not ju
 
 ## §11. Cost, Rate Limits & Scale (100 / 1K / 10K / 100K runs)
 
-**Cost is two independent line families on different scaling functions — never tokens × N** `locked` (D17, F4).
+**Cost is three independent line families on different scaling functions — never tokens × N** `locked` (D17, F4).
+*(Corrected 2026-07-25: this said "two" while §11 and `docs/cost/COST_ANALYSIS.md` both enumerate three —
+hosted-token inference · local/capacity-priced inference · platform operations. Same correction applied
+to §1 and to the D17 index row.)*
 The dimensionally-invalid `list_price / throughput` division from the draft is **removed**; "not tokens × N"
 means token spend is *insufficient*, not absent — token accounting stays.
 
@@ -568,10 +620,10 @@ traces.
 
 ## §12. Deploy, Rollback & Environments
 
-- **Full platform on Railway** `locked` (D3), **packaged locally rather than deployed**: the multi-stage
-  image builds the Vite console and Python wheel, then carries only runtime Python, compiled assets,
-  `alembic.ini`, and the complete migration tree. A public **Web** service serves the console/API and
-  performs Clerk verification; private
+- **Full platform on Railway** `locked` (D3), **deployed and smoke-proven on staging; production
+  pending**: the multi-stage image builds the Vite console and Python wheel, then carries only runtime
+  Python, compiled assets, `alembic.ini`, and the complete migration tree. A public **Web** service
+  serves the console/API and performs Clerk verification; private
   **runner** services execute queued agent work; a private **scheduler/cron** service only enqueues work;
   private managed **Postgres** holds domain records, checkpoints, and queues. Only Web receives public
   ingress. Runner, scheduler, and Postgres have no public hostname or inbound route. Deployment history +
@@ -595,15 +647,30 @@ traces.
   release that introduces their consumers; checkpoint/jobs payloads are versioned and unknown rows are
   dead-lettered (§7); a **pre-deploy drain/quiesce** step ensures a deploy never lands mid-lease; **Postgres
   PITR is the true rollback of record** for data.
-- **Deploy sequence:** drain/quiesce workers → run backward-compatible Alembic migrations as a
-  pre-deploy job → deploy Web/runner/scheduler → require `/health` and `/ready` → exercise an
-  authenticated smoke path without invoking a live campaign → promote. A failed auth configuration or
-  readiness check blocks promotion.
+- **Deploy sequence — Runner first:** drain/quiesce work → build and authorize the exact images → deploy
+  the private Runner first in a fail-closed wait state → hold public Web routing while Web's canonical
+  pre-deploy hook runs `alembic upgrade head` and Web starts behind that hold → verify the single head
+  and a healthy Runner heartbeat → activate and verify the private Scheduler → require `/health` and
+  `/ready`, verify the unauthenticated protected-API denial and authentication shell, then open Web's
+  public routing. A signed-in smoke path and any live campaign remain separate human-gated steps. A
+  failed migration, auth configuration, heartbeat, or readiness check blocks promotion.
+- **Staging proof (2026-07-25):** exact candidate `2069036e` followed that order from database revision
+  `0013` to `0021`. Runner, Web, and Scheduler each reached `SUCCESS`; Web routing opened only after the
+  private Scheduler was stable. Public `/health` and `/ready` returned `200`, unauthenticated
+  `/api/v1/principal` returned `401`, and `/` plus `/sign-in` returned the packaged HTML shell. No
+  campaign, provider, or target call was made. This proves deployment mechanics, not live-campaign or
+  signed-in Clerk behavior.
 - **Current integrated head and refusal boundary:** pre-deploy runs `alembic upgrade head`; the packaged
-  sole head is `0005`. `/ready` requires PostgreSQL connectivity, that exact head, built assets, and
+  sole head is **`0021_four_role_agent_acceptance`** (`0005` at the time this section was written;
+  `0017`–`0021` add hosted agent-execution lineage, provider-call lineage, recordable provider identity,
+  agent-acceptance authority, and the four-role acceptance surface). The mechanism claim is unchanged and
+  still correct — readiness resolves the head dynamically and requires exactly one.
+  `/ready` requires PostgreSQL connectivity, that exact head, built assets, and
   locally parsed Clerk/Web security configuration without Clerk/JWKS/target/model egress. Runner and
-  scheduler entrypoints open no public socket and currently refuse operation because trusted execution
-  and authoritative scheduling composition are absent.
+  scheduler entrypoints open no public socket. **The blanket "refuse operation" no longer holds:** the
+  Runner is a composed durable loop and `POST /api/v1/campaigns` exists
+  (`src/agentforge/api/router.py:536`) with a gated launch handler, alongside
+  `POST /campaigns/{campaign_id}/abort` (`:546`). See the drift register, §20.
 - Perf baselines are measured **on Railway**, not locally (§19). Sensitive values use sealed Railway
   variables scoped per environment. Publishable keys are public identifiers; `CLERK_JWT_KEY`, provider
   credentials, and target bindings are not logged. `CLERK_SECRET_KEY` is absent from the request-verification
@@ -673,9 +740,11 @@ residual risk remains.
   DB-role enforcement, the deterministic oracles/canaries, and the shared validators (contract-compat,
   eval-case schema, duplicate-sequence, data-quality) + Semgrep/ZAP. AI where judgment is needed, determinism
   where it isn't.
-- **Owned limitation:** Clerk-backed enforcement and console/API composition are implemented locally but
-  Railway and real-user verification are incomplete. Until those external checks pass, no user-facing or
-  approval flow may be represented as protected in a deployed environment.
+- **Owned limitation:** Railway staging now proves the deployed console/API shell, readiness, and
+  unauthenticated denial boundary. Clerk Dashboard policy, a signed-in production-like session,
+  cross-Organization denial, custom-permission enforcement with real users, and the distinct approver
+  flow remain unverified. Until those checks pass, no signed-in approval flow may be represented as
+  externally proven.
 
 ## §16. Build-vs-Configure Summary → ADR-0001
 
@@ -714,10 +783,11 @@ residual risk remains.
   tool-augmented corpus has a different hash and requires fresh authorization. Tool orchestrators and
   target execution remain outside this slice; Policy Gateway and Judge authority are unchanged.
 - Concrete regression **SLO budgets** (§10) and **alert SLAs** (§9) are MVP-measured.
-- **Clerk/Railway verification remains open:** Dashboard invitation restrictions, disabled
-  personal/user-created organizations, mandatory MFA, role/custom-permission assignments, exact public
-  auth-shell behavior, cross-Organization denial, and the two-real-user flow must be verified in Railway
-  staging before deployment can be claimed.
+- **Clerk verification remains open:** Railway staging deployment and the exact public auth-shell boundary
+  are proven. Dashboard invitation restrictions, disabled personal/user-created organizations, mandatory
+  MFA, role/custom-permission assignments, signed-in behavior, cross-Organization denial, and the
+  two-real-user flow still require external verification before Clerk-backed access control can be
+  claimed end to end.
 - **Authoritative runtime repositories remain incomplete:** server-prepared campaign composition, the
   trusted runner credential/executor composition, schedule repository, finding-to-evidence relation,
   nonce-deduplicated hash-reconciled coverage, persisted traces, measured accounting, immutable
@@ -802,7 +872,7 @@ detail: `docs/planning/gap-audit.md`.
 | **F1** | Deterministic fail-closed Judge invariant (verdict state machine; oracle precedence; fail-closed on the verdict not the run; async dual-judging calibration) | §3, §5, §15; D13; D8 |
 | **F2** | Trust split: untrusted generator → trusted Policy Gateway + Execution Recorder → external target; Judge sees hashed recorder `AttemptResult` only; contract direction corrected (migration note) | §3, §4, §5; D14; diagram spec |
 | **F3** | Langfuse Cloud for MVP; self-host full footprint documented post-MVP | §9, §12; D5 |
-| **F4** | Two independent cost line families; invalid `list_price/throughput` division removed | §11; D17 |
+| **F4** | Three independent cost line families; invalid `list_price/throughput` division removed | §11; D17 |
 | **F5** | Live-campaign gate enforced in Policy Gateway runtime code, independent of trigger; skill flag is convenience; gated side effects idempotent | §5, §14; D14 |
 | **F6** | Full Postgres queue delivery semantics (lease/heartbeat/reaper/dead-letter/idempotency/dedup/cancel/poison + backpressure) | §6, §7, §11; D6 |
 | **F7** | Config-switch; deployed default = hosted OSS; Mac = dev/cost-baseline; Mac tok/s open | §8, §12; D8 |
@@ -815,7 +885,7 @@ detail: `docs/planning/gap-audit.md`.
 | **S2** | Per-agent DB roles: Red Team INSERT-only staging (no read-back); **Recorder role INSERT-only** on the append-only authoritative AttemptResult table (no UPDATE/DELETE to any role); Judge SELECT-only on hash-verified payload; a Red Team write to the Recorder-owned AttemptResult table is DB-rejected (contract test) | §5, §6, §18; D14 |
 | **S3** | Run-nonce `{campaign_run_id, attempt_id}` in hashed payload + UNIQUE constraint; regression re-executes live | §4, §6, §10 |
 | **S4** | Evaluators consume a typed, trust-labelled, size-bounded **evidence envelope**; oracle/canary results are code-applied typed fields so injection **cannot downgrade `EXPLOIT_CONFIRMED`**; Judge holds no creds/mutation/publish/execute and emits a schema-validated Verdict; Documentation gets the validated Verdict + sanitized excerpts by default; raw evidence quarantined behind a warned operator action; separation/encoding are mitigations, not proof (residual owned) | §3, §4, §5, §15, §18; **D18** |
-| **S5** | Vendor-disjoint Judge failover invariant | §8; D8 |
+| **S5** | Vendor-disjoint Judge failover invariant — **`specified, NOT implemented` (corrected 2026-07-25).** No `Judge.vendor != Documentation.vendor` check exists in `src/agentforge/agents/**` and no test references it. The property holds by configuration only, and one provider (`openrouter`) fronts all four roles | §8; D8; drift register below |
 | **S6** | Coverage/resilience computed only from verified, deduped verdicts + sanity invariants | §9, §13 |
 | **S7** | Clerk-authenticated two-person rule on campaign authorization, critical publish, and remediation; distinct identity + custom permission required; no self-approval exception | §5, §14, §15 |
 | **S8** | Explicit canary provisioning where writable; honest "not deterministic" where the external target can't be seeded | §5, §10, §15 |
@@ -828,6 +898,40 @@ detail: `docs/planning/gap-audit.md`.
 | **O6** | Durable `campaign_id`/`attempt_id`/`finding_id` across spans + rows | §6, §9 |
 | **O7** | Langfuse-unavailable failure mode → Postgres fallback + alert | §9, §13 |
 | **O8** | CI substrate (ephemeral PG + mock adapter + cassettes); CI/dev as a cost line | §11, §18, §19 |
+
+### Architecture-vs-code drift register (2026-07-25, base `107c11c`)
+
+This document is binding. Where it disagrees with the code, **the code is what runs** and the
+divergence is recorded here rather than quietly edited out. Every row was verified by reading the file
+at this commit. Full analysis:
+[`docs/security/RED_TEAMING_COVERAGE_REVIEW_2026-07-25.md`](docs/security/RED_TEAMING_COVERAGE_REVIEW_2026-07-25.md).
+
+Direction matters: this document mostly **understates** what now exists, which is the safer failure —
+but three rows are load-bearing claims that are simply not true, and those are the reviewer risk.
+
+| § | Doc says | Code at `107c11c` | Direction | Disposition |
+|---|---|---|---|---|
+| §1, §7; D4 | Orchestration is **LangGraph OSS engine** + PostgresSaver checkpoints; `interrupt()`/`Command(resume=…)` is the approval mechanic — `locked` | **LangGraph is not a dependency and is imported nowhere.** Absent from `pyproject.toml`; the only mention under `src/` is a prose docstring (`src/agentforge/storage/models.py:13`), and the only two code references are `tests/test_smoke.py:17` and `tests/test_target_adapter.py:77`, which **assert `"langgraph" not in sys.modules`** | **Doc overstates** | **Open — decision owner.** D4's own fallback ("thin custom asyncio orchestrator on the *same* JSON-Schema contracts — a swap, not a rewrite") appears to be what was actually built. Either re-record D4 as taken-the-fallback, or restore the dependency. Do not leave it `locked` as-is. |
+| §8; D8 | Judge = Claude Sonnet 4.6 / `claude-sonnet-5`; Red Team = hosted OSS with a local 24–33B Mac switch | Judge = `google/gemini-2.5-pro`; Red Team = `qwen/qwen3.5-397b-a17b`; frozen and rejected on deviation (`agents/hosted.py:31-38`, `:352-353`) | **Doc stale** | **Reconciled** in §8 above and D8 revision 2026-07-25. |
+| §8, §18, §20 S5 | The platform enforces `Judge.vendor != Documentation.vendor` at run start, fail-closed | No such check exists; no test references it | **Doc overstates** | **Corrected** — S5 row and §8 now read `specified, NOT implemented`. |
+| §12 | Packaged sole Alembic head is `0005` | Sole head is `0021_four_role_agent_acceptance` | Doc stale | **Corrected** in §12. |
+| §4 | Contracts live in `contracts/v1/` | `src/agentforge/contracts/v1/` (18 schemas); no repo-root `contracts/` | Doc stale (broken path) | **Corrected** in §4. |
+| §1, §12 | Live campaign launch "remains fail-closed unavailable"; runner/scheduler "refuse operation" | `POST /api/v1/campaigns` exists with a gated launch handler returning `CommandResult.accepted`; the Runner is a composed durable loop | **Doc understates** | **Partially corrected** in §12. The *gate* is real and still fail-closed on its preconditions; the blanket unavailability is not. |
+| §1 | "public target/surface authoring remains typed unavailable until a trusted catalog exists" | Only partly true now — surface create/revise still return `unavailable`, but the trusted catalog exists and target registration paths have moved | Doc understates | **Open** — needs a targeted §1/§5 rewrite by the architecture owner, not a one-line patch. |
+| §15; D13 | Present tense: calibration "uses async dual-judging across the full ground-truth set, a stratified random live sample, and threshold-near cases" | The machinery exists as offline code. **Dual-judge cross-agreement does not exist** — the gate accepts exactly one evaluator, and `agreement_rate` measures agreement with ground truth, not judge-vs-judge. Per-category disablement is not implemented (per-category metrics are computed; the reason-code logic applies global rates plus a sample floor). No stratified live sample has ever been drawn | **Doc overstates** (present tense for unbuilt behavior) | **Open — flagged, not rewritten.** §15 is the AI-use disclosure; changing its tense is the architecture owner's call. |
+| §11 | "All cost numbers are deferred to measurement; no placeholder number appears here" | Two appear 16 lines earlier in the same section: cached-input ≈0.1× input and Batch API ≈50%. They are unmeasured provider-discount assumptions | Doc self-contradicts | **Open** — either label them as assumptions or move them to the required-inputs table in `docs/cost/COST_ANALYSIS.md`. |
+| §19 | Baseline profiles (OPT-17) and load/stress (OPT-18) → `docs/performance/` | `docs/performance/` does not exist. Performance code exists (`src/agentforge/performance/`) with **zero producers** — no import from `src/`, `scripts/`, or `console/` | Doc overstates | **Open** — destination is empty; the report library is fed only by test samples. |
+
+One further item that belongs in this register because it contradicts an invariant this document
+registers as resolved (S4/F1): two Judge seams disagree about whether a model may emit
+`EXPLOIT_CONFIRMED`. `agents/judge/hosted.py:22` excludes it and `:313-318` rejects it — that is the
+seam the production runner composes. But
+`agents/hosted_runtime.py::HostedFourRoleRuntime.run_attempt` (Judge schema currently at line 754)
+hands the judge role an output enum that **includes** `EXPLOIT_CONFIRMED` (`_VERDICTS`, lines 31–37),
+and `HostedFourRoleRuntime._deterministic_precedence` returns the hosted verdict verbatim at lines
+863–866 with `deterministic_precedence: False`. It is unreachable today only because nothing in
+`src/` ever constructs `HostedFourRoleRuntime` — not because of any check in that function.
+**Flagged for the owning lane; not patched from a documentation branch.**
 
 ## §21. Non-Goals & Owned Tradeoffs
 

@@ -1,12 +1,39 @@
 # WP-12 — Register real, versioned LLM target surfaces
 
+> **Horizon 2 — deferred (2026-07-25).** This package is **out of the current delivery scope** and
+> nothing in it may be counted toward a coverage, capability, or closure claim. Design retained; not
+> dispatched. It was never dispatched: `.tdd-swarm/reports/RTG-orchestrator.md:5-6` records the
+> gap-swarm as `BLOCKED(base-precondition)`, held at Wave 0 entry. It also depends on
+> [WP-11](WP-11-TRUSTED-OBSERVATIONS.md), which is likewise Horizon 2.
+>
+> **What does not exist at base `107c11c`:** `src/agentforge/target/surface_contracts.py`,
+> `http_surface_adapter.py`, `stream_surface_adapter.py`, the whole `src/agentforge/platform/` package,
+> both surface-contract schemas, and `docs/integration/OPENEMR_SURFACE_CONTRACT.md`. The
+> capability-state vocabulary (`declared_unverified` / `live_validated` / `unsupported` /
+> `blocked_missing_contract`) appears only inside this document's prose — it is not implemented
+> anywhere. Note that [WP-18B](WP-18B-BROWSER-STREAMING.md) instructs a later lane to "extend WP-12's
+> frozen `stream_surface_adapter.py`"; that file does not exist, and nothing in `src/` implements a
+> target-side SSE/WebSocket surface.
+>
+> **The one genuinely small, genuinely valuable part is not code.** The Week 2 upload/read/RAG surfaces
+> already exist in the committed catalogs with `enabled: false`
+> (declared at `config/live-target-catalog.production.json:222`, `:253`, `:284`; `"enabled": false` at `:250`, `:281`, `:312`). Enabling them is a
+> **target-authorization change** — a human decision requiring a fresh exact-scope grant — not an
+> implementation task, and it is the highest find-power move available against the real target (RT-07).
+> Track it separately from this package so it is not blocked behind Horizon 2 code.
+>
+> Also Horizon 2 by the owner's locked decision, and dependent on this package: the `attack-case.v2`
+> schema stack and the OWASP Agentic (ASI01–ASI10) taxonomy. ASI is not in the graded requirement.
+>
+> See `docs/security/RED_TEAMING_COVERAGE_REVIEW_2026-07-25.md` RT-07 and its *Horizon 2* section.
+
 **Branch:** `rtg/wp12-real-target-surfaces`
 
 **Model:** capable
 
-**Depends on:** WP-03, WP-08, WP-11
+**Depends on:** WP-03, WP-08, WP-11 — **WP-11 is Horizon 2**
 
-**Implements toward (live validation pending):** RT-07
+**Implements toward (live validation pending):** RT-07 — **still open; see the Horizon 2 note above**
 
 Read target spec/catalog/registry/binding, the owner-provided OpenEMR Clinical Co-Pilot
 surface contract if present, RT-07, and WP-11 observation interfaces. Never infer routes

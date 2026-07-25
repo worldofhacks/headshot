@@ -1,12 +1,49 @@
 # WP-11 — Trusted observations and category-specific oracles
 
+> **Horizon 2 — deferred (2026-07-25).** This package is **out of the current delivery scope** and
+> nothing in it may be counted toward a coverage, capability, or closure claim. Design retained; not
+> dispatched. Never dispatched at all: `.tdd-swarm/reports/RTG-orchestrator.md:5-6` records the
+> gap-swarm as `BLOCKED(base-precondition)`, held at Wave 0 entry.
+>
+> **Why deferred is the honest call, not just a schedule slip.** RT-02 has been reframed by a
+> grounding pass and recorded as `docs/planning/DECISIONS.md` **D26**: **wiring these evaluators into
+> the run path would not make them fire.** Against a black-box `POST /chat` surface there is no source
+> data to populate their observations —
+> `ToolCallObservation` / `RetrievalScopeObservation` / state-diff / identity-scope / resource
+> observations are constructed **only** in `tests/test_category_oracles.py` and nowhere in `src/`; the
+> recorder persists transcripts only (`src/agentforge/policy/recorder.py`); the sole oracle constructed
+> in the run path is `CanaryOracle` (`src/agentforge/campaign/coordinator.py:711-726`); and
+> `TargetResponse` carries only `output`, `status`, and `{adapter, url, trace_id}`. Retrieval lineage,
+> pre/post state hashes, tool-call authorization decisions, effective role and token/tool counters are
+> **target-internal facts an HTTP response body does not contain**, and no attesting collector exists.
+>
+> **What exists at base `107c11c`:** a pure *evaluator* layer only — five deterministic category
+> oracles plus a canary oracle, each honestly self-labelled `availability="pending_runtime"` /
+> `runtime_wired=False`. **What does not exist:** the `src/agentforge/observations/**` package, the
+> `TrustedObservation` / `RequiredOraclePolicy` / `OracleEvaluation` types, their three JSON contracts,
+> the migration, owner-side authenticated collectors and attestation, and the `ground-truth-v2` slice
+> (zero grep hits repo-wide for each).
+>
+> **A second, non-schedule gate:** WP-11 requires **human-produced ground-truth-v2 labels plus an
+> independent human reviewer**. No code lane can supply those.
+>
+> **Standing prohibition while deferred:** do not flip `runtime_wired` to `True` without a test proving
+> the observation is actually collected, and do not bind an attack case to an oracle that cannot fire.
+> Either move manufactures `INDETERMINATE` at best and a fake confirmation at worst.
+>
+> **What replaces it in Horizon 1:** canary-anchoring (D26 §1) plus wiring the consumption oracle from
+> the Policy Gateway's own meter (D26 §2) — the one category family that is platform-observable rather
+> than target-internal. See `docs/security/RED_TEAMING_COVERAGE_REVIEW_2026-07-25.md` RT-02 and its
+> *Horizon 2* section.
+
 **Branch:** `rtg/wp11-trusted-observations`
 
 **Model:** capable
 
 **Depends on:** WP-02, WP-10
 
-**Implements toward (live validation pending):** RT-02
+**Implements toward (live validation pending):** RT-02 — **reframed; see the Horizon 2 note above and
+`DECISIONS.md` D26**
 
 Read the Evidence Envelope, Recorder, Judge, oracle code, calibration gate, storage roles,
 RT-02, and WP-10's stage contract.
