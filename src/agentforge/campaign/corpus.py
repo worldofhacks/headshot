@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from agentforge.agents.hosted import HOSTED_MAX_PHYSICAL_CALLS
 from agentforge.agents.red_team.seed_replay import corpus_sha256, seed_to_attempt
 from agentforge.evals.validation import (
     detect_duplicate_sequences,
@@ -38,7 +39,41 @@ LIVE_100_CATEGORY_COUNTS = {
     "denial_of_service": 14,
     "identity_role_exploitation": 15,
 }
-TRUSTED_WORKLOAD_IDS = frozenset({MVP_CORPUS_ID, FULL_SCAN_CORPUS_ID, LIVE_100_CORPUS_ID})
+#: The frozen live-100 corpus, split into the minimum number of separately-authorized hosted
+#: sub-workloads that aggregate EXACTLY back to the 100-case / 121-physical whole. Each batch's
+#: physical Sigma(turns) is <= HOSTED_MAX_PHYSICAL_CALLS (56) so no cap raise is required. Content
+#: is
+#: the SAME reviewed cases (see evals/workloads/live-100-batches.json and the batch manifests
+#: emitted
+#: by scripts/build_live_100_batches.py) — no synthesis, no mutation.
+LIVE_100_BATCH_IDS: tuple[str, ...] = (
+    "headshot-live-100-batch-01",
+    "headshot-live-100-batch-02",
+    "headshot-live-100-batch-03",
+)
+#: Per-batch active-case count (logical exact-match cap), physical Sigma(turns) (physical
+#: exact-match
+#: cap), and the pinned batch-manifest sha256 emitted by scripts/build_live_100_batches.py.
+LIVE_100_BATCH_SPECS: dict[str, dict[str, object]] = {
+    "headshot-live-100-batch-01": {
+        "case_count": 34,
+        "physical": 41,
+        "manifest_sha256": ("cb852cd514caccca99fe5eaa5a9a5fe59f2a7891fcc84409f9dcd331a8dd7d2c"),
+    },
+    "headshot-live-100-batch-02": {
+        "case_count": 33,
+        "physical": 40,
+        "manifest_sha256": ("a29bf9c5f30154328234c4a489f279b624830cb8fbdcac52d2153f980b86845c"),
+    },
+    "headshot-live-100-batch-03": {
+        "case_count": 33,
+        "physical": 40,
+        "manifest_sha256": ("fadf6d422ab0f59ca6ee7a9c2ec5f7352ec7c41197dcc216b37b080a715680de"),
+    },
+}
+TRUSTED_WORKLOAD_IDS = frozenset(
+    {MVP_CORPUS_ID, FULL_SCAN_CORPUS_ID, LIVE_100_CORPUS_ID, *LIVE_100_BATCH_IDS}
+)
 _WORKLOAD_ID = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9._:-]{0,127}\Z")
 _SHA256 = re.compile(r"\A[0-9a-f]{64}\Z")
 _REVIEWED_BUNDLES = {
@@ -312,25 +347,36 @@ def load_full_scan_corpus(
     )
 
 
-def load_live_100_corpus(
-    root: str | os.PathLike[str] | None = None,
+def _load_reviewed_workload_manifest(
+    selected: Path,
     *,
-    manifest_path: str | os.PathLike[str] | None = None,
-    expected_manifest_sha256: str | None = None,
-    bundle_root: str | os.PathLike[str] | None = None,
-) -> AuthoredCorpus:
-    """Load the externally reviewed 100-case workload, never synthesize it.
+    manifest_path: str | os.PathLike[str] | None,
+    expected_manifest_sha256: str | None,
+    expected_workload_id: str,
+    expected_case_count: int | None,
+) -> tuple[list[AuthoredCase], int, str]:
+    """Load and fully verify a byte-pinned reviewed workload manifest — GENERIC across workloads.
 
-    The workload is admitted only from a byte-pinned manifest.  The manifest references
-    individually validated attack-case JSON files below the eval root and carries immutable review
-    record hashes.  No code path expands the fourteen-case corpus into placeholder mutations.
+    This is the shared integrity spine used by both the frozen live-100 whole and each batch
+    sub-workload. It admits a workload ONLY from a byte-pinned manifest, validates every case
+    entry's
+    path/provenance/content hash, re-validates each attack case against the fixture registry, and
+    verifies the source-generation and review-record sidecars — NEVER synthesizing or mutating a
+    case.
+
+    It intentionally applies NO live-100-specific totals (14-case baseline, 6-category balance, the
+    79/21/121 turn split, exact full-scan membership) — those are the caller's workload-specific
+    invariants, asserted after this returns. Batches are strict subsets, so they must NOT carry
+    them.
+
+    Returns ``(cases, hosted_variant_count, manifest_sha256)``.  ``selected`` must already be the
+    resolved eval root.
     """
 
-    selected = corpus_root(root).resolve()
     path = (
         Path(manifest_path)
         if manifest_path is not None
-        else selected / "workloads" / f"{LIVE_100_CORPUS_ID}.json"
+        else selected / "workloads" / f"{expected_workload_id}.json"
     )
     expected = (
         expected_manifest_sha256
@@ -352,9 +398,9 @@ def load_live_100_corpus(
         not isinstance(manifest, dict)
         or set(manifest) != {"schema_version", "workload_id", "cases"}
         or manifest.get("schema_version") != "1"
-        or manifest.get("workload_id") != LIVE_100_CORPUS_ID
+        or manifest.get("workload_id") != expected_workload_id
         or not isinstance(manifest.get("cases"), list)
-        or len(manifest["cases"]) != LIVE_100_CASE_COUNT
+        or (expected_case_count is not None and len(manifest["cases"]) != expected_case_count)
     ):
         raise CorpusUnavailable("live-100 reviewed workload identity or case count is invalid")
 
@@ -490,6 +536,31 @@ def load_live_100_corpus(
                 source_generation_sha256=review["source_generation_sha256"],
             )
         )
+    return cases, hosted_variant_count, manifest_sha256
+
+
+def load_live_100_corpus(
+    root: str | os.PathLike[str] | None = None,
+    *,
+    manifest_path: str | os.PathLike[str] | None = None,
+    expected_manifest_sha256: str | None = None,
+    bundle_root: str | os.PathLike[str] | None = None,
+) -> AuthoredCorpus:
+    """Load the externally reviewed 100-case workload, never synthesize it.
+
+    The workload is admitted only from a byte-pinned manifest.  The manifest references
+    individually validated attack-case JSON files below the eval root and carries immutable review
+    record hashes.  No code path expands the fourteen-case corpus into placeholder mutations.
+    """
+
+    selected = corpus_root(root).resolve()
+    cases, hosted_variant_count, manifest_sha256 = _load_reviewed_workload_manifest(
+        selected,
+        manifest_path=manifest_path,
+        expected_manifest_sha256=expected_manifest_sha256,
+        expected_workload_id=LIVE_100_CORPUS_ID,
+        expected_case_count=LIVE_100_CASE_COUNT,
+    )
 
     duplicate_issues = detect_duplicate_sequences([case.payload for case in cases])
     if duplicate_issues:
@@ -527,6 +598,75 @@ def load_live_100_corpus(
         categories=frozenset(category_counts),
         root=selected,
         tool_sources=tuple(sorted((*baseline.tool_sources, "hosted_red_team"))),
+    )
+
+
+def load_live_100_batch(
+    batch_id: str,
+    root: str | os.PathLike[str] | None = None,
+    *,
+    manifest_path: str | os.PathLike[str] | None = None,
+    expected_manifest_sha256: str | None = None,
+) -> AuthoredCorpus:
+    """Load one separately-authorized live-100 batch sub-workload — a strict frozen subset.
+
+    A batch is a subset of the frozen ``headshot-live-100-v1`` corpus, so it deliberately does NOT
+    carry the live-100 whole's totals (14-case baseline, 6-category balance, 79/21/121 turn split,
+    exact full-scan membership).  It is admitted through the SAME shared integrity spine as the
+    whole
+    (byte-pinned manifest, per-case content hash + provenance + schema re-validation), then
+    constrained
+    only by manifest integrity, its own declared case count, and its pinned physical Sigma(turns) <=
+    HOSTED_MAX_PHYSICAL_CALLS.  The batch content is the same reviewed cases as the whole — never
+    synthesized, never mutated.
+    """
+
+    if batch_id not in LIVE_100_BATCH_SPECS:
+        raise CorpusUnavailable("workload identity is not in the trusted registry")
+    spec = LIVE_100_BATCH_SPECS[batch_id]
+    expected_case_count = int(spec["case_count"])
+    expected_physical = int(spec["physical"])
+    pinned_manifest_sha256 = str(spec["manifest_sha256"])
+
+    selected = corpus_root(root).resolve()
+    resolved_manifest_path = (
+        Path(manifest_path)
+        if manifest_path is not None
+        else selected / "workloads" / f"{batch_id}.json"
+    )
+    cases, _hosted_variant_count, manifest_sha256 = _load_reviewed_workload_manifest(
+        selected,
+        manifest_path=resolved_manifest_path,
+        # Default to this batch's own pinned digest so batch loading is content-addressed by
+        # default.
+        expected_manifest_sha256=(
+            expected_manifest_sha256
+            if expected_manifest_sha256 is not None
+            else pinned_manifest_sha256
+        ),
+        expected_workload_id=batch_id,
+        expected_case_count=expected_case_count,
+    )
+    if manifest_sha256 != pinned_manifest_sha256:
+        raise CorpusUnavailable("live-100 batch manifest differs from its pinned digest")
+
+    duplicate_issues = detect_duplicate_sequences([case.payload for case in cases])
+    if duplicate_issues:
+        raise CorpusUnavailable("live-100 batch contains duplicate identities or sequences")
+    if len(cases) != expected_case_count:
+        raise CorpusUnavailable("live-100 batch does not contain its declared case count")
+    physical = sum(len(case.payload["input_sequence"]) for case in cases)
+    if physical != expected_physical:
+        raise CorpusUnavailable("live-100 batch physical request count differs from its plan")
+    if physical > HOSTED_MAX_PHYSICAL_CALLS:
+        raise CorpusUnavailable("live-100 batch physical request count exceeds the hosted cap")
+
+    return AuthoredCorpus(
+        corpus_id=batch_id,
+        content_hash=manifest_sha256,
+        cases=tuple(cases),
+        categories=frozenset(case.payload["category"] for case in cases),
+        root=selected,
     )
 
 
@@ -575,7 +715,7 @@ def resolve_workload(
     manifest_path: str | os.PathLike[str] | None = None,
     expected_content_hash: str | None = None,
 ) -> AuthoredCorpus:
-    """Resolve one of the three closed, trusted workload identities."""
+    """Resolve one of the closed, trusted workload identities (whole corpora + live-100 batches)."""
 
     selected_id = (
         workload_id or os.environ.get("AGENTFORGE_WORKLOAD_ID", FULL_SCAN_CORPUS_ID).strip()
@@ -591,6 +731,15 @@ def resolve_workload(
             expected_manifest_sha256=expected_content_hash,
             bundle_root=bundle_root,
         )
+    elif selected_id in LIVE_100_BATCH_SPECS:
+        # The batch content-addresses itself via its own pinned manifest sha; the caller's
+        # ``expected_content_hash`` is enforced by the shared final check below (so a wrong pin
+        # raises "...expected content hash", matching every other trusted workload).
+        corpus = load_live_100_batch(
+            selected_id,
+            root,
+            manifest_path=manifest_path,
+        )
     else:
         raise CorpusUnavailable("workload identity is not in the trusted registry")
     if expected_content_hash is not None and corpus.content_hash != expected_content_hash:
@@ -604,6 +753,9 @@ __all__ = [
     "CorpusUnavailable",
     "FULL_SCAN_CASE_COUNT",
     "FULL_SCAN_CORPUS_ID",
+    "HOSTED_MAX_PHYSICAL_CALLS",
+    "LIVE_100_BATCH_IDS",
+    "LIVE_100_BATCH_SPECS",
     "LIVE_100_CASE_COUNT",
     "LIVE_100_CATEGORY_COUNTS",
     "LIVE_100_CORPUS_ID",
@@ -614,6 +766,7 @@ __all__ = [
     "TRUSTED_WORKLOAD_IDS",
     "corpus_root",
     "load_full_scan_corpus",
+    "load_live_100_batch",
     "load_live_100_corpus",
     "load_mvp_corpus",
     "resolve_workload",

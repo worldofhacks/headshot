@@ -54,6 +54,7 @@ from agentforge.campaign.authorization import RunAuthorization
 from agentforge.campaign.binding import TargetBinding
 from agentforge.campaign.coordinator import CampaignAbort, RunConfig, SecureCampaignCoordinator
 from agentforge.campaign.corpus import (
+    LIVE_100_BATCH_IDS,
     LIVE_100_CORPUS_ID,
     MVP_CASE_COUNT,
     MVP_CATEGORIES,
@@ -91,6 +92,15 @@ from agentforge.telemetry import OutboundHttpTelemetry
 
 _PAYLOAD_SCHEMA = "campaign.execute"
 _PAYLOAD_VERSION = 1
+
+#: The live-100 whole plus its three batch sub-workloads.  Each batch is an exact, reviewed,
+#: manifest-ordered SUBSET of the same frozen corpus, dispatched under its own separately-authorized
+#: exact-match caps. Every live-100 discipline therefore applies to a batch identically:
+#: manifest-order
+#: drift prevention, exact-request-cap enforcement, and manifest-order dispatch.  Gating those on
+#: the
+#: whole's id alone let a batch run bypass ``exact_request_caps_mismatch`` entirely.
+_EXACT_MANIFEST_WORKLOAD_IDS = frozenset({LIVE_100_CORPUS_ID, *LIVE_100_BATCH_IDS})
 _DEFAULT_LEASE = datetime.timedelta(minutes=10)
 _DEFAULT_POLL_SECONDS = 1.0
 _PROVIDER_RECOVERY_INTERVAL_SECONDS = 30.0
@@ -693,7 +703,7 @@ def _select_authorized_proposal(
     if not remaining or not proposals:
         raise DispatchUnavailable("authorized case proposal is unavailable")
     proposal = proposals[0]
-    if corpus_id == LIVE_100_CORPUS_ID:
+    if corpus_id in _EXACT_MANIFEST_WORKLOAD_IDS:
         expected_case_id = remaining[0].payload.get("case_id")
         ordered_matches = [
             candidate for candidate in proposals if candidate.get("case_ref") == expected_case_id
@@ -1233,6 +1243,22 @@ class DurableCampaignRunner:
                 blockers.append("synthetic_data_attestation_missing")
             if not target.canary_refs:
                 blockers.append("deterministic_canary_missing")
+            elif verified_payloads:
+                # A canary oracle is a SUBSTRING match over the response transcript. If the literal
+                # seeded in the target is not byte-identical to the literal the case expects, the
+                # oracle can never fire — and a corpus of canary-anchored cases then returns a clean
+                # sweep that looks like target resistance. That silent false negative is strictly
+                # worse than a loud refusal, so require every expected literal to be declared
+                # seeded.
+                declared = {ref.rsplit("/", 1)[-1] for ref in target.canary_refs}
+                expected = {
+                    literal
+                    for payload in verified_payloads
+                    if isinstance(payload.get("oracle_expectation"), dict)
+                    and (literal := payload["oracle_expectation"].get("canary_ref"))
+                }
+                if expected - declared:
+                    blockers.append("canary_literal_not_seeded")
             transport_policy = entry.transport_policy
             if transport_policy is None:
                 # T-F16a makes the v2 policy authoritative but does not include T-F16b's physical
@@ -1274,7 +1300,7 @@ class DurableCampaignRunner:
             entry.target.safety_caps if entry is not None else caps
         ):
             blockers.append("campaign_caps_incompatible")
-        if self.corpus.corpus_id == LIVE_100_CORPUS_ID:
+        if self.corpus.corpus_id in _EXACT_MANIFEST_WORKLOAD_IDS:
             expected_physical = (
                 sum(len(payload["input_sequence"]) for payload in verified_payloads)
                 if verified_payloads
@@ -1616,7 +1642,7 @@ class DurableCampaignRunner:
                     )
                     directive["mutation_policy"] = "redirect_to_remaining_authorized_case"
                     priority_reason = f"{priority_reason}_exhausted_redirect"
-                if prepared.corpus.corpus_id == LIVE_100_CORPUS_ID:
+                if prepared.corpus.corpus_id in _EXACT_MANIFEST_WORKLOAD_IDS:
                     next_category = verified_case_payload(remaining[0])["category"]
                     if directive["category"] != next_category:
                         directive["category"] = next_category
