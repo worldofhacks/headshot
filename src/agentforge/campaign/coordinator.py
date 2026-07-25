@@ -169,6 +169,12 @@ class RunConfig:
     run_nonce: str
     canary_token: str
     environment: str = "production"
+    # Whether the bound target carries a VERIFIED synthetic-data attestation. The composition root
+    # derives this from the target's catalog spec (``synthetic_data_only`` + a non-empty
+    # ``synthetic_data_attestation_ref``); it is never asserted by a caller on its own say-so.
+    # Defaults False so a run that has not established the attestation cannot reach a live target
+    # outside production — see ``PolicyGateway._enforce_synthetic_data``.
+    synthetic_target_attested: bool = False
     # The authored-corpus IDENTITY the authorization is scoped to. A grant authorizes attacking the
     # bound target/host with THIS corpus under the given caps; changing the corpus id changes the
     # operation hash and thus refuses a stale grant.
@@ -609,7 +615,14 @@ class SecureCampaignCoordinator:
 
             allowlist = Allowlist(
                 entries=[
-                    AllowlistEntry(target_id=binding.target_id, adapter_name=binding.adapter_kind)
+                    AllowlistEntry(
+                        target_id=binding.target_id,
+                        adapter_name=binding.adapter_kind,
+                        # Carried from the composition root, which reads it off the target's own
+                        # validated catalog spec. Defaults False, so a caller that has not
+                        # established the attestation keeps the strict no-live-target rule.
+                        synthetic_attested=self.config.synthetic_target_attested,
+                    )
                 ]
             )
             self._gateway = PolicyGateway(

@@ -1938,6 +1938,15 @@ class DurableCampaignRunner:
                 run_nonce=scope.run_nonce,
                 canary_token="",
                 environment=self.environment,
+                # Re-derived here from the target's own validated catalog spec rather than assumed.
+                # preflight already refuses a target missing either half
+                # (``synthetic_data_attestation_missing``); this recomputes the same fact at the
+                # point of use so the gateway's decision is grounded in the spec, not in the fact
+                # that some earlier check happened to pass.
+                synthetic_target_attested=bool(
+                    prepared.entry.target.synthetic_data_only
+                    and prepared.entry.target.synthetic_data_attestation_ref
+                ),
                 corpus_id=scope.corpus_id,
                 corpus_sha=scope.corpus_hash,
                 authorization_operation_hash=authorized.run.scope_hash,

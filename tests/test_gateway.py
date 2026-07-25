@@ -642,3 +642,85 @@ def test_result_content_hash_is_canonical_hex() -> None:
     assert isinstance(result.content_hash, str)
     assert len(result.content_hash) == 64
     assert all(c in "0123456789abcdef" for c in result.content_hash)
+
+
+# ---------------------------------------------------------------------------------------------
+# Synthetic-data policy (O1) — the gate admits a live target only on a VERIFIED attestation.
+#
+# These lock the narrowing in from both sides. Before it, the rule keyed on environment alone,
+# which refused an attested-synthetic target purely for being reached from a non-production
+# deployment AND admitted any live target in production, attested or not.
+# ---------------------------------------------------------------------------------------------
+
+_LIVE_TARGET = "https://agent-production-9f62.up.railway.app"
+
+
+def _live_allowlist(*, attested: bool) -> Allowlist:
+    return Allowlist(
+        [AllowlistEntry(target_id=_LIVE_TARGET, adapter_name="fake", synthetic_attested=attested)]
+    )
+
+
+def test_unattested_live_target_is_still_refused_outside_production() -> None:
+    """The strict rule must survive: no attestation, no live dispatch. This is the whole point."""
+
+    gateway = _gateway(
+        allowlist=_live_allowlist(attested=False),
+        settings=Settings(environment="staging"),
+    )
+
+    with pytest.raises(AbortError) as excinfo:
+        gateway.execute(_attack_attempt(), _policy(), target_id=_LIVE_TARGET)
+
+    assert "synthetic-data policy" in str(excinfo.value)
+    assert "no verified synthetic-data attestation" in str(excinfo.value)
+
+
+def test_attested_synthetic_live_target_is_admitted_outside_production() -> None:
+    """An attested-synthetic target is reachable from staging — the narrowing's purpose."""
+
+    adapter = FakeTargetAdapter()
+    gateway = _gateway(
+        adapter=adapter,
+        allowlist=_live_allowlist(attested=True),
+        settings=Settings(environment="staging"),
+    )
+
+    result = gateway.execute(_attack_attempt(), _policy(), target_id=_LIVE_TARGET)
+
+    assert result.target_id == _LIVE_TARGET
+    assert gateway.physical_send_count == 1
+
+
+def test_attestation_defaults_to_absent_so_an_unset_entry_fails_closed() -> None:
+    """A construction path that never considered attestation must NOT admit a live target."""
+
+    entry = AllowlistEntry(target_id=_LIVE_TARGET, adapter_name="fake")
+    assert entry.synthetic_attested is False
+
+    gateway = _gateway(
+        allowlist=Allowlist([entry]),
+        settings=Settings(environment="staging"),
+    )
+    with pytest.raises(AbortError):
+        gateway.execute(_attack_attempt(), _policy(), target_id=_LIVE_TARGET)
+
+
+def test_production_behaviour_is_unchanged_by_the_narrowing() -> None:
+    """Production still short-circuits before the attestation check — no regression there."""
+
+    gateway = _gateway(
+        allowlist=_live_allowlist(attested=False),
+        settings=Settings(environment="production"),
+    )
+
+    result = gateway.execute(_attack_attempt(), _policy(), target_id=_LIVE_TARGET)
+    assert result.target_id == _LIVE_TARGET
+
+
+def test_a_non_live_target_is_unaffected_in_any_environment() -> None:
+    """The gate only ever concerned live (http/https) targets; a fake id is untouched."""
+
+    gateway = _gateway(settings=Settings(environment="staging"))
+    result = gateway.execute(_attack_attempt(), _policy(), target_id=FAKE_TARGET_ID)
+    assert result.target_id == FAKE_TARGET_ID
