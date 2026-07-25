@@ -242,3 +242,44 @@ def test_real_committed_artifact_splits_into_a_lower_non_oracle_agreement() -> N
     assert report["pooled"]["over_call_on_ambiguous_count"] == 4
     assert report["non_oracle"]["over_call_on_ambiguous_count"] == 4
     assert report["non_oracle"]["safe_miss_count"] == 0
+
+
+def test_per_batch_metrics_expose_a_bad_sub_run_the_aggregate_would_average_away() -> None:
+    """A batched campaign's aggregate governs, but one degraded sub-run must stay visible."""
+
+    module = _module()
+    good = [_sample(f"A-{i}", "NO_EXPLOIT_OBSERVED", "NO_EXPLOIT_OBSERVED") for i in range(9)]
+    bad = [_sample("B-1", "NO_EXPLOIT_OBSERVED", "INDETERMINATE")]
+    labels = _labels({f"A-{i}": False for i in range(9)} | {"B-1": False})
+    manifest = {
+        "label_to_batch": {**{f"A-{i}": "batch-0" for i in range(9)}, "B-1": "batch-1"},
+    }
+
+    report = module.build_report(_artifact(good + bad), labels, batch_manifest=manifest)
+
+    assert report["pooled"]["agreement_rate"] == 0.9
+    by_batch = {item["batch"]: item for item in report["by_batch"]}
+    assert by_batch["batch-0"]["metrics"]["agreement_rate"] == 1.0
+    assert by_batch["batch-1"]["metrics"]["agreement_rate"] == 0.0
+    assert by_batch["batch-1"]["non_oracle_metrics"]["sample_count"] == 1
+
+
+def test_batch_metrics_are_absent_without_a_manifest() -> None:
+    module = _module()
+    samples = [_sample("L-1", "NO_EXPLOIT_OBSERVED", "NO_EXPLOIT_OBSERVED")]
+
+    report = module.build_report(_artifact(samples), _labels({"L-1": False}))
+
+    assert report["by_batch"] is None
+
+
+def test_a_manifest_describing_another_campaign_is_refused() -> None:
+    module = _module()
+    samples = [_sample("L-1", "NO_EXPLOIT_OBSERVED", "NO_EXPLOIT_OBSERVED")]
+
+    with pytest.raises(module.AnalysisError, match="in no batch"):
+        module.build_report(
+            _artifact(samples),
+            _labels({"L-1": False}),
+            batch_manifest={"label_to_batch": {"SOMETHING-ELSE": "batch-0"}},
+        )

@@ -64,7 +64,7 @@ import hashlib
 import json
 import os
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -158,28 +158,32 @@ def _parser() -> argparse.ArgumentParser:
         help="required acknowledgement that this makes real, billed OpenRouter calls",
     )
     parser.add_argument(
-        "--max-samples",
+        "--batch-size",
         type=int,
         default=None,
         help=(
-            "refuse to start if the corpus exceeds this many labels. Defaults to the staged "
-            "Judge role's own max_calls, which is the real ceiling"
+            "labels per sub-run. Defaults to the staged Judge role's max_calls (bounded by the "
+            f"{HOSTED_MAX_PHYSICAL_CALLS}-call platform ceiling). A corpus larger than one batch "
+            "is captured as several sub-runs against the SAME staged configuration, which keeps "
+            "judge_model_version constant — raising the cap instead would change the identity"
         ),
+    )
+    parser.add_argument(
+        "--batch-index",
+        type=int,
+        default=0,
+        help="0-based index of the sub-run to capture (default 0)",
+    )
+    parser.add_argument(
+        "--plan-only",
+        action="store_true",
+        help="print the batch plan and the derived identity, then exit without calling a provider",
     )
     return parser
 
 
 def main() -> int:
     args = _parser().parse_args()
-    if not args.confirm_provider_spend:
-        raise SystemExit(
-            "refusing to run: --confirm-provider-spend is required because this issues real, "
-            "billed OpenRouter requests"
-        )
-    credential = os.environ.get("OPENROUTER_API_KEY", "")
-    if not credential:
-        raise SystemExit("refusing to run: OPENROUTER_API_KEY is not set")
-
     configuration = _staged_configuration(
         args.hosted_configuration_set,
         expected_sha256=args.expected_configuration_sha256,
@@ -191,15 +195,44 @@ def main() -> int:
     labels.sort(key=lambda pair: pair[1]["label_id"])
     if not labels:
         raise SystemExit("refusing to run: the ground-truth corpus has no labels")
-    _require_capacity(
-        sample_count=len(labels),
+
+    plan = _batch_plan(
+        labels,
         configuration=configuration,
         judge_role=judge_role,
-        max_samples=args.max_samples,
+        batch_size=args.batch_size,
     )
-
     identity = hosted_judge_identity(configuration)
-    generation_policy_sha256 = _generation_policy_sha256(configuration, sample_count=len(labels))
+    generation_policy_sha256 = _generation_policy_sha256(
+        configuration,
+        total_sample_count=plan["total_sample_count"],
+        batch_size=plan["batch_size"],
+    )
+    if args.plan_only:
+        _print_plan(plan, identity=identity, generation_policy_sha256=generation_policy_sha256)
+        return 0
+
+    if not 0 <= args.batch_index < plan["batch_count"]:
+        raise SystemExit(
+            f"refusing to run: --batch-index {args.batch_index} is outside the "
+            f"{plan['batch_count']}-batch plan for this corpus"
+        )
+    batch = plan["batches"][args.batch_index]
+    labels = batch["labels"]
+
+    if not args.confirm_provider_spend:
+        raise SystemExit(
+            "refusing to run: --confirm-provider-spend is required because this issues real, "
+            "billed OpenRouter requests"
+        )
+    credential = os.environ.get("OPENROUTER_API_KEY", "")
+    if not credential:
+        raise SystemExit("refusing to run: OPENROUTER_API_KEY is not set")
+    print(
+        f"batch {args.batch_index + 1}/{plan['batch_count']}: "
+        f"{len(labels)} labels ({batch['first_label_id']} … {batch['last_label_id']})",
+        flush=True,
+    )
     authorization = HostedRunBinding(
         configuration_set_sha256=configuration.configuration_sha256,
         generation_policy_sha256=generation_policy_sha256,
@@ -283,6 +316,18 @@ def main() -> int:
             "capture_run_id": args.capture_run_id,
             "sample_count": len(samples),
             "slice_ids": sorted(item["slice_id"] for item in slices),
+            "batch": {
+                "batch_index": args.batch_index,
+                "batch_count": plan["batch_count"],
+                "batch_size": plan["batch_size"],
+                "total_sample_count": plan["total_sample_count"],
+                "label_ids": batch["label_ids"],
+                "note": (
+                    "One sub-run of a batched campaign. Every batch runs against the SAME staged "
+                    "configuration, so judge_model_version is identical across batches and the "
+                    "bundles can be merged by scripts/merge_calibration_batches.py."
+                ),
+            },
             "identity_binding": {
                 "source": "staged_production_configuration_set",
                 "hosted_configuration_set_path": str(args.hosted_configuration_set),
@@ -396,54 +441,112 @@ def _staged_configuration(path: Path, *, expected_sha256: str) -> HostedConfigur
     return configuration
 
 
-def _require_capacity(
+def _batch_plan(
+    labels: Sequence[tuple[str, Mapping[str, Any]]],
     *,
-    sample_count: int,
     configuration: HostedConfigurationSet,
     judge_role: Any,
-    max_samples: int | None,
-) -> None:
-    """Refuse a corpus the staged envelope cannot actually pay for, in one physical call each.
+    batch_size: int | None,
+) -> dict[str, Any]:
+    """Split the corpus into sub-runs that each fit the staged envelope, unchanged.
 
-    The hosted platform caps ``max_calls`` at ``HOSTED_MAX_PHYSICAL_CALLS`` (56), so a corpus
-    larger than that cannot be captured in a single run under ANY valid configuration. That is a
-    real ceiling to be batched against across several bound captures — never something to work
-    around by loosening the staged limits, which would change the identity being attested.
+    ``HostedLimits.max_calls`` is capped platform-wide at ``HOSTED_MAX_PHYSICAL_CALLS`` (56) and
+    one label costs one physical call, so a larger corpus cannot be captured in a single run under
+    ANY valid configuration.  The answer is several sub-runs against the SAME staged configuration
+    — not a wider cap.  Widening it would change ``limits``, which sits inside the Judge role's
+    ``configuration_sha256`` and therefore inside ``judge_model_version``: the batches would attest
+    different identities and could not be aggregated at all.
+
+    Batches are cut from the label list sorted by ``label_id``, so the plan is deterministic and
+    every sub-run is reproducible from its index alone.
     """
 
-    ceiling = max_samples if max_samples is not None else judge_role.limits.max_calls
-    if sample_count > ceiling:
+    ceiling = min(judge_role.limits.max_calls, configuration.global_limits.max_calls)
+    resolved = ceiling if batch_size is None else batch_size
+    if resolved < 1:
+        raise SystemExit("refusing to run: --batch-size must be at least 1")
+    if resolved > ceiling:
         raise SystemExit(
-            f"refusing to run: {sample_count} labels exceeds the authorized call budget "
-            f"({ceiling}). The staged Judge role allows {judge_role.limits.max_calls} physical "
-            f"calls and the platform ceiling is {HOSTED_MAX_PHYSICAL_CALLS}; capture this corpus "
-            "as several identity-bound batches instead of relaxing the staged limits."
+            f"refusing to run: --batch-size {resolved} exceeds the staged envelope "
+            f"({ceiling} physical calls; platform ceiling {HOSTED_MAX_PHYSICAL_CALLS}). Reduce "
+            "the batch size — do NOT raise the staged limits, which would change "
+            "judge_model_version and make the batches un-aggregatable."
         )
-    if sample_count > judge_role.limits.max_calls:
-        raise SystemExit(
-            f"refusing to run: {sample_count} labels exceeds the staged Judge role's "
-            f"max_calls ({judge_role.limits.max_calls})"
+
+    batches = []
+    for index in range(0, len(labels), resolved):
+        window = list(labels[index : index + resolved])
+        batches.append(
+            {
+                "batch_index": len(batches),
+                "labels": window,
+                "label_ids": [label["label_id"] for _category, label in window],
+                "first_label_id": window[0][1]["label_id"],
+                "last_label_id": window[-1][1]["label_id"],
+            }
         )
-    if sample_count > configuration.global_limits.max_calls:
-        raise SystemExit(
-            f"refusing to run: {sample_count} labels exceeds the staged global "
-            f"max_calls ({configuration.global_limits.max_calls})"
+    return {
+        "total_sample_count": len(labels),
+        "batch_size": resolved,
+        "batch_count": len(batches),
+        "batches": batches,
+    }
+
+
+def _print_plan(
+    plan: Mapping[str, Any],
+    *,
+    identity: Any,
+    generation_policy_sha256: str,
+) -> None:
+    payload = identity.payload()
+    print(f"corpus            {plan['total_sample_count']} labels")
+    print(f"batch size        {plan['batch_size']} (one physical Judge call per label)")
+    print(f"batches           {plan['batch_count']}")
+    print(f"identity_sha256   {_identity_sha256(payload)}")
+    print(f"judge_model       {payload['judge_model']} via {payload['judge_provider']}")
+    print(f"judge_model_ver   {payload['judge_model_version']}  (constant across every batch)")
+    print(f"generation_policy {generation_policy_sha256}  (bound to the campaign, not the batch)")
+    for batch in plan["batches"]:
+        print(
+            f"  batch {batch['batch_index']}: {len(batch['labels']):>3} labels  "
+            f"{batch['first_label_id']} … {batch['last_label_id']}"
         )
+
+
+def _identity_sha256(payload: Mapping[str, str]) -> str:
+    return hashlib.sha256(
+        json.dumps(
+            payload,
+            allow_nan=False,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+    ).hexdigest()
 
 
 def _generation_policy_sha256(
     configuration: HostedConfigurationSet,
     *,
-    sample_count: int,
+    total_sample_count: int,
+    batch_size: int,
 ) -> str:
-    """Content-address the exact generation envelope this capture is authorized to use."""
+    """Content-address the generation envelope for the whole CAMPAIGN, not one sub-run.
+
+    It binds the corpus size and the batch size rather than the per-batch sample count, so every
+    sub-run of one campaign carries the identical value and the merged bundle has a single
+    coherent ``generation_policy_sha256``. A per-batch count would make the trailing short batch
+    disagree with the others for no reason that means anything.
+    """
 
     return hashlib.sha256(
         json.dumps(
             {
                 "purpose": "judge-calibration-capture",
                 "configuration_sha256": configuration.configuration_sha256,
-                "sample_count": sample_count,
+                "total_sample_count": total_sample_count,
+                "batch_size": batch_size,
                 "call_bounds": {
                     "input_tokens": _JUDGE_CALL_BOUNDS.input_tokens,
                     "output_tokens": _JUDGE_CALL_BOUNDS.output_tokens,

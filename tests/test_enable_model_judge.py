@@ -163,16 +163,35 @@ def _attestation(
     }
 
 
+def _provenance(
+    configuration: HostedConfigurationSet, calibration: dict[str, Any]
+) -> dict[str, Any]:
+    """A reconciliation covering every scored sample, as verify_calibration_provenance emits."""
+
+    return {
+        "schema_version": "1",
+        "attestation_kind": "openrouter_usage_export_reconciled",
+        "judge_identity": hosted_judge_identity(configuration).payload(),
+        "sample_count": len(calibration["sample_results"]),
+        "matched_generation_count": len(calibration["sample_results"]),
+        "unclaimed_generation_count": 0,
+        "measured_usd_total": "0.75823375",
+        "usage_export_path": "/tmp/openrouter-usage.csv",
+    }
+
+
 def _args(tmp_path: Path, **overrides: Any) -> Any:
     configuration = overrides.pop("configuration", None) or _staged_set()
     calibration = overrides.pop("calibration", None) or _passing_calibration(configuration)
     attestation = overrides.pop("attestation", None) or _attestation(calibration)
+    provenance = overrides.pop("provenance", None) or _provenance(configuration, calibration)
 
     paths = {}
     for name, payload in (
         ("calibration", calibration),
         ("hosted", configuration.canonical_payload()),
         ("attestation", attestation),
+        ("provenance", provenance),
     ):
         target = tmp_path / f"{name}.json"
         target.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
@@ -187,6 +206,7 @@ def _args(tmp_path: Path, **overrides: Any) -> Any:
             "expected_sha", configuration.configuration_sha256
         ),
         ground_truth_attestation=paths["attestation"],
+        provenance_attestation=paths["provenance"],
         approver_ref=overrides.pop("approver_ref", "headshot:approver-morgan"),
         slice_dir=_GROUND_TRUTH,
         output=tmp_path / "out.json",

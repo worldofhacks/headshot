@@ -79,6 +79,15 @@ def _parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--provenance-attestation",
+        type=Path,
+        required=True,
+        help=(
+            "output of scripts/verify_calibration_provenance.py — the reconciliation of the "
+            "capture bundle against the provider's own usage export"
+        ),
+    )
+    parser.add_argument(
         "--approver-ref",
         required=True,
         help="the authorized human principal approving runtime enablement",
@@ -138,6 +147,11 @@ def _enable(args: argparse.Namespace) -> dict[str, Any]:
         _read_json(args.ground_truth_attestation, "ground-truth attestation"),
         slice_set_sha256=calibration["slice_set_sha256"],
     )
+    _require_measured_provenance(
+        _read_json(args.provenance_attestation, "provenance attestation"),
+        judge_identity=identity.payload(),
+        sample_count=len(calibration["sample_results"]),
+    )
     _require_governing_stratum_passes(calibration, slice_dir=args.slice_dir)
 
     enabled = CalibrationGate(evaluator=Judge()).human_enable(
@@ -174,6 +188,37 @@ def _require_two_person_ground_truth(
         raise EnablementRefused(
             f"ground-truth labeler and reviewer are the same principal ({labeler}); the "
             "two-person gate requires two distinct authorized humans"
+        )
+
+
+def _require_measured_provenance(
+    attestation: Mapping[str, Any],
+    *,
+    judge_identity: Mapping[str, str],
+    sample_count: int,
+) -> None:
+    """A shape-valid bundle is not a measurement; only the provider's record makes it one.
+
+    The replay path validates bundle shape and nothing else, so a hand-written bundle produces a
+    passing artifact. Enablement therefore requires the reconciliation against the provider's own
+    usage export, bound to the same identity and covering every sample that was scored.
+    """
+
+    if attestation.get("attestation_kind") != "openrouter_usage_export_reconciled":
+        raise EnablementRefused(
+            "the provenance attestation is not a provider usage-export reconciliation; a "
+            "calibration whose provider calls cannot be shown to have happened may not grant "
+            "runtime authority"
+        )
+    if attestation.get("judge_identity") != dict(judge_identity):
+        raise EnablementRefused(
+            "the provenance attestation covers a different Judge identity than the deployment"
+        )
+    matched = attestation.get("matched_generation_count")
+    if not isinstance(matched, int) or matched < sample_count:
+        raise EnablementRefused(
+            f"the provenance attestation reconciles {matched} generations but the calibration "
+            f"scored {sample_count} samples — every scored sample needs a provider record"
         )
 
 

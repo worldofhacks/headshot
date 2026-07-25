@@ -61,6 +61,14 @@ def _parser() -> argparse.ArgumentParser:
         help="the ground-truth slice directory the artifact was measured over",
     )
     parser.add_argument(
+        "--batch-manifest",
+        type=Path,
+        help=(
+            "batch-manifest.json from scripts/merge_calibration_batches.py. Adds per-sub-run "
+            "metrics so one bad batch is visible instead of averaged into the aggregate"
+        ),
+    )
+    parser.add_argument(
         "--output",
         type=Path,
         help="write the full report as JSON here (stdout stays human-readable)",
@@ -80,7 +88,8 @@ def main() -> int:
     args = _parser().parse_args()
     artifact = _read_json(args.calibration)
     labels = _load_labels(args.slice_dir)
-    report = build_report(artifact, labels)
+    batch_manifest = None if args.batch_manifest is None else _read_json(args.batch_manifest)
+    report = build_report(artifact, labels, batch_manifest=batch_manifest)
 
     if args.output is not None:
         args.output.write_text(
@@ -97,6 +106,8 @@ def main() -> int:
 def build_report(
     artifact: Mapping[str, Any],
     labels: Mapping[str, Mapping[str, Any]],
+    *,
+    batch_manifest: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Split the artifact's own samples by runtime authority and recompute honestly."""
 
@@ -147,7 +158,45 @@ def build_report(
             {"category": category, "metrics": _metrics(items)}
             for category, items in sorted(_by_category(non_oracle).items())
         ],
+        "by_batch": _batch_metrics(enriched, batch_manifest),
     }
+
+
+def _batch_metrics(
+    samples: Sequence[Mapping[str, Any]],
+    batch_manifest: Mapping[str, Any] | None,
+) -> list[dict[str, Any]] | None:
+    """Per-sub-run metrics, so a single bad batch is visible rather than averaged away.
+
+    The aggregate over a batched campaign is the number that governs, but it can hide a sub-run
+    that went wrong — a provider degradation partway through, a truncated batch. Reporting each
+    batch alongside makes that legible without changing what the aggregate is.
+    """
+
+    if batch_manifest is None:
+        return None
+    assignment = batch_manifest.get("label_to_batch")
+    if not isinstance(assignment, Mapping):
+        raise AnalysisError("the batch manifest carries no label_to_batch mapping")
+
+    unassigned = sorted({s["label_id"] for s in samples} - set(assignment))
+    if unassigned:
+        raise AnalysisError(
+            f"{len(unassigned)} scored samples are in no batch (first: {unassigned[0]}); the "
+            "manifest and the artifact describe different campaigns"
+        )
+
+    grouped: dict[str, list[Mapping[str, Any]]] = defaultdict(list)
+    for sample in samples:
+        grouped[str(assignment[sample["label_id"]])].append(sample)
+    return [
+        {
+            "batch": source,
+            "metrics": _metrics(items),
+            "non_oracle_metrics": _metrics([i for i in items if not i["oracle_backed"]]),
+        }
+        for source, items in sorted(grouped.items())
+    ]
 
 
 def _metrics(samples: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
@@ -299,6 +348,18 @@ def _render(report: Mapping[str, Any]) -> None:
             f"{m['safe_miss_count']:>11}"
             f"{m['over_call_on_ambiguous_count']:>11}"
         )
+    if report.get("by_batch"):
+        print()
+        print(f"{'per batch':<14}{'n':>5}{'agree':>9}{'non-oracle n':>14}{'non-oracle agree':>18}")
+        print("-" * 60)
+        for batch in report["by_batch"]:
+            m, nm = batch["metrics"], batch["non_oracle_metrics"]
+            name = batch["batch"].rsplit("/", 1)[-1][:13]
+            print(
+                f"{name:<14}{m['sample_count']:>5}{m['agreement_rate']:>9.4f}"
+                f"{nm['sample_count']:>14}{nm['agreement_rate']:>18.4f}"
+            )
+        print("(the aggregate above governs; batches are shown so one bad sub-run is visible)")
     print()
     print("oracle-backed rows are decided in code; only the NON-ORACLE row moves when the")
     print("model Judge is enabled. Gate enablement on that row.")

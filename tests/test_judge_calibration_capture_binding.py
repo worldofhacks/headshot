@@ -198,47 +198,10 @@ def test_staged_configuration_refuses_a_prompt_identity_this_release_does_not_se
         module._staged_configuration(path, expected_sha256=staged.configuration_sha256)
 
 
-# --- capacity preflight ------------------------------------------------------------------
-
-
-def test_capacity_preflight_accepts_a_corpus_that_fits(tmp_path: Path) -> None:
-    module = _capture_module()
-    staged = _staged_set()
-
-    module._require_capacity(
-        sample_count=54,
-        configuration=staged,
-        judge_role=_judge_role(staged),
-        max_samples=None,
-    )
-
-
-def test_capacity_preflight_refuses_a_corpus_past_the_platform_ceiling() -> None:
-    """A 100-case / 200-label corpus cannot be captured in one run under ANY valid config."""
-
-    module = _capture_module()
-    staged = _staged_set()
-
-    with pytest.raises(SystemExit, match="identity-bound batches"):
-        module._require_capacity(
-            sample_count=200,
-            configuration=staged,
-            judge_role=_judge_role(staged),
-            max_samples=None,
-        )
-
-
-def test_capacity_preflight_refuses_a_corpus_past_the_staged_role_budget() -> None:
-    module = _capture_module()
-    staged = _staged_set(judge_max_calls=10)
-
-    with pytest.raises(SystemExit, match="authorized call budget"):
-        module._require_capacity(
-            sample_count=54,
-            configuration=staged,
-            judge_role=_judge_role(staged),
-            max_samples=None,
-        )
+# --- capacity ---------------------------------------------------------------------------
+# A corpus larger than one staged batch is no longer a refusal — it is split into sub-runs against
+# the SAME configuration, so judge_model_version stays constant. That behaviour, and the refusal to
+# widen the staged limits instead, live in tests/test_judge_calibration_batching.py.
 
 
 # --- the CLI contract --------------------------------------------------------------------

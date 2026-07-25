@@ -66,41 +66,83 @@ stage the real policy identity.
 
 ## 3. Procedure
 
+Let `R=evals/results/judge-calibration-<run-id>`.
+
 ```bash
-# (a) capture — REAL, BILLED provider calls against the deployed identity
+# (a) plan — free, no provider call. Prints the batch split and the derived identity.
 PYTHONPATH=src python scripts/capture_judge_calibration.py \
   --hosted-configuration-set <staged-prod-config.json> \
   --expected-configuration-sha256 <sha-m-attested> \
-  --output-dir evals/results/judge-calibration-<run-id> \
-  --capture-run-id <run-id> \
-  --confirm-provider-spend
+  --output-dir "$R" --capture-run-id <run-id> --plan-only
 
-# (b) measure — network-free, over the captured bundle
+# (b) capture — REAL, BILLED. One invocation per batch; the SAME staged config every time.
+for i in $(seq 0 $((BATCHES-1))); do
+  PYTHONPATH=src python scripts/capture_judge_calibration.py \
+    --hosted-configuration-set <staged-prod-config.json> \
+    --expected-configuration-sha256 <sha-m-attested> \
+    --batch-index "$i" \
+    --output-dir "$R/batch-$i" --capture-run-id "<run-id>-b$i" \
+    --confirm-provider-spend
+done
+
+# (c) merge — refuses on identity drift, overlap, or an uncovered label
+PYTHONPATH=src python scripts/merge_calibration_batches.py "$R"/batch-* --output-dir "$R"
+
+# (d) provenance — reconcile against OpenRouter's own record. Without this the artifact is
+#     shape-valid, not measured.
+PYTHONPATH=src python scripts/verify_calibration_provenance.py \
+  --captured-results "$R/captured-results.json" \
+  --usage-export <openrouter-usage-export.csv> \
+  --ledger-total-usd "$(jq -r .measured_usd_total "$R/batch-manifest.json")" \
+  --output "$R/provenance-attestation.json"
+
+# (e) measure — network-free, over the merged bundle
 PYTHONPATH=src python scripts/run_judge_calibration.py \
-  --captured-results evals/results/judge-calibration-<run-id>/captured-results.json \
-  --expected-identity evals/results/judge-calibration-<run-id>/judge-identity.json \
+  --captured-results "$R/captured-results.json" \
+  --expected-identity "$R/judge-identity.json" \
   --threshold-policy accepted --require-pass \
-  > evals/results/judge-calibration-<run-id>/calibration-accepted.json
+  > "$R/calibration-accepted.json"
 
-# (c) restate over the stratum the model actually governs
+# (f) restate over the stratum the model governs, with per-batch visibility
 PYTHONPATH=src python scripts/analyze_judge_calibration.py \
-  --calibration evals/results/judge-calibration-<run-id>/calibration-accepted.json \
-  --output evals/results/judge-calibration-<run-id>/stratified-report.json \
+  --calibration "$R/calibration-accepted.json" \
+  --batch-manifest "$R/batch-manifest.json" \
+  --output "$R/stratified-report.json" \
   --require-non-oracle-pass
 
-# (d) human enablement — refuses unless every gate in §6 holds
+# (g) human enablement — refuses unless every gate in §6 holds
 PYTHONPATH=src python scripts/enable_model_judge.py \
-  --calibration evals/results/judge-calibration-<run-id>/calibration-accepted.json \
+  --calibration "$R/calibration-accepted.json" \
   --hosted-configuration-set <staged-prod-config.json> \
   --expected-configuration-sha256 <sha-m-attested> \
   --ground-truth-attestation <two-person-attestation.json> \
+  --provenance-attestation "$R/provenance-attestation.json" \
   --approver-ref <authorized-human> \
-  --output evals/results/judge-calibration-<run-id>/calibration-enabled.json \
+  --output "$R/calibration-enabled.json" \
   --confirm
 ```
 
-Steps (a)–(c) report whatever the numbers are. Step (d) is the only one that grants authority, and
+Steps (a)–(f) report whatever the numbers are. Step (g) is the only one that grants authority, and
 it is a separate human act.
+
+### Batching, and why not just raise the cap
+
+`limits` is inside the Judge role's `configuration_sha256`, which *is* `judge_model_version`. So
+raising `max_calls` to fit a bigger corpus changes the identity being attested — the batches would
+measure different evaluators and could not be aggregated at all. Batching keeps one identity and
+splits the work instead; `merge_calibration_batches.py` refuses unless every sub-run carries a
+byte-identical `judge_identity`, the batches are disjoint, and their union covers the corpus
+exactly. Coverage is checked against the slice directory rather than the batch manifests, so a
+sub-run that was never captured cannot hide behind a smaller, easier corpus.
+
+`generation_policy_sha256` is bound to the campaign (corpus size + batch size), not the per-batch
+sample count, so it too is constant across sub-runs and the merged bundle has one coherent value.
+
+The aggregate over all batches is the number that governs. Per-batch metrics are reported alongside
+so a degraded sub-run stays visible instead of being averaged away.
+
+**Cost:** one physical Judge call per label. The 54-label slice set measured $0.75823375, so budget
+**~$0.014/label** — about **$2.80 for a 200-label corpus** across 4 batches of 56/56/56/32.
 
 ## 4. The 56-call ceiling — the corpus cannot be captured in one run
 
@@ -174,15 +216,25 @@ per-sample costs are read from OpenRouter's own `usage.cost` field
 produced different numbers. The 54 request ids are unique, OpenRouter-shaped, and their embedded
 timestamps rise monotonically over a 650-second window ending 11 seconds before `captured_at`.
 
-The consequence is about **what a passing artifact proves**. It proves the arithmetic, not the
-provenance. So:
+The consequence is about **what a passing artifact proves**: the arithmetic, not the provenance.
 
-- **Any re-attest must be reported as "the harness measured this bundle", never as "the model was
-  measured", unless an out-of-band receipt is attached.** The receipt is an OpenRouter
-  activity/usage export covering the capture window, matching the sample count and the measured
-  total. Attach it to the PR; it is the only thing in existence that closes this.
-- The capture manifest's `identity_binding` and `evidence_provenance` blocks now record what the
-  run was bound to and that the evidence was authored, so a reader does not have to infer it.
+**This is now closed by requirement, not by convention.** `scripts/verify_calibration_provenance.py`
+reconciles the bundle against OpenRouter's own usage export — every sample's `provider_request_id`
+must appear in it, with matching model, cost and tokens, and the summed cost must reconcile with the
+ledger. A fabricated request id has nothing to match. The resulting
+`provenance-attestation.json` is a **required input to `enable_model_judge.py`**, so a bundle that
+is merely shape-valid cannot license runtime authority.
+
+The export is CSV or JSON; columns are resolved case-insensitively against a documented alias set,
+and if a required column cannot be resolved the tool prints the headers it actually saw and refuses
+rather than guessing — a column guessed wrong would "verify" nothing.
+
+What the attestation does **not** prove, and says so in its own body: that the evidence judged came
+from a live target. The corpus is authored synthetic ground truth. The attestation establishes only
+that the Judge model calls really happened and cost what the bundle claims.
+
+The capture manifest's `identity_binding`, `batch` and `evidence_provenance` blocks record what each
+sub-run was bound to and that the evidence was authored, so a reader does not have to infer it.
 
 ## 6. Gates on `runtime_enabled = true`
 
@@ -195,7 +247,9 @@ provenance. So:
    expected-positive sample was scored `NO_EXPLOIT_OBSERVED`;
 5. ground truth carries a two-person attestation (`human_labeler ≠ distinct_reviewer`, both
    identified and timestamped) bound to the exact `slice_set_sha256`, `blind_to_judge_output`;
-6. a named `--approver-ref` and explicit `--confirm`.
+6. a provenance attestation reconciling the bundle against the provider's usage export, bound to
+   the same identity and covering **every** scored sample;
+7. a named `--approver-ref` and explicit `--confirm`.
 
 The written artifact is then re-checked through `require_model_judge_enablement`, so what lands on
 disk is exactly what the runtime will accept.
