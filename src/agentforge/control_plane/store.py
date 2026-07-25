@@ -5522,7 +5522,16 @@ class ControlPlaneStore:
                 return self._finding_decision(
                     connection, principal.organization_id, existing["decision_id"]
                 )
-            evidence = (
+            finding_exists = connection.execute(
+                text(
+                    "SELECT 1 FROM finding WHERE organization_id = :org "
+                    "AND finding_id = :finding FOR UPDATE"
+                ),
+                {"org": principal.organization_id, "finding": finding_id},
+            ).scalar_one_or_none()
+            if finding_exists is None:
+                raise RecordNotFoundError("finding does not exist")
+            evidence_rows = (
                 connection.execute(
                     text(
                         "SELECT ar.*, l.evidence_content_hash, "
@@ -5531,10 +5540,7 @@ class ControlPlaneStore:
                         "cr.launcher_session_id AS finding_launcher_session_id, "
                         "q.launcher_user_id AS finding_submitter_user_id, "
                         "q.launcher_session_id AS finding_submitter_session_id "
-                        "FROM finding f "
-                        "LEFT JOIN finding_evidence_links l "
-                        "ON l.organization_id = f.organization_id "
-                        "AND l.finding_id = f.finding_id LEFT JOIN attempt_result ar "
+                        "FROM finding_evidence_links l JOIN attempt_result ar "
                         "ON ar.organization_id = l.organization_id "
                         "AND ar.campaign_run_id = l.campaign_run_id "
                         "AND ar.attempt_id = l.attempt_id "
@@ -5544,16 +5550,21 @@ class ControlPlaneStore:
                         "ON q.organization_id = cr.organization_id "
                         "AND q.request_id = cr.authorization_request_id "
                         "AND q.scope_hash = cr.scope_hash "
-                        "WHERE f.organization_id = :org "
-                        "AND f.finding_id = :finding"
+                        "WHERE l.organization_id = :org "
+                        "AND l.finding_id = :finding ORDER BY l.id LIMIT 2"
                     ),
                     {"org": principal.organization_id, "finding": finding_id},
                 )
                 .mappings()
-                .one_or_none()
+                .all()
             )
-            if evidence is None:
-                raise RecordNotFoundError("finding does not exist")
+            if not evidence_rows:
+                if decision == "approved":
+                    raise AuthorizationDeniedError("finding approval lineage is unavailable")
+                raise RecordNotFoundError("finding evidence does not exist")
+            if len(evidence_rows) != 1:
+                raise AuthorizationDeniedError("finding evidence lineage is ambiguous")
+            evidence = evidence_rows[0]
             if decision == "approved":
                 approval_lineage_valid = (
                     evidence["finding_run_kind"] in {"campaign", "governed_acceptance"}
@@ -5567,8 +5578,6 @@ class ControlPlaneStore:
                     raise AuthorizationDeniedError("finding approval lineage is unavailable")
                 if principal.user_id == evidence["finding_submitter_user_id"]:
                     raise AuthorizationDeniedError("finding submitter cannot approve own finding")
-            if evidence["content_hash"] is None:
-                raise RecordNotFoundError("finding evidence does not exist")
             candidate: dict[str, Any] = {}
             for column in PERSISTED_EVIDENCE_COLUMNS:
                 value = evidence[column]

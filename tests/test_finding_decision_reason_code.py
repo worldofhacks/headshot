@@ -17,9 +17,13 @@ from sqlalchemy import Engine, event, text
 from agentforge.api.backend import ApiConflict
 from agentforge.api.postgres import PostgresApiBackend, _finding_histories
 from agentforge.api.router import FindingDecisionInput
-from agentforge.auth.permissions import FINDINGS_APPROVE
+from agentforge.auth.permissions import FINDINGS_APPROVE, FINDINGS_RESOLVE
 from agentforge.auth.principal import Principal
-from agentforge.control_plane import AuthorizationDeniedError, ControlPlaneStore
+from agentforge.control_plane import (
+    AuthorizationDeniedError,
+    ControlPlaneStore,
+    RecordNotFoundError,
+)
 from agentforge.policy.recorder import ExecutionRecorder
 
 ORG_ID = "org_ReasonCodeFixture"
@@ -30,13 +34,14 @@ def _approver(
     *,
     organization_id: str = ORG_ID,
     user_id: str = APPROVER_ID,
+    permissions: tuple[str, ...] = (FINDINGS_APPROVE,),
 ) -> Principal:
     return Principal(
         user_id=user_id,
         session_id=f"sess_{user_id.removeprefix('user_')}",
         organization_id=organization_id,
         organization_role="org:approver",
-        organization_permissions=frozenset((FINDINGS_APPROVE,)),
+        organization_permissions=frozenset(permissions),
     )
 
 
@@ -187,6 +192,110 @@ def _seed_confirmed_finding(
     return finding_id
 
 
+def _append_same_launcher_evidence(
+    engine: Engine,
+    *,
+    finding_id: str,
+    organization_id: str = ORG_ID,
+) -> None:
+    """Add a second valid evidence link under the finding's existing human-launched run."""
+
+    attempt_id = uuid.uuid4().hex
+    recorder = ExecutionRecorder()
+    with engine.begin() as connection:
+        run = (
+            connection.execute(
+                text(
+                    "SELECT l.campaign_run_id, ar.authorization_scope_hash "
+                    "FROM finding_evidence_links l JOIN attempt_result ar "
+                    "ON ar.organization_id = l.organization_id "
+                    "AND ar.campaign_run_id = l.campaign_run_id "
+                    "AND ar.attempt_id = l.attempt_id "
+                    "WHERE l.organization_id = :org AND l.finding_id = :finding "
+                    "ORDER BY l.id LIMIT 1"
+                ),
+                {"org": organization_id, "finding": finding_id},
+            )
+            .mappings()
+            .one()
+        )
+        campaign_run_id = str(run["campaign_run_id"])
+        connection.execute(
+            text(
+                "INSERT INTO campaign_attempts "
+                "(organization_id, run_id, attempt_id, ordinal, case_id, case_content_hash, "
+                "category, severity, attack_class, owasp_mappings, fixture_provenance) VALUES "
+                "(:org, :run, :attempt, 1, :case_id, :case_hash, 'access-control', 'high', "
+                "'boundary', CAST(:mappings AS jsonb), CAST(:fixture AS jsonb))"
+            ),
+            {
+                "org": organization_id,
+                "run": campaign_run_id,
+                "attempt": attempt_id,
+                "case_id": f"case-{attempt_id}",
+                "case_hash": "d" * 64,
+                "mappings": (
+                    '[{"framework":"OWASP Web","version":"2021",'
+                    '"id":"A01","name":"Broken Access Control"}]'
+                ),
+                "fixture": '{"classification":"synthetic","contains_real_phi":false}',
+            },
+        )
+        stored = recorder.record(
+            {
+                "schema_version": "1",
+                "campaign_run_id": campaign_run_id,
+                "attempt_id": attempt_id,
+                "campaign_id": "synthetic-fixture",
+                "target_id": "synthetic-target",
+                "target_version": "1.0.0",
+                "attack_attempt": {"case_ref": "second-synthetic-case"},
+                "request_transcript": {"request": ["second synthetic input"]},
+                "response_transcript": "second synthetic canary response",
+                "policy_decision_id": "second-fixture-policy-decision",
+                "executed_at": "2026-07-21T12:01:00+00:00",
+                "trace_id": None,
+                "correlation_id": campaign_run_id,
+                "recorder_identity": "recorder@1",
+                "recorder_version": "1",
+                "organization_id": organization_id,
+                "surface_id": "synthetic-surface",
+                "surface_version": "1.0.0",
+                "authorization_scope_hash": str(run["authorization_scope_hash"]),
+                "execution_profile": "synthetic",
+                "evidence_provenance": "synthetic_offline",
+            },
+            connection,
+        )
+        verdict_id = connection.execute(
+            text(
+                "INSERT INTO verdict "
+                "(state, confidence, campaign_run_id, attempt_id, organization_id, "
+                "reason_codes, confirmation_source) VALUES "
+                "('EXPLOIT_CONFIRMED', 1.0, :run, :attempt, :org, "
+                "CAST('[\"canary_hit\"]' AS jsonb), 'canary') RETURNING id"
+            ),
+            {"run": campaign_run_id, "attempt": attempt_id, "org": organization_id},
+        ).scalar_one()
+        connection.execute(
+            text(
+                "INSERT INTO finding_evidence_links "
+                "(organization_id, finding_id, campaign_run_id, attempt_id, "
+                "evidence_content_hash, verdict_id, provenance) VALUES "
+                "(:org, :finding, :run, :attempt, :evidence_hash, :verdict_id, "
+                "'synthetic_offline')"
+            ),
+            {
+                "org": organization_id,
+                "finding": finding_id,
+                "run": campaign_run_id,
+                "attempt": attempt_id,
+                "evidence_hash": stored.content_hash,
+                "verdict_id": verdict_id,
+            },
+        )
+
+
 def test_finding_decision_input_accepts_structured_reason_code() -> None:
     model = FindingDecisionInput(
         decision="rejected",
@@ -299,6 +408,93 @@ def test_finding_approval_rejects_missing_submitter_lineage(migrated_db: Engine)
             reason_code="human_confirmed",
             idempotency_key="finding-missing-lineage-denied",
         )
+
+
+def test_finding_approval_distinguishes_missing_finding(migrated_db: Engine) -> None:
+    store = ControlPlaneStore(migrated_db, environment="staging")
+
+    with pytest.raises(RecordNotFoundError, match="finding does not exist"):
+        store.record_finding_decision(
+            principal=_approver(),
+            finding_id=f"finding-{uuid.uuid4().hex}",
+            decision="approved",
+            rationale="A nonexistent finding has no approval authority.",
+            reason_code="human_confirmed",
+            idempotency_key="finding-missing-record-denied",
+        )
+
+
+def test_finding_approval_rejects_ambiguous_same_submitter_lineage(
+    migrated_db: Engine,
+) -> None:
+    finding_id = _seed_confirmed_finding(migrated_db)
+    _append_same_launcher_evidence(migrated_db, finding_id=finding_id)
+    store = ControlPlaneStore(migrated_db, environment="staging")
+
+    with pytest.raises(
+        AuthorizationDeniedError,
+        match="evidence lineage is ambiguous",
+    ):
+        store.record_finding_decision(
+            principal=_approver(),
+            finding_id=finding_id,
+            decision="approved",
+            rationale="Multiple evidence links must not select an arbitrary submitter.",
+            reason_code="human_confirmed",
+            idempotency_key="finding-ambiguous-lineage-denied",
+        )
+
+
+def test_finding_approval_keeps_tenant_scoped_existence_private(migrated_db: Engine) -> None:
+    finding_id = _seed_confirmed_finding(migrated_db)
+    store = ControlPlaneStore(migrated_db, environment="staging")
+    foreign_approver = _approver(
+        organization_id="org_ReasonForeign",
+        user_id="user_ReasonForeignApprover",
+    )
+
+    with pytest.raises(RecordNotFoundError, match="finding does not exist"):
+        store.record_finding_decision(
+            principal=foreign_approver,
+            finding_id=finding_id,
+            decision="approved",
+            rationale="A foreign tenant must not observe finding lineage.",
+            reason_code="human_confirmed",
+            idempotency_key="finding-cross-organization-denied",
+        )
+
+
+@pytest.mark.parametrize(
+    ("decision", "reason_code", "permission"),
+    (
+        ("rejected", "not_a_real_exploit", FINDINGS_APPROVE),
+        ("resolved", None, FINDINGS_RESOLVE),
+    ),
+)
+def test_nonapproval_decisions_preserve_same_submitter_behavior(
+    migrated_db: Engine,
+    decision: str,
+    reason_code: str | None,
+    permission: str,
+) -> None:
+    finding_id = _seed_confirmed_finding(
+        migrated_db,
+        launcher_user_id=APPROVER_ID,
+    )
+    store = ControlPlaneStore(migrated_db, environment="staging")
+
+    recorded = store.record_finding_decision(
+        principal=_approver(permissions=(permission,)),
+        finding_id=finding_id,
+        decision=decision,
+        rationale="The non-approval decision retains its existing permission semantics.",
+        reason_code=reason_code,
+        idempotency_key=f"finding-same-submitter-{decision}",
+    )
+
+    assert recorded.finding_id == finding_id
+    assert recorded.decision == decision
+    assert recorded.actor_user_id == APPROVER_ID
 
 
 def test_backend_rejects_decision_incompatible_reason_code(migrated_db: Engine) -> None:
