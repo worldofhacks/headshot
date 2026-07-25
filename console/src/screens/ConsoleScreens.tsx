@@ -66,6 +66,8 @@ import {
   type BirdseyeAttentionReadModel,
   type BirdseyeSnapshotReadModel,
   type CampaignReadModel,
+  type CampaignSuiteBatchReadModel,
+  type CampaignSuiteTemplateReadModel,
   type ComponentReadModel,
   type ConfigurationReadModel,
   type EvidenceReadModel,
@@ -1556,6 +1558,365 @@ function TargetManagement({
   );
 }
 
+type SuiteBatchState =
+  | "ready"
+  | "authorization pending"
+  | "approved"
+  | "runnable"
+  | "running"
+  | "completed"
+  | "blocked";
+
+interface SuiteBatchView {
+  batch: CampaignSuiteBatchReadModel;
+  state: SuiteBatchState;
+  approval: ApprovalReadModel | null;
+  campaign: CampaignReadModel | null;
+  detail: string;
+}
+
+const newestFirst = <T extends { created_at: string }>(left: T, right: T) =>
+  Date.parse(right.created_at) - Date.parse(left.created_at);
+
+export const buildSuiteBatchViews = (
+  suite: CampaignSuiteTemplateReadModel,
+  approvals: ApprovalReadModel[],
+  campaigns: CampaignReadModel[],
+): SuiteBatchView[] => suite.batches.map((batch) => {
+  const matchingCampaigns = campaigns
+    .filter((campaign) => (
+      campaign.target_id === batch.target_id
+      && campaign.target_version === batch.target_version
+      && campaign.corpus_id === batch.corpus_id
+      && campaign.corpus_hash === batch.corpus_hash
+    ))
+    .sort(newestFirst);
+  const campaign = matchingCampaigns[0] ?? null;
+  const approval = approvals
+    .filter((candidate) => (
+      candidate.target_id === batch.target_id
+      && candidate.target_version === batch.target_version
+      && candidate.corpus_id === batch.corpus_id
+      && candidate.corpus_hash === batch.corpus_hash
+    ))
+    .sort(newestFirst)[0] ?? null;
+  if (campaign?.state === "complete") {
+    return {
+      batch,
+      state: "completed",
+      approval,
+      campaign,
+      detail: `${batch.case_count} cases and ${batch.physical_request_count} requests recorded`,
+    };
+  }
+  if (campaign?.state === "queued" || campaign?.state === "running") {
+    return {
+      batch,
+      state: "running",
+      approval,
+      campaign,
+      detail: campaign.attempt_count === null
+        ? "Waiting for persisted attempt progress"
+        : `${Math.min(campaign.attempt_count, batch.case_count)}/${batch.case_count} cases recorded`,
+    };
+  }
+  if (campaign?.state === "failed" || campaign?.state === "aborted") {
+    return {
+      batch,
+      state: "blocked",
+      approval,
+      campaign,
+      detail: `Campaign ${campaign.state}; request a fresh exact authorization`,
+    };
+  }
+  if (!batch.hosted_run) {
+    return {
+      batch,
+      state: "blocked",
+      approval,
+      campaign,
+      detail: "No server-owned atomic four-role configuration set is staged",
+    };
+  }
+  if (approval?.status === "pending" && !approval.expired) {
+    return {
+      batch,
+      state: "authorization pending",
+      approval,
+      campaign,
+      detail: "Waiting for a distinct Approver decision",
+    };
+  }
+  if (
+    approval?.status === "approved"
+    && !approval.expired
+    && !approval.consumed
+  ) {
+    return {
+      batch,
+      state: "runnable",
+      approval,
+      campaign,
+      detail: "Exact scope approved; the original Operator may launch",
+    };
+  }
+  if (approval?.status === "approved") {
+    return {
+      batch,
+      state: "approved",
+      approval,
+      campaign,
+      detail: approval.expired
+        ? "Authorization expired; request a fresh exact scope"
+        : "Authorization consumed; waiting for its campaign record",
+    };
+  }
+  if (approval?.status === "rejected") {
+    return {
+      batch,
+      state: "blocked",
+      approval,
+      campaign,
+      detail: "Exact scope was rejected; the Operator may request a fresh scope",
+    };
+  }
+  return {
+    batch,
+    state: "ready",
+    approval,
+    campaign,
+    detail: "Trusted batch is ready for exact authorization",
+  };
+});
+
+export const summarizeSuiteProgress = (
+  suite: CampaignSuiteTemplateReadModel,
+  views: SuiteBatchView[],
+) => {
+  const completed = views.filter((view) => view.state === "completed");
+  return {
+    completedBatches: completed.length,
+    completedCases: completed.reduce((total, view) => total + view.batch.case_count, 0),
+    completedRequests: completed.reduce(
+      (total, view) => total + view.batch.physical_request_count,
+      0,
+    ),
+    complete: completed.length === suite.batches.length
+      && completed.reduce((total, view) => total + view.batch.case_count, 0)
+        === suite.case_count
+      && completed.reduce(
+        (total, view) => total + view.batch.physical_request_count,
+        0,
+      ) === suite.physical_request_count,
+  };
+};
+
+function SuiteBatchActions({
+  client,
+  principal,
+  view,
+  refresh,
+}: {
+  client: ApiClient;
+  principal: Principal;
+  view: SuiteBatchView;
+  refresh: () => void;
+}) {
+  const { batch, approval } = view;
+  const [runNonce, setRunNonce] = useState(
+    () => `suite-${batch.ordinal}-${globalThis.crypto.randomUUID()}`,
+  );
+  const canLaunch = hasPermission(principal, PERMISSIONS.campaignLaunch);
+  const canAuthorize = hasPermission(principal, PERMISSIONS.campaignAuthorize);
+  const isRequester = approval?.launcher_user_id === principal.user_id;
+  const pending = approval?.status === "pending" && !approval.expired;
+  const requestable = canLaunch
+    && batch.hosted_run !== null
+    && ["ready", "blocked", "approved"].includes(view.state);
+  const requestPayload = {
+    target_id: batch.target_id,
+    target_version: batch.target_version,
+    surface_id: batch.surface_id,
+    surface_version: batch.surface_version,
+    corpus_id: batch.corpus_id,
+    corpus_hash: batch.corpus_hash,
+    execution_profile: batch.execution_profile,
+    caps: batch.maximum_caps,
+    run_nonce: runNonce,
+    hosted_run: batch.hosted_run,
+    expires_in_seconds: 900,
+  };
+  if (view.state === "completed" || view.state === "running") return null;
+  if (!batch.hosted_run) {
+    return (
+      <button
+        type="button"
+        className="button button-primary"
+        onClick={() => navigateTo({ screen: "config", entityId: null })}
+      >
+        Open Configuration
+      </button>
+    );
+  }
+  return (
+    <div className="command-row suite-batch-actions">
+      {pending && canAuthorize && (
+        <>
+          <CommandButton
+            client={client}
+            path={COMMAND_PATHS.decideCampaignAuthorization(approval.request_id)}
+            payload={{ decision: "approved" }}
+            label="Approve exact batch"
+            allowed={!isRequester}
+            unavailableReason="a distinct Approver"
+            onAcknowledged={refresh}
+          />
+          <CommandButton
+            client={client}
+            path={COMMAND_PATHS.decideCampaignAuthorization(approval.request_id)}
+            payload={{ decision: "rejected" }}
+            label="Reject exact batch"
+            allowed={true}
+            unavailableReason={PERMISSIONS.campaignAuthorize}
+            destructive
+            onAcknowledged={refresh}
+          />
+        </>
+      )}
+      {view.state === "runnable" && approval && (
+        <CommandButton
+          client={client}
+          path={COMMAND_PATHS.launchCampaign}
+          payload={{ authorization_request_id: approval.request_id }}
+          label="Launch approved batch"
+          allowed={canLaunch && isRequester}
+          unavailableReason={isRequester
+            ? PERMISSIONS.campaignLaunch
+            : "the persisted campaign launcher"}
+          onAcknowledged={refresh}
+        />
+      )}
+      {requestable && (
+        <CommandButton
+          client={client}
+          path={COMMAND_PATHS.createCampaignAuthorizationRequest}
+          payload={requestPayload}
+          label="Request batch authorization"
+          allowed={canLaunch}
+          unavailableReason={PERMISSIONS.campaignLaunch}
+          onAcknowledged={() => {
+            setRunNonce(`suite-${batch.ordinal}-${globalThis.crypto.randomUUID()}`);
+            refresh();
+          }}
+        />
+      )}
+      {!canLaunch && !canAuthorize && (
+        <span className="command-note">
+          Read-only access. An Operator requests and launches; a distinct Approver decides.
+        </span>
+      )}
+    </div>
+  );
+}
+
+function FullCampaignSuite({
+  client,
+  principal,
+  suite,
+}: {
+  client: ApiClient;
+  principal: Principal;
+  suite: CampaignSuiteTemplateReadModel;
+}) {
+  const approvals = useResource<ApprovalReadModel[]>(
+    client,
+    RESOURCE_PATHS.approvals,
+    decodeApprovals,
+  );
+  const campaigns = useResource<CampaignReadModel[]>(
+    client,
+    RESOURCE_PATHS.campaigns,
+    decodeCampaigns,
+  );
+  const views = buildSuiteBatchViews(
+    suite,
+    approvals.result.data ?? [],
+    campaigns.result.data ?? [],
+  );
+  const progress = summarizeSuiteProgress(suite, views);
+  const refresh = () => {
+    approvals.refresh();
+    campaigns.refresh();
+  };
+  return (
+    <Panel
+      title={suite.title}
+      meta={suite.suite_id}
+      eyebrow="FULL GOVERNED SUITE"
+    >
+      <MetricStrip label="Suite progress" values={[
+        {
+          label: "Cases",
+          value: `${progress.completedCases}/${suite.case_count}`,
+          note: "completed batches only",
+        },
+        {
+          label: "Physical requests",
+          value: `${progress.completedRequests}/${suite.physical_request_count}`,
+          note: "completed batches only",
+        },
+        {
+          label: "Governed batches",
+          value: `${progress.completedBatches}/${suite.batches.length}`,
+          note: "separate exact authorizations",
+        },
+        {
+          label: "Categories",
+          value: count(suite.categories.length),
+          note: suite.categories.join(" · "),
+        },
+      ]} />
+      <StateNotice
+        state={progress.complete ? "ready" : "pending"}
+        detail={progress.complete
+          ? "Suite complete: every trusted batch has a completed campaign record."
+          : "The suite is complete only when all server-owned batches complete. Progress never infers unrecorded physical requests."}
+      />
+      <div className="suite-batch-list">
+        {views.map((view) => (
+          <article className="suite-batch" key={view.batch.batch_id}>
+            <div className="suite-batch-head">
+              <div>
+                <p className="field-label">Batch {view.batch.ordinal}</p>
+                <strong>{view.batch.batch_id}</strong>
+              </div>
+              <span className={`suite-state suite-state-${view.state.replaceAll(" ", "-")}`}>
+                {view.state}
+              </span>
+            </div>
+            <EvidenceGrid values={[
+              { label: "Cases", value: count(view.batch.case_count) },
+              { label: "Requests", value: count(view.batch.physical_request_count) },
+              { label: "Corpus", value: view.batch.corpus_id },
+              {
+                label: "Scope",
+                value: shortId(view.batch.corpus_hash),
+              },
+            ]} />
+            <p className="data-note">{view.detail}</p>
+            <SuiteBatchActions
+              client={client}
+              principal={principal}
+              view={view}
+              refresh={refresh}
+            />
+          </article>
+        ))}
+      </div>
+    </Panel>
+  );
+}
+
 export function TargetsScreen({ client, principal }: ScreenProps) {
   const catalog = useResource<TargetCatalogEntryReadModel[]>(
     client,
@@ -1590,6 +1951,14 @@ export function TargetsScreen({ client, principal }: ScreenProps) {
         title="Targets"
         detail="Only persisted immutable target and attack-surface versions may be selected for dispatch."
       />
+      {records.flatMap((target) => (target.campaign_suite_templates ?? []).map((suite) => (
+        <FullCampaignSuite
+          key={`${target.target_id}:${target.version}:${suite.suite_id}`}
+          client={client}
+          principal={principal}
+          suite={suite}
+        />
+      )))}
       <Panel
         title="Trusted target catalog"
         meta="server-owned registration"
