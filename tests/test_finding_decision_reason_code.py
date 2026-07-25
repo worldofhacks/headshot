@@ -381,6 +381,34 @@ def test_finding_approval_accepts_distinct_approver(migrated_db: Engine) -> None
     assert decision.decision == "approved"
 
 
+def test_finding_approval_succeeds_under_production_web_role(
+    migrated_db: Engine,
+) -> None:
+    finding_id = _seed_confirmed_finding(migrated_db)
+    role_bound_engine = migrated_db.execution_options()
+
+    def assume_web_role(connection) -> None:
+        connection.execute(text("SET LOCAL ROLE headshot_web"))
+
+    event.listen(role_bound_engine, "begin", assume_web_role)
+    try:
+        store = ControlPlaneStore(role_bound_engine, environment="staging")
+        decision = store.record_finding_decision(
+            principal=_approver(),
+            finding_id=finding_id,
+            decision="approved",
+            rationale="The production Web role retains least-privilege approval access.",
+            reason_code="human_confirmed",
+            idempotency_key="finding-web-role-approval-succeeds",
+        )
+    finally:
+        event.remove(role_bound_engine, "begin", assume_web_role)
+
+    assert decision.finding_id == finding_id
+    assert decision.actor_user_id == APPROVER_ID
+    assert decision.decision == "approved"
+
+
 def test_finding_approval_rejects_missing_submitter_lineage(migrated_db: Engine) -> None:
     finding_id = f"finding-{uuid.uuid4().hex}"
     with migrated_db.begin() as connection:

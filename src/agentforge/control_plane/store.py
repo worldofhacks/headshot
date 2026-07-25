@@ -5522,10 +5522,13 @@ class ControlPlaneStore:
                 return self._finding_decision(
                     connection, principal.organization_id, existing["decision_id"]
                 )
+            self._aggregate_lock(
+                connection,
+                f"finding-decision:{principal.organization_id}:{finding_id}",
+            )
             finding_exists = connection.execute(
                 text(
-                    "SELECT 1 FROM finding WHERE organization_id = :org "
-                    "AND finding_id = :finding FOR UPDATE"
+                    "SELECT 1 FROM finding WHERE organization_id = :org AND finding_id = :finding"
                 ),
                 {"org": principal.organization_id, "finding": finding_id},
             ).scalar_one_or_none()
