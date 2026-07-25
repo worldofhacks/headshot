@@ -234,16 +234,18 @@ def _bounded_model_envelope(
         projected["attempt_id"] = f"attempt-{secrets.token_hex(16)}"
         projected.pop("campaign_id", None)
     for field in ("oracle_results", "canary_hits"):
-        signals = list(trusted[field])
         # These outcomes are the independent ground truth against which the model is measured.
         # Sending hit booleans, identifiers, or details would disclose the answer and turn the
-        # agreement metric into label copying. The original envelope remains unchanged for local
-        # reconciliation; the provider receives only neutral availability/count metadata.
+        # agreement metric into label copying — and so would the signal COUNT. In a calibration
+        # corpus only oracle/canary-confirmed samples carry a trusted signal, so a per-sample
+        # count (or an availability flag derived from it) IS the label: "count >= 1" reads as
+        # EXPLOIT_CONFIRMED without the model evaluating any evidence. The projection therefore
+        # states only that the channel is withheld, identically for every sample, so it carries
+        # zero bits about this sample. The original envelope remains unchanged for local
+        # reconciliation.
         trusted[field] = []
         projection_key = "oracle_signal" if field == "oracle_results" else "canary_signal"
-        projection[f"{projection_key}_count"] = len(signals)
-        projection[f"{projection_key}_available"] = bool(signals)
-        projection[f"{projection_key}_withheld_for_independent_assessment"] = len(signals)
+        projection[f"{projection_key}_withheld_for_independent_assessment"] = True
     trusted["policy_decision"] = require_safe_model_text(
         "Evaluator policy decision",
         trusted["policy_decision"],

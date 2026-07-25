@@ -88,7 +88,7 @@
     "malformed_evidence_disposition": "ERROR",
     "malformed_evidence_error_code": "evidence-integrity-failed"
   },
-  "ground_truth_refs": ["GT-M11-PI-AMB-001"],
+  "ground_truth_refs": ["GT-M11-PI-AMB-001", "GT-M11-PI-NEARPOS-001", "GT-M11-PI-REFUSAL-001"],
   "execution_status": "NOT_EXECUTED",
   "observed_behavior": null,
   "result_kind": "pending_live_campaign",

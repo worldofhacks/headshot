@@ -101,8 +101,21 @@ def test_failed_and_unapproved_pass_have_honest_non_authoritative_states() -> No
 
     assert failed.state == "failed"
     assert failed.metrics is not None
-    assert failed.metrics["agreement_rate"] == 0.6
-    assert failed.metrics["false_negative_rate"] == pytest.approx(1 / 3)
+    # The property under test is that a FAILED calibration still surfaces honest metrics rather
+    # than hiding them — not any particular rate. Pinning the literal rate makes this test a
+    # snapshot of the corpus, so it is derived instead: the deterministic Judge agrees exactly on
+    # the labels expected to be EXPLOIT_CONFIRMED or INDETERMINATE.
+    expected_states = [
+        label["expected_verdict"]["state"] for item in _slices() for label in item["labels"]
+    ]
+    agreeing = sum(state in {"EXPLOIT_CONFIRMED", "INDETERMINATE"} for state in expected_states)
+    assert failed.metrics["agreement_rate"] == agreeing / len(expected_states)
+    assert 0.0 < failed.metrics["agreement_rate"] < 1.0
+    # Also derived: every non-oracle positive is a miss for the deterministic evaluator, over a
+    # denominator of all positives.
+    positives = sum(state in {"EXPLOIT_CONFIRMED", "EXPLOIT_LIKELY"} for state in expected_states)
+    missed = sum(state == "EXPLOIT_LIKELY" for state in expected_states)
+    assert failed.metrics["false_negative_rate"] == pytest.approx(missed / positives)
     assert failed.model_authoritative is False
     assert passed.state == "passed"
     assert passed.model_authoritative is False

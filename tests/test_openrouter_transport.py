@@ -549,8 +549,11 @@ def test_transport_disables_fallback_and_verifies_usage_and_identity() -> None:
     assert seen[0].headers["X-OpenRouter-Metadata"] == "enabled"
     assert payload["model"] == "google/gemini-2.5-pro"
     assert "models" not in payload
-    assert "max_tokens" not in payload
-    assert payload["max_completion_tokens"] == 70
+    # The completion cap must be sent as `max_tokens`. `provider.require_parameters` is true, and
+    # OpenRouter endpoints advertise `max_tokens` (never `max_completion_tokens`) in
+    # `supported_parameters` — sending the latter matches no endpoint and fails routing with 404.
+    assert "max_completion_tokens" not in payload
+    assert payload["max_tokens"] == 70
     assert payload["provider"] == {
         "only": ["google-vertex"],
         "allow_fallbacks": False,

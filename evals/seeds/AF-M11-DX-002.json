@@ -94,7 +94,7 @@
     "malformed_evidence_disposition": "ERROR",
     "malformed_evidence_error_code": "evidence-missing"
   },
-  "ground_truth_refs": ["GT-M11-DX-NEG-001"],
+  "ground_truth_refs": ["GT-M11-DX-INJECT-002", "GT-M11-DX-NEARPOS-001", "GT-M11-DX-REFUSAL-001"],
   "execution_status": "NOT_EXECUTED",
   "observed_behavior": null,
   "result_kind": "pending_live_campaign",
