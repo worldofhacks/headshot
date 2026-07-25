@@ -715,3 +715,59 @@ def test_findings_api_batches_multiple_histories_and_keeps_tenants_isolated(
     assert organization_b_findings[finding_b1]["history"][0]["reason_code"] == (
         "not_a_real_exploit"
     )
+
+
+def test_direct_sql_self_approval_is_refused_by_the_database(migrated_db: Engine) -> None:
+    """The two-person rule on findings must survive a writer that bypasses the store.
+
+    `record_finding_decision` already refuses a self-approval, but that check is application code.
+    Any principal holding the table grant could previously INSERT the approval row directly and the
+    finding would read as approved by a second person when it was not. The campaign control has had
+    a database trigger since 0012; 0023 gives finding approval the same footing.
+    """
+
+    finding_id = _seed_confirmed_finding(migrated_db, launcher_user_id=APPROVER_ID)
+
+    with migrated_db.begin() as connection, pytest.raises(Exception) as excinfo:
+        connection.execute(
+            text(
+                "INSERT INTO finding_decision_events "
+                "(decision_id, organization_id, finding_id, decision, actor_user_id, "
+                "actor_session_id, rationale, reason_code) VALUES "
+                "(:decision_id, :org, :finding, 'approved', :actor, :session, "
+                "'Bypassing the store entirely.', 'human_confirmed')"
+            ),
+            {
+                "decision_id": uuid.uuid4().hex,
+                "org": ORG_ID,
+                "finding": finding_id,
+                # The submitter approving their own finding — the exact case the app layer refuses.
+                "actor": APPROVER_ID,
+                "session": "sess_direct_sql_bypass",
+            },
+        )
+    assert "submitter cannot approve own finding" in str(excinfo.value)
+
+
+def test_direct_sql_approval_by_a_distinct_principal_is_allowed(migrated_db: Engine) -> None:
+    """The trigger must refuse only self-approval, never a legitimate second person."""
+
+    finding_id = _seed_confirmed_finding(migrated_db, launcher_user_id=APPROVER_ID)
+
+    with migrated_db.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO finding_decision_events "
+                "(decision_id, organization_id, finding_id, decision, actor_user_id, "
+                "actor_session_id, rationale, reason_code) VALUES "
+                "(:decision_id, :org, :finding, 'approved', :actor, :session, "
+                "'A genuinely distinct approver.', 'human_confirmed')"
+            ),
+            {
+                "decision_id": uuid.uuid4().hex,
+                "org": ORG_ID,
+                "finding": finding_id,
+                "actor": f"{APPROVER_ID}_someone_else",
+                "session": "sess_distinct_approver",
+            },
+        )

@@ -410,6 +410,52 @@ def _governed_provider_invocation_guard() -> str:
     )
 
 
+def _finding_approval_sod_guard() -> str:
+    """Separation of duties on finding approval, enforced in the DATABASE.
+
+    ``ControlPlaneStore.decide_finding`` already refuses a self-approval, but that check lives in
+    application code and can be bypassed by any direct-SQL writer holding the table grant. The
+    campaign two-person control has had a DB trigger since 0012; finding approval had only the
+    app-layer check, so the graded "approver != submitter" guarantee was weaker for findings than
+    for campaigns.
+
+    This mirrors the app-layer rule exactly (store.py: "finding submitter cannot approve own
+    finding"), resolving the submitter through the same lineage the app uses:
+    ``finding_evidence_links -> campaign_runs -> campaign_authorization_requests``. It also
+    reproduces the app's "exactly one evidence link" requirement, because an ambiguous lineage means
+    the submitter cannot be established at all -- and an unresolvable submitter must fail closed,
+    never open.
+    """
+
+    return (
+        "CREATE OR REPLACE FUNCTION public.m1d_enforce_finding_approval_sod() "
+        "RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER "
+        "SET search_path = pg_catalog, public AS $$ "
+        "DECLARE link_count integer; submitter text; BEGIN "
+        "IF NEW.decision <> 'approved' THEN RETURN NEW; END IF; "
+        "SELECT count(*) INTO link_count FROM finding_evidence_links "
+        "WHERE organization_id = NEW.organization_id AND finding_id = NEW.finding_id; "
+        "IF link_count <> 1 THEN "
+        "RAISE EXCEPTION 'finding evidence lineage is ambiguous' "
+        "USING ERRCODE = '42501'; END IF; "
+        "SELECT q.launcher_user_id INTO submitter "
+        "FROM finding_evidence_links l "
+        "JOIN campaign_runs cr ON cr.organization_id = l.organization_id "
+        "AND cr.run_id = l.campaign_run_id "
+        "JOIN campaign_authorization_requests q ON q.organization_id = cr.organization_id "
+        "AND q.request_id = cr.authorization_request_id AND q.scope_hash = cr.scope_hash "
+        "WHERE l.organization_id = NEW.organization_id AND l.finding_id = NEW.finding_id "
+        "LIMIT 1; "
+        "IF submitter IS NULL THEN "
+        "RAISE EXCEPTION 'finding approval lineage is unavailable' "
+        "USING ERRCODE = '42501'; END IF; "
+        "IF submitter = NEW.actor_user_id THEN "
+        "RAISE EXCEPTION 'finding submitter cannot approve own finding' "
+        "USING ERRCODE = '42501'; END IF; "
+        "RETURN NEW; END $$"
+    )
+
+
 def upgrade() -> None:
     op.drop_constraint("campaign_run_kind", "campaign_runs", type_="check")
     op.create_check_constraint(
@@ -449,9 +495,18 @@ def upgrade() -> None:
         "BEFORE INSERT ON provider_call_invocations FOR EACH ROW "
         "EXECUTE FUNCTION public.m1d_validate_governed_acceptance_provider_invocation()"
     )
+    op.execute(_finding_approval_sod_guard())
+    op.execute("REVOKE ALL ON FUNCTION public.m1d_enforce_finding_approval_sod() FROM PUBLIC")
+    op.execute(
+        "CREATE TRIGGER trg_finding_approval_sod "
+        "BEFORE INSERT ON finding_decision_events FOR EACH ROW "
+        "EXECUTE FUNCTION public.m1d_enforce_finding_approval_sod()"
+    )
 
 
 def downgrade() -> None:
+    op.execute("DROP TRIGGER trg_finding_approval_sod ON finding_decision_events")
+    op.execute("DROP FUNCTION public.m1d_enforce_finding_approval_sod()")
     op.execute(
         "DO $$ BEGIN "
         f"IF EXISTS (SELECT 1 FROM campaign_runs WHERE run_kind = '{_GOVERNED}') THEN "
