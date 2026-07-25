@@ -53,15 +53,16 @@ rollback image.
 | Missing, expired, or scope-mismatched authorization | Zero dispatch | Campaign authorization tests | Deployed drill unavailable |
 | Same user launches and approves | Generic 403/database rejection; no authorized run | Auth/control-plane tests; migration `0012` | Two-user acceptance unavailable |
 | Budget/rate/attempt/timeout/physical cap reached | Abort before the next send; preserve completed evidence | Gateway/coordinator tests | Final campaign unavailable |
-| Target/provider rate limit or timeout | Bounded retry/backoff, queue or abort; no synthetic success | Adapter/gateway/hosted-runtime tests | Live observation unavailable |
-| Runner crash after reserving a physical coordinate | Reservation stays ambiguous/unobserved; no blind replay | Migration `0014` and reservation tests | Staged crash drill unavailable |
+| Target/provider rate limit or timeout | Bounded retry/backoff, queue or abort; no synthetic success; full timeout must fit strictly before run/grant/session deadlines | Adapter/gateway/hosted-runtime plus focused external-I/O guard tests | Live observation unavailable |
+| Queue lease/grant changes immediately before external I/O | Typed abort; no provider credential/lineage/ledger/HTTP after refusal; no target send after failed guard | 185-test focused Runner/provider/gateway/work-unit suite at candidate `b14d2bd` | Staged lease-loss/drift drill unavailable |
+| Runner crash after reserving a physical target coordinate | Reservation stays ambiguous/unobserved; no blind replay | Migration `0014` and reservation tests | Staged crash drill unavailable |
 | Duplicate job or event | Idempotency/uniqueness prevents duplicate authoritative side effects | Queue/control-plane tests | Staged replay drill unavailable |
 | Evidence hash mismatch | Judge/coverage fail closed; no confirmed/safe state | Recorder/reconciliation/Judge tests | Deployed corruption drill unavailable |
 | Provider route/model substitution or physical retry drift | Fail closed; preserve exact configured/observed identity and unresolved call state | Migration `0018`, hosted transport/lineage tests | Staged provider evidence unavailable |
 | Judge model unavailable or identity-drifted | Deterministic oracles remain decisive; model-only authority disabled/advisory | Judge calibration/hosted lineage checks | Exact-route human enablement unavailable |
 | Langfuse unavailable or flush succeeds without query-back | PostgreSQL remains authoritative; delivery stays queued/error, never exported | Migration `0016`/`0018`, verifier tests | Exact remote query-back unavailable |
 | Database is below packaged head | `/ready` fails and private workers do not consume | Readiness/container migration tests | Final staging deployment unavailable |
-| Target session expires mid-run | Abort; no silent refresh/rotation; new scope and approval required | Session lease/runbook controls | Live drill unavailable |
+| Target session expires mid-run | Next external call refuses if its full timeout reaches or crosses session expiry; no silent refresh/rotation; new scope and approval required | Session lease/runbook and equality-boundary guard tests | Live drill unavailable |
 | Critical finding publication/remediation | Remains blocked until required different human approval | Finding decision/storage tests | Final workflow unavailable |
 
 ## Pre-deploy rollback binding

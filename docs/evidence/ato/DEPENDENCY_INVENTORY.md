@@ -1,7 +1,8 @@
 # Dependency and version inventory
 
 Inventory baseline: release-candidate source inspected through
-`ed41c6e20b7793c656c45aa6d05f8b9a0c476d1b` (final integration SHA unavailable)
+`a1abbc41dd7973a7c6e63e7bf054369e15842cbc`; later documentation is not a final release SHA
+(final integration SHA unavailable)
 
 This inventory distinguishes an exact pin from a lower-bound constraint. A lower bound is not a
 reproducible resolution.

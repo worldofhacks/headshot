@@ -2,7 +2,9 @@
 
 - Packet date: 2026-07-24
 - Canonical requirements: [`../../../Week_3_AgentForge.pdf`](../../../Week_3_AgentForge.pdf)
-- Release-candidate source inspected through: `ed41c6e20b7793c656c45aa6d05f8b9a0c476d1b`
+- Last committed candidate source inspected through:
+  `a1abbc41dd7973a7c6e63e7bf054369e15842cbc`
+- Later documentation: does not create a final release SHA or deployment evidence
 - Final release commit: **unavailable while integration is moving**
 
 ## Authorization decision

@@ -36,6 +36,12 @@ The configuration preflight is deliberately secret-free and performs zero provid
 calls. A missing hosted composition, stale Runner heartbeat, incomplete credential readiness, or
 lease failure is terminal for that launch attempt.
 
+Candidate commit `b14d2bd` also performs this check at each physical-send boundary. It
+renews/proves the exact queue claim, reloads immutable authorization, and admits the configured
+transport timeout only when it ends strictly before the anchored run, approval, and delegated
+session deadlines. Equality refuses. This behavior has focused source tests but is not deployed
+acceptance evidence.
+
 ## Final SMART session rotation
 
 Do not reuse or overwrite a previously authorized generation. Immediately before the final
@@ -53,9 +59,12 @@ authorized campaign:
 6. Restart only the existing private Runner and verify that no previous generation overlaps.
 7. Launch within five minutes. Set authorization expiry strictly beyond the exact campaign timeout
    plus its bounded queue/start margin, and keep the target credential lease valid for that whole
-   window. The current 3,600-second browser/API authorization maximum is not evidence that a
-   100-case workload fits; stop until measured latency supports the selected timeout or a reviewed,
-   still-bounded hard ceiling is released.
+   window. The standard profile retains a 3,600-second maximum grant. Candidate source also defines
+   an explicit staging-campaign-only `staging_extended` profile, capped at a 14,400-second run and
+   14,701-second server-derived grant; it is rejected in local/production and for live probes, and
+   the current 1,800-second target catalog does not expose it. Neither profile is evidence that a
+   100-case workload fits. Stop until measured latency supports the selected timeout and the exact
+   target version, credential lease, approval, and deployed release bind that window.
 
 Resolve the session once into one campaign HTTP client. Session expiry terminates the campaign;
 there is no refresh, substitution, or retry. Never place the identifier or its digest in the Web

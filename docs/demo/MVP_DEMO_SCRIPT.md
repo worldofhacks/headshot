@@ -21,12 +21,19 @@ Stop if any prerequisite is missing:
    commit; only Web may be public.
 2. Load the security owner's exact **frozen 100-case corpus**. Record its corpus ID and SHA-256; do not
    generate, expand, or substitute a corpus for the demo. Candidate source admits the exact
-   400-call four-role envelope only with **zero provider retries** and refuses the 800-call
-   retry-expanded shape. This source is not deployed and no final 100-case configuration exists.
+   400-physical-attempt four-role envelope only with **zero provider retries** and refuses the
+   800-attempt retry-expanded shape. This source is not deployed and no final 100-case configuration
+   exists.
    The default Red-Team input policy is also below current canonical encoded requests and now
-   correctly refuses before any provider side effect. Do not launch until the frozen request shapes
-   produce a new policy hash and the exact role/global token, USD, rate, timeout, and call ceilings
-   are staged, catalog-preflighted, and bound into a fresh authorization.
+   correctly refuses before any provider side effect. Candidate source also exactly sums
+   worst-case provider reservations across all required attempts and refuses the current
+   insufficient per-role/global USD authority before provider I/O. Do not launch until the frozen
+   request shapes produce a new policy hash and a human approves the exact role/global token, USD,
+   rate, timeout, and call ceilings that are staged, catalog-preflighted, and bound into a fresh
+   authorization. Standard remains the default campaign window. The explicit `staging_extended`
+   profile is source-tested only, capped at a 14,400-second run and 14,701-second server-derived
+   grant, and is offered only when a new staging target version advertises a timeout beyond the
+   standard window. The current 1,800-second target exposes no extended option.
 3. Stage the exact configuration and verify its immutable identities:
 
    | Role | Requested model | Exact upstream route |

@@ -3,8 +3,10 @@
 ## Current integration addendum - 2026-07-24
 
 Source implementation baseline inspected through:
-`ed41c6e20b7793c656c45aa6d05f8b9a0c476d1b`, including hosted Red-Team safe composition at
-`bdadc88`.
+`a1abbc41dd7973a7c6e63e7bf054369e15842cbc`, including the exact 400-attempt
+zero-provider-retry envelope, authorization-bound encoded-input refusal, and cumulative
+provider-USD admission, explicit staging-only extended campaign window, and per-physical-send
+lease/grant/deadline guard. Later documentation does not make this a final immutable release.
 
 This is a **source/integration** addendum, not a final release attestation. GitHub and GitLab `main`
 and the observed Railway release remain at `23490ea9846bffcf36168b58f2c36edeceabb8df` with database
@@ -45,6 +47,19 @@ evidence and are not silently upgraded to current-release proof.
 - The query-back verifier reconciles campaign/run/attempt identity, logical parent, physical order,
   model/provider/request identity, status, tokens, duration, retry/error state, and measured cost
   between PostgreSQL and Langfuse before atomically marking the persisted rows exported.
+- Hosted admission computes the exact worst-case reservation over every required physical attempt
+  with decimal traps that forbid rounding. It rejects insufficient per-role or global USD authority
+  with typed errors before provider I/O. The transport separately refuses any encoded request whose
+  conservative bound exceeds the immutable policy input bound before credential lookup, ledger
+  reservation, lineage, physical-attempt observation, or HTTP.
+- Candidate commit `b14d2bd` adds one shared Runner external-I/O guard. Immediately before every
+  physical hosted attempt (including retry) and target send, it renews/proves the exact queue claim,
+  reloads and compares immutable authorization, and requires the complete transport timeout to end
+  strictly before the anchored run deadline, approval expiry, and any delegated-session expiry.
+  Boundary equality fails closed. Provider refusal precedes credential, lineage/ledger,
+  physical-attempt observation, and HTTP; target reservation stays the last callback before adapter
+  I/O so ambiguous sends are not replayed. This is focused source-test evidence in the committed
+  candidate, not deployed evidence.
 - The protected event stream remains cursor-based and bounded to 100 events per poll, requires
   `org:console:read`, validates same-origin browser provenance, and forces re-authentication after at
   most 30 seconds. Other collection reads still use fixed server windows; general stable cursor
@@ -93,11 +108,17 @@ without changing their findings or dispositions.
 - Authorization additionally requires the exact target/surface/corpus identities, exact host in its
   server-owned allowlist, synthetic-only assertion and attestation, hosted configuration, positive
   bounded budget/rate/timeout, exact attempt abort limit, and fresh nonce. Browser authorization
-  expiry is strictly greater than the chosen timeout plus a 300-second execution margin and never
-  exceeds 3,600 seconds; an impossible window disables authorization.
+  grants are server-derived as `floor(run timeout) + 301` seconds and an inconsistent browser echo
+  is rejected. The standard/default profile retains a 3,600-second maximum grant. Only an explicitly
+  selected staging campaign on a target whose timeout exceeds that standard window may use
+  `staging_extended`, bounded to a 14,400-second run and 14,701-second grant. It is unavailable in
+  local/production and for live probes; the current 1,800-second target catalog exposes no extended
+  option. These window controls are source-tested only.
 - Target and provider rates are exact run/configuration inputs, not invented constants. The physical
   path enforces budget, call, rate, retry, concurrency, timeout, logical-case, and physical-request
-  limits. Typed rate/transport failures use bounded retry/backoff, then queue/abort.
+  limits. Immediately before each external call, the candidate guard re-proves queue/grant
+  ownership and remaining run/grant/session time; the full configured transport timeout must fit
+  strictly inside all deadlines. Typed refusals are persisted and use no fallback send.
 - Langfuse credentials are Runner-only. Remote delivery is accepted only after authenticated,
   ID-for-ID query-back; the observability system does not authorize traffic or replace PostgreSQL
   evidence.
@@ -163,20 +184,28 @@ The candidate includes source tests for:
 - one physical trace per provider attempt, retry/error accounting, and Langfuse query-back;
 - hosted `Orchestrator -> Red Team -> Judge -> Documentation` parent/provider-request lineage;
 - quarantining hosted Red-Team output while dispatching only the authorized frozen seed; and
-- target ceilings versus exact workload caps, target-policy/synthetic bindings, and bounded browser
-  authorization expiry.
+- the exact 400-physical-attempt zero-retry ceiling, encoded-input refusal, cumulative role/global
+  USD admission, target ceilings versus exact workload caps, target-policy/synthetic bindings, and
+  server-derived standard and explicit staging-only extended authorization windows.
+- focused coverage for per-physical-send queue/grant revalidation and strict
+  run/approval/session deadline admission before provider credentials or network I/O, while
+  retaining the target reservation/no-replay boundary.
 
 These are source-level tests, not the complete final release suite or authoritative GitHub CI.
+The external-I/O guard's focused Runner/provider/gateway/work-unit suite records 185 passing tests;
+it is committed in candidate `b14d2bd` and is not deployed evidence.
 
 ### End-to-end evidence status
 
 [`../evidence/agent-trace.md`](../evidence/agent-trace.md) and existing `evals/results/` artifacts do
 not establish a current `0018`, four-agent, Langfuse-reconciled release. No frozen 100-case corpus or
 representative 100-case result has been integrated, and no candidate campaign has been deployed or
-query-reconciled. Candidate source now admits exactly 400 hosted calls for the zero-provider-retry
-100-case shape and refuses its 800-call retry expansion. The final role/global token, USD, rate,
-timeout, and call ceilings still require the exact frozen corpus, a staged configuration, catalog
-preflight, deployment, and new authorization. The
+query-reconciled. Candidate source now admits exactly 400 physical hosted attempts for the
+zero-provider-retry 100-case worst case and refuses its 800-attempt retry expansion. It also rejects
+an encoded input larger than its authorized policy identity and rejects insufficient cumulative
+per-role/global USD authority before provider I/O. The final role/global token, USD, rate, timeout,
+and call ceilings still require the exact frozen corpus, a human-approved exact budget, a staged
+configuration, catalog preflight, deployment, and new authorization. The
 [capacity audit](../evidence/provider/HOSTED_100_CAPACITY_PREFLIGHT_2026-07-24.md) also shows that
 the default Red-Team input policy is below every current canonical encoded request, so the exact
 frozen shapes must produce a new policy hash rather than relying on transport widening. Final cost

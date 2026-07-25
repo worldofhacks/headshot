@@ -130,13 +130,19 @@ physical-tracing changes. Focused hosted/provider/trace tests also passed. Later
 make those results historical branch evidence, not a substitute for a fresh complete suite or
 authoritative GitHub CI on the final SHA.
 
+The `b14d2bd` candidate external-I/O guard passed 185 focused
+Runner/provider/gateway/work-unit tests plus Ruff and diff checks. It re-proves queue/grant authority
+and strict run/approval/session deadline headroom before each physical provider/target send. This is
+not a complete final suite, authoritative final-release CI, deployment, or live failure-drill result.
+
 ## Unavailable final evidence
 
 - exact final-commit scanner artifacts and CI URLs;
 - a security-owner frozen 100-case corpus hash, final authorized campaign ID, and evidence ID;
 - an exact staged 100-case hosted configuration and authorization: candidate source accepts the
-  400-call zero-provider-retry shape and refuses its 800-call retry expansion, but its final
-  token/USD/rate/timeout ceilings are not deployed or live-verified; the
+  400-physical-attempt zero-provider-retry shape, refuses its 800-attempt retry expansion and
+  encoded-input widening, and checks cumulative per-role/global USD authority before provider I/O,
+  but its final token/USD/rate/timeout ceilings are not deployed or live-verified; the
   [capacity preflight](../provider/HOSTED_100_CAPACITY_PREFLIGHT_2026-07-24.md) records the
   additional default Red-Team input-policy refusal;
 - an exact-runtime-identity model-Judge enablement (the model remains advisory without it);

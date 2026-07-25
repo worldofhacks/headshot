@@ -18,7 +18,7 @@ does not relax or prove any Clerk control.
 | Exact Headshot Organization and backend custom permissions | Implemented/tested | Exact real membership/permission acceptance unavailable |
 | Invitation restriction, personal-org disablement, and MFA | Required Dashboard posture | Unavailable |
 | Different Operator launcher and Approver | Implemented/tested, including database invariant | Two-real-user acceptance unavailable |
-| Exact campaign authorization and Policy Gateway revalidation | Implemented/tested | Frozen-corpus final campaign unavailable |
+| Exact campaign authorization, server-derived bounded window, and Policy Gateway revalidation | Implemented/tested; staging-only extended profile remains opt-in and unavailable to the current 1,800-second target | Frozen-corpus final campaign unavailable |
 
 ## Human request path
 

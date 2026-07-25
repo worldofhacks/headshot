@@ -133,3 +133,58 @@ Append-only project record. Newest entries appear at the bottom.
   deterministic-oracle precedence.
 - Stage: Final integration candidate source and tests only. No target request, deployment, Langfuse
   query-back, production promotion, publication, or remediation was performed by this entry.
+
+## [2026-07-24] Closed 100-case hosted admission controls   ·   type: integration correction
+
+- What: Raised the single closed platform ceiling to the exact 400 physical provider attempts
+  required by the 100-case zero-provider-retry worst case, while retaining refusal of its
+  800-attempt retry expansion. Bound every encoded provider request to the immutable policy input
+  authority instead of silently widening it.
+- What: Added a network-free Runner preflight that exactly sums the price-ceiling reservation for
+  all required physical attempts and compares it with both per-role and global USD caps. Exact
+  decimal operations fail closed rather than round an unrepresentable authority value.
+- Result: The source accepts exact-fit call/token/USD envelopes and emits typed refusals for
+  insufficient role/global USD authority or oversized encoded input before credential lookup,
+  ledger/lineage/observation creation, or provider HTTP. The current artifact still refuses the
+  intended 100-case run: the default Red-Team input bound is too small and current cumulative
+  provider caps are below the conservative reservation envelope.
+- Remaining: The security owner has not delivered its final frozen 100-case commit/corpus shapes;
+  no new policy/configuration hash or human-approved target/provider budget can be derived without
+  them. The Langfuse plan/invoice, complete development spend, demo/social URLs, and production
+  database rollback binding also remain external inputs.
+- Stage: Candidate source and local tests through `44a950a` only. Not on either `main`, not deployed,
+  not a campaign authorization, and not live performance or billing evidence.
+
+## [2026-07-24] Explicit staging-only extended campaign window   ·   type: safety correction
+
+- What: Kept the standard campaign profile as the browser default, with an exact server-derived
+  grant of `floor(run timeout) + 301` seconds and a 3,600-second maximum. Added an explicitly
+  selected `staging_extended` profile capped at a 14,400-second run and 14,701-second grant.
+- Boundaries: The server denies the extended profile in local/production and for live probes. A
+  staging campaign template exposes it only when the target timeout exceeds the standard window;
+  changing only the timeout while `standard` remains selected disables submission. A supplied
+  browser grant must exactly equal the server derivation.
+- Result: Focused Python policy/API/PostgreSQL and TypeScript decoder/authorization/render/typecheck
+  checks passed. The current target catalog remains capped at 1,800 seconds, exposes no extended
+  option, and still blocks a longer campaign in practice.
+- Stage: Candidate commit `7b253fd` source/test evidence only. Not on either `main`, not deployed,
+  not available to production, not an authorization, and not evidence that the 100-case workload
+  completes within four hours.
+
+## [2026-07-24] Per-physical-send lease and deadline admission   ·   type: safety correction
+
+- What: Anchored one exact start-plus-run-timeout deadline on the campaign credential lease. Before
+  every hosted physical provider attempt, including retry, and every target physical send, the
+  Runner renews/proves its exact queue claim, reloads immutable authorization, asserts ownership
+  again, and requires the complete configured transport timeout to end strictly before the run,
+  approval, and delegated-session deadlines. Boundary equality refuses.
+- Ordering: Provider admission runs after pacing but before credential resolution, lineage/ledger
+  reservation, physical-attempt observation, or HTTP. The target's durable coordinate reservation
+  remains the final callback before adapter I/O; ambiguous target sends retain no-blind-replay
+  semantics.
+- Result: Whitelisted typed refusal reasons persist to campaign/queue state and hosted logical
+  lifecycle. The focused Runner/provider/gateway/work-unit suite passed 185 tests; Ruff and diff
+  checks passed.
+- Stage: Candidate commit `b14d2bd` source/test evidence only. Not on either `main`, not deployed,
+  not live failure-drill evidence, and not proof the 100-case campaign fits its authorization or
+  credential window.

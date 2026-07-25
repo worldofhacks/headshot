@@ -12,13 +12,20 @@ provider lineage, or Langfuse reconciliation. Use the wording below only after t
 green in authoritative GitHub CI, mirrored to GitLab, deployed to staging, migrated through `0018`, and
 used for the authorized frozen 100-case campaign.
 
-Candidate source now admits the exact 400-call four-role envelope for 100 cases with zero provider
-retries and refuses the 800-call retry-expanded shape. That is source/test evidence only: it is not
-deployed, and no exact frozen-corpus configuration or authorization exists. The final role/global
-token, USD, rate, timeout, and call ceilings must be staged, preflighted, and included in the new
-authorization. Candidate source also refuses an encoded provider input above its policy identity;
+Candidate source now admits the exact 400-physical-attempt four-role envelope for 100 cases with zero
+provider retries and refuses the 800-attempt retry-expanded shape. That is source/test evidence only:
+it is not deployed, and no exact frozen-corpus configuration or authorization exists. The final
+role/global token, USD, rate, timeout, and call ceilings must be staged, preflighted, and included in
+the new authorization. Candidate source also refuses an encoded provider input above its policy identity;
 the default Red-Team policy is too small for current canonical requests, so the frozen requests must
-produce a new policy hash. Do not weaken or bypass either preflight.
+produce a new policy hash. It exactly sums worst-case provider reservations across every required
+attempt and refuses insufficient per-role/global USD authority before provider I/O. Do not weaken or
+bypass any of these preflights. Standard remains the default window. An explicit staging-only
+extended profile is source-tested to a 14,400-second run/14,701-second grant, but the current
+1,800-second target exposes no such option; do not present it as deployed or completion evidence.
+Candidate source also re-proves queue/grant ownership and requires each complete transport
+timeout to fit strictly inside the run, approval, and session deadlines before every physical send.
+That focused source-test result is not a deployed lease-loss/deadline drill.
 
 ## 1. Identity permits a request; exact policy authorizes traffic
 

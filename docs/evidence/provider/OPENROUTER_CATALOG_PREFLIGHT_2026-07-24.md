@@ -7,8 +7,8 @@ campaign authorization, deployment assertion, Judge calibration result, or live 
 input was a non-secret schema-v2 `HostedConfigurationSet` assembled from the intended exact endpoint
 tags, role-specific completion-token parameters, price ceilings, and then-current closed limits. It
 was not read from Railway and does not prove that the configuration is deployed. The artifact
-predates the candidate's later 400-call source ceiling and is not a preflight of a final 100-case
-configuration. It also predates the exact-input refusal in `8c21d2d`; the default Red-Team
+predates the candidate's later 400-physical-attempt source ceiling and is not a preflight of a final
+100-case configuration. It also predates the exact-input refusal in `8c21d2d`; the default Red-Team
 generation-policy input bound is now known to be below current canonical encoded requests. See the
 [100-case capacity preflight](HOSTED_100_CAPACITY_PREFLIGHT_2026-07-24.md).
 
@@ -45,7 +45,7 @@ and non-secret role/model/routing identities. Exit `0` means all catalog checks 
 
 Prices are the endpoint catalog's USD-per-million-token values at observation time. They validate
 one-call reservation capacity; they are not a bill, final campaign cost, or permission to activate
-the later 400-call source ceiling.
+the later 400-physical-attempt source ceiling.
 
 | Role | Exact tag | Token parameter | Public provider | Input | Output | Reasoning | One-call reservation / role cap | Result |
 |---|---|---|---|---:|---:|---:|---:|---|

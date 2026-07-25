@@ -1,7 +1,8 @@
 # Final requirements matrix
 
 Audit date: `2026-07-24`
-Audited source implementation baseline: `ed41c6e20b7793c656c45aa6d05f8b9a0c476d1b`
+Last committed source implementation baseline inspected:
+`a1abbc41dd7973a7c6e63e7bf054369e15842cbc`
 Canonical row-level ledger: [`REQUIREMENTS_MATRIX.csv`](REQUIREMENTS_MATRIX.csv)
 Fresh baseline: [`../evidence/baseline/2026-07-22-final-integration.md`](../evidence/baseline/2026-07-22-final-integration.md)
 Release audit: [`../evidence/baseline/2026-07-23-role-agent-release-audit.md`](../evidence/baseline/2026-07-23-role-agent-release-audit.md)
@@ -23,7 +24,8 @@ This is a review view of the canonical CSV. The CSV records, for every requireme
 | Implementation-lead acceptance | 0 | 8 | 0 | 2 | 10 |
 | **All requirements** | **24** | **39** | **2** | **7** | **72** |
 
-At this audit, candidate source was `ed41c6e` with one migration head at `0018`, while GitHub
+At this audit, the last committed candidate baseline was `a1abbc4` with one migration head at
+`0018`; later documentation is not release evidence. GitHub
 `main`, GitLab `main`, and Railway were still the older `23490ea` release with schema `0013`.
 The prior topology and protected-route denial are verified; the candidate hosted-agent/Langfuse path
 is not deployed or live-proved. Source tests now compose hosted
@@ -98,7 +100,7 @@ SDK flush, replay planning, taxonomy mapping, or source tests as live evidence.
 | OPT-15 | partial | Data model documents ingestion, validation, lineage, access, reporting, and publication | ATO flow/auth artifacts exist; bind them to final live lineage, grants, retention, and publication evidence. |
 | OPT-16 | partial | Indexes and reproducible query/regression SLOs are verified | Measure and enforce query and regression SLOs in CI. |
 | OPT-17 | partial | CPU, memory, latency, and throughput baseline exists for 100 cases/full regression | Pre-run Railway/storage baselines exist; integrate the owner's representative 100-case result. |
-| OPT-18 | blocked | Authorized 100-case live stress run records required metrics and scaling change | Candidate source accepts the 400-call zero-retry shape and refuses retry expansion/input widening; the frozen corpus, new executable policy hash, final token/USD/time configuration, deployment, explicit load authorization, and distinct approval remain unavailable. |
+| OPT-18 | blocked | Authorized 100-case live stress run records required metrics and scaling change | Candidate source accepts the exact 400-physical-attempt zero-retry shape; refuses its 800-attempt retry expansion and encoded-input widening; preflights cumulative per-role/global USD authority; and source-tests an explicit staging-only 14,400/14,701-second run/grant profile. The current 1,800-second target exposes no extended option. The frozen corpus, new executable policy/target hashes, final token/USD/time configuration, human-approved exact budget, deployment, explicit load authorization, and distinct approval remain unavailable. |
 
 ## User deployment constraints
 

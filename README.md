@@ -16,8 +16,8 @@ a claim about the eventual final commit.
 
 | Item | Audited value | Evidence meaning |
 |---|---|---|
-| Deployment-audit source baseline | `eac2968` | Point-in-time source baseline; not a final release |
-| Current integration candidate | Moving release branch; final SHA pending | One migration head at `0018`, hosted configuration schema v2, exact provider routes, and physical provider-attempt tracing; not deployed |
+| Last committed candidate baseline inspected here | `a1abbc41dd7973a7c6e63e7bf054369e15842cbc` | Point-in-time committed source baseline; later documentation does not make it a final release |
+| Current integration candidate | Moving release branch; final SHA pending | One migration head at `0018`, hosted configuration schema v2, exact provider routes, physical provider-attempt tracing, closed call/input/USD admission, and an explicit staging-only extended campaign window; not deployed |
 | GitHub `main` | `23490ea` | Older deployed release |
 | GitLab `main` | `23490ea` | Exact mirror of the older release |
 | Railway staging/production source | `23490ea` | Healthy prior Web/Runner/Scheduler/PostgreSQL baseline |
@@ -60,6 +60,27 @@ corpus, a live four-agent campaign, or Langfuse query-back. See the
   `quarantined_not_dispatched`; only the byte-exact authorized SeedReplay case reaches the target.
   This is tested source behavior, not deployed four-role evidence, and it is not a
   generation-to-review-to-reauthorization workflow.
+- A closed hosted workload envelope. The candidate admits at most 400 physical provider attempts;
+  the exact 100-case worst case is 100 Orchestrator + 100 Red Team + 100 Judge + up to 100
+  Documentation attempts with zero provider retries. Enabling one retry for that shape requires 800
+  attempts and is refused. Before any provider side effect, the Runner also proves every encoded
+  request fits its authorization-bound input limit and that the exact worst-case reservation across
+  all required attempts fits both per-role and global USD caps. Oversize input, insufficient
+  cumulative authority, or an unrepresentable exact decimal is a typed fail-closed refusal.
+- Server-owned campaign windows. The standard profile remains the browser default, derives the
+  exact grant as `floor(run timeout) + 301` seconds, and retains the 3,600-second maximum grant.
+  Only a staging campaign whose target advertises a larger timeout may explicitly select
+  `staging_extended`, bounded to a 14,400-second run and 14,701-second grant. Local, production, and
+  live-probe use reject it. The current 1,800-second target catalog exposes no extended option.
+  This is focused source-test evidence only, not a deployed or completion-capable campaign.
+- A per-physical-send authority guard in candidate commit `b14d2bd`. The Runner anchors
+  one start-plus-run-timeout deadline, renews and proves its exact queue claim, reloads the immutable
+  authorization, and requires the complete transport timeout to end strictly before the run,
+  approval, and delegated-session deadlines before every hosted provider attempt or target send.
+  Equality refuses. A provider refusal occurs after pacing but before credential resolution,
+  lineage/ledger reservation, or HTTP; the target's durable reservation remains the final callback
+  before its adapter send, preserving ambiguous-I/O no-replay behavior. Typed refusal reasons are
+  persisted. Focused tests pass, but this candidate control is not deployed or live-verified.
 - Deterministic-oracle precedence. Oracle/canary confirmation and evidence errors are decisive.
   A model Judge is advisory unless the exact Judge identity has a valid, enabled calibration
   artifact. Failed or unavailable calibration does not convert an exploit into a safe result.
@@ -83,8 +104,12 @@ corpus, a live four-agent campaign, or Langfuse query-back. See the
   Runner. The deployed trace must prove ordered roles, target requests, findings/report behavior,
   and provider lineage.
 - Query Langfuse Cloud back and reconcile exact observation IDs and values against PostgreSQL.
-- Publish the authorized 100-case performance evidence, final numeric cost analysis, demo URL, and
-  social-post URL.
+- Obtain the security owner's final commit and exact frozen 100-case corpus/Judge identities, then
+  have a human authorize the exact target and provider budget; no default corpus or inferred cap may
+  replace either input.
+- Publish the authorized 100-case performance evidence and complete the interim numeric cost
+  analysis with the account owner's Langfuse plan/invoice and actual development-spend inputs.
+  Attach the real demo and social-post URLs only after the user supplies them.
 - Confirm the real Clerk role assignments and two-user flow before claiming live RBAC proof. The
   backend controls are implemented and tested, and deployed protected routes return `401`, but the
   external role proof remains pending and is not a substitute for campaign authorization.
@@ -185,7 +210,10 @@ assignment/MFA proof remains pending; see [USERS.md](USERS.md) and
 3. The launch request and separate decision are persisted. Any scope change requires a new decision.
 4. Launch writes an idempotent durable job. It is not an inline target request.
 5. Runner re-reads the scope and approval, proves the queue lease, validates the catalog and
-   credential/session lease, reserves each physical coordinate, and revalidates before every send.
+   credential/session lease, and revalidates immediately before every physical provider/target
+   send. The complete transport timeout must fit strictly inside the anchored run deadline, approval
+   expiry, and any delegated-session expiry. Target coordinates are durably reserved immediately
+   before the adapter call and ambiguous sends are never blindly replayed.
 6. Orchestrator selects authorized work; Red Team emits an `AttackAttempt`; the Policy Gateway sends
    it; the Recorder persists hash-addressed evidence; Judge applies deterministic precedence; and
    Documentation conditionally writes a sanitized draft and blocked regression disposition.
@@ -199,8 +227,8 @@ socket. Use only the authenticated Web/API and private Runner path.
 
 | Boundary | Authentication | Limits and failure behavior |
 |---|---|---|
-| Clinical Co-Pilot | Runner-only session resolved from an environment-scoped opaque reference; Clerk tokens are never forwarded | Exact HTTPS host/path/method, request/response size and content-type limits, campaign rate/budget/timeout/physical caps; typed retry is bounded by the authorized policy and hard-aborts on exhaustion or session expiry |
-| OpenRouter | Runner-only provider key resolved from a role-unique opaque reference | Exact model and upstream provider, fallbacks disabled, global and per-role call/token/USD/rate/concurrency caps, at most one configured retry, bounded `Retry-After`, then typed failure |
+| Clinical Co-Pilot | Runner-only session resolved from an environment-scoped opaque reference; Clerk tokens are never forwarded | Exact HTTPS host/path/method, request/response size and content-type limits, campaign rate/budget/timeout/physical caps; each send must fit strictly within run/grant/session deadlines; typed retry is bounded by the authorized policy and hard-aborts on exhaustion or session expiry |
+| OpenRouter | Runner-only provider key resolved from a role-unique opaque reference | Exact model and upstream provider, fallbacks disabled, global and per-role call/token/USD/rate/concurrency caps, at most one configured retry, bounded `Retry-After`; each physical attempt re-proves the queue/grant and deadline before credential resolution or HTTP |
 | Langfuse Cloud | Environment-specific public/secret keypair on private Runner | Projection is fail-soft for deterministic telemetry but mandatory before a hosted provider call; remote delivery is unproven until paged exact query-back succeeds |
 | Clerk | Browser bearer session verified by Web with the configured public JWT key | Exact authorized parties and organization; no dynamic JWKS fallback; token expiry and short event-stream reconnect bound freshness |
 
@@ -216,6 +244,10 @@ terminal states. Claims are short `SKIP LOCKED` transactions; work runs outside 
 transaction. Lease tokens, heartbeat/reaper behavior, payload versions, enqueue fingerprints, and
 idempotent completion protect state. A reserved but unobserved physical target send is treated as
 ambiguous and is never silently declared unsent.
+
+Focused candidate tests cover loss of queue ownership, immutable-authorization drift, invalid or
+boundary-equal transport deadlines, and delegated-session expiry for provider and target sends. They
+do not replace a staged lease-loss/deadline drill on the final release.
 
 PostgreSQL indexes cover queue claims/reaping/depth, organization/run lookups, finding severity,
 category and target version, audit cursors, agent trace/delivery/provider-request lookup, and

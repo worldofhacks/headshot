@@ -8,9 +8,11 @@
 > `docs/planning/DECISIONS.md` (D#) and `docs/planning/RESEARCH.md` (R#). The finalize audit trail is
 > `docs/planning/gap-audit.md`; every finding's resolution is registered in **§20**.
 >
-> **Implementation reconciliation — 2026-07-24.** The deployment audit began from source `eac2968`
-> with one Alembic head at `0017`; the moving integration candidate now has one head at `0018`,
-> hosted-configuration schema v2, exact provider routes, and physical provider-attempt tracing.
+> **Implementation reconciliation — 2026-07-24.** The committed integration candidate inspected
+> here is `a1abbc41dd7973a7c6e63e7bf054369e15842cbc`. It has one Alembic head at `0018`,
+> hosted-configuration schema v2, exact provider routes, physical provider-attempt tracing, closed
+> call/input/USD admission, explicit staging-only campaign windows, and per-physical-send
+> lease/grant/deadline revalidation.
 > GitHub `main`, GitLab `main`, and the observed Railway release were still `23490ea` with schema
 > `0013`. Consequently, the controls described as implemented below are candidate-source capabilities
 > unless a linked artifact explicitly labels them live-verified. The newer hosted-agent and Langfuse
@@ -469,12 +471,19 @@ and `DurableScheduler` records target-version replay plans. PostgreSQL is the du
 - `campaign_work_unit_reservations` reserves each physical
   `(run, attempt, turn, retry)` before network I/O. An ambiguous unobserved send is not treated as
   unsent, preventing a retry from silently exceeding authorization.
+- Candidate commit `b14d2bd` anchors one start-plus-run-timeout deadline and re-proves the
+  exact queue claim and immutable authorization immediately before every physical provider attempt
+  and target send. The full transport timeout must end strictly before the run, approval, and any
+  delegated-session deadline; equality fails closed. Provider refusal precedes credentials,
+  lineage/ledger, and HTTP. Target reservation remains the last callback before adapter I/O, so the
+  existing ambiguous-send no-replay rule is unchanged. This is focused source-test evidence, not a
+  deployed runtime claim.
 - Campaign, run, attempt, evidence, verdict, finding, report, audit, agent-execution, provider-request,
   and queue state are persisted independently of process memory. Command idempotency and content
   fingerprints reject duplicate logical work.
 - Human approval is a persisted policy decision, not an orchestration pause. The Runner revalidates
   target, allowlist, synthetic-data controls, budget/rate/timeout/physical-call caps, configuration,
-  authorization expiry, and abort state at execution time.
+  authorization expiry, and abort state at execution time and again at the physical-send boundary.
 - Inter-agent communication remains package-owned versioned JSON Schema with both-sided tests (§4).
   The framework never supplies authorization or evidence authority.
 

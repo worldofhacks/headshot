@@ -13,7 +13,7 @@ This is the reviewer-facing index for Headshot / AgentForge. The canonical requi
 
 | Item | Status | Evidence |
 |---|---|---|
-| Source implementation baseline inspected for this packet | **Implemented** through `ed41c6e20b7793c656c45aa6d05f8b9a0c476d1b`; later documentation commits do not imply deployment | ATO packet root: [`docs/evidence/ato/README.md`](docs/evidence/ato/README.md) |
+| Last committed candidate baseline inspected for this packet | **Implemented** through `a1abbc41dd7973a7c6e63e7bf054369e15842cbc`; later documentation does not imply deployment or a final SHA | ATO packet root: [`docs/evidence/ato/README.md`](docs/evidence/ato/README.md) |
 | Source migration graph | **Tested**; one head at `0018` | [`docs/evidence/ato/AUDIT_AND_ROLLBACK.md`](docs/evidence/ato/AUDIT_AND_ROLLBACK.md) |
 | Final release commit, dual-remote identity, and authoritative GitHub CI | **Pending** | Must be recorded after final integration; the GitLab repository is a passive exact mirror |
 | Deployed platform | **Live but stale**; repository evidence records `23490ea` and migration `0013`, not this source baseline | [Staging](https://web-staging-8e30.up.railway.app) - [Production](https://web-production-44528.up.railway.app) - [`docs/security/LANGFUSE_AGENT_OBSERVABILITY_REVIEW_2026-07-24.md`](docs/security/LANGFUSE_AGENT_OBSERVABILITY_REVIEW_2026-07-24.md) |
@@ -40,7 +40,7 @@ deployed.
 | Eval results | [`evals/results/README.md`](evals/results/README.md) | Classified historical artifacts; no result is presented as final-release Langfuse-reconciled evidence |
 | Vulnerability reports | [`docs/vulnerabilities/README.md`](docs/vulnerabilities/README.md) | See the report owners' index; this submission index does not restate or alter its conclusions |
 | Security-tool evidence | [`docs/evidence/ato/SECURITY_TOOL_EVIDENCE.md`](docs/evidence/ato/SECURITY_TOOL_EVIDENCE.md) | Historical pinned local/CI evidence; exact final-release scan pending |
-| Cost analysis | [`docs/cost/COST_ANALYSIS.md`](docs/cost/COST_ANALYSIS.md) | Final measured analysis pending outside this packet |
+| Cost analysis | [`docs/cost/COST_ANALYSIS.md`](docs/cost/COST_ANALYSIS.md) | Interim measured attributable subtotal and numeric 100/1K/10K/100K sensitivities published; final campaign, Langfuse plan/invoice, and actual development-spend inputs pending |
 | Performance and 100-case load evidence | [`docs/evidence/performance/README.md`](docs/evidence/performance/README.md) | **Pending**; only pre-run baselines exist and no authorized final-release 100-case live result is available |
 | Demo video (3-5 minutes) | URL not supplied | **Pending**; no URL is available in the repository or task context |
 | Deployed Clinical Co-Pilot target | [OpenEMR Clinical Co-Pilot](https://agent-production-9f62.up.railway.app) | Existing external target; a new attack run still requires exact authorization |
@@ -67,5 +67,7 @@ The submission is not release-complete until one exact commit is on both `origin
 `gitlab/main`, GitHub CI is green for that commit, Railway staging exposes that same commit and the
 latest single migration head, and an independently authorized synthetic campaign produces ordered
 four-agent records plus exact Langfuse query-back reconciliation. Production remains blocked until a
-human grants deployment and names a compatible rollback deployment and database recovery point. Demo
-and social-post URLs must be supplied by the user; they will not be invented.
+human grants deployment and names a compatible rollback deployment and database recovery point. The
+security owner's final frozen 100-case commit/corpus and a human-approved exact target/provider
+budget are also absent. The Langfuse plan/invoice, complete development spend, demo URL, and
+social-post URL must be supplied by the user; they will not be invented.

@@ -88,6 +88,11 @@ is 5,336–9,802 across the current canonical 9/14-case requests. Candidate sour
 rather than silently widening that bound. The final 100-case policy, hash, token totals, and dollar
 capacity therefore remain dependent on the security owner's exact frozen request shapes.
 
+Candidate commit `44a950a` introduced a preflight for the exact worst-case reservation over all
+required physical attempts; it remains in the current baseline. Exact-decimal arithmetic refuses
+rounding or unrepresentable authority, and insufficient role/global USD caps fail before provider
+I/O. This is a safety admission control, not campaign spend evidence.
+
 ## Actual runtime call model
 
 Let:
