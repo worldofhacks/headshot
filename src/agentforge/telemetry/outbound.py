@@ -642,13 +642,16 @@ class OutboundHttpTelemetry:
                 row = (
                     connection.execute(
                         text(
-                            "SELECT execution_id, organization_id, campaign_run_id, attempt_id, "
-                            "parent_execution_id, agent_role, provider, model, execution_mode, "
-                            "configuration_version, trace_id, input_sha256, "
-                            "configuration_set_sha256, role_configuration_sha256, "
-                            "generation_policy_sha256, judge_calibration_id, "
-                            "judge_calibration_state "
-                            "FROM agent_executions WHERE execution_id = :execution_id"
+                            "SELECT e.execution_id, e.organization_id, e.campaign_run_id, "
+                            "e.attempt_id, e.parent_execution_id, e.agent_role, e.provider, "
+                            "e.model, e.execution_mode, e.configuration_version, e.trace_id, "
+                            "e.input_sha256, e.configuration_set_sha256, "
+                            "e.role_configuration_sha256, e.generation_policy_sha256, "
+                            "e.judge_calibration_id, e.judge_calibration_state, r.run_kind "
+                            "FROM agent_executions e JOIN campaign_runs r "
+                            "ON r.organization_id = e.organization_id "
+                            "AND r.run_id = e.campaign_run_id "
+                            "WHERE e.execution_id = :execution_id"
                         ),
                         {"execution_id": execution_id},
                     )
@@ -701,6 +704,10 @@ class OutboundHttpTelemetry:
                 "deployment.environment": self.environment,
                 "organization_id": str(row["organization_id"]),
                 "campaign_run_id": str(row["campaign_run_id"]),
+                "run.kind": str(row["run_kind"]),
+                "agent.acceptance_run_id": (
+                    str(row["campaign_run_id"]) if row["run_kind"] == "agent_acceptance" else None
+                ),
                 "attempt_id": (str(row["attempt_id"]) if row["attempt_id"] is not None else None),
                 "parent_execution_id": (
                     str(row["parent_execution_id"])
@@ -847,7 +854,8 @@ class OutboundHttpTelemetry:
                             "SELECT status, duration_ms, input_tokens, output_tokens, "
                             "reasoning_tokens, measured_cost, currency, output_sha256, "
                             "returned_model, upstream_provider, provider_request_id, "
-                            "physical_attempts, oracle_agreement, decision_authority "
+                            "physical_attempts, provider_event_ids, cost_measurement_state, "
+                            "oracle_agreement, decision_authority "
                             "FROM agent_executions WHERE execution_id = :execution_id"
                         ),
                         {"execution_id": execution_id},
@@ -861,6 +869,16 @@ class OutboundHttpTelemetry:
         if str(row["status"]) == "running" or row["output_sha256"] is None:
             _logger.warning("agent telemetry completion row is not terminal")
             return False
+        execution_mode = handle.metadata.get("agent.execution_mode")
+        cost_source = (
+            "deterministic_zero"
+            if execution_mode == "deterministic"
+            else (
+                "provider_measured"
+                if row["cost_measurement_state"] == "measured"
+                else "unavailable"
+            )
+        )
         metadata = {
             **handle.metadata,
             "agent.execution_id": execution_id,
@@ -882,6 +900,9 @@ class OutboundHttpTelemetry:
                 str(row["provider_request_id"]) if row["provider_request_id"] is not None else None
             ),
             "agent.physical_attempts": row["physical_attempts"],
+            "agent.provider_event_ids": row["provider_event_ids"],
+            "cost.measurement_state": row["cost_measurement_state"],
+            "cost.source": cost_source,
             "judge.oracle_agreement": row["oracle_agreement"],
             "judge.decision_authority": row["decision_authority"],
             "error_code": pending.error_code,

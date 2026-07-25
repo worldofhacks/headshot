@@ -708,6 +708,9 @@ def test_all_agent_roles_are_queued_for_queryback_with_observed_latency_and_spen
     ):
         assert finished_metadata[key] == started_metadata[key]
     assert finished_metadata["agent.status"] == "succeeded"
+    assert finished_metadata["agent.provider_event_ids"] == []
+    assert finished_metadata["cost.measurement_state"] == "measured"
+    assert finished_metadata["cost.source"] == "deterministic_zero"
 
 
 def test_disabled_agent_finish_releases_state_none_handle(migrated_db: Engine) -> None:
