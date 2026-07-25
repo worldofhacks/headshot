@@ -853,6 +853,19 @@ class HostedFourRoleRuntime:
         hosted_state = hosted_verdict.get("state")
         if hosted_state not in _VERDICTS:
             raise HostedCompositionError("hosted Judge returned an invalid verdict state")
+        if hosted_state == "EXPLOIT_CONFIRMED":
+            # AD-04: reaching here means the deterministic path did NOT confirm, so this
+            # EXPLOIT_CONFIRMED originates from the calibrated MODEL Judge. Only the deterministic
+            # oracle/canary/human may CONFIRM an exploit (the verdict contract restricts a CONFIRMED
+            # confirmation_source to exactly those). A model can never originate a confirmation, so
+            # strip the unauthorized CONFIRM down to the strongest verdict a model may assert —
+            # EXPLOIT_LIKELY — rather than emit a model-sourced confirmed exploit.
+            return {
+                **dict(hosted_verdict),
+                "state": "EXPLOIT_LIKELY",
+                "deterministic_precedence": False,
+                "reason": "model_confirmation_refused_no_deterministic_source",
+            }
         if hosted_state == "NO_EXPLOIT_OBSERVED" and hosted_verdict.get("calibrated") is not True:
             return {
                 **dict(hosted_verdict),

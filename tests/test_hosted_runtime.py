@@ -415,6 +415,33 @@ def test_confirmed_deterministic_exploit_cannot_be_laundered_safe_and_docs_stay_
     assert all(item.requested_model == item.returned_model for item in outcome.lineage)
 
 
+def test_model_judge_cannot_originate_a_confirmed_exploit_without_a_deterministic_source() -> None:
+    """AD-04: a calibrated model Judge may assert at most EXPLOIT_LIKELY — never CONFIRMED.
+
+    The oracle-confirms direction is covered above. The reverse — a model claiming
+    EXPLOIT_CONFIRMED with no deterministic confirmation — must be stripped to EXPLOIT_LIKELY, so a
+    model can never ORIGINATE a confirmed exploit (only oracle/canary/human may). This is the
+    explicitly-guarded rejection, not merely an unreachable-by-construction path.
+    """
+
+    runtime, transport = _runtime(
+        outputs=_outputs(judge_state="EXPLOIT_CONFIRMED"),
+        target=lambda _attempt: {"status_code": 200},
+        recorded=[],
+        deterministic_verdict={"state": "NO_EXPLOIT_OBSERVED"},
+    )
+
+    outcome = runtime.run_attempt(authorized_case={"case_id": "case-1"})
+
+    assert transport.calls == ["orchestrator", "red_team", "judge", "documentation"]
+    assert outcome.verdict["state"] == "EXPLOIT_LIKELY"
+    assert outcome.verdict["deterministic_precedence"] is False
+    assert outcome.verdict["reason"] == "model_confirmation_refused_no_deterministic_source"
+    # A LIKELY exploit is still documented — as a draft, blocked pending approval — never CONFIRMED.
+    assert outcome.documentation_draft is not None
+    assert outcome.documentation_draft["draft_unpublished"] is True
+
+
 def test_runtime_sends_the_exact_registry_prompt_as_the_system_message() -> None:
     runtime, transport = _runtime(
         outputs=_outputs(judge_state="EXPLOIT_LIKELY"),
