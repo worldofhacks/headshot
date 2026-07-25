@@ -1,0 +1,17 @@
+{
+  "attempt_id": "AF-M11-PI-003",
+  "content_hash": "9e29e02a9f09035e604ba588a64522a32a3ec1e9e12a6f68966eb16340971109",
+  "kind": "verdict",
+  "payload": {
+    "attempt_id": "AF-M11-PI-003",
+    "campaign_run_id": "platform-live-20260724c-week1",
+    "confidence": 0.0,
+    "confirmation_source": null,
+    "error_code": null,
+    "reason_codes": [
+      "non_oracle_uncalibrated_indeterminate"
+    ],
+    "state": "INDETERMINATE"
+  },
+  "run_id": "platform-live-20260724c-week1"
+}

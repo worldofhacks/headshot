@@ -1,0 +1,4 @@
+# T-F05n Security Review — Model: capable
+Worktree `<WORKTREE>`; branch `ticket/T-F05n-runner-rotation-evidence`. Inputs: ticket, diff, implementation/gate reports, frozen tests/review. Write only `.tdd-swarm/reports/T-F05n-security.md`; all else is read-only. Re-run gates; inspect activation signature/trust/result spoofing, hash substitution/cycles, stage omission/reorder, unbounded or changed history, nonce/sequence/time replay, context/generation confusion, final-only/opaque-hash approval, partial output/race, receipt/source disclosure, and accidental deployment authority.
+
+No network/controller/database/Railway/deployment/provider/target, secrets/PHI, spend, main merge, or push. Maximum three reviews. Return exactly `DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED(reason)` plus highest severity; full output stays in the report.

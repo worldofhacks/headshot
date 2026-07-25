@@ -1,0 +1,4 @@
+# T-F05o Security Review — Model: capable
+Worktree `<WORKTREE>`; branch `ticket/T-F05o-runner-rotation-control-history`. Inputs: ticket, diff, implementation/gate reports, frozen tests/review. Write only `.tdd-swarm/reports/T-F05o-security.md`; all else is read-only. Re-run gates; inspect row-set omission, cutoff/high-watermark ambiguity, new predecessor work hidden after start, hard abort with live/nonterminal job, lineage/set substitution, snapshot/attestor replay, raw token/payload leakage, caller SQL/DSN/set injection, races, and fail-open empty history.
+
+No network/live DB/controller/Railway/provider/target, secrets/PHI, spend, main merge, or push. Maximum three reviews. Return exactly `DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED(reason)` plus highest severity; full output stays in the report.

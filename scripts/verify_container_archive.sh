@@ -35,6 +35,7 @@ done
 
 test -f "$rootfs_dir/app/alembic.ini"
 test -f "$rootfs_dir/app/migrations/env.py"
+test -s "$rootfs_dir/app/scripts/verify_langfuse_campaign.py"
 test -f "$rootfs_dir/app/console/index.html"
 test -d "$rootfs_dir/app/console/assets"
 test -d "$rootfs_dir/usr/local/lib/python3.12/site-packages/agentforge"

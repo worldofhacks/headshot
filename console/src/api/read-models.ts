@@ -1,9 +1,14 @@
 import { isJsonRecord, type JsonRecord, type Principal } from "./contracts";
 import type {
   ApprovalReadModel,
+  ApprovalDetailReadModel,
+  AgentAcceptanceExecutionReadModel,
   AgentActivityReadModel,
   AgentAssignmentReadModel,
+  AgentBudgetReadModel,
+  AgentPromptReadModel,
   AgentReadModel,
+  AttackCaseEvidenceReadModel,
   AttackSurfaceReadModel,
   AttemptReadModel,
   AuditReadModel,
@@ -23,14 +28,27 @@ import type {
   CostReadModel,
   CoverageReadModel,
   EvidenceReadModel,
+  EvidenceIntegrityReadModel,
+  FindingDetailReadModel,
   FindingHistoryReadModel,
   FindingReadModel,
+  FindingVerificationReadModel,
+  HostedRunBindingReadModel,
+  JudgeCalibrationSummaryReadModel,
+  RegressionDispositionReadModel,
+  ReportReadModel,
   ResilienceReadModel,
   SafetyCapsReadModel,
+  TargetCatalogEntryReadModel,
   TargetReadModel,
   ToolScopeReadModel,
   TraceReadModel,
 } from "../types";
+import {
+  FINDING_DECISION_REASON_CODES,
+  type FindingDecisionReasonCode,
+  reasonCodeMatchesDecision,
+} from "../finding-decisions";
 
 export type ReadModelDecoder<T> = (value: unknown) => T;
 
@@ -103,10 +121,43 @@ const nullableNumber = (value: JsonRecord, key: string, name: string): number | 
   return number(value, key, name);
 };
 
+const nullableNonnegativeInteger = (
+  value: JsonRecord,
+  key: string,
+  name: string,
+): number | null => {
+  if (value[key] === null) return null;
+  return number(value, key, name, { integer: true, minimum: 0 });
+};
+
+const validateTokenObservation = (
+  inputTokens: number | null,
+  outputTokens: number | null,
+  observationCount: number,
+  name: string,
+): void => {
+  if (
+    (observationCount === 0 && (inputTokens !== null || outputTokens !== null)) ||
+    (observationCount > 0 && inputTokens === null && outputTokens === null)
+  ) {
+    invalid(name);
+  }
+};
+
+const sha256 = (value: JsonRecord, key: string, name: string): string => {
+  const candidate = string(value, key, name);
+  return /^[0-9a-f]{64}$/.test(candidate) ? candidate : invalid(name);
+};
+
 const boolean = (value: JsonRecord, key: string, name: string): boolean => {
   const candidate = value[key];
   if (typeof candidate !== "boolean") return invalid(name);
   return candidate;
+};
+
+const nullableBoolean = (value: JsonRecord, key: string, name: string): boolean | null => {
+  if (value[key] === null) return null;
+  return boolean(value, key, name);
 };
 
 const object = (value: JsonRecord, key: string, name: string): JsonRecord =>
@@ -120,6 +171,14 @@ const nullableObject = (value: JsonRecord, key: string, name: string): JsonRecor
 const stringArray = (value: JsonRecord, key: string, name: string): string[] => {
   const candidate = value[key];
   if (!Array.isArray(candidate) || !candidate.every((entry) => typeof entry === "string")) {
+    return invalid(name);
+  }
+  return candidate;
+};
+
+const sha256Array = (value: JsonRecord, key: string, name: string): string[] => {
+  const candidate = stringArray(value, key, name);
+  if (!candidate.every((entry) => /^[0-9a-f]{64}$/.test(entry))) {
     return invalid(name);
   }
   return candidate;
@@ -148,6 +207,28 @@ const nullableLiteral = <T extends string>(
   return candidate === null || allowed.includes(candidate as T) ? candidate as T | null : invalid(name);
 };
 
+const judgeCalibrationStates = [
+  "unavailable",
+  "failed",
+  "passed",
+  "invalidated",
+  "enabled",
+] as const;
+
+const judgeDecisionAuthorities = ["oracle", "model", "none"] as const;
+const providerEventStatuses = [
+  "succeeded",
+  "timeout",
+  "retryable_failure",
+  "terminal_failure",
+  "model_mismatch",
+  "identity_invalid",
+  "route_unauthorized",
+  "invalid_usage",
+  "invalid_output",
+  "outcome_unknown",
+] as const;
+
 const scopeKeys = [
   "target_id",
   "target_version",
@@ -168,6 +249,7 @@ const scopeKeys = [
   "caps",
   "run_nonce",
   "execution_profile",
+  "hosted_run",
 ] as const;
 
 const decodeCaps = (value: unknown): SafetyCapsReadModel => {
@@ -178,12 +260,62 @@ const decodeCaps = (value: unknown): SafetyCapsReadModel => {
     "max_attempts_per_run",
     "target_requests_per_second",
     "run_timeout_seconds",
+    "logical_case_limit",
+    "physical_request_limit",
+    "target_retries_per_turn",
   ], name);
   number(result, "budget_usd", name);
   number(result, "max_attempts_per_run", name, { integer: true });
   number(result, "target_requests_per_second", name);
   number(result, "run_timeout_seconds", name);
+  for (const key of ["logical_case_limit", "physical_request_limit"]) {
+    const value = nullableNonnegativeInteger(result, key, name);
+    if (value === 0) invalid(name);
+  }
+  nullableNonnegativeInteger(result, "target_retries_per_turn", name);
   return result as SafetyCapsReadModel;
+};
+
+const decodeHostedRun = (value: unknown): HostedRunBindingReadModel => {
+  const name = "hosted run binding";
+  const result = record(value, name);
+  exactKeys(result, [
+    "configuration_set_sha256",
+    "generation_policy_sha256",
+    "session_generation",
+    "provider_model_call_limit",
+    "provider_model_spend_limit_usd",
+    "provider_max_retries",
+    "provider_max_concurrency",
+    "provider_timeout_seconds",
+  ], name);
+  sha256(result, "configuration_set_sha256", name);
+  sha256(result, "generation_policy_sha256", name);
+  const sessionGeneration = string(result, "session_generation", name);
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(sessionGeneration)) invalid(name);
+  const spendLimit = string(result, "provider_model_spend_limit_usd", name);
+  if (
+    !/^(?:0|[1-9][0-9]*)(?:\.[0-9]+)?$/.test(spendLimit)
+    || Number(spendLimit) <= 0
+    || Number(spendLimit) > 10
+  ) {
+    invalid(name);
+  }
+  const callLimit = number(
+    result,
+    "provider_model_call_limit",
+    name,
+    { integer: true, minimum: 1 },
+  );
+  if (callLimit > 56) invalid(name);
+  const retries = number(result, "provider_max_retries", name, { integer: true, minimum: 0 });
+  if (retries > 1) invalid(name);
+  if (number(result, "provider_max_concurrency", name, { integer: true }) !== 1) {
+    invalid(name);
+  }
+  const timeout = number(result, "provider_timeout_seconds", name, { minimum: 0 });
+  if (timeout === 0 || timeout > 300) invalid(name);
+  return result as HostedRunBindingReadModel;
 };
 
 const validateScope = (result: JsonRecord, name: string, extraKeys: readonly string[]): void => {
@@ -211,6 +343,7 @@ const validateScope = (result: JsonRecord, name: string, extraKeys: readonly str
   boolean(result, "explicit_no_auth", name);
   literal(result, "execution_profile", ["synthetic", "live"], name);
   result.caps = decodeCaps(result.caps);
+  result.hosted_run = result.hosted_run === null ? null : decodeHostedRun(result.hosted_run);
 };
 
 export const decodePrincipal: ReadModelDecoder<Principal> = (value) => {
@@ -218,12 +351,11 @@ export const decodePrincipal: ReadModelDecoder<Principal> = (value) => {
   const result = record(value, name);
   exactKeys(result, [
     "user_id",
-    "session_id",
     "organization_id",
     "organization_role",
     "organization_permissions",
   ], name);
-  for (const key of ["user_id", "session_id", "organization_id", "organization_role"]) {
+  for (const key of ["user_id", "organization_id", "organization_role"]) {
     string(result, key, name);
   }
   stringArray(result, "organization_permissions", name);
@@ -345,13 +477,184 @@ export const decodeEvidence: ReadModelDecoder<EvidenceReadModel> = (value) => {
 const decodeFindingHistory = (value: unknown): FindingHistoryReadModel => {
   const name = "finding history";
   const result = record(value, name);
-  exactKeys(result, ["decision", "actor_user_id", "rationale", "created_at"], name);
-  for (const key of ["decision", "actor_user_id", "rationale"]) string(result, key, name);
+  exactKeys(
+    result,
+    ["decision", "actor_user_id", "rationale", "reason_code", "created_at"],
+    name,
+  );
+  const decision = string(result, "decision", name);
+  for (const key of ["actor_user_id", "rationale"]) string(result, key, name);
+  const reasonCode = nullableLiteral(
+    result,
+    "reason_code",
+    FINDING_DECISION_REASON_CODES as FindingDecisionReasonCode[],
+    name,
+  );
+  if (reasonCode !== null && !reasonCodeMatchesDecision(reasonCode, decision)) invalid(name);
   timestamp(result, "created_at", name);
   return result as FindingHistoryReadModel;
 };
 
-const decodeFindingRecord = (value: unknown): FindingReadModel => {
+const decodeAttackCaseEvidence = (value: unknown): AttackCaseEvidenceReadModel => {
+  const name = "attack case evidence";
+  const result = record(value, name);
+  exactKeys(result, [
+    "case_id",
+    "case_content_sha256",
+    "category",
+    "attack_class",
+    "owasp_mappings",
+    "oracle_expectation",
+    "corpus_reconciliation",
+  ], name);
+  string(result, "case_id", name);
+  nullableString(result, "case_content_sha256", name);
+  nullableString(result, "category", name);
+  nullableLiteral(result, "attack_class", ["boundary", "invariant", "regression"], name);
+  objectArray(result, "owasp_mappings", name);
+  nullableObject(result, "oracle_expectation", name);
+  literal(result, "corpus_reconciliation", ["verified", "unavailable"], name);
+  return result as AttackCaseEvidenceReadModel;
+};
+
+const decodeRegressionDisposition = (value: unknown): RegressionDispositionReadModel => {
+  const name = "regression disposition";
+  const result = record(value, name);
+  exactKeys(result, [
+    "disposition_id",
+    "state",
+    "reason_codes",
+    "reproduction_attempted",
+    "deterministic_reproduction",
+    "passes_for_right_reason",
+    "human_approved",
+    "admitted",
+  ], name);
+  for (const key of ["disposition_id", "state"]) string(result, key, name);
+  stringArray(result, "reason_codes", name);
+  for (const key of [
+    "reproduction_attempted",
+    "deterministic_reproduction",
+    "passes_for_right_reason",
+    "human_approved",
+    "admitted",
+  ]) boolean(result, key, name);
+  return result as RegressionDispositionReadModel;
+};
+
+const decodeEvidenceIntegrity = (value: unknown): EvidenceIntegrityReadModel => {
+  const name = "evidence integrity";
+  const result = record(value, name);
+  exactKeys(result, [
+    "stored_content_sha256",
+    "finding_link_sha256",
+    "recomputed_content_sha256",
+    "evidence_record",
+    "finding_link",
+    "observability_reconciliation",
+    "observability_detail",
+  ], name);
+  for (const key of [
+    "stored_content_sha256",
+    "finding_link_sha256",
+    "recomputed_content_sha256",
+    "observability_detail",
+  ]) string(result, key, name);
+  literal(result, "evidence_record", ["verified"], name);
+  literal(result, "finding_link", ["verified"], name);
+  literal(result, "observability_reconciliation", ["unavailable"], name);
+  return result as EvidenceIntegrityReadModel;
+};
+
+const decodeFindingVerification = (value: unknown): FindingVerificationReadModel => {
+  const name = "finding verification";
+  const result = record(value, name);
+  exactKeys(result, [
+    "availability",
+    "reason_code",
+    "finding_id",
+    "campaign_run_id",
+    "attempt_id",
+    "attack_case",
+    "attack_attempt",
+    "input_sequence",
+    "request_transcript",
+    "response_transcript",
+    "policy_decision_id",
+    "executed_at",
+    "trace_id",
+    "judge",
+    "report_id",
+    "minimal_reproduction",
+    "reproduction_sha256",
+    "regression",
+    "integrity",
+    "redaction_state",
+  ], name);
+  literal(result, "availability", ["ready", "unavailable"], name);
+  nullableString(result, "reason_code", name);
+  string(result, "finding_id", name);
+  for (const key of [
+    "campaign_run_id",
+    "attempt_id",
+    "response_transcript",
+    "policy_decision_id",
+    "trace_id",
+    "report_id",
+    "reproduction_sha256",
+  ]) nullableString(result, key, name);
+  nullableTimestamp(result, "executed_at", name);
+  const attackCase = nullableObject(result, "attack_case", name);
+  result.attack_case = attackCase === null ? null : decodeAttackCaseEvidence(attackCase);
+  nullableObject(result, "attack_attempt", name);
+  stringArray(result, "input_sequence", name);
+  nullableObject(result, "request_transcript", name);
+  stringArray(result, "minimal_reproduction", name);
+  const judge = nullableObject(result, "judge", name);
+  if (judge !== null) {
+    exactKeys(judge, [
+      "state",
+      "confidence",
+      "reason_codes",
+      "confirmation_source",
+      "oracle_refs",
+      "canary_refs",
+      "rationale",
+      "rationale_availability",
+      "rationale_detail",
+      "error_code",
+    ], "Judge basis");
+    string(judge, "state", "Judge basis");
+    nullableNumber(judge, "confidence", "Judge basis");
+    if (typeof judge.confidence === "number" && (judge.confidence < 0 || judge.confidence > 1)) {
+      invalid("Judge basis");
+    }
+    stringArray(judge, "reason_codes", "Judge basis");
+    stringArray(judge, "oracle_refs", "Judge basis");
+    stringArray(judge, "canary_refs", "Judge basis");
+    nullableLiteral(
+      judge,
+      "confirmation_source",
+      ["oracle", "canary", "calibrated_model", "human"],
+      "Judge basis",
+    );
+    nullableString(judge, "rationale", "Judge basis");
+    literal(judge, "rationale_availability", ["unavailable"], "Judge basis");
+    string(judge, "rationale_detail", "Judge basis");
+    nullableString(judge, "error_code", "Judge basis");
+  }
+  const regression = nullableObject(result, "regression", name);
+  result.regression = regression === null ? null : decodeRegressionDisposition(regression);
+  const integrity = nullableObject(result, "integrity", name);
+  result.integrity = integrity === null ? null : decodeEvidenceIntegrity(integrity);
+  literal(result, "redaction_state", ["synthetic_identifiers_redacted"], name);
+  return result as FindingVerificationReadModel;
+};
+
+const decodeFindingRecord = (
+  value: unknown,
+  detail = false,
+): FindingReadModel | FindingDetailReadModel => {
   const name = "finding";
   const result = record(value, name);
   exactKeys(result, [
@@ -369,34 +672,52 @@ const decodeFindingRecord = (value: unknown): FindingReadModel => {
     "attempt_id",
     "evidence_content_hash",
     "history",
+    ...(detail ? ["verification"] : []),
   ], name);
   for (const key of [
     "finding_id",
     "state",
     "severity",
-    "category",
-    "target_version",
     "publication_status",
-    "evidence_integrity",
     "source_kind",
     "evidence_provenance",
-    "evidence_content_hash",
   ]) {
     string(result, key, name);
   }
+  nullableString(result, "category", name);
+  nullableString(result, "target_version", name);
+  const evidenceContentHash = nullableString(result, "evidence_content_hash", name);
   nullableString(result, "campaign_run_id", name);
   nullableString(result, "attempt_id", name);
+  const evidenceIntegrity = literal(
+    result,
+    "evidence_integrity",
+    ["verified", "unavailable"],
+    name,
+  );
+  if (
+    (evidenceIntegrity === "verified" &&
+      (evidenceContentHash === null || !/^[0-9a-f]{64}$/.test(evidenceContentHash))) ||
+    (evidenceIntegrity === "unavailable" && evidenceContentHash !== null)
+  ) {
+    invalid(name);
+  }
   literal(result, "execution_profile", ["synthetic", "live"], name);
   result.history = records(result.history, "finding history", decodeFindingHistory);
-  return result as FindingReadModel;
+  if (detail) result.verification = decodeFindingVerification(result.verification);
+  return result as FindingReadModel | FindingDetailReadModel;
 };
 
 export const decodeFindings: ReadModelDecoder<FindingReadModel[]> = (value) =>
-  records(value, "findings", decodeFindingRecord);
+  records(value, "findings", (entry) => decodeFindingRecord(entry) as FindingReadModel);
 
-export const decodeFinding: ReadModelDecoder<FindingReadModel> = decodeFindingRecord;
+export const decodeFinding: ReadModelDecoder<FindingDetailReadModel> = (value) =>
+  decodeFindingRecord(value, true) as FindingDetailReadModel;
 
-const decodeApproval = (value: unknown): ApprovalReadModel => {
+const decodeApproval = (
+  value: unknown,
+  detail = false,
+): ApprovalReadModel | ApprovalDetailReadModel => {
   const name = "approval";
   const result = record(value, name);
   validateScope(result, name, [
@@ -410,6 +731,9 @@ const decodeApproval = (value: unknown): ApprovalReadModel => {
     "approver_user_id",
     "self_approval_override",
     "decided_at",
+    "expired",
+    "consumed",
+    ...(detail ? ["campaign_run_id", "verification_chain"] : []),
   ]);
   for (const key of ["request_id", "scope_hash", "launcher_user_id"]) string(result, key, name);
   timestamp(result, "expires_at", name);
@@ -418,12 +742,25 @@ const decodeApproval = (value: unknown): ApprovalReadModel => {
   nullableLiteral(result, "decision", ["approved", "rejected"], name);
   nullableString(result, "approver_user_id", name);
   boolean(result, "self_approval_override", name);
+  boolean(result, "expired", name);
+  boolean(result, "consumed", name);
   nullableTimestamp(result, "decided_at", name);
-  return result as ApprovalReadModel;
+  if (detail) {
+    nullableString(result, "campaign_run_id", name);
+    result.verification_chain = records(
+      result.verification_chain,
+      "approval verification chain",
+      decodeFindingVerification,
+    );
+  }
+  return result as ApprovalReadModel | ApprovalDetailReadModel;
 };
 
 export const decodeApprovals: ReadModelDecoder<ApprovalReadModel[]> = (value) =>
-  records(value, "approvals", decodeApproval);
+  records(value, "approvals", (entry) => decodeApproval(entry) as ApprovalReadModel);
+
+export const decodeApprovalDetail: ReadModelDecoder<ApprovalDetailReadModel> = (value) =>
+  decodeApproval(value, true) as ApprovalDetailReadModel;
 
 const decodeCoverageRecord = (value: unknown): CoverageReadModel => {
   const name = "coverage";
@@ -451,7 +788,16 @@ const decodeCoverageRecord = (value: unknown): CoverageReadModel => {
   stringArray(result, "classifications", name);
   stringArray(result, "owasp_web", name);
   stringArray(result, "owasp_llm", name);
-  object(result, "verdict_counts", name);
+  const verdictCounts = object(result, "verdict_counts", name);
+  for (const count of Object.values(verdictCounts)) {
+    if (
+      typeof count !== "number"
+      || !Number.isSafeInteger(count)
+      || count < 0
+    ) {
+      invalid(name);
+    }
+  }
   boolean(result, "covered", name);
   timestamp(result, "as_of", name);
   return result as CoverageReadModel;
@@ -472,16 +818,457 @@ const decodeResilienceRecord = (value: unknown): ResilienceReadModel => {
 export const decodeResilience: ReadModelDecoder<ResilienceReadModel[]> = (value) =>
   records(value, "resilience", decodeResilienceRecord);
 
+const decodeReport = (value: unknown): ReportReadModel => {
+  const name = "report";
+  const result = record(value, name);
+  exactKeys(result, [
+    "schema_version",
+    "report_id",
+    "finding_id",
+    "campaign_run_id",
+    "attempt_id",
+    "source_case_id",
+    "severity",
+    "category",
+    "description",
+    "clinical_impact",
+    "minimal_reproduction",
+    "reproduction_sha256",
+    "observed_behavior",
+    "expected_behavior",
+    "recommended_remediation",
+    "status",
+    "fix_validation",
+    "evidence_references",
+    "publication_state",
+    "regression",
+    "report_integrity",
+    "created_at",
+    "verification",
+  ], name);
+  literal(result, "schema_version", ["1"], name);
+  for (const key of [
+    "report_id",
+    "finding_id",
+    "campaign_run_id",
+    "attempt_id",
+    "source_case_id",
+    "category",
+    "description",
+    "clinical_impact",
+    "reproduction_sha256",
+    "observed_behavior",
+    "expected_behavior",
+    "recommended_remediation",
+  ]) string(result, key, name);
+  literal(result, "severity", ["low", "medium", "high", "critical"], name);
+  literal(result, "status", [
+    "draft",
+    "validated",
+    "remediation_pending",
+    "fix_pending",
+    "fixed",
+    "regressed",
+  ], name);
+  literal(result, "publication_state", [
+    "draft_unpublished",
+    "blocked_pending_human_approval",
+  ], name);
+  literal(result, "report_integrity", ["verified"], name);
+  stringArray(result, "minimal_reproduction", name);
+  stringArray(result, "evidence_references", name);
+  const fixValidation = object(result, "fix_validation", name);
+  exactKeys(fixValidation, ["state", "summary", "evidence_references"], "fix validation");
+  literal(
+    fixValidation,
+    "state",
+    ["not_run", "failed", "passed_for_right_reason"],
+    "fix validation",
+  );
+  string(fixValidation, "summary", "fix validation");
+  stringArray(fixValidation, "evidence_references", "fix validation");
+  const regression = nullableObject(result, "regression", name);
+  result.regression = regression === null ? null : decodeRegressionDisposition(regression);
+  timestamp(result, "created_at", name);
+  result.verification = decodeFindingVerification(result.verification);
+  return result as ReportReadModel;
+};
+
+export const decodeReports: ReadModelDecoder<ReportReadModel[]> = (value) =>
+  records(value, "reports", decodeReport);
+
+export const decodeReportDetail: ReadModelDecoder<ReportReadModel> = decodeReport;
+
+const decodeAgentBudget = (value: unknown): AgentBudgetReadModel => {
+  const name = "agent budget";
+  const result = record(value, name);
+  exactKeys(result, [
+    "status",
+    "campaign_run_id",
+    "configuration_set_sha256",
+    "role_cost_measurement_state",
+    "role_usd_cap",
+    "role_usd_spent",
+    "role_unresolved_usd_exposure",
+    "role_usd_remaining",
+    "role_usd_remaining_upper_bound",
+    "role_usd_overrun",
+    "role_call_cap",
+    "role_physical_calls",
+    "role_unresolved_physical_calls",
+    "role_call_count_state",
+    "role_calls_remaining",
+    "role_call_overrun",
+    "global_cost_measurement_state",
+    "global_usd_cap",
+    "global_usd_spent",
+    "global_unresolved_usd_exposure",
+    "global_usd_remaining",
+    "global_usd_remaining_upper_bound",
+    "global_usd_overrun",
+    "global_call_cap",
+    "global_physical_calls",
+    "global_unresolved_physical_calls",
+    "global_call_count_state",
+    "global_calls_remaining",
+    "global_call_overrun",
+  ], name);
+  const status = literal(
+    result,
+    "status",
+    [
+      "staged_pending_authorization",
+      "active",
+      "historical",
+      "agent_acceptance",
+      "unavailable",
+    ],
+    name,
+  );
+  const campaignRunId = nullableString(result, "campaign_run_id", name);
+  const configurationSha256 = nullableString(
+    result,
+    "configuration_set_sha256",
+    name,
+  );
+  if (
+    configurationSha256 !== null
+    && !/^[0-9a-f]{64}$/.test(configurationSha256)
+  ) {
+    invalid(name);
+  }
+  const roleCostState = nullableLiteral(
+    result,
+    "role_cost_measurement_state",
+    ["measured", "partial", "not_observed", "invalid"],
+    name,
+  );
+  const roleUsdCap = nullableNumber(result, "role_usd_cap", name);
+  const roleUsdSpent = number(result, "role_usd_spent", name, { minimum: 0 });
+  const roleUnresolvedUsdExposure = number(
+    result,
+    "role_unresolved_usd_exposure",
+    name,
+    { minimum: 0 },
+  );
+  const roleUsdRemaining = nullableNumber(result, "role_usd_remaining", name);
+  const roleUsdRemainingUpperBound = nullableNumber(
+    result,
+    "role_usd_remaining_upper_bound",
+    name,
+  );
+  const roleUsdOverrun = number(result, "role_usd_overrun", name, { minimum: 0 });
+  const roleCallCap = nullableNonnegativeInteger(result, "role_call_cap", name);
+  const rolePhysicalCalls = number(
+    result,
+    "role_physical_calls",
+    name,
+    { integer: true, minimum: 0 },
+  );
+  const roleUnresolvedPhysicalCalls = number(
+    result,
+    "role_unresolved_physical_calls",
+    name,
+    { integer: true, minimum: 0 },
+  );
+  const roleCallCountState = nullableLiteral(
+    result,
+    "role_call_count_state",
+    ["exact", "lower_bound"],
+    name,
+  );
+  const roleCallsRemaining = nullableNonnegativeInteger(
+    result,
+    "role_calls_remaining",
+    name,
+  );
+  const roleCallOverrun = number(
+    result,
+    "role_call_overrun",
+    name,
+    { integer: true, minimum: 0 },
+  );
+  const globalCostState = nullableLiteral(
+    result,
+    "global_cost_measurement_state",
+    ["measured", "partial", "not_observed", "invalid"],
+    name,
+  );
+  const globalUsdCap = nullableNumber(result, "global_usd_cap", name);
+  const globalUsdSpent = number(result, "global_usd_spent", name, { minimum: 0 });
+  const globalUnresolvedUsdExposure = number(
+    result,
+    "global_unresolved_usd_exposure",
+    name,
+    { minimum: 0 },
+  );
+  const globalUsdRemaining = nullableNumber(result, "global_usd_remaining", name);
+  const globalUsdRemainingUpperBound = nullableNumber(
+    result,
+    "global_usd_remaining_upper_bound",
+    name,
+  );
+  const globalUsdOverrun = number(result, "global_usd_overrun", name, { minimum: 0 });
+  const globalCallCap = nullableNonnegativeInteger(result, "global_call_cap", name);
+  const globalPhysicalCalls = number(
+    result,
+    "global_physical_calls",
+    name,
+    { integer: true, minimum: 0 },
+  );
+  const globalUnresolvedPhysicalCalls = number(
+    result,
+    "global_unresolved_physical_calls",
+    name,
+    { integer: true, minimum: 0 },
+  );
+  const globalCallCountState = nullableLiteral(
+    result,
+    "global_call_count_state",
+    ["exact", "lower_bound"],
+    name,
+  );
+  const globalCallsRemaining = nullableNonnegativeInteger(
+    result,
+    "global_calls_remaining",
+    name,
+  );
+  const globalCallOverrun = number(
+    result,
+    "global_call_overrun",
+    name,
+    { integer: true, minimum: 0 },
+  );
+  for (const candidate of [
+    roleUsdCap,
+    roleUsdRemaining,
+    roleUsdRemainingUpperBound,
+    globalUsdCap,
+    globalUsdRemaining,
+    globalUsdRemainingUpperBound,
+  ]) {
+    if (candidate !== null && candidate < 0) invalid(name);
+  }
+  const requiredCaps = [
+    roleUsdCap,
+    roleUsdRemaining,
+    roleUsdRemainingUpperBound,
+    roleCallCap,
+    roleCallsRemaining,
+    globalUsdCap,
+    globalUsdRemaining,
+    globalUsdRemainingUpperBound,
+    globalCallCap,
+    globalCallsRemaining,
+  ];
+  if (status === "unavailable") {
+    if (
+      requiredCaps.some((candidate) => candidate !== null)
+      || campaignRunId !== null
+      || configurationSha256 !== null
+      || roleCostState !== null
+      || globalCostState !== null
+      || roleCallCountState !== null
+      || globalCallCountState !== null
+      || roleCallsRemaining !== null
+      || globalCallsRemaining !== null
+      || roleUsdRemaining !== null
+      || globalUsdRemaining !== null
+      || [
+        roleUsdSpent,
+        roleUnresolvedUsdExposure,
+        roleUsdOverrun,
+        rolePhysicalCalls,
+        roleUnresolvedPhysicalCalls,
+        roleCallOverrun,
+        globalUsdSpent,
+        globalUnresolvedUsdExposure,
+        globalUsdOverrun,
+        globalPhysicalCalls,
+        globalUnresolvedPhysicalCalls,
+        globalCallOverrun,
+      ].some((candidate) => candidate !== 0)
+    ) {
+      invalid(name);
+    }
+    return result as AgentBudgetReadModel;
+  }
+  if (
+    requiredCaps.some((candidate) => candidate === null)
+    || roleCostState === null
+    || globalCostState === null
+    || roleCallCountState === null
+    || globalCallCountState === null
+    || configurationSha256 === null
+    || (
+      ["active", "historical", "agent_acceptance"].includes(status)
+      && campaignRunId === null
+    )
+    || (
+      status === "agent_acceptance"
+      && !campaignRunId?.startsWith("AR-")
+    )
+    || (status === "staged_pending_authorization" && campaignRunId !== null)
+    || roleCallCap === 0
+    || globalCallCap === 0
+  ) {
+    invalid(name);
+  }
+  if (
+    Math.abs(
+      (roleUsdRemainingUpperBound ?? 0)
+      - Math.max(0, (roleUsdCap ?? 0) - roleUsdSpent),
+    ) > 0.000001
+    || Math.abs(
+      (globalUsdRemainingUpperBound ?? 0)
+      - Math.max(0, (globalUsdCap ?? 0) - globalUsdSpent),
+    ) > 0.000001
+    || Math.abs(
+      roleUsdSpent + roleUnresolvedUsdExposure + (roleUsdRemaining ?? 0)
+      - ((roleUsdCap ?? 0) + roleUsdOverrun),
+    ) > 0.000001
+    || Math.abs(
+      globalUsdSpent + globalUnresolvedUsdExposure + (globalUsdRemaining ?? 0)
+      - ((globalUsdCap ?? 0) + globalUsdOverrun),
+    ) > 0.000001
+    || rolePhysicalCalls + roleUnresolvedPhysicalCalls + (roleCallsRemaining ?? 0)
+      !== (roleCallCap ?? 0) + roleCallOverrun
+    || globalPhysicalCalls + globalUnresolvedPhysicalCalls + (globalCallsRemaining ?? 0)
+      !== (globalCallCap ?? 0) + globalCallOverrun
+    || (
+      status !== "active"
+      && (
+        (roleCostState === "measured" && roleUnresolvedUsdExposure !== 0)
+        || (globalCostState === "measured" && globalUnresolvedUsdExposure !== 0)
+        || (roleCallCountState === "exact" && roleUnresolvedPhysicalCalls !== 0)
+        || (globalCallCountState === "exact" && globalUnresolvedPhysicalCalls !== 0)
+      )
+    )
+  ) {
+    invalid(name);
+  }
+  return result as AgentBudgetReadModel;
+};
+
+const decodeJudgeCalibration = (
+  value: unknown,
+): JudgeCalibrationSummaryReadModel => {
+  const name = "judge calibration";
+  const result = record(value, name);
+  exactKeys(result, [
+    "state",
+    "calibration_id",
+    "decision_authority",
+    "oracle_comparison_count",
+    "oracle_agreement_count",
+    "oracle_agreement_rate",
+    "status_label",
+  ], name);
+  const state = literal(result, "state", judgeCalibrationStates, name);
+  const calibrationId = nullableString(result, "calibration_id", name);
+  const authority = literal(
+    result,
+    "decision_authority",
+    judgeDecisionAuthorities,
+    name,
+  );
+  const comparisons = number(
+    result,
+    "oracle_comparison_count",
+    name,
+    { integer: true, minimum: 0 },
+  );
+  const agreements = number(
+    result,
+    "oracle_agreement_count",
+    name,
+    { integer: true, minimum: 0 },
+  );
+  const rate = nullableNumber(result, "oracle_agreement_rate", name);
+  const label = literal(
+    result,
+    "status_label",
+    [
+      "not yet measured",
+      "live, verified against oracle",
+      "live, model-decisive after calibration",
+    ],
+    name,
+  );
+  if (
+    agreements > comparisons
+    || (rate !== null && (rate < 0 || rate > 1))
+    || (comparisons === 0 && rate !== null)
+    || (
+      comparisons > 0
+      && (rate === null || Math.abs(rate - agreements / comparisons) > 1e-9)
+    )
+    || (state === "unavailable" && calibrationId !== null)
+    || (state !== "unavailable" && calibrationId === null)
+    || (
+      authority === "model"
+      && (state !== "enabled" || label !== "live, model-decisive after calibration")
+    )
+    || (
+      authority !== "model"
+      && label === "live, model-decisive after calibration"
+    )
+    || (comparisons === 0 && label !== "not yet measured")
+    || (
+      comparisons > 0
+      && authority !== "model"
+      && label !== "live, verified against oracle"
+    )
+  ) {
+    invalid(name);
+  }
+  return result as JudgeCalibrationSummaryReadModel;
+};
+
 const decodeTrace = (value: unknown): TraceReadModel => {
   const name = "trace";
   const result = record(value, name);
   exactKeys(result, [
     "request_id",
+    "execution_id",
+    "parent_execution_id",
     "trace_id",
     "campaign_id",
     "attempt_id",
     "operation",
     "provider",
+    "model",
+    "agent_role",
+    "execution_mode",
+    "requested_model",
+    "returned_model",
+    "model_substituted",
+    "upstream_provider",
+    "provider_request_id",
+    "configuration_set_sha256",
+    "role_configuration_sha256",
+    "generation_policy_sha256",
+    "physical_attempts",
     "method",
     "destination_host",
     "relative_path",
@@ -494,8 +1281,23 @@ const decodeTrace = (value: unknown): TraceReadModel => {
     "request_bytes",
     "response_bytes",
     "measured_cost",
+    "cost_measurement_state",
+    "accounting_status",
+    "provider_event_ids",
+    "provider_event_status",
+    "provider_lineage_state",
     "currency",
+    "input_tokens",
+    "output_tokens",
+    "reasoning_tokens",
+    "judge_calibration_id",
+    "judge_calibration_state",
+    "oracle_agreement",
+    "decision_authority",
+    "p50_duration_ms",
+    "p95_duration_ms",
     "langfuse_status",
+    "langfuse_verified_at",
     "request_preview",
     "response_preview",
     "request_sha256",
@@ -503,15 +1305,250 @@ const decodeTrace = (value: unknown): TraceReadModel => {
     "inspection_flags",
     "inspection_owasp_mappings",
   ], name);
-  for (const key of ["trace_id", "campaign_id", "operation", "provider", "status", "currency", "langfuse_status"]) string(result, key, name);
-  for (const key of ["request_id", "attempt_id", "method", "destination_host", "relative_path", "error_code", "request_preview", "response_preview", "request_sha256", "response_sha256"]) nullableString(result, key, name);
+  for (const key of ["trace_id", "campaign_id", "operation", "provider", "status", "currency"]) string(result, key, name);
+  const langfuseVerifiedAt = nullableTimestamp(result, "langfuse_verified_at", name);
+  literal(
+    result,
+    "langfuse_status",
+    [
+      "not_attempted",
+      "disabled",
+      "queued",
+      "exported",
+      "error",
+      "historical_not_instrumented",
+    ],
+    name,
+  );
+  nullableLiteral(result, "agent_role", agentRoles, name);
+  nullableLiteral(result, "execution_mode", ["deterministic", "hosted_advisory"], name);
+  for (const key of [
+    "request_id",
+    "execution_id",
+    "parent_execution_id",
+    "attempt_id",
+    "model",
+    "requested_model",
+    "returned_model",
+    "upstream_provider",
+    "provider_request_id",
+    "configuration_set_sha256",
+    "role_configuration_sha256",
+    "generation_policy_sha256",
+    "method",
+    "destination_host",
+    "relative_path",
+    "error_code",
+    "request_preview",
+    "response_preview",
+    "request_sha256",
+    "response_sha256",
+    "judge_calibration_id",
+  ]) nullableString(result, key, name);
+  const configuredModel = nullableString(result, "model", name);
+  const requestedModel = nullableString(result, "requested_model", name);
+  const returnedModel = nullableString(result, "returned_model", name);
+  const modelSubstituted = boolean(result, "model_substituted", name);
+  const providerEventStatus = nullableLiteral(
+    result,
+    "provider_event_status",
+    providerEventStatuses,
+    name,
+  );
+  const providerIdentity = [
+    result.returned_model,
+    result.upstream_provider,
+    result.provider_request_id,
+  ];
+  if (
+    providerIdentity.some((candidate) => candidate === null)
+    !== providerIdentity.every((candidate) => candidate === null)
+    || (
+      result.agent_role === null
+      && (result.requested_model !== null || modelSubstituted)
+    )
+    || (
+      result.agent_role !== null
+      && (
+        configuredModel === null
+        || result.requested_model === null
+        || modelSubstituted !== (providerEventStatus === "model_mismatch")
+      )
+    )
+    || (
+      modelSubstituted
+      && (
+        returnedModel === null
+        || returnedModel === requestedModel
+        || returnedModel.startsWith("unsafe-provider-text-")
+      )
+    )
+  ) {
+    invalid(name);
+  }
+  const physicalAttempts = nullableNonnegativeInteger(
+    result,
+    "physical_attempts",
+    name,
+  );
+  if (physicalAttempts === 0) invalid(name);
   nullableNumber(result, "status_code", name);
   timestamp(result, "started_at", name);
   nullableTimestamp(result, "finished_at", name);
-  number(result, "duration_ms", name, { minimum: 0 });
+  if (result.duration_ms !== null) number(result, "duration_ms", name, { minimum: 0 });
   number(result, "request_bytes", name, { integer: true, minimum: 0 });
   if (result.response_bytes !== null) number(result, "response_bytes", name, { integer: true, minimum: 0 });
-  number(result, "measured_cost", name, { minimum: 0 });
+  const measuredCost = nullableNumber(result, "measured_cost", name);
+  if (measuredCost !== null && measuredCost < 0) invalid(name);
+  const costMeasurementState = literal(
+    result,
+    "cost_measurement_state",
+    ["measured", "partial", "not_observed", "invalid"],
+    name,
+  );
+  const accountingStatus = literal(
+    result,
+    "accounting_status",
+    ["measured", "partial", "unavailable"],
+    name,
+  );
+  const providerEventIds = sha256Array(result, "provider_event_ids", name);
+  const providerLineageState = literal(
+    result,
+    "provider_lineage_state",
+    ["not_applicable", "canonical_physical", "historical_not_instrumented"],
+    name,
+  );
+  if (
+    new Set(providerEventIds).size !== providerEventIds.length
+    || ((providerEventStatus === null) !== (providerEventIds.length === 0))
+    || (
+      result.agent_role !== null
+      && providerLineageState !== "historical_not_instrumented"
+      && (
+        providerEventIds.length > (physicalAttempts ?? 0)
+        || (
+          result.status !== "running"
+          && physicalAttempts !== null
+          && providerEventIds.length !== physicalAttempts
+        )
+      )
+    )
+  ) {
+    invalid(name);
+  }
+  if (
+    (result.agent_role === null && providerLineageState !== "not_applicable")
+    || (
+      result.agent_role !== null
+      && result.execution_mode === "deterministic"
+      && providerLineageState !== "not_applicable"
+    )
+    || (
+      result.agent_role !== null
+      && result.execution_mode !== "deterministic"
+      && (
+        result.execution_mode !== "hosted_advisory"
+        || providerLineageState === "not_applicable"
+      )
+    )
+    || (
+      providerLineageState === "historical_not_instrumented"
+      && (
+        result.status === "running"
+        || providerEventIds.length !== 0
+        || costMeasurementState === "measured"
+      )
+    )
+  ) {
+    invalid(name);
+  }
+  const expectedAccountingStatus = {
+    measured: "measured",
+    partial: "partial",
+    not_observed: "unavailable",
+    invalid: "unavailable",
+  }[costMeasurementState];
+  if (accountingStatus !== expectedAccountingStatus) invalid(name);
+  if (
+    (["measured", "partial"].includes(accountingStatus) && measuredCost === null)
+    || (accountingStatus === "unavailable" && measuredCost !== null)
+  ) {
+    invalid(name);
+  }
+  nullableNonnegativeInteger(result, "input_tokens", name);
+  nullableNonnegativeInteger(result, "output_tokens", name);
+  const reasoningTokens = nullableNonnegativeInteger(result, "reasoning_tokens", name);
+  const calibrationState = nullableLiteral(
+    result,
+    "judge_calibration_state",
+    judgeCalibrationStates,
+    name,
+  );
+  const oracleAgreement = nullableBoolean(result, "oracle_agreement", name);
+  const decisionAuthority = nullableLiteral(
+    result,
+    "decision_authority",
+    judgeDecisionAuthorities,
+    name,
+  );
+  const p50Duration = nullableNumber(result, "p50_duration_ms", name);
+  const p95Duration = nullableNumber(result, "p95_duration_ms", name);
+  if (
+    (p50Duration !== null && p50Duration < 0) ||
+    (p95Duration !== null && p95Duration < 0)
+  ) {
+    invalid(name);
+  }
+  if (result.agent_role === null && (p50Duration !== null || p95Duration !== null)) {
+    invalid(name);
+  }
+  if ((p50Duration === null) !== (p95Duration === null)) invalid(name);
+  if (p50Duration !== null && p95Duration !== null && p50Duration > p95Duration) {
+    invalid(name);
+  }
+  if (
+    result.agent_role !== null &&
+    result.finished_at !== null &&
+    (p50Duration === null || p95Duration === null)
+  ) {
+    invalid(name);
+  }
+  if (
+    accountingStatus === "partial"
+    && (
+      result.agent_role === null
+      || (
+        physicalAttempts === null
+        && providerLineageState !== "historical_not_instrumented"
+      )
+    )
+  ) {
+    invalid(name);
+  }
+  if (
+    result.agent_role === null
+    && [
+      result.model,
+      ...providerIdentity,
+      result.configuration_set_sha256,
+      result.role_configuration_sha256,
+      result.generation_policy_sha256,
+      physicalAttempts,
+      reasoningTokens,
+      result.judge_calibration_id,
+      calibrationState,
+      oracleAgreement,
+      decisionAuthority,
+      providerEventStatus,
+      ...providerEventIds,
+    ].some((candidate) => candidate !== null)
+  ) {
+    invalid(name);
+  }
+  if (result.agent_role !== null && result.model === null) invalid(name);
+  if (decisionAuthority === "model" && calibrationState !== "enabled") invalid(name);
+  if ((result.langfuse_status === "exported") !== (langfuseVerifiedAt !== null)) invalid(name);
   stringArray(result, "inspection_flags", name);
   stringArray(result, "inspection_owasp_mappings", name);
   return result as TraceReadModel;
@@ -527,12 +1564,28 @@ const decodeCost = (value: unknown): CostReadModel => {
     "accounting_id",
     "campaign_id",
     "provider",
+    "agent_role",
+    "record_kind",
+    "execution_mode",
     "measured_cost",
+    "cost_measurement_state",
+    "accounting_status",
+    "provider_event_ids",
     "currency",
     "request_count",
+    "execution_count",
     "attempt_count",
     "confirmed_finding_count",
     "average_cost_per_request",
+    "input_tokens",
+    "output_tokens",
+    "reasoning_tokens",
+    "token_observation_count",
+    "physical_call_count",
+    "physical_call_count_state",
+    "provider_budget",
+    "p50_duration_ms",
+    "p95_duration_ms",
     "budget_usd",
     "budget_utilization",
     "duration_ms",
@@ -544,17 +1597,177 @@ const decodeCost = (value: unknown): CostReadModel => {
   for (const key of ["accounting_id", "campaign_id", "provider", "currency"]) {
     string(result, key, name);
   }
-  number(result, "measured_cost", name, { minimum: 0 });
-  number(result, "request_count", name, { integer: true, minimum: 0 });
+  nullableLiteral(result, "agent_role", agentRoles, name);
+  const recordKind = literal(result, "record_kind", ["campaign", "agent"], name);
+  const executionMode = nullableLiteral(
+    result,
+    "execution_mode",
+    ["deterministic", "hosted_advisory"],
+    name,
+  );
+  const measuredCost = nullableNumber(result, "measured_cost", name);
+  if (measuredCost !== null && measuredCost < 0) invalid(name);
+  const costMeasurementState = literal(
+    result,
+    "cost_measurement_state",
+    ["not_applicable", "measured", "partial", "not_observed", "invalid"],
+    name,
+  );
+  const accountingStatus = literal(
+    result,
+    "accounting_status",
+    ["not_applicable", "measured", "partial", "unavailable"],
+    name,
+  );
+  const providerEventIds = sha256Array(result, "provider_event_ids", name);
+  if (new Set(providerEventIds).size !== providerEventIds.length) {
+    invalid(name);
+  }
+  const expectedAccountingStatus = {
+    not_applicable: "not_applicable",
+    measured: "measured",
+    partial: "partial",
+    not_observed: "unavailable",
+    invalid: "unavailable",
+  }[costMeasurementState];
+  if (accountingStatus !== expectedAccountingStatus) invalid(name);
+  if (
+    (["measured", "partial"].includes(accountingStatus) && measuredCost === null)
+    || (["not_applicable", "unavailable"].includes(accountingStatus)
+      && measuredCost !== null)
+  ) {
+    invalid(name);
+  }
+  const requestCount = number(
+    result,
+    "request_count",
+    name,
+    { integer: true, minimum: 0 },
+  );
+  const executionCount = number(
+    result,
+    "execution_count",
+    name,
+    { integer: true, minimum: 0 },
+  );
   number(result, "attempt_count", name, { integer: true, minimum: 0 });
   number(result, "confirmed_finding_count", name, { integer: true, minimum: 0 });
-  number(result, "average_cost_per_request", name, { minimum: 0 });
+  const averageCostPerRequest = nullableNumber(
+    result,
+    "average_cost_per_request",
+    name,
+  );
+  const inputTokens = nullableNonnegativeInteger(result, "input_tokens", name);
+  const outputTokens = nullableNonnegativeInteger(result, "output_tokens", name);
+  const reasoningTokens = nullableNonnegativeInteger(result, "reasoning_tokens", name);
+  const tokenObservationCount = number(
+    result,
+    "token_observation_count",
+    name,
+    { integer: true, minimum: 0 },
+  );
+  validateTokenObservation(inputTokens, outputTokens, tokenObservationCount, name);
+  const physicalCallCount = number(
+    result,
+    "physical_call_count",
+    name,
+    { integer: true, minimum: 0 },
+  );
+  const physicalCallCountState = literal(
+    result,
+    "physical_call_count_state",
+    ["not_applicable", "exact", "lower_bound"],
+    name,
+  );
+  if (
+    (
+      averageCostPerRequest !== null
+      && (
+        averageCostPerRequest < 0
+        || accountingStatus !== "measured"
+        || requestCount === 0
+        || (recordKind === "agent" && physicalCallCountState !== "exact")
+      )
+    )
+    || (
+      accountingStatus === "measured"
+      && requestCount > 0
+      && (recordKind === "campaign" || physicalCallCountState === "exact")
+      && averageCostPerRequest === null
+    )
+  ) {
+    invalid(name);
+  }
+  const providerBudget = nullableObject(result, "provider_budget", name);
+  result.provider_budget = providerBudget === null
+    ? null
+    : decodeAgentBudget(providerBudget);
+  const p50Duration = nullableNumber(result, "p50_duration_ms", name);
+  const p95Duration = nullableNumber(result, "p95_duration_ms", name);
+  if (
+    (p50Duration !== null && p50Duration < 0) ||
+    (p95Duration !== null && p95Duration < 0) ||
+    (result.record_kind === "campaign" &&
+      (p50Duration !== null || p95Duration !== null)) ||
+    (result.record_kind === "agent" &&
+      ((executionCount === 0 &&
+        (p50Duration !== null || p95Duration !== null)) ||
+        (executionCount > 0 &&
+          (p50Duration === null || p95Duration === null)))) ||
+    (p50Duration !== null && p95Duration !== null && p50Duration > p95Duration)
+  ) {
+    invalid(name);
+  }
+  if (
+    ["partial", "unavailable"].includes(accountingStatus) &&
+    result.record_kind !== "agent"
+  ) {
+    invalid(name);
+  }
+  if (
+    (result.record_kind === "agent") !== (result.provider_budget !== null)
+    || ((recordKind === "agent") !== (executionMode !== null))
+    || (
+      recordKind === "agent"
+      && (
+        requestCount !== physicalCallCount
+        || (
+          executionMode === "deterministic"
+          && (
+            physicalCallCountState !== "not_applicable"
+            || physicalCallCount !== 0
+          )
+        )
+        || (
+          executionMode === "hosted_advisory"
+          && physicalCallCountState === "not_applicable"
+        )
+      )
+    )
+    || (
+      recordKind === "campaign"
+      && (
+        reasoningTokens !== null
+        || physicalCallCount !== 0
+        || physicalCallCountState !== "not_applicable"
+        || providerEventIds.length !== 0
+      )
+    )
+  ) {
+    invalid(name);
+  }
   nullableNumber(result, "budget_usd", name);
   nullableNumber(result, "budget_utilization", name);
   number(result, "duration_ms", name, { minimum: 0 });
   literal(result, "execution_profile", ["synthetic", "live"], name);
   timestamp(result, "started_at", name);
-  timestamp(result, "ended_at", name);
+  const endedAt = nullableTimestamp(result, "ended_at", name);
+  if (
+    result.record_kind === "agent"
+    && ((executionCount === 0) !== (endedAt === null))
+  ) {
+    invalid(name);
+  }
   timestamp(result, "recorded_at", name);
   return result as CostReadModel;
 };
@@ -656,6 +1869,7 @@ const decodeTarget = (value: unknown): TargetReadModel => {
       "tool_sources",
       "execution_profile",
       "maximum_caps",
+      "hosted_run",
     ], "campaign template");
     for (const key of [
       "target_id",
@@ -669,6 +1883,9 @@ const decodeTarget = (value: unknown): TargetReadModel => {
     stringArray(template, "tool_sources", "campaign template");
     literal(template, "execution_profile", ["synthetic", "live"], "campaign template");
     template.maximum_caps = decodeCaps(template.maximum_caps);
+    template.hosted_run = template.hosted_run === null
+      ? null
+      : decodeHostedRun(template.hosted_run);
   }
   timestamp(result, "created_at", name);
   return result as TargetReadModel;
@@ -676,6 +1893,29 @@ const decodeTarget = (value: unknown): TargetReadModel => {
 
 export const decodeTargets: ReadModelDecoder<TargetReadModel[]> = (value) =>
   records(value, "targets", decodeTarget);
+
+const decodeTargetCatalogEntry = (value: unknown): TargetCatalogEntryReadModel => {
+  const name = "target catalog entry";
+  const result = record(value, name);
+  exactKeys(result, [
+    "target_id",
+    "version",
+    "name",
+    "environment",
+    "synthetic_data_only",
+    "surface_count",
+    "registration_state",
+  ], name);
+  for (const key of ["target_id", "version", "name"]) string(result, key, name);
+  literal(result, "environment", ["local", "staging", "production"], name);
+  if (result.synthetic_data_only !== true) invalid(name);
+  number(result, "surface_count", name, { integer: true, minimum: 1 });
+  literal(result, "registration_state", ["available", "registered", "conflict"], name);
+  return result as TargetCatalogEntryReadModel;
+};
+
+export const decodeTargetCatalog: ReadModelDecoder<TargetCatalogEntryReadModel[]> = (value) =>
+  records(value, "target catalog", decodeTargetCatalogEntry);
 
 export const decodeConfiguration: ReadModelDecoder<ConfigurationReadModel> = (value) => {
   const name = "configuration";
@@ -720,6 +1960,10 @@ const decodeAgentAssignment = (value: unknown): AgentAssignmentReadModel => {
     "role",
     "provider",
     "model",
+    "resolved_model",
+    "upstream_provider",
+    "prompt_sha256",
+    "prompt_version",
     "execution_mode",
     "activation_state",
     "version",
@@ -728,13 +1972,101 @@ const decodeAgentAssignment = (value: unknown): AgentAssignmentReadModel => {
     "configured_by",
   ], name);
   literal(result, "role", agentRoles, name);
-  for (const key of ["provider", "model", "configuration_sha256"]) string(result, key, name);
+  for (const key of [
+    "provider",
+    "model",
+    "configuration_sha256",
+  ]) string(result, key, name);
+  const resolvedModel = nullableString(result, "resolved_model", name);
+  const upstreamProvider = nullableString(result, "upstream_provider", name);
+  if ((resolvedModel === null) !== (upstreamProvider === null)) invalid(name);
+  for (const key of [
+    "prompt_sha256",
+    "prompt_version",
+  ]) nullableString(result, key, name);
   literal(result, "execution_mode", ["deterministic", "hosted_advisory"], name);
   literal(result, "activation_state", ["active", "staged_pending_authorization"], name);
   number(result, "version", name, { integer: true, minimum: 1 });
   nullableTimestamp(result, "configured_at", name);
   nullableString(result, "configured_by", name);
   return result as AgentAssignmentReadModel;
+};
+
+const decodeAgentAcceptanceExecution = (
+  value: unknown,
+): AgentAcceptanceExecutionReadModel => {
+  const name = "agent acceptance execution";
+  const result = record(value, name);
+  exactKeys(result, [
+    "scope",
+    "agent_role",
+    "acceptance_run_id",
+    "acceptance_attempt_id",
+    "execution_id",
+    "parent_execution_id",
+    "configuration_set_sha256",
+    "returned_model",
+    "upstream_provider",
+    "trace_id",
+    "measured_cost",
+    "cost_measurement_state",
+    "provider_event_ids",
+    "currency",
+    "input_tokens",
+    "output_tokens",
+    "reasoning_tokens",
+    "langfuse_status",
+    "langfuse_verified_at",
+    "finished_at",
+  ], name);
+  literal(result, "scope", ["agent_acceptance"], name);
+  literal(
+    result,
+    "agent_role",
+    ["orchestrator", "red_team", "judge", "documentation"],
+    name,
+  );
+  for (const key of [
+    "acceptance_run_id",
+    "execution_id",
+    "returned_model",
+    "upstream_provider",
+    "trace_id",
+  ]) {
+    string(result, key, name);
+  }
+  if (!string(result, "acceptance_run_id", name).startsWith("AR-")) invalid(name);
+  sha256(result, "acceptance_attempt_id", name);
+  nullableString(result, "parent_execution_id", name);
+  sha256(result, "configuration_set_sha256", name);
+  number(result, "measured_cost", name, { minimum: 0 });
+  literal(result, "cost_measurement_state", ["measured"], name);
+  const providerEventIds = stringArray(result, "provider_event_ids", name);
+  if (
+    providerEventIds.length === 0
+    || providerEventIds.some((eventId) => !/^[0-9a-f]{64}$/.test(eventId))
+    || new Set(providerEventIds).size !== providerEventIds.length
+  ) {
+    invalid(name);
+  }
+  literal(result, "currency", ["USD"], name);
+  for (const key of ["input_tokens", "output_tokens", "reasoning_tokens"]) {
+    number(result, key, name, { integer: true, minimum: 0 });
+  }
+  const langfuseStatus = literal(
+    result,
+    "langfuse_status",
+    ["queued", "exported"],
+    name,
+  );
+  const langfuseVerifiedAt = nullableTimestamp(
+    result,
+    "langfuse_verified_at",
+    name,
+  );
+  if ((langfuseStatus === "exported") !== (langfuseVerifiedAt !== null)) invalid(name);
+  timestamp(result, "finished_at", name);
+  return result as AgentAcceptanceExecutionReadModel;
 };
 
 const decodeAgent = (value: unknown): AgentReadModel => {
@@ -750,17 +2082,36 @@ const decodeAgent = (value: unknown): AgentReadModel => {
     "output_contract",
     "active_assignment",
     "staged_assignment",
+    "latest_acceptance_execution",
     "execution_count",
+    "hosted_execution_count",
     "running_count",
     "succeeded_count",
     "failed_count",
     "skipped_count",
     "measured_cost",
+    "cost_measurement_state",
+    "accounting_status",
+    "provider_event_ids",
     "currency",
     "input_tokens",
     "output_tokens",
+    "reasoning_tokens",
     "token_observation_count",
+    "physical_call_count",
+    "physical_call_count_state",
+    "provider_budget",
+    "judge_calibration",
     "average_duration_ms",
+    "p50_duration_ms",
+    "p95_duration_ms",
+    "langfuse_not_attempted_count",
+    "langfuse_disabled_count",
+    "langfuse_queued_count",
+    "langfuse_exported_count",
+    "langfuse_error_count",
+    "langfuse_verified_count",
+    "last_langfuse_verified_at",
     "last_activity_at",
     "last_status",
     "last_campaign_run_id",
@@ -780,18 +2131,150 @@ const decodeAgent = (value: unknown): AgentReadModel => {
   result.staged_assignment = result.staged_assignment === null
     ? null
     : decodeAgentAssignment(result.staged_assignment);
-  for (const key of [
+  const latestAcceptanceExecution = result.latest_acceptance_execution === null
+    ? null
+    : decodeAgentAcceptanceExecution(result.latest_acceptance_execution);
+  result.latest_acceptance_execution = latestAcceptanceExecution;
+  if (
+    latestAcceptanceExecution !== null
+    && latestAcceptanceExecution.agent_role !== result.role
+  ) {
+    invalid(name);
+  }
+  const counters = Object.fromEntries([
     "execution_count",
+    "hosted_execution_count",
     "running_count",
     "succeeded_count",
     "failed_count",
     "skipped_count",
     "token_observation_count",
-  ]) number(result, key, name, { integer: true, minimum: 0 });
-  number(result, "measured_cost", name, { minimum: 0 });
-  nullableNumber(result, "input_tokens", name);
-  nullableNumber(result, "output_tokens", name);
-  nullableNumber(result, "average_duration_ms", name);
+    "physical_call_count",
+    "langfuse_not_attempted_count",
+    "langfuse_disabled_count",
+    "langfuse_queued_count",
+    "langfuse_exported_count",
+    "langfuse_error_count",
+    "langfuse_verified_count",
+  ].map((key) => [
+    key,
+    number(result, key, name, { integer: true, minimum: 0 }),
+  ]));
+  const measuredCost = nullableNumber(result, "measured_cost", name);
+  if (measuredCost !== null && measuredCost < 0) invalid(name);
+  const costMeasurementState = literal(
+    result,
+    "cost_measurement_state",
+    ["not_applicable", "measured", "partial", "not_observed", "invalid"],
+    name,
+  );
+  const accountingStatus = literal(
+    result,
+    "accounting_status",
+    ["not_applicable", "measured", "partial", "unavailable"],
+    name,
+  );
+  const providerEventIds = sha256Array(result, "provider_event_ids", name);
+  if (new Set(providerEventIds).size !== providerEventIds.length) {
+    invalid(name);
+  }
+  const expectedAccountingStatus = {
+    not_applicable: "not_applicable",
+    measured: "measured",
+    partial: "partial",
+    not_observed: "unavailable",
+    invalid: "unavailable",
+  }[costMeasurementState];
+  if (accountingStatus !== expectedAccountingStatus) invalid(name);
+  if (
+    (["measured", "partial"].includes(accountingStatus) && measuredCost === null)
+    || (["not_applicable", "unavailable"].includes(accountingStatus)
+      && measuredCost !== null)
+  ) {
+    invalid(name);
+  }
+  const inputTokens = nullableNonnegativeInteger(result, "input_tokens", name);
+  const outputTokens = nullableNonnegativeInteger(result, "output_tokens", name);
+  const reasoningTokens = nullableNonnegativeInteger(result, "reasoning_tokens", name);
+  const physicalCallCountState = literal(
+    result,
+    "physical_call_count_state",
+    ["not_applicable", "exact", "lower_bound"],
+    name,
+  );
+  result.provider_budget = decodeAgentBudget(result.provider_budget);
+  const judgeCalibration = nullableObject(result, "judge_calibration", name);
+  result.judge_calibration = judgeCalibration === null
+    ? null
+    : decodeJudgeCalibration(judgeCalibration);
+  const averageDuration = nullableNumber(result, "average_duration_ms", name);
+  const p50Duration = nullableNumber(result, "p50_duration_ms", name);
+  const p95Duration = nullableNumber(result, "p95_duration_ms", name);
+  if (
+    [averageDuration, p50Duration, p95Duration].some(
+      (duration) => duration !== null && duration < 0,
+    )
+  ) {
+    invalid(name);
+  }
+  const executionCount = counters.execution_count;
+  const hostedExecutionCount = counters.hosted_execution_count;
+  const completedCount = (
+    counters.succeeded_count +
+    counters.failed_count +
+    counters.skipped_count
+  );
+  if (counters.running_count + completedCount !== executionCount) invalid(name);
+  if (
+    counters.langfuse_not_attempted_count +
+    counters.langfuse_disabled_count +
+    counters.langfuse_queued_count +
+    counters.langfuse_exported_count +
+    counters.langfuse_error_count !== executionCount
+  ) {
+    invalid(name);
+  }
+  if (counters.token_observation_count > executionCount) invalid(name);
+  if (hostedExecutionCount > executionCount) invalid(name);
+  if (counters.langfuse_verified_count !== counters.langfuse_exported_count) invalid(name);
+  const lastLangfuseVerifiedAt = nullableTimestamp(
+    result,
+    "last_langfuse_verified_at",
+    name,
+  );
+  if (
+    (counters.langfuse_verified_count === 0) !==
+    (lastLangfuseVerifiedAt === null)
+  ) {
+    invalid(name);
+  }
+  if ((executionCount === 0) !== (accountingStatus === "not_applicable")) invalid(name);
+  if (
+    (
+      hostedExecutionCount === 0
+      && (
+        physicalCallCountState !== "not_applicable"
+        || counters.physical_call_count !== 0
+      )
+    )
+    || (hostedExecutionCount > 0 && physicalCallCountState === "not_applicable")
+  ) {
+    invalid(name);
+  }
+  if ((result.role === "judge") !== (result.judge_calibration !== null)) invalid(name);
+  validateTokenObservation(
+    inputTokens,
+    outputTokens,
+    counters.token_observation_count,
+    name,
+  );
+  const latencyValues = [averageDuration, p50Duration, p95Duration];
+  if (
+    (completedCount > 0 && latencyValues.some((duration) => duration === null)) ||
+    (completedCount === 0 && latencyValues.some((duration) => duration !== null))
+  ) {
+    invalid(name);
+  }
   nullableTimestamp(result, "last_activity_at", name);
   nullableString(result, "last_status", name);
   nullableString(result, "last_campaign_run_id", name);
@@ -801,6 +2284,22 @@ const decodeAgent = (value: unknown): AgentReadModel => {
 
 export const decodeAgents: ReadModelDecoder<AgentReadModel[]> = (value) =>
   records(value, "agents", decodeAgent);
+
+export const decodeAgentPrompt: ReadModelDecoder<AgentPromptReadModel> = (value) => {
+  const name = "agent prompt";
+  const result = record(value, name);
+  exactKeys(result, [
+    "role",
+    "prompt_version",
+    "prompt_sha256",
+    "system_prompt",
+  ], name);
+  literal(result, "role", agentRoles, name);
+  for (const key of ["prompt_version", "prompt_sha256", "system_prompt"]) {
+    string(result, key, name);
+  }
+  return result as AgentPromptReadModel;
+};
 
 const decodeAgentActivityRecord = (value: unknown): AgentActivityReadModel => {
   const name = "agent activity";
@@ -814,16 +2313,36 @@ const decodeAgentActivityRecord = (value: unknown): AgentActivityReadModel => {
     "status",
     "provider",
     "model",
+    "returned_model",
+    "model_substituted",
+    "upstream_provider",
+    "provider_request_id",
     "execution_mode",
     "configuration_version",
+    "configuration_set_sha256",
+    "role_configuration_sha256",
+    "generation_policy_sha256",
     "input_sha256",
     "output_sha256",
     "input_tokens",
     "output_tokens",
+    "reasoning_tokens",
+    "physical_attempts",
     "measured_cost",
+    "cost_measurement_state",
+    "accounting_status",
+    "provider_event_ids",
+    "provider_event_status",
+    "provider_lineage_state",
     "currency",
     "trace_id",
+    "langfuse_status",
+    "langfuse_verified_at",
     "detail",
+    "judge_calibration_id",
+    "judge_calibration_state",
+    "oracle_agreement",
+    "decision_authority",
     "error_code",
     "started_at",
     "finished_at",
@@ -834,27 +2353,233 @@ const decodeAgentActivityRecord = (value: unknown): AgentActivityReadModel => {
     "campaign_run_id",
     "provider",
     "model",
-    "input_sha256",
     "currency",
     "trace_id",
+    "langfuse_status",
   ]) string(result, key, name);
+  sha256(result, "input_sha256", name);
   for (const key of [
     "attempt_id",
     "parent_execution_id",
+    "returned_model",
+    "upstream_provider",
+    "provider_request_id",
+    "configuration_set_sha256",
+    "role_configuration_sha256",
+    "generation_policy_sha256",
     "output_sha256",
+    "judge_calibration_id",
     "error_code",
   ]) nullableString(result, key, name);
+  const returnedModel = nullableString(result, "returned_model", name);
+  const modelSubstituted = boolean(result, "model_substituted", name);
+  const providerEventStatus = nullableLiteral(
+    result,
+    "provider_event_status",
+    providerEventStatuses,
+    name,
+  );
+  const providerIdentity = [
+    result.returned_model,
+    result.upstream_provider,
+    result.provider_request_id,
+  ];
+  const hostedAuthority = [
+    result.configuration_set_sha256,
+    result.role_configuration_sha256,
+    result.generation_policy_sha256,
+  ];
+  if (
+    providerIdentity.some((candidate) => candidate === null)
+      !== providerIdentity.every((candidate) => candidate === null)
+    || hostedAuthority.some((candidate) => candidate === null)
+      !== hostedAuthority.every((candidate) => candidate === null)
+    || modelSubstituted !== (providerEventStatus === "model_mismatch")
+    || (
+      modelSubstituted
+      && (
+        returnedModel === null
+        || returnedModel === result.model
+        || returnedModel.startsWith("unsafe-provider-text-")
+      )
+    )
+  ) {
+    invalid(name);
+  }
   literal(result, "agent_role", agentRoles, name);
   literal(result, "status", ["running", "succeeded", "failed", "skipped"], name);
   literal(result, "execution_mode", ["deterministic", "hosted_advisory"], name);
+  literal(
+    result,
+    "langfuse_status",
+    ["not_attempted", "disabled", "queued", "exported", "error"],
+    name,
+  );
+  const langfuseVerifiedAt = nullableTimestamp(result, "langfuse_verified_at", name);
+  if ((result.langfuse_status === "exported") !== (langfuseVerifiedAt !== null)) invalid(name);
   number(result, "configuration_version", name, { integer: true, minimum: 1 });
-  nullableNumber(result, "input_tokens", name);
-  nullableNumber(result, "output_tokens", name);
-  number(result, "measured_cost", name, { minimum: 0 });
-  object(result, "detail", name);
+  const inputTokens = nullableNonnegativeInteger(result, "input_tokens", name);
+  const outputTokens = nullableNonnegativeInteger(result, "output_tokens", name);
+  const reasoningTokens = nullableNonnegativeInteger(result, "reasoning_tokens", name);
+  const physicalAttempts = nullableNonnegativeInteger(
+    result,
+    "physical_attempts",
+    name,
+  );
+  if (physicalAttempts === 0) invalid(name);
+  const measuredCost = nullableNumber(result, "measured_cost", name);
+  if (measuredCost !== null && measuredCost < 0) invalid(name);
+  const costMeasurementState = literal(
+    result,
+    "cost_measurement_state",
+    ["measured", "partial", "not_observed", "invalid"],
+    name,
+  );
+  const accountingStatus = literal(
+    result,
+    "accounting_status",
+    ["measured", "partial", "unavailable"],
+    name,
+  );
+  const providerEventIds = sha256Array(result, "provider_event_ids", name);
+  const providerLineageState = literal(
+    result,
+    "provider_lineage_state",
+    ["not_applicable", "canonical_physical", "historical_not_instrumented"],
+    name,
+  );
+  if (
+    new Set(providerEventIds).size !== providerEventIds.length
+    || ((providerEventStatus === null) !== (providerEventIds.length === 0))
+    || (
+      providerLineageState !== "historical_not_instrumented"
+      && providerEventIds.length > (physicalAttempts ?? 0)
+    )
+    || (
+      providerLineageState !== "historical_not_instrumented"
+      &&
+      result.status !== "running"
+      && physicalAttempts !== null
+      && providerEventIds.length !== physicalAttempts
+    )
+  ) {
+    invalid(name);
+  }
+  const providerAccountingComplete =
+    inputTokens !== null && outputTokens !== null && reasoningTokens !== null;
+  const expectedAccountingStatus = {
+    measured: "measured",
+    partial: "partial",
+    not_observed: "unavailable",
+    invalid: "unavailable",
+  }[costMeasurementState];
+  if (accountingStatus !== expectedAccountingStatus) invalid(name);
+  if (
+    (["measured", "partial"].includes(accountingStatus) && measuredCost === null)
+    || (accountingStatus === "unavailable" && measuredCost !== null)
+  ) {
+    invalid(name);
+  }
+  if (
+    result.accounting_status === "partial"
+    && physicalAttempts === null
+    && providerLineageState !== "historical_not_instrumented"
+  ) {
+    invalid(name);
+  }
+  const detail = object(result, "detail", name);
+  const durableLineageState = detail.provider_lineage_state;
+  if (
+    (
+      result.execution_mode === "deterministic"
+      && (
+        providerLineageState !== "not_applicable"
+        || durableLineageState !== undefined
+      )
+    )
+    || (
+      result.execution_mode === "hosted_advisory"
+      && (
+        providerLineageState === "not_applicable"
+        || durableLineageState !== providerLineageState
+      )
+    )
+    || (
+      providerLineageState === "historical_not_instrumented"
+      && (
+        result.status === "running"
+        || providerEventIds.length !== 0
+        || costMeasurementState === "measured"
+      )
+    )
+  ) {
+    invalid(name);
+  }
+  const calibrationState = nullableLiteral(
+    result,
+    "judge_calibration_state",
+    judgeCalibrationStates,
+    name,
+  );
+  const oracleAgreement = nullableBoolean(result, "oracle_agreement", name);
+  const decisionAuthority = nullableLiteral(
+    result,
+    "decision_authority",
+    judgeDecisionAuthorities,
+    name,
+  );
   timestamp(result, "started_at", name);
-  nullableTimestamp(result, "finished_at", name);
-  nullableNumber(result, "duration_ms", name);
+  const finishedAt = nullableTimestamp(result, "finished_at", name);
+  const duration = nullableNumber(result, "duration_ms", name);
+  if (duration !== null && duration < 0) invalid(name);
+  const outputSha256 = result.output_sha256;
+  if (outputSha256 !== null && !/^[0-9a-f]{64}$/.test(outputSha256 as string)) {
+    invalid(name);
+  }
+  if (
+    (result.status === "running" &&
+      (outputSha256 !== null || finishedAt !== null || duration !== null)) ||
+    (result.status !== "running" &&
+      (outputSha256 === null || finishedAt === null || duration === null))
+  ) {
+    invalid(name);
+  }
+  const judgeValues = [
+    result.judge_calibration_id,
+    calibrationState,
+    oracleAgreement,
+    decisionAuthority,
+  ];
+  if (
+    (
+      result.execution_mode === "deterministic"
+      && [
+        ...providerIdentity,
+        ...hostedAuthority,
+        reasoningTokens,
+        physicalAttempts,
+        providerEventStatus,
+        ...judgeValues,
+      ].some((candidate) => candidate !== null)
+    )
+    || (
+      result.execution_mode === "hosted_advisory"
+      && result.status === "succeeded"
+      && result.configuration_set_sha256 !== null
+      && (
+        providerIdentity.some((candidate) => candidate === null)
+        || !providerAccountingComplete
+        || physicalAttempts === null
+      )
+    )
+    || (
+      result.agent_role !== "judge"
+      && judgeValues.some((candidate) => candidate !== null)
+    )
+    || (decisionAuthority === "model" && calibrationState !== "enabled")
+  ) {
+    invalid(name);
+  }
   return result as AgentActivityReadModel;
 };
 
@@ -890,6 +2615,9 @@ const decodeToolScope = (value: unknown): ToolScopeReadModel => {
     "recorded_scan_count",
     "recorded_finding_count",
     "last_executed_at",
+    "runtime_state",
+    "evidenced_finding_count",
+    "last_error_code",
   ], name);
   for (const key of [
     "tool_id",
@@ -922,8 +2650,11 @@ const decodeToolScope = (value: unknown): ToolScopeReadModel => {
     "executed_attempt_count",
     "recorded_scan_count",
     "recorded_finding_count",
+    "evidenced_finding_count",
   ]) number(result, key, name, { integer: true, minimum: 0 });
+  literal(result, "runtime_state", ["idle", "running", "evidenced", "error"], name);
   nullableTimestamp(result, "last_executed_at", name);
+  nullableString(result, "last_error_code", name);
   return result as ToolScopeReadModel;
 };
 
@@ -966,6 +2697,7 @@ const decodeBirdseyeInstrumentation = (
     "queue_leased",
     "queue_dead_letter",
     "confirmed_count",
+    "confirmed_finding_count",
     "likely_count",
     "review_count",
     "healthy_components",
@@ -985,6 +2717,7 @@ const decodeBirdseyeInstrumentation = (
     "queue_leased",
     "queue_dead_letter",
     "confirmed_count",
+    "confirmed_finding_count",
     "likely_count",
     "review_count",
     "healthy_components",
@@ -1135,8 +2868,16 @@ const decodeBirdseyeAgentActivity = (
   ], name);
   literal(result, "status", ["running", "succeeded", "failed", "skipped"], name);
   timestamp(result, "started_at", name);
-  nullableTimestamp(result, "finished_at", name);
-  if (result.duration_ms !== null) number(result, "duration_ms", name, { minimum: 0 });
+  const finishedAt = nullableTimestamp(result, "finished_at", name);
+  const duration = result.duration_ms === null
+    ? null
+    : number(result, "duration_ms", name, { minimum: 0 });
+  if (
+    (result.status === "running" && (finishedAt !== null || duration !== null)) ||
+    (result.status !== "running" && (finishedAt === null || duration === null))
+  ) {
+    invalid(name);
+  }
   return result as BirdseyeAgentActivityReadModel;
 };
 
@@ -1159,6 +2900,21 @@ const decodeBirdseyeNode = (value: unknown): BirdseyeNodeReadModel => {
     "total_instances",
     "p50_latency_ms",
     "p95_latency_ms",
+    "execution_count",
+    "measured_cost_usd",
+    "accounting_status",
+    "currency",
+    "input_tokens",
+    "output_tokens",
+    "token_observation_count",
+    "langfuse_not_attempted_count",
+    "langfuse_disabled_count",
+    "langfuse_queued_count",
+    "langfuse_exported_count",
+    "langfuse_error_count",
+    "langfuse_verified_count",
+    "last_langfuse_verified_at",
+    "langfuse_status",
     "queue_depth",
     "target_access",
   ], name);
@@ -1200,8 +2956,121 @@ const decodeBirdseyeNode = (value: unknown): BirdseyeNodeReadModel => {
   boolean(result, "is_fresh", name);
   number(result, "healthy_instances", name, { integer: true, minimum: 0 });
   number(result, "total_instances", name, { integer: true, minimum: 1 });
-  for (const key of ["p50_latency_ms", "p95_latency_ms"]) {
-    if (result[key] !== null) number(result, key, name, { minimum: 0 });
+  const p50Latency = result.p50_latency_ms === null
+    ? null
+    : number(result, "p50_latency_ms", name, { minimum: 0 });
+  const p95Latency = result.p95_latency_ms === null
+    ? null
+    : number(result, "p95_latency_ms", name, { minimum: 0 });
+  const executionCount = nullableNonnegativeInteger(result, "execution_count", name);
+  const measuredCost = result.measured_cost_usd === null
+    ? null
+    : number(result, "measured_cost_usd", name, { minimum: 0 });
+  const accountingStatus = nullableLiteral(
+    result,
+    "accounting_status",
+    ["not_applicable", "measured", "partial", "unavailable"],
+    name,
+  );
+  const currency = nullableString(result, "currency", name);
+  const inputTokens = nullableNonnegativeInteger(result, "input_tokens", name);
+  const outputTokens = nullableNonnegativeInteger(result, "output_tokens", name);
+  const tokenObservationCount = nullableNonnegativeInteger(
+    result,
+    "token_observation_count",
+    name,
+  );
+  const deliveryCounts = [
+    nullableNonnegativeInteger(result, "langfuse_not_attempted_count", name),
+    nullableNonnegativeInteger(result, "langfuse_disabled_count", name),
+    nullableNonnegativeInteger(result, "langfuse_queued_count", name),
+    nullableNonnegativeInteger(result, "langfuse_exported_count", name),
+    nullableNonnegativeInteger(result, "langfuse_error_count", name),
+  ];
+  const langfuseVerifiedCount = nullableNonnegativeInteger(
+    result,
+    "langfuse_verified_count",
+    name,
+  );
+  const lastLangfuseVerifiedAt = nullableTimestamp(
+    result,
+    "last_langfuse_verified_at",
+    name,
+  );
+  const langfuseStatus = nullableLiteral(
+    result,
+    "langfuse_status",
+    ["not_attempted", "disabled", "queued", "exported", "error"],
+    name,
+  );
+  const isAgentNode = (result.kind as string).startsWith("agent:");
+  if (!isAgentNode) {
+    if (
+      [
+        executionCount,
+        measuredCost,
+        accountingStatus,
+        currency,
+        inputTokens,
+        outputTokens,
+        tokenObservationCount,
+        ...deliveryCounts,
+        langfuseVerifiedCount,
+        lastLangfuseVerifiedAt,
+        langfuseStatus,
+      ].some((metric) => metric !== null)
+    ) {
+      invalid(name);
+    }
+  } else {
+    if (
+      executionCount === null ||
+      tokenObservationCount === null ||
+      deliveryCounts.some((count) => count === null) ||
+      langfuseVerifiedCount === null ||
+      accountingStatus === null
+    ) {
+      invalid(name);
+    }
+    const agentExecutionCount = executionCount as number;
+    const agentTokenObservationCount = tokenObservationCount as number;
+    const agentLangfuseVerifiedCount = langfuseVerifiedCount as number;
+    const completeDeliveryCounts = deliveryCounts as number[];
+    const exportedCount = completeDeliveryCounts[3];
+    if (
+      completeDeliveryCounts.reduce((total, count) => total + count, 0) !==
+        agentExecutionCount ||
+      agentTokenObservationCount > agentExecutionCount ||
+      agentLangfuseVerifiedCount !== exportedCount ||
+      ((agentLangfuseVerifiedCount === 0) !== (lastLangfuseVerifiedAt === null)) ||
+      ((agentExecutionCount === 0) !== (accountingStatus === "not_applicable")) ||
+      (accountingStatus === "unavailable" && measuredCost !== 0)
+    ) {
+      invalid(name);
+    }
+    validateTokenObservation(
+      inputTokens,
+      outputTokens,
+      agentTokenObservationCount,
+      name,
+    );
+    if (
+      (p50Latency === null) !== (p95Latency === null) ||
+      (agentExecutionCount === 0 && (p50Latency !== null || p95Latency !== null)) ||
+      (agentExecutionCount > 0 &&
+        ["ready", "error", "waiting"].includes(result.runtime_state as string) &&
+        (p50Latency === null || p95Latency === null))
+    ) {
+      invalid(name);
+    }
+    if (
+      (agentExecutionCount === 0 &&
+        (measuredCost !== null || currency !== null || langfuseStatus !== null)) ||
+      (agentExecutionCount > 0 &&
+        (measuredCost === null || currency === null || langfuseStatus === null))
+    ) {
+      invalid(name);
+    }
   }
   if (result.queue_depth !== null) {
     number(result, "queue_depth", name, { integer: true, minimum: 0 });

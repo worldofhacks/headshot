@@ -165,7 +165,7 @@ def _approved_request(store: ControlPlaneStore, launcher: Principal):
     request = store.request_campaign_authorization(
         principal=launcher,
         scope=scope,
-        expires_at=datetime.datetime.now(datetime.UTC) + datetime.timedelta(minutes=10),
+        expires_at=datetime.datetime.now(datetime.UTC) + datetime.timedelta(minutes=15),
         idempotency_key=f"request-{uuid.uuid4().hex}",
     )
     store.decide_campaign_authorization(
@@ -235,7 +235,7 @@ def test_authorization_persists_launcher_and_denies_self_approval(
     request = store.request_campaign_authorization(
         principal=launcher,
         scope=scope,
-        expires_at=datetime.datetime.now(datetime.UTC) + datetime.timedelta(minutes=10),
+        expires_at=datetime.datetime.now(datetime.UTC) + datetime.timedelta(minutes=15),
         idempotency_key="request-auth-self-fixture",
     )
 
@@ -258,7 +258,7 @@ def test_distinct_approver_can_approve_exact_scope_and_launcher_can_launch(
     request = store.request_campaign_authorization(
         principal=launcher,
         scope=scope,
-        expires_at=datetime.datetime.now(datetime.UTC) + datetime.timedelta(minutes=10),
+        expires_at=datetime.datetime.now(datetime.UTC) + datetime.timedelta(minutes=15),
         idempotency_key="request-auth-distinct-fixture",
     )
     decision = store.decide_campaign_authorization(
@@ -281,13 +281,40 @@ def test_distinct_approver_can_approve_exact_scope_and_launcher_can_launch(
     assert run.state == "queued"
 
 
+def test_launch_refuses_authorization_that_cannot_cover_the_full_run_timeout(
+    store: ControlPlaneStore,
+) -> None:
+    launcher = _principal(LAUNCHER_ID, permissions=(TARGETS_MANAGE, CAMPAIGN_LAUNCH))
+    approver = _principal(APPROVER_ID, permissions=(CAMPAIGN_AUTHORIZE,))
+    scope = _ready_scope(store, launcher)
+    request = store.request_campaign_authorization(
+        principal=launcher,
+        scope=scope,
+        expires_at=datetime.datetime.now(datetime.UTC) + datetime.timedelta(minutes=5),
+        idempotency_key="request-window-too-short",
+    )
+    store.decide_campaign_authorization(
+        principal=approver,
+        request_id=request.request_id,
+        decision="approved",
+        idempotency_key="approve-window-too-short",
+    )
+
+    with pytest.raises(AuthorizationDeniedError, match="full campaign timeout"):
+        store.launch_campaign(
+            principal=launcher,
+            request_id=request.request_id,
+            idempotency_key="launch-window-too-short",
+        )
+
+
 def test_cross_organization_lookup_and_decision_are_denied(store: ControlPlaneStore) -> None:
     launcher = _principal(LAUNCHER_ID, permissions=(TARGETS_MANAGE, CAMPAIGN_LAUNCH))
     scope = _ready_scope(store, launcher)
     request = store.request_campaign_authorization(
         principal=launcher,
         scope=scope,
-        expires_at=datetime.datetime.now(datetime.UTC) + datetime.timedelta(minutes=10),
+        expires_at=datetime.datetime.now(datetime.UTC) + datetime.timedelta(minutes=15),
         idempotency_key="request-cross-org-fixture",
     )
     other = _principal(
@@ -317,7 +344,7 @@ def test_launch_and_queue_enqueue_commit_atomically_and_are_idempotent(
     request = store.request_campaign_authorization(
         principal=launcher,
         scope=scope,
-        expires_at=datetime.datetime.now(datetime.UTC) + datetime.timedelta(minutes=10),
+        expires_at=datetime.datetime.now(datetime.UTC) + datetime.timedelta(minutes=15),
         idempotency_key="request-launch-idempotent",
     )
     store.decide_campaign_authorization(
@@ -379,7 +406,7 @@ def test_registry_mutation_invalidates_pending_approval(store: ControlPlaneStore
     request = store.request_campaign_authorization(
         principal=launcher,
         scope=scope,
-        expires_at=datetime.datetime.now(datetime.UTC) + datetime.timedelta(minutes=10),
+        expires_at=datetime.datetime.now(datetime.UTC) + datetime.timedelta(minutes=15),
         idempotency_key="request-disable-before-approval",
     )
     store.set_surface_enabled(
@@ -489,6 +516,55 @@ def test_finding_decision_persists_bounded_redacted_plain_text(
     }
     recorder = ExecutionRecorder()
     with migrated_db.begin() as connection:
+        authorization_request_id = f"request-{campaign_run_id}"
+        connection.execute(
+            text(
+                "INSERT INTO campaign_authorization_requests "
+                "(request_id, organization_id, scope_hash, scope_payload, launcher_user_id, "
+                "launcher_session_id, expires_at) VALUES "
+                "(:request, :org, :scope_hash, '{}'::jsonb, :user, :session, "
+                "clock_timestamp() + INTERVAL '10 minutes')"
+            ),
+            {
+                "request": authorization_request_id,
+                "org": ORG_ID,
+                "scope_hash": "a" * 64,
+                "user": LAUNCHER_ID,
+                "session": "sess_M1dLauncher",
+            },
+        )
+        connection.execute(
+            text(
+                "INSERT INTO campaign_authorization_decisions "
+                "(decision_id, organization_id, request_id, scope_hash, decision, "
+                "approver_user_id, approver_session_id) VALUES "
+                "(:decision, :org, :request, :scope_hash, 'approved', :user, :session)"
+            ),
+            {
+                "decision": f"decision-{campaign_run_id}",
+                "org": ORG_ID,
+                "request": authorization_request_id,
+                "scope_hash": "a" * 64,
+                "user": APPROVER_ID,
+                "session": "sess_M1dApprover",
+            },
+        )
+        connection.execute(
+            text(
+                "INSERT INTO campaign_runs "
+                "(run_id, organization_id, authorization_request_id, scope_hash, "
+                "launcher_user_id, launcher_session_id) VALUES "
+                "(:run, :org, :request, :scope_hash, :user, :session)"
+            ),
+            {
+                "run": campaign_run_id,
+                "org": ORG_ID,
+                "request": authorization_request_id,
+                "scope_hash": "a" * 64,
+                "user": LAUNCHER_ID,
+                "session": "sess_M1dLauncher",
+            },
+        )
         stored = recorder.record(evidence_fields, connection)
         verdict_id = connection.execute(
             text(
@@ -573,7 +649,7 @@ def test_db_rejects_direct_self_approval_and_append_only_mutation(
     request = store.request_campaign_authorization(
         principal=launcher,
         scope=scope,
-        expires_at=datetime.datetime.now(datetime.UTC) + datetime.timedelta(minutes=10),
+        expires_at=datetime.datetime.now(datetime.UTC) + datetime.timedelta(minutes=15),
         idempotency_key="request-db-trigger-fixture",
     )
 

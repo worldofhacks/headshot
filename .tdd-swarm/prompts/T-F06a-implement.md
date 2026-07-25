@@ -1,0 +1,4 @@
+# T-F06a Implement — Model: capable
+Worktree `<WORKTREE>`; branch `ticket/T-F06a-replay-code`. Inputs: ticket, frozen test/review, lessons, and landed T-F05d through T-F05p. Write only the four ticket source scopes and `.tdd-swarm/reports/T-F06a-implement.md`; never edit tests/dependencies. Preserve exact target/chat/session/patient, J/K binding, post-claim and per-attempt L→H/I through M, queue-sanitized rejection, one resolution/cleanup, and O/N/G complete rotation chain; add no disabled surface, catalog/parser/source fallback, combined/final-only state, reload, or rotation.
+
+Run `.tdd-swarm/run-local-gates.sh tickets/T-F06a.md <DIFF_BASE>` every GREEN loop; maximum three implementation attempts. No network, raw credential/session input, Railway action, spend, live traffic, main merge, or push. Return exactly `DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED(reason)` plus commit/gate summary; full output stays in the report.

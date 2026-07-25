@@ -1,10 +1,11 @@
 # Headshot authentication and authorization
 
-> **Status — 2026-07-21:** Clerk is the locked human identity provider. This integration branch wires
-> the offline-tested M1c verifier into a bearer-only `/api/v1` boundary and a Clerk React console.
-> It is **not deployed** and has not been verified with real Clerk users. Dashboard provisioning,
-> Railway staging, and all external acceptance tests remain required before this can be called an
-> operational Clerk integration.
+> **Status — updated 2026-07-25:** Clerk is the locked human identity provider. The bearer-only
+> `/api/v1` boundary and Clerk React console are deployed on Railway staging from candidate
+> `2069036e`. Staging readiness proved that the local Clerk/Web security configuration parses, the
+> console and sign-in shell load, and a missing-token protected request returns `401`. This is not a
+> signed-in acceptance test. Real Clerk users, exact Organization and permission assignments, MFA,
+> cross-Organization denial, the two-person flow, and production authentication remain unverified.
 
 This document is the security contract for human access to the Headshot console and API. It does not
 define agent/workload credentials and it does not authorize live campaigns.

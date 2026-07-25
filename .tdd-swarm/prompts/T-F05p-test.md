@@ -1,0 +1,4 @@
+# T-F05p Test — Model: capable
+Worktree `<WORKTREE>`; branch `ticket/T-F05p-clinical-copilot-target-catalog`. Inputs: ticket, tracked catalog, production catalog/config conventions, frozen readiness. Write only `tests/test_clinical_copilot_target_catalog.py` and `.tdd-swarm/reports/T-F05p-test.md`. Own RED for exactly the two authorized target IDs, identical Web/Runner file+hash, opaque Runner-only credential bindings, enabled chat and disabled UI/evidence/upload surfaces, exact one-target/one-session selection, session-pinned patient identity, and secret/extracted-artifact absence.
+
+Use fake configuration/resolver only; patch socket/DNS/HTTP/provider/target/Railway hooks to fail. No network, credential/session values, PHI, extracted local artifacts, spend, main merge, or push. Maximum three attempts. Return exactly `DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED(reason)` plus RED mapping; full output stays in the report.

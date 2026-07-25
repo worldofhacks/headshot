@@ -25,6 +25,7 @@ def _metadata(value: str = SESSION_VALUE) -> SessionLeaseMetadata:
         generation="generation-20260722a",
         expires_at=datetime.datetime(2026, 7, 22, 21, 0, tzinfo=datetime.UTC),
         value_sha256=hashlib.sha256(value.encode()).hexdigest(),
+        expiry_source="operator_conservative_lease",
     )
 
 
@@ -70,6 +71,26 @@ def test_silent_rotation_under_the_same_versioned_reference_is_refused() -> None
         lease.resolve(SESSION_REF)
 
 
+def test_session_metadata_rejects_cookie_wrappers_without_path_name_heuristics() -> None:
+    reference = "secretref://staging/openemr/generation-20260722a"
+    wrapped_value = "sid=synthetic-smart-session-value"
+    resolver = SealedEnvironmentCredentialResolver(
+        {reference: "OPENEMR_SMART_SESSION"},
+        environment={"OPENEMR_SMART_SESSION": wrapped_value},
+        session_metadata={
+            reference: SessionLeaseMetadata(
+                generation="generation-20260722a",
+                expires_at=_metadata().expires_at,
+                value_sha256=hashlib.sha256(wrapped_value.encode()).hexdigest(),
+                expiry_source="operator_conservative_lease",
+            )
+        },
+    )
+
+    with pytest.raises(CredentialResolutionError, match="raw identifier"):
+        resolver.resolve(reference)
+
+
 def test_session_must_cover_the_full_campaign_window_and_version_match_reference() -> None:
     resolver = SealedEnvironmentCredentialResolver(
         {SESSION_REF: "OPENEMR_SMART_SESSION"},
@@ -97,6 +118,7 @@ def test_session_must_cover_the_full_campaign_window_and_version_match_reference
         generation="generation-other",
         expires_at=_metadata().expires_at,
         value_sha256=_metadata().value_sha256,
+        expiry_source="operator_conservative_lease",
     )
     bad = SealedEnvironmentCredentialResolver(
         {SESSION_REF: "OPENEMR_SMART_SESSION"},
@@ -160,6 +182,7 @@ def test_runner_environment_loads_session_value_and_lifecycle_metadata_separatel
                     "generation": _metadata().generation,
                     "expires_at": _metadata().expires_at.isoformat(),
                     "value_sha256": _metadata().value_sha256,
+                    "expiry_source": _metadata().expiry_source,
                 }
             }
         ),
@@ -190,3 +213,17 @@ def test_malformed_runner_session_metadata_fails_closed(
 
     with pytest.raises(CredentialResolutionError, match="metadata configuration"):
         SealedEnvironmentCredentialResolver.from_environment()
+
+
+def test_session_cookie_wrapper_is_refused_without_echoing_the_value() -> None:
+    wrapped = "sid=synthetic-session-that-must-not-be-logged"
+    resolver = SealedEnvironmentCredentialResolver(
+        {SESSION_REF: "OPENEMR_SMART_SESSION"},
+        environment={"OPENEMR_SMART_SESSION": wrapped},
+        session_metadata={SESSION_REF: _metadata(wrapped)},
+    )
+
+    with pytest.raises(CredentialResolutionError) as error:
+        resolver.resolve(SESSION_REF)
+    assert "raw identifier" in str(error.value)
+    assert wrapped not in str(error.value)

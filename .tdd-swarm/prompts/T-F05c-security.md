@@ -1,0 +1,4 @@
+# T-F05c Security Review — Model: capable
+Worktree `<WORKTREE>`; branch `ticket/T-F05c-live-campaign-preflight`. Exact inputs: ticket, diff/reports/frozen tests, and T-F05d through T-F05p reviews. Write only security report; all else read-only. Inspect catalog/hash/Web resolver/disabled-surface/target-session-patient confusion, source trust/acquisition, active rows, fake claim, combined/final-only state, history omission, activation replay/order/hash substitution, queue-message leakage, TOCTOU, mutation, and early effects.
+
+No network, raw credential/session input, Railway/database/controller/provider/target action, spend, main merge, or push. Maximum three review attempts. Return exactly `DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED(reason)` plus highest severity; full output stays in the report.

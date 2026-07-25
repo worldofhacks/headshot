@@ -1,0 +1,4 @@
+# T-F04h Test Review — Model: capable
+Worktree `<WORKTREE>`; branch `ticket/T-F04h-smoke-contracts`. Exact inputs: ticket, focused tests/RED report. Allowed write only: `.tdd-swarm/reports/T-F04h-test-review.md`; do not edit tests. Run focused pytest. Attack classification/parity/hash/lineage/accounting/review/network flaws and any attempt to treat the `target_scope:none` smoke fixture as T-F05d's target-session patient manifest. Freeze only after all Critical/Important findings close.
+
+No network, credentials, spend, target traffic, main merge, or push. Maximum three review attempts. Post-implementation verifier: `.tdd-swarm/run-local-gates.sh tickets/T-F04h.md <DIFF_BASE>`. Return exactly `DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED(reason)` plus freeze verdict; full output stays in the report.

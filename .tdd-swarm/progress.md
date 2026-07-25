@@ -159,3 +159,80 @@ packet -> presence-only preflight report. No hosted/target calls; no unverified 
    Current status: Model=empty, Budget/AttemptCap/Rate/Timeout=missing, Canary=unavailable -> live NOT ready
    (fail-closed). No hosted/target call made.
 NEXT: report to owner + STOP for explicit bounded live-campaign authorization.
+
+## 2026-07-24 — Phase 0 / final-submission plan created
+- [locked-decision] Production-grade posture retained; base `23490ea` recorded as 1001 Python passed/3
+  skipped, 75 console tests, 4 browser tests, dual CI green.
+- [locked-decision] Created the ten-ticket minimum manifest T-F01..T-F10 with exclusive same-wave scopes,
+  strict RED→test-review→freeze→GREEN→code/security review sequencing, four-slot accounting, traceability,
+  gate mapping, and role prompts. Planning only; no agent dispatch, application/test edit, live traffic,
+  credential action, commit, push, or main merge.
+- [open-question] Execution remains gated by fresh staging SMART lease, exact authorization, distinct
+  Approver, paid provider/model activation, passing Judge calibration, separate load approval, and any
+  true-production isolation/credential choice.
+- [locked-decision] Existing 9×HTTP-200/9×evidence/9×INDETERMINATE/$0.09 run is transport evidence only;
+  no finding/report is fabricated. PRD-32 remains conditional on three genuine independently reproduced
+  findings.
+
+## 2026-07-24 — Phase 0 plan-review repairs complete
+- [locked-decision] Adversarial review findings C-1..C-5 and I-1..I-4 repaired before dispatch. Superseded
+  ten-ticket hybrids were split into 26 single-concern tickets: T-F00, deterministic `a` tickets,
+  separately authorized `b` evidence tickets, and final reconciliation owners.
+- [locked-decision] Wave 0 now owns spec-lint, one local wrapper, coverage policy/baseline-or-approved-
+  non-applicability, import-cycle validation, and frozen negative tests. No code ticket may reach
+  `review-passed` until T-F00 lands.
+- [locked-decision] Regenerated 82 strict prompts (50 code-role, 32 operational-role) with exact inputs,
+  scopes, report paths, literal status contract, three-attempt cap, frozen-test/verifier rule, gate wrapper,
+  no main merge/push, and named authorization boundaries.
+- [locked-decision] Self-check passed: 26 tickets, 82 expected prompts, acyclic strictly earlier-wave
+  dependencies, no same-wave scope collisions, required ticket sections present, prompt contracts complete,
+  and `git diff --check` clean.
+- [locked-decision] Deadline triage is explicit: P0 maximum safe deterministic proof path; P1 external/human
+  evidence and P2 packaging remain honest blockers. Full completion by noon is not promised.
+
+## 2026-07-24 — Final ticket-context repair complete
+- [locked-decision] Closed re-review finding I-1 by adding `## Context` before Acceptance Criteria in all
+  26 final-gap tickets. Each context names its upstream interface/manifest, authoritative requirement and
+  policy/contract hash source, wave boundary, and task class.
+- [locked-decision] Every authorization-bound context treats the owner-supplied authorization artifact as
+  read-only and makes absence/invalidity `BLOCKED` with zero calls. No ticket ID, scope, dependency, AC,
+  prompt path, application/test file, external state, git history, or remote was changed.
+- [locked-decision] Structural self-check and `git diff --check` passed after the repair: 26/26 Context
+  sections are positioned before Acceptance Criteria and contain all required execution fields; the
+  existing 82-prompt/dependency/scope checks remain green.
+
+## 2026-07-24 — Final-submission execution authorized
+- [locked-decision] Owner approved the reviewed swarm plan and bounded OpenRouter spending at 09:16 EDT.
+  Paid provider use remains subject to per-run caps and evidence; target calls still require the Policy
+  Gateway's exact target/corpus authorization, fresh SMART lease, synthetic-only proof, and distinct
+  launcher/Approver. Spending approval is not target or load authorization.
+- Ticket T-F00: tests-dispatched (base `6fcfa0c`, worktree `wt-T-F00`, wave 0).
+- [research] Parallel read-only owner lanes dispatched for current OpenRouter model allocation and
+  staging/live-gate readiness. They may write sanitized reports only and cannot make paid or target calls.
+- Ticket T-F00: RED verified at `e8e112e` (8 feature-missing failures), then test-review rejected
+  (1 Critical, 3 Important). Test Agent repair attempt 2 dispatched; tests are not frozen.
+- [research] OpenRouter readiness found no effective provider/model configuration and no complete hosted
+  runtime. Proposed four-family allocation and a bounded $5/56-call evaluation envelope are evidence only
+  until deterministic provider tickets and role authorizations land.
+- [research] Live-gate audit found Web healthy/ready and only-Web-public, but missing session-lease metadata,
+  provider configuration, exact campaign/load authorization, current-SHA deployment proof, and staging/
+  production database isolation evidence. Zero target calls remain enforced.
+- Ticket T-F00: tests-frozen at `87b472f` after two review/repair cycles (17 clean feature-missing
+  failures; final test-review 0 Critical/Important, 1 recorded Minor). Implementation attempt 1 dispatched.
+- [locked-decision] Owner's broad spending approval is operationalized conservatively as the readiness
+  proposal's hard ceiling of $5.00 and 56 physical calls for the initial two-hour provider evaluation.
+  This does not authorize target traffic and will not be used until reviewed provider code, per-role
+  credential references, zero-call preflight, and bounded authorization artifacts exist.
+- Ticket T-F00: implementation attempt 1 committed at `3e1c370`; orchestrator rerun green (1,018
+  passed/3 skipped, Ruff/secret/spec/import gates green), but independent review rejected it with
+  12 Important findings across code and security. A Test Agent is adding RED regression coverage
+  before any implementation repair; the first green run is not accepted as a trust root.
+- [locked-decision] The four-role OpenRouter amendment is independently `REVIEW_PASS` with zero
+  Critical/Important/Minor findings after three adversarial review cycles. The reviewed plan now
+  has 33 bounded tickets and 54 prompts, including atomic role-configuration staging, zero-call
+  provider and live-campaign preflights, worst-case pre-dispatch spend reservation, strict role
+  adapters/contracts, immutable dual smoke evidence, and distinct Evidence/Security reviews.
+- Ticket T-F00: post-review Test Agents added collection-bound spec checks and adversarial gate
+  authority, timeout/output, redaction, path, hash, and signed-approval cases. Candidate frozen-test
+  head is `93e62dc`; the combined suite is cleanly RED and definitive independent test-design review
+  is pending before implementation attempt 2.

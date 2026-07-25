@@ -8,8 +8,8 @@ describe("frozen direct routes", () => {
     ["/live/attempt-id", { screen: "live", entityId: "attempt-id" }],
     ["/findings/finding-id", { screen: "findings", entityId: "finding-id" }],
     ["/approvals/approval-id", { screen: "approvals", entityId: "approval-id" }],
+    ["/reports/report-id", { screen: "reports", entityId: "report-id" }],
     ["/coverage", { screen: "coverage", entityId: null }],
-    ["/resilience", { screen: "resilience", entityId: null }],
     ["/traces", { screen: "traces", entityId: null }],
     ["/costs", { screen: "costs", entityId: null }],
     ["/targets", { screen: "targets", entityId: null }],
@@ -23,5 +23,10 @@ describe("frozen direct routes", () => {
       "/findings/finding%20%2F%20one",
     );
     expect(parseConsoleRoute("/not-a-screen")).toEqual({ screen: "live", entityId: null });
+    expect(parseConsoleRoute("/resilience")).toEqual({ screen: "live", entityId: null });
+    expect(parseConsoleRoute("/coverage/regression-id")).toEqual({
+      screen: "live",
+      entityId: null,
+    });
   });
 });

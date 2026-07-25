@@ -1,0 +1,4 @@
+# T-F05h Security Review — Model: capable
+Worktree `<WORKTREE>`; branch `ticket/T-F05h-runner-deployment-state`. Inputs: ticket, diff, implementation/gate reports, frozen tests/review. Write only `.tdd-swarm/reports/T-F05h-security.md`; all else is read-only. Re-run gates; inspect forged/serialized runtime receipt, evidence-only-to-runtime confusion, signature/key/trust/request replay, sequence rollback, phase/hash confusion, caller source/state bypass, release rollback, unsafe-state suppression, create-only races, disclosure, and fail-open approval.
+
+No network/controller/Railway/database/provider/target, raw secrets/PHI, spend, main merge, or push. Maximum three review attempts. Return exactly `DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED(reason)` plus highest severity; full output stays in the report.

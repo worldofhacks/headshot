@@ -1,0 +1,4 @@
+# T-F05g Test Review — Model: capable
+Worktree `<WORKTREE>`; branch `ticket/T-F05g-smart-session-rotation`. Inputs: ticket, focused test/report, landed E/F/H/I/J/K/L/M/N/O/P chain, owned config/docs. Write only `.tdd-swarm/reports/T-F05g-test-review.md`; tests/source/config/docs are read-only. Attack catalog/hash divergence, disabled surface or target/session/patient drift, omitted/aliased/reordered stages, unbounded/changed prior set, incomplete terminal jobs, zero/final substitution, unsigned activation, nonce/sequence/time rollback, open admissions, old-process resurrection, single-snapshot approval, context overwrite, unsafe guidance, and secrets.
+
+Freeze only clean criterion-complete RED. No network/live DB/controller/Railway/deployment/provider/target, secrets/PHI, spend, main merge, or push. Maximum three reviews. Return exactly `DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED(reason)` plus freeze verdict; full output stays in the report.

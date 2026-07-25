@@ -1,0 +1,7 @@
+{
+  "target_id": "copilot-week1",
+  "host": "agent-production-9f62.up.railway.app",
+  "adapter_kind": "openemr",
+  "credential_ref": "secretref://staging/copilot-week1/session/generation-20260724a",
+  "auth_mode": "session"
+}

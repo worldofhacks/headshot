@@ -74,4 +74,29 @@ describe("console stream control events", () => {
     await waitFor(() => expect(reconcile).toHaveBeenCalledTimes(1));
     expect("cursor" in result.current && result.current.cursor).toBe(1);
   });
+
+  it("accepts non-contiguous cursors from an organization-filtered stream", async () => {
+    const reconcile = vi.fn();
+    const getToken = vi.fn(async () => "fixture-session");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>().mockResolvedValue(
+        new Response(
+          'id: 41\nevent: campaign.started\ndata: {"aggregate_type":"campaign"}\n\n'
+          + 'id: 44\nevent: agent.completed\ndata: {"aggregate_type":"agent"}\n\n',
+          { status: 200, headers: { "content-type": "text/event-stream" } },
+        ),
+      ),
+    );
+
+    const { result } = renderHook(() =>
+      useConsoleEvents(getToken, reconcile),
+    );
+
+    await waitFor(() =>
+      expect("cursor" in result.current && result.current.cursor).toBe(44),
+    );
+    expect(result.current.state).toBe("ready");
+    expect(result.current.reason_code).toBeUndefined();
+  });
 });

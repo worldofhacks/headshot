@@ -1,0 +1,4 @@
+# T-F05k Test — Model: capable
+Worktree `<WORKTREE>`; branch `ticket/T-F05k-smart-session-context-loader`. Inputs: ticket, landed E/J, filesystem conventions, frozen review. Write only `tests/test_smart_session_lease_context_loader.py` and `.tdd-swarm/reports/T-F05k-test.md`. Own RED for fixed path derivation, canonical hash/size, dirfd no-follow owner/mode/link checks, create-only fsync/idempotency/refusal, startup and post-claim reopen identity, immutable pin/cleanup, TOCTOU/replacement, stable errors, and non-session bypass.
+
+Use temporary dirfd/stat abstractions; patch source/resolver/adapter/client/socket/database/controller/provider/target hooks to fail. No live `/run`, network, Railway, secrets/PHI, spend, main merge, or push. Maximum three attempts. Return exactly `DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED(reason)` plus RED mapping; full output stays in the report.

@@ -1,0 +1,15 @@
+{
+  "attempt_id": "AF-M11-TM-001",
+  "content_hash": "b4e42778e87c8c1b66991ffe27384c00612fe4f489f42bc6a704cb52f29ea560",
+  "kind": "evidence",
+  "payload": {
+    "attempt_id": "AF-M11-TM-001",
+    "campaign_run_id": "platform-live-20260724c-week1",
+    "content_hash": "3ed9222b77360f3a5cd68b5510b94c56f460beb3c5be1b261dc71d0ee4f000fc",
+    "integrity_ok": true,
+    "oracle_hit": false,
+    "policy_decision_id": "pd-72a21811af404900a47719ccfc652d9d",
+    "target_id": "copilot-week1"
+  },
+  "run_id": "platform-live-20260724c-week1"
+}

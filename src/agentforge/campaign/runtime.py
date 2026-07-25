@@ -1,33 +1,22 @@
-"""Production composition root for the authorized bounded-run CLI (M11-coordinator).
+"""Shared runtime primitives for the private durable Runner and Scheduler.
 
-``python -m agentforge.campaign run …`` (:mod:`agentforge.campaign.__main__`) must construct the
-REAL production collaborators the injection-driven :func:`agentforge.campaign.cli.main` needs — a
-real DB engine, a real :class:`~agentforge.target.openemr_adapter.OpenEmrAdapter`, a real clock, and
-real run accounting — rather than failing closed for want of an injection. This module is that
-composition root: the ONE place the live dependencies are built.
+The Railway Runner is the only supported live campaign executor. It consumes a durable
+``agent_work`` job, revalidates the exact persisted authorization before dispatch, records target
+and agent execution rows, and exports the corresponding Langfuse observations.
 
-Two properties matter for safety:
-
-* **Preflight is network-free and stays separate from run.** Building these dependencies opens NO
-  socket: :func:`production_engine` uses ``pool_pre_ping`` but SQLAlchemy connects lazily (first
-  use only), and :func:`live_adapter_factory` returns an adapter whose ``httpx`` client is built
-  lazily inside ``send()``. So the composition root constructs inert objects; the target connection
-  is made ONLY at the first post-gate dispatch inside ``run_case`` — after authorization + binding +
-  scope validation pass. The presence-only preflight (``scripts/preflight_status.py``) never touches
-  this module.
-* **A misconfiguration fails closed, legibly.** A missing ``DATABASE_URL`` for a ``run`` is a typed
-  :class:`RuntimeConfigError` (an operational error), NOT a silent default — the bounded run never
-  launches against an unspecified store.
-
-Framework-neutral at construction: ``httpx`` is never imported here (the adapter imports it lazily);
-only SQLAlchemy's engine factory and stdlib are used.
+The former one-shot ``python -m agentforge.campaign run`` composition root is retired because its
+local-file workflow could bypass that durable ledger. The generic engine, clock, and accounting
+helpers remain here because the authoritative private Runner and Scheduler use them. The legacy
+live-adapter factory now refuses instead of constructing a target transport.
 """
 
 from __future__ import annotations
 
 import os
+import sys
 import time
 from collections.abc import Callable
+from typing import TextIO
 
 from sqlalchemy import Engine, create_engine
 
@@ -39,6 +28,21 @@ from agentforge.target.openemr_adapter import OpenEmrAdapter
 # via HEADSHOT_PER_CALL_USD for a target with a known per-request price.
 _DEFAULT_PER_CALL_USD = 0.01
 _PER_CALL_USD_ENV = "HEADSHOT_PER_CALL_USD"
+LEGACY_LIVE_EXECUTION_EXIT_CODE = 2
+LEGACY_LIVE_EXECUTION_MESSAGE = (
+    "operational-error: direct legacy live execution is disabled because it bypasses the durable "
+    "campaign, agent, target-request, cost, and Langfuse telemetry ledger. Use the authenticated "
+    "Railway Web control plane: create an exact-scope /api/v1/campaign-authorization-requests "
+    "record, obtain a decision from a distinct approver, then launch through /api/v1/campaigns. "
+    "Only the private DurableCampaignRunner may contact a live target."
+)
+
+
+def refuse_legacy_live_execution(*, stream: TextIO | None = None) -> int:
+    """Fail closed before credentials, storage, adapters, or target sockets are touched."""
+
+    print(LEGACY_LIVE_EXECUTION_MESSAGE, file=stream or sys.stderr)
+    return LEGACY_LIVE_EXECUTION_EXIT_CODE
 
 
 class RuntimeConfigError(Exception):
@@ -75,8 +79,8 @@ def production_engine(database_url: str | None) -> Engine:
     """
     if not database_url:
         raise RuntimeConfigError(
-            "DATABASE_URL is not set — the authorized bounded run needs a real evidence store; "
-            "refusing to launch against an unspecified database (fail closed)"
+            "DATABASE_URL is not set — the private durable service needs its authoritative store; "
+            "refusing to start against an unspecified database (fail closed)"
         )
     return create_engine(_to_psycopg_dialect(database_url), pool_pre_ping=True, future=True)
 
@@ -123,16 +127,12 @@ def accounting_from_environment() -> RunAccounting:
 
 
 def live_adapter_factory(*, timeout_seconds: float | None = None) -> Callable[..., OpenEmrAdapter]:
-    """Return the factory the CLI calls as ``factory(base_url=...) -> OpenEmrAdapter``.
+    """Refuse the retired direct-live adapter composition path.
 
-    The returned adapter carries NO injected client, so its real ``httpx`` client is built LAZILY
-    inside ``send()`` on the first post-gate dispatch — constructing the adapter opens no socket.
-    There is no fallback to the P9 fake: this is the sole live transport the composition root wires.
+    ``timeout_seconds`` remains in the signature only to make stale callers fail with the explicit
+    safety error instead of silently changing call semantics. The durable Runner constructs its
+    adapter only after loading and revalidating persisted control-plane authority.
     """
 
-    def _factory(*, base_url: str) -> OpenEmrAdapter:
-        if timeout_seconds is None:
-            return OpenEmrAdapter(base_url=base_url)
-        return OpenEmrAdapter(base_url=base_url, timeout_seconds=timeout_seconds)
-
-    return _factory
+    del timeout_seconds
+    raise RuntimeConfigError(LEGACY_LIVE_EXECUTION_MESSAGE)

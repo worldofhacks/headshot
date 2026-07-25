@@ -14,7 +14,7 @@ out-of-band/browser-specific tools:
 | Reference workflow | Headshot implementation | Execution boundary |
 |---|---|---|
 | Dashboard + Target | Targets, Campaigns, Coverage | Versioned ready targets and enabled surfaces only |
-| Proxy + Logger + Inspector | PostgreSQL outbound request ledger, Langfuse projection, sanitized Traces inspector | Every target request is recorded; secrets are redacted before persistence |
+| Proxy + Logger + Inspector | PostgreSQL target/agent ledgers, campaign-correlated Langfuse projection, sanitized Traces inspector | Every target request and all four agent roles are recorded; only hashes, sizes, timing, usage, cost, and status leave the Runner for Langfuse |
 | Repeater | Regression replay | Versioned corpus plus fresh exact-scope authorization; no arbitrary raw resend |
 | Intruder | Garak, PyRIT, Giskard and Promptfoo candidate/mutation toolchain | Five reviewed Garak/PyRIT/Promptfoo candidates join the 14-attempt full scan; Giskard remains analysis-only until it emits an explicit attack; PolicyGateway applies rate, attempt, timeout and cost caps |
 | Scanner | Exact-origin passive ZAP plus independent Judge | Scanner findings are advisory and publication remains human-gated |
@@ -24,9 +24,13 @@ out-of-band/browser-specific tools:
 | Collaborator | Synthetic exfiltration canaries | No public callback listener or uncontrolled off-origin traffic is exposed |
 | DOM/IAST/browser helpers | Not claimed for the black-box chat surface | Use separately authorized tooling if those surfaces enter scope |
 
-The public Configuration screen renders this same server-owned map. The Traces screen exposes a
-bounded request/response preview, content hashes, latency, cost, Langfuse status, and deterministic
-passive signals. Signals are not findings and cannot replace the independent Judge.
+The public Configuration screen renders this same server-owned map. The Traces screen exposes
+organization-scoped target and agent observations: bounded request/response previews stay in
+PostgreSQL, while the console also shows content hashes, per-role p50/p95 latency, measured agent
+spend, tokens, Langfuse delivery proof, and deterministic passive signals. Queued observations are
+shown as awaiting remote verification; only the authenticated exact query-back verifier can
+atomically mark them exported/observed. Signals are not findings and cannot replace the independent
+Judge.
 
 ## Authorization and evidence invariants
 
@@ -35,8 +39,9 @@ passive signals. Signals are not findings and cannot replace the independent Jud
 - Repeater- and Intruder-style execution uses `headshot-full-scan-v1`, changes the baseline corpus
   identity, and requires a fresh approval
   bound to target, surface, corpus hash, nonce, rate, attempts, timeout, and cost.
-- The request ledger stores sanitized content and hashes. Raw credentials never reach the browser or
-  Langfuse.
+- The target and agent ledgers store sanitized content and hashes. Raw prompts, target responses,
+  credentials, and evidence bodies never reach Langfuse; the browser receives only bounded,
+  organization-scoped projections.
 - ZAP is passive and exact-origin. Active DAST, public out-of-band callbacks, DOM testing, and
   instrumented-runtime testing are explicitly not claimed.
 - Tool output remains `scan_only`; critical publication stays

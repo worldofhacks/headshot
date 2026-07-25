@@ -60,6 +60,7 @@
           "observation_incomplete",
           "replay_non_deterministic",
           "judge_error",
+          "judge_indeterminate",
           "evidence_contradictory"
         ]
       }

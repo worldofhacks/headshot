@@ -1,0 +1,4 @@
+# T-F05g Test — Model: capable
+Worktree `<WORKTREE>`; branch `ticket/T-F05g-smart-session-rotation`. Inputs: ticket, landed T-F05e/f/h/i/j/k/l/m/n/o/p, config/runbooks/reviews. Write only `tests/test_smart_session_lease_rotation.py` and `.tdd-swarm/reports/T-F05g-test.md`. Own RED for P catalog parity/chat-only policy, overlap zero/defaults, complete-chain CLI, separate start/terminal/zero/activation/final artifacts, every hash/set/order edge, no final-only/opaque hash, current-abort rejection, and sanitized guidance.
+
+Use synthetic signed/attested artifacts only. No network/live DB/controller/Railway/deployment/provider/target, secrets/PHI, spend, main merge, or push. Maximum three attempts. Return exactly `DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED(reason)` plus RED mapping; full output stays in the report.

@@ -28,7 +28,8 @@ from sqlalchemy import Engine
 
 from agentforge.agents.red_team.seed_replay import corpus_sha256, load_seed_attempts
 from agentforge.campaign.binding import TargetBinding
-from agentforge.campaign.cli import main
+from agentforge.campaign.cli import _main_for_structural_test as main
+from agentforge.campaign.cli import main as operational_main
 from agentforge.target.fake_adapter import FakeTargetAdapter
 from agentforge.target.openemr_adapter import OpenEmrAdapter
 
@@ -140,6 +141,9 @@ def _write_caps(dir_path: Path) -> Path:
                 "max_attempts_per_run": 1000,
                 "target_requests_per_second": 1000.0,
                 "run_timeout_seconds": 3600.0,
+                "logical_case_limit": 1000,
+                "physical_request_limit": 3000,
+                "target_retries_per_turn": 2,
             }
         ),
         encoding="utf-8",
@@ -174,6 +178,9 @@ def _bound_operation_hash(
             "max_attempts_per_run": 1000,
             "target_requests_per_second": 1000.0,
             "run_timeout_seconds": 3600.0,
+            "logical_case_limit": 1000,
+            "physical_request_limit": 3000,
+            "target_retries_per_turn": 2,
         }
     )
     binding = TargetBinding(
@@ -274,6 +281,43 @@ def _argv(
     if auth is not None:
         argv += ["--authorization", auth]
     return argv
+
+
+# ============================================================================================
+# OPERATIONAL ENTRY — direct live execution is retired; only the durable Railway Runner executes.
+# ============================================================================================
+def test_operational_run_refuses_before_inputs_or_adapter_are_touched(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The public CLI cannot be converted into a live bypass by injecting production collaborators.
+
+    The old execution seam below remains private solely for socket-disabled structural tests; those
+    test-double results are never deployment evidence.
+    """
+
+    factory = _RecordingAdapterFactory(FakeHttpClient(body=LEAK_RESPONSE))
+    run_dir = tmp_path / "must-not-exist"
+    code = operational_main(
+        _argv(
+            str(tmp_path / "missing-seeds"),
+            str(run_dir),
+            binding=str(tmp_path / "missing-binding.json"),
+            caps=str(tmp_path / "missing-caps.json"),
+            auth=str(tmp_path / "missing-authorization.json"),
+        ),
+        adapter_factory=factory,
+        clock=FakeClock(),
+        accounting=FakeAccounting(),
+        environment="production",
+    )
+
+    assert code == _EXIT_OPERATIONAL_CLI
+    assert factory.calls == 0
+    assert not run_dir.exists()
+    stderr = capsys.readouterr().err.lower()
+    assert "legacy live execution is disabled" in stderr
+    assert "durablecampaignrunner" in stderr
+    assert "langfuse" in stderr
 
 
 # ============================================================================================

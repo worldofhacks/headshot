@@ -1,0 +1,4 @@
+# T-F05o Test Review — Model: capable
+Worktree `<WORKTREE>`; branch `ticket/T-F05o-runner-rotation-control-history`. Inputs: ticket, focused test/report, landed H/I/J, frozen review. Write only `.tdd-swarm/reports/T-F05o-test-review.md`; tests/source are read-only. Attack open admissions, wrong draining state/rotation/predecessors, omitted/duplicate/new/reclassified rows, ambiguous cutoff, changed membership, live lease, hard-abort with nonterminal job, missing lineage, raw token, snapshot/time/trust swaps, caller set/SQL/DSN, and partial output.
+
+Freeze only clean criterion-complete RED. Fake DB/attestor only; no network/live DB/controller/Railway/provider/target, secrets/PHI, spend, main merge, or push. Maximum three reviews. Return exactly `DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED(reason)` plus freeze verdict; full output stays in the report.

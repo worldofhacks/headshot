@@ -1,0 +1,4 @@
+# T-F04c Security Review — Model: capable
+Worktree `<WORKTREE>`; branch `ticket/T-F04c-hosted-role-staging`. Exact inputs: `tickets/T-F04c.md`, `.tdd-swarm/diffs/T-F04c.patch`, `.tdd-swarm/reports/T-F04c-implement.md`, `.tdd-swarm/reports/T-F04c-gates.md`. Allowed write only: `.tdd-swarm/reports/T-F04c-security.md`; frozen tests are read-only. Re-run gates; inspect credentials/confused deputy/price-hash substitution, canonicalization ambiguity, role-order collision, cross-release replay, actor-controlled idempotency, same-release changed-input mutation/reuse, partial transaction, mutable authority, migration/RBAC/activation/log leakage, and resolver/provider/target side effects.
+
+No network, credentials, spend, target traffic, main merge, or push. Maximum three review attempts. Return exactly `DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED(reason)` plus highest severity and one-line summary; full output stays in the declared report.

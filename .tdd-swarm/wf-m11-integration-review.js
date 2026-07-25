@@ -4,7 +4,7 @@ export const meta = {
   phases: [{ title: 'Review', detail: '4 parallel lenses over the 13-item compatibility checklist' }],
 }
 
-const REPO = '/Users/quietguy/Documents/Dev/Gauntlet/Adversarial Machine'
+const REPO = '<repo>'
 const CTX = `
 REPO: ${REPO}  BRANCH: swarm/mvp-live-gate (M2+M4+M6a+M9 landed; Codex M11 corpus cherry-picked in: commits
 06165c2 + 5ffe0db). READ-ONLY review — do NOT edit any file; do NOT refactor the validator. Activate the venv

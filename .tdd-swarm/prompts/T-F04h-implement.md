@@ -1,0 +1,4 @@
+# T-F04h Implement — Model: capable
+Worktree `<WORKTREE>`; branch `ticket/T-F04h-smoke-contracts`. Exact inputs: ticket, frozen tests, test review, lessons, dependencies. Allowed writes only: ticket `file_scopes` and `.tdd-swarm/reports/T-F04h-implement.md`. Never edit tests. Implement only target-free `target_scope:none` smoke contracts/fixture/verifiers; do not create or claim the T-F05d target-session patient fixture, lease binding, adapters, transport, or execution.
+
+Run `.tdd-swarm/run-local-gates.sh tickets/T-F04h.md <DIFF_BASE>` every loop; maximum three GREEN loops. No network, credentials, spend, target traffic, main merge, or push. Exact output: `.tdd-swarm/reports/T-F04h-implement.md`. Return exactly `DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED(reason)` plus commits/gates; full output stays in the report.

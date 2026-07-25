@@ -30,9 +30,9 @@ def run_cli(*args: str) -> subprocess.CompletedProcess[str]:
 def test_validate_corpus_cli_exits_zero_for_repository_corpus() -> None:
     result = run_cli("validate-corpus", "evals")
     assert result.returncode == 0, result.stderr
-    assert "9 cases" in result.stdout
-    assert "15 ground-truth labels" in result.stdout
-    assert "3 categories" in result.stdout
+    assert "16 authored cases (9 active, 7 draft, 0 retired)" in result.stdout
+    assert "54 ground-truth labels" in result.stdout
+    assert "6 categories" in result.stdout
 
 
 def test_validate_eval_case_cli_exits_one_with_typed_sanitized_error(tmp_path: Path) -> None:

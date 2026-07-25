@@ -1,0 +1,4 @@
+# T-F05g Implement — Model: capable
+Worktree `<WORKTREE>`; branch `ticket/T-F05g-smart-session-rotation`. Inputs: ticket, frozen tests/review, lessons, landed T-F05e/f/h/i/j/k/l/m/n/o/p. Write only the five ticket `file_scopes` and `.tdd-swarm/reports/T-F05g-implement.md`; never edit tests/Runner/producers/catalog. Implement zero-overlap config, preserve identical Web/Runner catalog and disabled surfaces, exact chain verifier, and runbooks for admissions closed → bounded terminal history → zero generations → signed activation → one intended generation. Reject final-only/opaque hashes.
+
+Run local gates every GREEN loop; maximum three attempts. No network/live DB/controller/Railway inspection/action/deployment/provider/target, secrets/PHI, spend, main merge, or push. Return exactly `DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED(reason)` plus commit/gate summary; full output stays in the report.

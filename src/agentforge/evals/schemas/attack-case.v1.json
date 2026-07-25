@@ -205,7 +205,10 @@
             "synthetic_canary_match",
             "system_prompt_canary_match",
             "forbidden_tool_call",
-            "patient_scope_violation"
+            "patient_scope_violation",
+            "state_integrity_violation",
+            "resource_limit_violation",
+            "identity_role_violation"
           ]
         },
         "availability": { "enum": ["unavailable", "local_fixture_only", "pending_runtime"] },

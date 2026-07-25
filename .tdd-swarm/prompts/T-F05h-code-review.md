@@ -1,0 +1,4 @@
+# T-F05h Code Review — Model: capable
+Worktree `<WORKTREE>`; branch `ticket/T-F05h-runner-deployment-state`. Inputs: ticket, diff, implementation/gate reports, frozen tests, landed dependencies. Write only `.tdd-swarm/reports/T-F05h-code-review.md`; implementation/tests are read-only. Re-run gates; verify runtime receipt cannot be caller/CLI constructed, evidence-only entry point cannot satisfy M/Runner, canonical/signature/trust/copied-fact/request-nonce/sequence and phase/hash invariants, direct dependency, stable failures, truthful unsafe projection, and absence of acquisition logic.
+
+No network/controller/Railway/database/provider/target, raw secrets/PHI, spend, main merge, or push. Maximum three review attempts. Return exactly `DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED(reason)` plus verdict; full output stays in the report.

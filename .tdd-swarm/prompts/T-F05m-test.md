@@ -1,0 +1,4 @@
+# T-F05m Test — Model: capable
+Worktree `<WORKTREE>`; branch `ticket/T-F05m-authenticated-runner-state-provider`. Inputs: ticket, landed E/H/I/J/K/L, frozen review. Write only `tests/test_authenticated_runner_state_provider.py` and `.tdd-swarm/reports/T-F05m-test.md`. Own RED for closed protocol, trusted context/claim types, exact L acquire → H project → I project → E validate order, two calls/two challenges/transactions, no path/combined/caller state, no cached/partial success, stable redacted failures, and self-only claim/current-abort enforcement.
+
+Use fake authorities/clocks only; patch filesystem/AF_INET/production socket/PostgreSQL/controller/Railway/resolver/adapter/provider/target hooks to fail. No network, secrets/PHI, spend, main merge, or push. Maximum three attempts. Return exactly `DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED(reason)` plus RED mapping; full output stays in the report.

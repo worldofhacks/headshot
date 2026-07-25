@@ -1,0 +1,4 @@
+# T-F05o Implement — Model: capable
+Worktree `<WORKTREE>`; branch `ticket/T-F05o-runner-rotation-control-history`. Inputs: ticket, frozen tests/review, lessons, landed H/I/J. Write only the five ticket `file_scopes` and `.tdd-swarm/reports/T-F05o-implement.md`; never edit tests/storage/current-state source. Implement strict canonical start/terminal rotation control artifacts, exact fixed-query/high-watermark set ownership in two authenticated read-only snapshots, identical-set terminal proof, attestation/validation, create-only dual-mode CLI, and redaction.
+
+Run local gates every GREEN loop; maximum three attempts. Fake-source tests only; no network/live DB/controller/Railway/provider/target, secrets/PHI, spend, main merge, or push. Return exactly `DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED(reason)` plus commit/gate summary; full output stays in the report.

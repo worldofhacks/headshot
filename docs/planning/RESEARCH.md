@@ -121,7 +121,23 @@ orders of magnitude below SKIP LOCKED contention limits.
   github.com/pgmq/pgmq · Railway extension-support thread.
 
 ## R6 — Cost model @ 100/1K/10K/100K runs (confidence: high)
-**Finding.** Two independent line families on *different* scaling functions — never tokens × N.
+
+> **SUPERSEDED — do not use the formula below.** `effective_cost_per_run = list_price /
+> realized_throughput_at_offered_load` is **dimensionally invalid** ($/token ÷ tokens/s = $·s/token²)
+> and was withdrawn by [`DECISIONS.md` D17](DECISIONS.md); it is exactly the shortcut
+> [`docs/cost/COST_ANALYSIS.md`](../cost/COST_ANALYSIS.md) names as forbidden. The binding method is
+> `ARCHITECTURE.md` §11 plus `docs/cost/COST_ANALYSIS.md`. This section is retained as the research
+> record of how the number was originally reached, **not** as guidance.
+>
+> Two further reasons not to lift figures from here (verified 2026-07-25 at base `107c11c`): the
+> per-model rates below price a Claude-Sonnet Judge, a local-Mac or ~$0.88–1.20/M hosted-OSS Red Team,
+> and Langfuse self-hosting — **none of which the platform runs.** The frozen role set is
+> `anthropic/claude-opus-4.8` / `qwen/qwen3.5-397b-a17b` / `google/gemini-2.5-pro` / `openai/gpt-5.4`
+> (`src/agentforge/agents/hosted.py:31-38`), and Langfuse Cloud is the MVP choice (D5). No dollar
+> figure anywhere in this repository comes from a measured run.
+
+**Finding (as originally recorded).** Two independent line families on *different* scaling functions —
+never tokens × N.
 `Cost(N) = Hosting_tier(peak_concurrency) + Σ_agents[ runs_routed(N) × effective_cost_per_run ] +
 Storage(rows(N)) + Egress(bytes(N))`, where `effective_cost_per_run = list_price / realized_throughput
 _at_offered_load` (list-price × tokens overstates by 17–36× under load).

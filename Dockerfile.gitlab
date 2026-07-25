@@ -33,6 +33,7 @@ RUN python -m pip install --no-index --find-links=/wheels agentforge==0.1.0 \
 COPY alembic.ini /app/alembic.ini
 COPY migrations /app/migrations
 COPY evals /app/evals
+COPY --chown=app:app scripts/verify_langfuse_campaign.py /app/scripts/verify_langfuse_campaign.py
 COPY --chown=app:app console/dist /app/console
 
 RUN chown -R app:app /app

@@ -9,10 +9,18 @@ from agentforge.agents.documentation.agent import (
     DocumentationInputError,
     DuplicateReproductionError,
 )
+from agentforge.agents.documentation.hosted import (
+    HostedReportWriter,
+    HostedReportWriterError,
+    HostedReportWriterResult,
+)
 
 __all__ = [
     "DocumentationAgent",
     "DocumentationInput",
     "DocumentationInputError",
     "DuplicateReproductionError",
+    "HostedReportWriter",
+    "HostedReportWriterError",
+    "HostedReportWriterResult",
 ]

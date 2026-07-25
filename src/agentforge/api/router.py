@@ -12,7 +12,7 @@ from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, Header, Request
 from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from agentforge.api.backend import ApiBackend, ApiBackendUnavailable, ApiConflict
 from agentforge.api.schemas import CommandResult, EventBatch, ResourceResult
@@ -32,12 +32,20 @@ from agentforge.auth.permissions import (
     TARGETS_MANAGE,
 )
 from agentforge.auth.principal import Principal
+from agentforge.control_plane.finding_decisions import (
+    FindingDecisionReasonCode,
+    validate_finding_decision_reason_code,
+)
 
 router = APIRouter(prefix="/api/v1")
 
 ConsolePrincipal = Annotated[Principal, Depends(require_permissions(CONSOLE_READ))]
 FindingPrincipal = Annotated[Principal, Depends(require_permissions(CONSOLE_READ, FINDINGS_READ))]
 EvidencePrincipal = Annotated[Principal, Depends(require_permissions(CONSOLE_READ, EVIDENCE_READ))]
+FindingEvidencePrincipal = Annotated[
+    Principal,
+    Depends(require_permissions(CONSOLE_READ, FINDINGS_READ, EVIDENCE_READ)),
+]
 AuditPrincipal = Annotated[Principal, Depends(require_permissions(CONSOLE_READ, AUDIT_READ))]
 LaunchPrincipal = Annotated[Principal, Depends(require_permissions(CAMPAIGN_LAUNCH))]
 AuthorizePrincipal = Annotated[Principal, Depends(require_permissions(CAMPAIGN_AUTHORIZE))]
@@ -60,6 +68,20 @@ class CapsInput(_StrictModel):
     max_attempts_per_run: int = Field(gt=0)
     target_requests_per_second: float = Field(gt=0)
     run_timeout_seconds: float = Field(gt=0)
+    logical_case_limit: int | None = Field(default=None, gt=0)
+    physical_request_limit: int | None = Field(default=None, gt=0)
+    target_retries_per_turn: int | None = Field(default=None, ge=0)
+
+
+class HostedRunBindingInput(_StrictModel):
+    configuration_set_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    generation_policy_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    session_generation: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+    provider_model_call_limit: int = Field(gt=0, le=56)
+    provider_model_spend_limit_usd: str = Field(min_length=1, max_length=32)
+    provider_max_retries: int = Field(ge=0, le=1)
+    provider_max_concurrency: Literal[1]
+    provider_timeout_seconds: float = Field(gt=0, le=300)
 
 
 class AuthorizationRequestInput(_StrictModel):
@@ -72,6 +94,7 @@ class AuthorizationRequestInput(_StrictModel):
     execution_profile: Literal["synthetic", "live"] = "live"
     run_nonce: str = Field(min_length=16, max_length=128)
     caps: CapsInput
+    hosted_run: HostedRunBindingInput | None = None
     expires_in_seconds: int = Field(default=900, ge=60, le=3600)
 
 
@@ -90,6 +113,15 @@ class AbortInput(_StrictModel):
 class FindingDecisionInput(_StrictModel):
     decision: Literal["approved", "rejected"]
     rationale: str = Field(min_length=1, max_length=2000)
+    reason_code: FindingDecisionReasonCode
+
+    @model_validator(mode="after")
+    def validate_reason_code_matches_decision(self) -> FindingDecisionInput:
+        validate_finding_decision_reason_code(
+            decision=self.decision,
+            reason_code=self.reason_code,
+        )
+        return self
 
 
 class FindingResolveInput(_StrictModel):
@@ -103,21 +135,11 @@ class OwaspInput(_StrictModel):
     name: str = Field(min_length=1, max_length=160)
 
 
-class TargetInput(_StrictModel):
+class TargetCatalogSelectionInput(_StrictModel):
+    """An exact server-owned catalog identity; no dispatch authority crosses the browser."""
+
     target_id: str = Field(min_length=1, max_length=64)
-    name: str = Field(min_length=1, max_length=512)
     version: str = Field(min_length=1, max_length=32)
-    adapter_kind: Literal["fake", "openemr"]
-    environment: Literal["local", "staging", "production"]
-    base_url: str = Field(min_length=1, max_length=2048)
-    allowlisted_hosts: tuple[str, ...] = Field(min_length=1, max_length=32)
-    auth_mode: Literal["none", "bearer", "session", "oauth"]
-    credential_ref: str | None = Field(default=None, max_length=512)
-    synthetic_data_only: Literal[True]
-    synthetic_data_attestation_ref: str = Field(min_length=1, max_length=512)
-    canary_refs: tuple[str, ...] = Field(default=(), max_length=32)
-    oracle_refs: tuple[str, ...] = Field(default=(), max_length=32)
-    safety_caps: CapsInput
 
 
 class TargetLifecycleInput(_StrictModel):
@@ -172,6 +194,47 @@ class AgentConfigurationInput(_StrictModel):
     provider: Literal["headshot", "openrouter", "together", "anthropic"]
     model: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,159}$")
     execution_mode: Literal["deterministic", "hosted_advisory"]
+    rationale: str = Field(min_length=1, max_length=2000)
+
+
+class HostedTokenPricesInput(_StrictModel):
+    input_usd_per_million_tokens: str = Field(min_length=1, max_length=32)
+    output_usd_per_million_tokens: str = Field(min_length=1, max_length=32)
+    reasoning_usd_per_million_tokens: str = Field(min_length=1, max_length=32)
+
+
+class HostedLimitsInput(_StrictModel):
+    max_calls: int = Field(gt=0, le=56)
+    max_input_tokens: int = Field(gt=0)
+    max_output_tokens: int = Field(gt=0)
+    max_reasoning_tokens: int = Field(gt=0)
+    max_usd: str = Field(min_length=1, max_length=32)
+    max_retries: int = Field(ge=0, le=1)
+    max_requests_per_second: str = Field(min_length=1, max_length=32)
+    max_concurrency: Literal[1]
+
+
+class HostedRoleInput(_StrictModel):
+    role: Literal["orchestrator", "red_team", "judge", "documentation"]
+    provider: Literal["openrouter"]
+    model_id: str = Field(min_length=3, max_length=192)
+    upstream_provider: str = Field(min_length=1, max_length=64)
+    credential_reference: str = Field(min_length=1, max_length=512)
+    prompt_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    policy_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    prices: HostedTokenPricesInput
+    limits: HostedLimitsInput
+
+
+class HostedConfigurationInput(_StrictModel):
+    schema_version: Literal["1"]
+    roles: tuple[HostedRoleInput, ...] = Field(min_length=4, max_length=4)
+    global_limits: HostedLimitsInput
+
+
+class HostedConfigurationStageInput(_StrictModel):
+    configuration: HostedConfigurationInput
+    release_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
     rationale: str = Field(min_length=1, max_length=2000)
 
 
@@ -280,13 +343,46 @@ def findings(request: Request, principal: FindingPrincipal) -> JSONResponse:
 
 
 @router.get("/findings/{finding_id}")
-def finding(request: Request, finding_id: str, principal: FindingPrincipal) -> JSONResponse:
+def finding(request: Request, finding_id: str, principal: FindingEvidencePrincipal) -> JSONResponse:
     return _read(request, "finding", principal, {"finding_id": finding_id})
 
 
 @router.get("/approvals")
 def approvals(request: Request, principal: ConsolePrincipal) -> JSONResponse:
     return _read(request, "approvals", principal)
+
+
+@router.get("/approvals/{request_id}")
+def approval(
+    request: Request,
+    request_id: str,
+    principal: FindingEvidencePrincipal,
+) -> JSONResponse:
+    return _read(request, "approval", principal, {"request_id": request_id})
+
+
+@router.get("/reports")
+def reports(request: Request, principal: FindingEvidencePrincipal) -> JSONResponse:
+    return _read(request, "reports", principal)
+
+
+@router.get("/reports/{report_id}")
+def report(request: Request, report_id: str, principal: FindingEvidencePrincipal) -> JSONResponse:
+    return _read(request, "report", principal, {"report_id": report_id})
+
+
+@router.get("/campaign-authorization-requests/{request_id}/preflight")
+def campaign_authorization_preflight(
+    request: Request,
+    request_id: str,
+    principal: ConsolePrincipal,
+) -> JSONResponse:
+    return _read(
+        request,
+        "campaign_authorization_preflight",
+        principal,
+        {"request_id": request_id},
+    )
 
 
 @router.get("/coverage")
@@ -314,6 +410,11 @@ def targets(request: Request, principal: ConsolePrincipal) -> JSONResponse:
     return _read(request, "targets", principal)
 
 
+@router.get("/target-catalog")
+def target_catalog(request: Request, principal: TargetPrincipal) -> JSONResponse:
+    return _read(request, "target_catalog", principal)
+
+
 @router.get("/targets/{target_id}")
 def target(request: Request, target_id: str, principal: ConsolePrincipal) -> JSONResponse:
     return _read(request, "target", principal, {"target_id": target_id})
@@ -324,6 +425,34 @@ def configuration(request: Request, principal: ConsolePrincipal) -> JSONResponse
     return _read(request, "configuration", principal)
 
 
+@router.get("/hosted-configuration-sets/{configuration_sha256}")
+def hosted_configuration_set(
+    request: Request,
+    configuration_sha256: str,
+    principal: ConsolePrincipal,
+) -> JSONResponse:
+    return _read(
+        request,
+        "hosted_configuration_set",
+        principal,
+        {"configuration_sha256": configuration_sha256},
+    )
+
+
+@router.get("/hosted-configuration-sets/{configuration_sha256}/preflight")
+def hosted_configuration_preflight(
+    request: Request,
+    configuration_sha256: str,
+    principal: ConsolePrincipal,
+) -> JSONResponse:
+    return _read(
+        request,
+        "hosted_configuration_preflight",
+        principal,
+        {"configuration_sha256": configuration_sha256},
+    )
+
+
 @router.get("/components")
 def components(request: Request, principal: ConsolePrincipal) -> JSONResponse:
     return _read(request, "components", principal)
@@ -332,6 +461,28 @@ def components(request: Request, principal: ConsolePrincipal) -> JSONResponse:
 @router.get("/agents")
 def agents(request: Request, principal: ConsolePrincipal) -> JSONResponse:
     return _read(request, "agents", principal)
+
+
+@router.get("/agent-prompts/{agent_role}/{prompt_version}/{prompt_sha256}")
+def agent_prompt(
+    request: Request,
+    agent_role: str,
+    prompt_version: str,
+    prompt_sha256: str,
+    configuration_set_sha256: str,
+    principal: ConfigPrincipal,
+) -> JSONResponse:
+    return _read(
+        request,
+        "agent_prompt",
+        principal,
+        {
+            "agent_role": agent_role,
+            "prompt_version": prompt_version,
+            "prompt_sha256": prompt_sha256,
+            "configuration_sha256": configuration_set_sha256,
+        },
+    )
 
 
 @router.get("/agent-activity")
@@ -449,7 +600,7 @@ def resolve_finding(
 @router.post("/targets")
 def create_target(
     request: Request,
-    body: TargetInput,
+    body: TargetCatalogSelectionInput,
     principal: TargetPrincipal,
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
 ) -> JSONResponse:
@@ -460,7 +611,7 @@ def create_target(
 def revise_target(
     request: Request,
     target_id: str,
-    body: TargetInput,
+    body: TargetCatalogSelectionInput,
     principal: TargetPrincipal,
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
 ) -> JSONResponse:
@@ -566,6 +717,22 @@ def publish_configuration(
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
 ) -> JSONResponse:
     return _command(request, "publish_configuration", principal, body, idempotency_key)
+
+
+@router.post("/hosted-configuration-sets")
+def stage_hosted_configuration_set(
+    request: Request,
+    body: HostedConfigurationStageInput,
+    principal: ConfigPrincipal,
+    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
+) -> JSONResponse:
+    return _command(
+        request,
+        "stage_hosted_configuration_set",
+        principal,
+        body,
+        idempotency_key,
+    )
 
 
 @router.post("/agents/{agent_role}/configuration")

@@ -1,0 +1,4 @@
+# T-F05d Code Review — Model: capable
+Worktree `<WORKTREE>`; branch `ticket/T-F05d-target-session-fixture`. Exact inputs: `tickets/T-F05d.md`, `.tdd-swarm/diffs/T-F05d.patch`, implementation/gate reports, and frozen tests. Allowed write only: `.tdd-swarm/reports/T-F05d-code-review.md`; tests and implementation artifacts are read-only. Re-run the ticket gate and produce SPEC/CODE verdicts with file:line evidence for schema/registry parity, exact canonical bytes/hash, the one exact ordered 12-field identity including target/version and surface/version, deterministic verifier behavior, target-session-versus-smoke separation, synthetic-only safety, and downstream stable identity.
+
+No network, raw credential/session/PHI, Railway action, provider/target call, spend, main merge, or push. Maximum three review attempts. Return exactly `DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED(reason)` plus verdict; full output stays in the report.

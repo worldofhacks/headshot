@@ -8,7 +8,7 @@ export const meta = {
   ],
 }
 
-const REPO = '/Users/quietguy/Documents/Dev/Gauntlet/wt-m6a'
+const REPO = '<worktree>'
 
 const SPEC = `
 REPO (git worktree, ISOLATED): ${REPO}   BRANCH: ticket/m6a-observability (off swarm; has M2).

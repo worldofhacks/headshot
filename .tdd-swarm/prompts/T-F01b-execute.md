@@ -1,0 +1,6 @@
+# T-F01b Execute — Model: capable
+Worktree `<WORKTREE>`; branch `ticket/T-F01b-final-reconciliation`. Inputs ticket, manifests, and T-F05d through T-F05p docs/reviews. Write only its six doc paths. No test path; preserve the 12-field fixture; exact catalog target/chat/session/patient and Web/Runner parity; H/I/E trust/grammar; bounded J/K/L/M interfaces; F sanitized public message plus machine code/status; O/N ordered rotation; and G complete-chain verification. Reject disabled-surface activation, credential/session/local-artifact content, combined/final-only state, alternate source/parser/path, live `env:`, or legacy cookie guidance. No code.
+No network/spend/live traffic; no main merge/push; max 3. Output `.tdd-swarm/reports/T-F01b-execute.md`. Return `DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED(reason)` + line.
+Strict local contract: exact ticket input `tickets/T-F01b.md`; there is no test scope and no production-code permission; use only the named mechanical verifier above. Return exactly `DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED(reason)` plus one-line summary; full output stays in the declared report path.
+No main merge/push.
+Exact inputs: `tickets/T-F01b.md` and dependency/authorization artifacts named there; exact output: `.tdd-swarm/reports/T-F01b-execute.md`.

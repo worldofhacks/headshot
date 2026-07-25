@@ -8,7 +8,7 @@ export const meta = {
   ],
 }
 
-const REPO = '/Users/quietguy/Documents/Dev/Gauntlet/Adversarial Machine'
+const REPO = '<repo>'
 const SPEC = `
 REPO (main repo): ${REPO}   BRANCH: ticket/m5-openemr-adapter (off swarm/mvp-live-gate; has M2/M4/M6a/M9 + M11
 corpus + packaged schemas). venv at ${REPO}/.venv — activate for EVERY command:

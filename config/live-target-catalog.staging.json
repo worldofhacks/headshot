@@ -1,0 +1,456 @@
+[
+  {
+    "target": {
+      "target_id": "copilot-week1",
+      "name": "Clinical Co-Pilot Week 1 (synthetic, patient-pinned)",
+      "version": "1.0.0",
+      "adapter_kind": "openemr",
+      "environment": "staging",
+      "base_url": "https://agent-production-9f62.up.railway.app",
+      "allowlisted_hosts": ["agent-production-9f62.up.railway.app"],
+      "auth_mode": "session",
+      "credential_ref": "secretref://staging/copilot-week1/session/generation-20260724a",
+      "synthetic_data_only": true,
+      "synthetic_data_attestation_ref": "attestation://agentforge/synthetic-clinical-week1-v1",
+      "canary_refs": [
+        "oracle://agentforge/SYNTH_CANARY_PATIENT_BETA_8C1E",
+        "oracle://agentforge/SYNTH_CANARY_SYSTEM_PROMPT_4D2B"
+      ],
+      "oracle_refs": ["oracle://agentforge/copilot-chat-refusal-oracle-v1"],
+      "safety_caps": {
+        "budget_usd": 1.0,
+        "max_attempts_per_run": 40,
+        "target_requests_per_second": 0.5,
+        "run_timeout_seconds": 1800.0,
+        "logical_case_limit": 40,
+        "physical_request_limit": 60,
+        "target_retries_per_turn": 1
+      },
+      "lifecycle": "draft"
+    },
+    "surfaces": [
+      {
+        "surface_id": "copilot-week1-chat",
+        "version": "1.0.0",
+        "target_id": "copilot-week1",
+        "target_version": "1.0.0",
+        "kind": "chat",
+        "protocol": "https",
+        "method": "POST",
+        "relative_path": "chat",
+        "trust_boundary": "authenticated-session",
+        "authentication_required": true,
+        "risk": "critical",
+        "owasp_mappings": [
+          {"framework": "OWASP Web", "version": "2021", "id": "A03", "name": "Injection"},
+          {"framework": "OWASP LLM", "version": "2025", "id": "LLM01", "name": "Prompt Injection"}
+        ],
+        "oracle_refs": ["oracle://agentforge/copilot-chat-refusal-oracle-v1"],
+        "enabled": true
+      },
+      {
+        "surface_id": "copilot-week1-app",
+        "version": "1.0.0",
+        "target_id": "copilot-week1",
+        "target_version": "1.0.0",
+        "kind": "custom",
+        "protocol": "https",
+        "method": "GET",
+        "relative_path": "app",
+        "trust_boundary": "authenticated-session",
+        "authentication_required": true,
+        "risk": "high",
+        "owasp_mappings": [
+          {"framework": "OWASP Web", "version": "2021", "id": "A03", "name": "Injection"},
+          {"framework": "OWASP LLM", "version": "2025", "id": "LLM01", "name": "Prompt Injection"}
+        ],
+        "oracle_refs": ["oracle://agentforge/copilot-chat-refusal-oracle-v1"],
+        "enabled": false
+      },
+      {
+        "surface_id": "copilot-week1-evidence-search",
+        "version": "1.0.0",
+        "target_id": "copilot-week1",
+        "target_version": "1.0.0",
+        "kind": "rag",
+        "protocol": "https",
+        "method": "POST",
+        "relative_path": "evidence/search",
+        "trust_boundary": "anonymous-guideline-retrieval",
+        "authentication_required": false,
+        "risk": "high",
+        "owasp_mappings": [
+          {"framework": "OWASP Web", "version": "2021", "id": "A03", "name": "Injection"},
+          {"framework": "OWASP LLM", "version": "2025", "id": "LLM01", "name": "Prompt Injection"}
+        ],
+        "oracle_refs": ["oracle://agentforge/copilot-chat-refusal-oracle-v1"],
+        "enabled": false
+      }
+    ],
+    "transport_policy": {
+      "allowed_methods": ["GET", "POST"],
+      "write_upload_allowed": false,
+      "allowed_write_resource_refs": [],
+      "redirect_policy": "deny",
+      "response_size_limit_bytes": 262144,
+      "allowed_content_types": ["application/json", "text/plain"],
+      "request_timeout_seconds": 120.0,
+      "tls_required": true,
+      "allow_private_destination": false,
+      "payload_profile": "copilot_chat"
+    },
+    "ownership_authorization_ref": "authorization://agentforge/headshot-owner-synthetic-2026-07-24"
+  },
+  {
+    "target": {
+      "target_id": "copilot-week2",
+      "name": "Clinical Co-Pilot Week 2 (synthetic, patient-pinned + document intake)",
+      "version": "1.0.0",
+      "adapter_kind": "openemr",
+      "environment": "staging",
+      "base_url": "https://agent-production-9f62.up.railway.app",
+      "allowlisted_hosts": ["agent-production-9f62.up.railway.app"],
+      "auth_mode": "session",
+      "credential_ref": "secretref://staging/copilot-week2/session/generation-20260724a",
+      "synthetic_data_only": true,
+      "synthetic_data_attestation_ref": "attestation://agentforge/synthetic-clinical-week2-v1",
+      "canary_refs": [
+        "oracle://agentforge/SYNTH_CANARY_PATIENT_BETA_8C1E",
+        "oracle://agentforge/SYNTH_CANARY_SYSTEM_PROMPT_4D2B"
+      ],
+      "oracle_refs": ["oracle://agentforge/copilot-chat-refusal-oracle-v1"],
+      "safety_caps": {
+        "budget_usd": 50.0,
+        "max_attempts_per_run": 100,
+        "target_requests_per_second": 0.5,
+        "run_timeout_seconds": 3600.0,
+        "logical_case_limit": 100,
+        "physical_request_limit": 121,
+        "target_retries_per_turn": 0
+      },
+      "lifecycle": "draft"
+    },
+    "surfaces": [
+      {
+        "surface_id": "copilot-week2-chat",
+        "version": "1.0.0",
+        "target_id": "copilot-week2",
+        "target_version": "1.0.0",
+        "kind": "chat",
+        "protocol": "https",
+        "method": "POST",
+        "relative_path": "chat",
+        "trust_boundary": "authenticated-session",
+        "authentication_required": true,
+        "risk": "critical",
+        "owasp_mappings": [
+          {"framework": "OWASP Web", "version": "2021", "id": "A03", "name": "Injection"},
+          {"framework": "OWASP LLM", "version": "2025", "id": "LLM01", "name": "Prompt Injection"},
+          {"framework": "OWASP LLM", "version": "2025", "id": "LLM08", "name": "Vector and Embedding Weaknesses"}
+        ],
+        "oracle_refs": ["oracle://agentforge/copilot-chat-refusal-oracle-v1"],
+        "enabled": true
+      },
+      {
+        "surface_id": "copilot-week2-app",
+        "version": "1.0.0",
+        "target_id": "copilot-week2",
+        "target_version": "1.0.0",
+        "kind": "custom",
+        "protocol": "https",
+        "method": "GET",
+        "relative_path": "week2",
+        "trust_boundary": "authenticated-session",
+        "authentication_required": true,
+        "risk": "high",
+        "owasp_mappings": [
+          {"framework": "OWASP Web", "version": "2021", "id": "A03", "name": "Injection"},
+          {"framework": "OWASP LLM", "version": "2025", "id": "LLM01", "name": "Prompt Injection"}
+        ],
+        "oracle_refs": ["oracle://agentforge/copilot-chat-refusal-oracle-v1"],
+        "enabled": false
+      },
+      {
+        "surface_id": "copilot-week2-evidence-search",
+        "version": "1.0.0",
+        "target_id": "copilot-week2",
+        "target_version": "1.0.0",
+        "kind": "rag",
+        "protocol": "https",
+        "method": "POST",
+        "relative_path": "evidence/search",
+        "trust_boundary": "anonymous-guideline-retrieval",
+        "authentication_required": false,
+        "risk": "high",
+        "owasp_mappings": [
+          {"framework": "OWASP Web", "version": "2021", "id": "A03", "name": "Injection"},
+          {"framework": "OWASP LLM", "version": "2025", "id": "LLM01", "name": "Prompt Injection"}
+        ],
+        "oracle_refs": ["oracle://agentforge/copilot-chat-refusal-oracle-v1"],
+        "enabled": false
+      },
+      {
+        "surface_id": "copilot-week2-documents",
+        "version": "1.0.0",
+        "target_id": "copilot-week2",
+        "target_version": "1.0.0",
+        "kind": "file",
+        "protocol": "https",
+        "method": "POST",
+        "relative_path": "documents",
+        "trust_boundary": "authenticated-session",
+        "authentication_required": true,
+        "risk": "critical",
+        "owasp_mappings": [
+          {"framework": "OWASP Web", "version": "2021", "id": "A03", "name": "Injection"},
+          {"framework": "OWASP LLM", "version": "2025", "id": "LLM01", "name": "Prompt Injection"}
+        ],
+        "oracle_refs": ["oracle://agentforge/copilot-chat-refusal-oracle-v1"],
+        "enabled": false
+      }
+    ],
+    "transport_policy": {
+      "allowed_methods": ["GET", "POST"],
+      "write_upload_allowed": true,
+      "allowed_write_resource_refs": [
+        "resource://copilot-week2/lab-upload",
+        "resource://copilot-week2/intake-upload"
+      ],
+      "redirect_policy": "deny",
+      "response_size_limit_bytes": 10485760,
+      "allowed_content_types": ["application/json", "text/plain", "application/pdf", "image/png"],
+      "request_timeout_seconds": 120.0,
+      "tls_required": true,
+      "allow_private_destination": false,
+      "payload_profile": "copilot_chat"
+    },
+    "ownership_authorization_ref": "authorization://agentforge/headshot-owner-synthetic-2026-07-24"
+  },
+  {
+    "target": {
+      "target_id": "clinical-copilot-week1",
+      "name": "Clinical Co-Pilot Week 1 (synthetic, patient-pinned) [alias of copilot-week1]",
+      "version": "1.0.0",
+      "adapter_kind": "openemr",
+      "environment": "staging",
+      "base_url": "https://agent-production-9f62.up.railway.app",
+      "allowlisted_hosts": ["agent-production-9f62.up.railway.app"],
+      "auth_mode": "session",
+      "credential_ref": "secretref://staging/clinical-copilot-week1/session/generation-20260724a",
+      "synthetic_data_only": true,
+      "synthetic_data_attestation_ref": "attestation://agentforge/synthetic-clinical-week1-v1",
+      "canary_refs": [
+        "oracle://agentforge/SYNTH_CANARY_PATIENT_BETA_8C1E",
+        "oracle://agentforge/SYNTH_CANARY_SYSTEM_PROMPT_4D2B"
+      ],
+      "oracle_refs": ["oracle://agentforge/copilot-chat-refusal-oracle-v1"],
+      "safety_caps": {
+        "budget_usd": 1.0,
+        "max_attempts_per_run": 40,
+        "target_requests_per_second": 0.5,
+        "run_timeout_seconds": 1800.0,
+        "logical_case_limit": 40,
+        "physical_request_limit": 60,
+        "target_retries_per_turn": 1
+      },
+      "lifecycle": "draft"
+    },
+    "surfaces": [
+      {
+        "surface_id": "clinical-copilot-week1-chat",
+        "version": "1.0.0",
+        "target_id": "clinical-copilot-week1",
+        "target_version": "1.0.0",
+        "kind": "chat",
+        "protocol": "https",
+        "method": "POST",
+        "relative_path": "chat",
+        "trust_boundary": "authenticated-session",
+        "authentication_required": true,
+        "risk": "critical",
+        "owasp_mappings": [
+          {"framework": "OWASP Web", "version": "2021", "id": "A03", "name": "Injection"},
+          {"framework": "OWASP LLM", "version": "2025", "id": "LLM01", "name": "Prompt Injection"}
+        ],
+        "oracle_refs": ["oracle://agentforge/copilot-chat-refusal-oracle-v1"],
+        "enabled": true
+      },
+      {
+        "surface_id": "clinical-copilot-week1-app",
+        "version": "1.0.0",
+        "target_id": "clinical-copilot-week1",
+        "target_version": "1.0.0",
+        "kind": "custom",
+        "protocol": "https",
+        "method": "GET",
+        "relative_path": "app",
+        "trust_boundary": "authenticated-session",
+        "authentication_required": true,
+        "risk": "high",
+        "owasp_mappings": [
+          {"framework": "OWASP Web", "version": "2021", "id": "A03", "name": "Injection"},
+          {"framework": "OWASP LLM", "version": "2025", "id": "LLM01", "name": "Prompt Injection"}
+        ],
+        "oracle_refs": ["oracle://agentforge/copilot-chat-refusal-oracle-v1"],
+        "enabled": false
+      },
+      {
+        "surface_id": "clinical-copilot-week1-evidence-search",
+        "version": "1.0.0",
+        "target_id": "clinical-copilot-week1",
+        "target_version": "1.0.0",
+        "kind": "rag",
+        "protocol": "https",
+        "method": "POST",
+        "relative_path": "evidence/search",
+        "trust_boundary": "anonymous-guideline-retrieval",
+        "authentication_required": false,
+        "risk": "high",
+        "owasp_mappings": [
+          {"framework": "OWASP Web", "version": "2021", "id": "A03", "name": "Injection"},
+          {"framework": "OWASP LLM", "version": "2025", "id": "LLM01", "name": "Prompt Injection"}
+        ],
+        "oracle_refs": ["oracle://agentforge/copilot-chat-refusal-oracle-v1"],
+        "enabled": false
+      }
+    ],
+    "transport_policy": {
+      "allowed_methods": ["GET", "POST"],
+      "write_upload_allowed": false,
+      "allowed_write_resource_refs": [],
+      "redirect_policy": "deny",
+      "response_size_limit_bytes": 262144,
+      "allowed_content_types": ["application/json", "text/plain"],
+      "request_timeout_seconds": 120.0,
+      "tls_required": true,
+      "allow_private_destination": false,
+      "payload_profile": "copilot_chat"
+    },
+    "ownership_authorization_ref": "authorization://agentforge/headshot-owner-synthetic-2026-07-24"
+  },
+  {
+    "target": {
+      "target_id": "clinical-copilot-week2",
+      "name": "Clinical Co-Pilot Week 2 (synthetic, patient-pinned + document intake) [alias of copilot-week2]",
+      "version": "1.0.0",
+      "adapter_kind": "openemr",
+      "environment": "staging",
+      "base_url": "https://agent-production-9f62.up.railway.app",
+      "allowlisted_hosts": ["agent-production-9f62.up.railway.app"],
+      "auth_mode": "session",
+      "credential_ref": "secretref://staging/clinical-copilot-week2/session/generation-20260724a",
+      "synthetic_data_only": true,
+      "synthetic_data_attestation_ref": "attestation://agentforge/synthetic-clinical-week2-v1",
+      "canary_refs": [
+        "oracle://agentforge/SYNTH_CANARY_PATIENT_BETA_8C1E",
+        "oracle://agentforge/SYNTH_CANARY_SYSTEM_PROMPT_4D2B"
+      ],
+      "oracle_refs": ["oracle://agentforge/copilot-chat-refusal-oracle-v1"],
+      "safety_caps": {
+        "budget_usd": 50.0,
+        "max_attempts_per_run": 100,
+        "target_requests_per_second": 0.5,
+        "run_timeout_seconds": 3600.0,
+        "logical_case_limit": 100,
+        "physical_request_limit": 121,
+        "target_retries_per_turn": 0
+      },
+      "lifecycle": "draft"
+    },
+    "surfaces": [
+      {
+        "surface_id": "clinical-copilot-week2-chat",
+        "version": "1.0.0",
+        "target_id": "clinical-copilot-week2",
+        "target_version": "1.0.0",
+        "kind": "chat",
+        "protocol": "https",
+        "method": "POST",
+        "relative_path": "chat",
+        "trust_boundary": "authenticated-session",
+        "authentication_required": true,
+        "risk": "critical",
+        "owasp_mappings": [
+          {"framework": "OWASP Web", "version": "2021", "id": "A03", "name": "Injection"},
+          {"framework": "OWASP LLM", "version": "2025", "id": "LLM01", "name": "Prompt Injection"},
+          {"framework": "OWASP LLM", "version": "2025", "id": "LLM08", "name": "Vector and Embedding Weaknesses"}
+        ],
+        "oracle_refs": ["oracle://agentforge/copilot-chat-refusal-oracle-v1"],
+        "enabled": true
+      },
+      {
+        "surface_id": "clinical-copilot-week2-app",
+        "version": "1.0.0",
+        "target_id": "clinical-copilot-week2",
+        "target_version": "1.0.0",
+        "kind": "custom",
+        "protocol": "https",
+        "method": "GET",
+        "relative_path": "week2",
+        "trust_boundary": "authenticated-session",
+        "authentication_required": true,
+        "risk": "high",
+        "owasp_mappings": [
+          {"framework": "OWASP Web", "version": "2021", "id": "A03", "name": "Injection"},
+          {"framework": "OWASP LLM", "version": "2025", "id": "LLM01", "name": "Prompt Injection"}
+        ],
+        "oracle_refs": ["oracle://agentforge/copilot-chat-refusal-oracle-v1"],
+        "enabled": false
+      },
+      {
+        "surface_id": "clinical-copilot-week2-evidence-search",
+        "version": "1.0.0",
+        "target_id": "clinical-copilot-week2",
+        "target_version": "1.0.0",
+        "kind": "rag",
+        "protocol": "https",
+        "method": "POST",
+        "relative_path": "evidence/search",
+        "trust_boundary": "anonymous-guideline-retrieval",
+        "authentication_required": false,
+        "risk": "high",
+        "owasp_mappings": [
+          {"framework": "OWASP Web", "version": "2021", "id": "A03", "name": "Injection"},
+          {"framework": "OWASP LLM", "version": "2025", "id": "LLM01", "name": "Prompt Injection"}
+        ],
+        "oracle_refs": ["oracle://agentforge/copilot-chat-refusal-oracle-v1"],
+        "enabled": false
+      },
+      {
+        "surface_id": "clinical-copilot-week2-documents",
+        "version": "1.0.0",
+        "target_id": "clinical-copilot-week2",
+        "target_version": "1.0.0",
+        "kind": "file",
+        "protocol": "https",
+        "method": "POST",
+        "relative_path": "documents",
+        "trust_boundary": "authenticated-session",
+        "authentication_required": true,
+        "risk": "critical",
+        "owasp_mappings": [
+          {"framework": "OWASP Web", "version": "2021", "id": "A03", "name": "Injection"},
+          {"framework": "OWASP LLM", "version": "2025", "id": "LLM01", "name": "Prompt Injection"}
+        ],
+        "oracle_refs": ["oracle://agentforge/copilot-chat-refusal-oracle-v1"],
+        "enabled": false
+      }
+    ],
+    "transport_policy": {
+      "allowed_methods": ["GET", "POST"],
+      "write_upload_allowed": true,
+      "allowed_write_resource_refs": [
+        "resource://clinical-copilot-week2/lab-upload",
+        "resource://clinical-copilot-week2/intake-upload"
+      ],
+      "redirect_policy": "deny",
+      "response_size_limit_bytes": 10485760,
+      "allowed_content_types": ["application/json", "text/plain", "application/pdf", "image/png"],
+      "request_timeout_seconds": 120.0,
+      "tls_required": true,
+      "allow_private_destination": false,
+      "payload_profile": "copilot_chat"
+    },
+    "ownership_authorization_ref": "authorization://agentforge/headshot-owner-synthetic-2026-07-24"
+  }
+]

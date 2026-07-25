@@ -26,7 +26,9 @@ import time.
 
 from __future__ import annotations
 
+import hashlib
 import json
+import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -64,7 +66,53 @@ _API_PATH = "apis/default/api/copilot/message"
 #       sequences a multi-turn attempt so every physical /chat request is separately gated.
 _PROFILE_OPENEMR_TURNS = "openemr_turns"
 _PROFILE_COPILOT_CHAT = "copilot_chat"
-_PAYLOAD_PROFILES = frozenset({_PROFILE_OPENEMR_TURNS, _PROFILE_COPILOT_CHAT})
+# Additive profiles for the rest of the Clinical Co-Pilot Bruno surface set:
+#   "copilot_public_get"       — GET liveness/readiness; no credential, no body, no auth header.
+#   "copilot_evidence_search"  — POST anonymous guideline retrieval; body {"query","k"}, no
+#                                credential.
+#   "copilot_document_upload"  — POST multipart synthetic document; session_id in the FORM, a
+#                                synthetic fixture as the file part, no Authorization header.
+#   "copilot_document_read"    — GET a document sub-resource; the uploaded document_id (and page)
+#                                are substituted into the path and session_id travels in the QUERY.
+_PROFILE_COPILOT_PUBLIC_GET = "copilot_public_get"
+_PROFILE_COPILOT_EVIDENCE_SEARCH = "copilot_evidence_search"
+_PROFILE_COPILOT_DOCUMENT_UPLOAD = "copilot_document_upload"
+_PROFILE_COPILOT_DOCUMENT_READ = "copilot_document_read"
+_PAYLOAD_PROFILES = frozenset(
+    {
+        _PROFILE_OPENEMR_TURNS,
+        _PROFILE_COPILOT_CHAT,
+        _PROFILE_COPILOT_PUBLIC_GET,
+        _PROFILE_COPILOT_EVIDENCE_SEARCH,
+        _PROFILE_COPILOT_DOCUMENT_UPLOAD,
+        _PROFILE_COPILOT_DOCUMENT_READ,
+    }
+)
+# Profiles whose HTTP method is fixed by the owner's reviewed Bruno contract. openemr_turns stays
+# flexible (GET or POST) for backward compatibility; the copilot_* profiles are pinned.
+_GET_ONLY_PROFILES = frozenset({_PROFILE_COPILOT_PUBLIC_GET, _PROFILE_COPILOT_DOCUMENT_READ})
+_POST_ONLY_PROFILES = frozenset(
+    {
+        _PROFILE_COPILOT_CHAT,
+        _PROFILE_COPILOT_EVIDENCE_SEARCH,
+        _PROFILE_COPILOT_DOCUMENT_UPLOAD,
+    }
+)
+# Content types the adapter keeps verbatim; anything else is summarized (digest + size) so a binary
+# body (e.g. an image/png page preview) never lands as mojibake in the recorded transcript.
+_TEXTUAL_CONTENT_TYPES = frozenset({"", "application/json", "text/plain"})
+# One {name} placeholder segment — mirrors target.spec so the adapter needs no cross-module import.
+_PATH_PARAM_RE = re.compile(r"\A\{[a-z][a-z0-9_]*\}\Z")
+
+
+def _relative_path_parameters(relative_path: str) -> tuple[str, ...]:
+    """Ordered ``{param}`` names in a relative path (``()`` when fully static)."""
+
+    return tuple(
+        segment[1:-1]
+        for segment in relative_path.split("/")
+        if _PATH_PARAM_RE.fullmatch(segment) is not None
+    )
 
 
 class _BearerAuth:
@@ -142,6 +190,12 @@ class OpenEmrAdapter(TargetAdapter):
     allowed_content_types: tuple[str, ...] = ()
     destination_validator: Callable[[str], None] | None = field(default=None, repr=False)
     telemetry: Any | None = field(default=None, repr=False)
+    # Resolves a synthetic-only ``fixture://`` reference to (filename, bytes, content_type) for the
+    # ``copilot_document_upload`` profile. Injected by the trusted composition root; the adapter
+    # reads only synthetic fixtures by reference and never touches an arbitrary local path.
+    fixture_resolver: Callable[[str], tuple[str, bytes, str]] | None = field(
+        default=None, repr=False
+    )
     _owned_client: Any | None = field(default=None, init=False, repr=False)
     _closed: bool = field(default=False, init=False, repr=False)
     name: str = "openemr"
@@ -160,6 +214,10 @@ class OpenEmrAdapter(TargetAdapter):
             raise ValueError("OpenEMR adapter method is not allowed")
         if self.payload_profile not in _PAYLOAD_PROFILES:
             raise ValueError("OpenEMR adapter payload profile is not allowed")
+        if self.payload_profile in _GET_ONLY_PROFILES and self.method != "GET":
+            raise ValueError("OpenEMR adapter payload profile requires GET")
+        if self.payload_profile in _POST_ONLY_PROFILES and self.method != "POST":
+            raise ValueError("OpenEMR adapter payload profile requires POST")
         if (
             not self.relative_path
             or self.relative_path.startswith("/")
@@ -186,9 +244,9 @@ class OpenEmrAdapter(TargetAdapter):
         genuine target response, not an adapter transport failure.
         """
         client = self._client()
-        url = self._build_url()
+        url = self._build_url(request)
         headers = self._build_headers()
-        body = self._build_body(request)
+        request_kwargs = self._build_request_kwargs(request)
         auth = self._auth()
 
         telemetry_handle = None
@@ -204,7 +262,9 @@ class OpenEmrAdapter(TargetAdapter):
                     provider=self.name,
                     redactions=redactions,
                 )
-            response = client.request(self.method, url, headers=headers, json=body, auth=auth)
+            response = client.request(
+                self.method, url, headers=headers, auth=auth, **request_kwargs
+            )
         except (TimeoutError, ConnectionError, OSError) as exc:
             if telemetry_handle is not None:
                 telemetry_handle.finish(
@@ -250,17 +310,40 @@ class OpenEmrAdapter(TargetAdapter):
                     "OpenEMR target rate-limited (HTTP 429)",
                     retry_after=self._parse_retry_after(response.headers),
                 )
-            if len(output.encode("utf-8")) > self.response_size_limit_bytes:
-                raise AdapterError("OpenEMR target response exceeded the configured byte limit")
-            if self.allowed_content_types:
-                try:
-                    content_type = response.headers.get("Content-Type", "").split(";", 1)[0].strip()
-                except AttributeError as exc:
+            content_type = ""
+            try:
+                header_value = response.headers.get("Content-Type", "")
+            except AttributeError as exc:
+                if self.allowed_content_types:
                     raise AdapterError(
                         "OpenEMR target response content type is unavailable"
                     ) from exc
-                if content_type not in self.allowed_content_types:
-                    raise AdapterError("OpenEMR target response content type is outside policy")
+                header_value = ""
+            if isinstance(header_value, str):
+                content_type = header_value.split(";", 1)[0].strip()
+            if self.allowed_content_types and content_type not in self.allowed_content_types:
+                raise AdapterError("OpenEMR target response content type is outside policy")
+            raw_body = getattr(response, "content", None)
+            byte_length = (
+                len(raw_body)
+                if isinstance(raw_body, (bytes, bytearray))
+                else len(output.encode("utf-8"))
+            )
+            if byte_length > self.response_size_limit_bytes:
+                raise AdapterError("OpenEMR target response exceeded the configured byte limit")
+            if content_type not in _TEXTUAL_CONTENT_TYPES and isinstance(
+                raw_body, (bytes, bytearray)
+            ):
+                # Summarize a non-textual body (e.g. an image/png page preview) into a stable JSON
+                # digest so the recorder/Judge never store undecodable bytes.
+                output = json.dumps(
+                    {
+                        "binary_response": True,
+                        "content_type": content_type,
+                        "byte_length": byte_length,
+                        "sha256": hashlib.sha256(bytes(raw_body)).hexdigest(),
+                    }
+                )
             if self._is_expired_session_response(status, output):
                 raise TargetSessionExpiredError(
                     "OpenEMR delegated session expired; a fresh SMART launch is required"
@@ -321,16 +404,55 @@ class OpenEmrAdapter(TargetAdapter):
         if callable(close):
             close()
 
-    def _build_url(self) -> str:
-        """Join the configured base URL with the API path (no double slash)."""
-        return f"{self.base_url.rstrip('/')}/{self.relative_path}"
+    def _build_url(self, request: TargetRequest) -> str:
+        """Join the base URL with the API path, substituting any ``{param}`` placeholders.
+
+        For a document-read surface the path carries the uploaded ``document_id`` (and page) as
+        ``{name}`` placeholders. Each is filled from the authorized attempt's ``path_params`` and
+        strictly validated — a missing, malformed, or unsafe value (traversal / a second authority
+        / URL-override syntax) is a fail-closed :class:`AdapterError`, never a partially-templated
+        URL.
+        """
+        path = self.relative_path
+        parameters = _relative_path_parameters(path)
+        if parameters:
+            supplied = self._path_params(request)
+            for name in parameters:
+                value = supplied.get(name)
+                if (
+                    not isinstance(value, str)
+                    or not value
+                    or any(bad in value for bad in ("/", "?", "#", "%", "\\", " ", "..", "{", "}"))
+                ):
+                    raise AdapterError("OpenEMR document path parameter is missing or unsafe")
+                path = path.replace("{" + name + "}", value)
+        return f"{self.base_url.rstrip('/')}/{path}"
+
+    @staticmethod
+    def _path_params(request: TargetRequest) -> dict[str, Any]:
+        """Decode the attempt's ``path_params`` metadata (a JSON object string) fail-closed."""
+        raw = dict(request.metadata or {}).get("path_params")
+        if raw is None:
+            return {}
+        try:
+            parsed = json.loads(raw) if isinstance(raw, str) else raw
+        except (json.JSONDecodeError, TypeError) as exc:
+            raise AdapterError("OpenEMR document path parameters are malformed") from exc
+        if not isinstance(parsed, dict):
+            raise AdapterError("OpenEMR document path parameters are malformed")
+        return parsed
 
     def _build_headers(self) -> dict[str, str]:
-        """Build the non-credential request headers.
+        """Build the non-credential request headers for the active payload profile.
 
-        The credential is NEVER inlined here — it flows through :meth:`_auth` as a redacting
-        auth object so the raw value never lands in a recorded/logged header string.
+        The credential is NEVER inlined here — it flows through the profile-specific body/form/query
+        (or the redacting :meth:`_auth` bearer object), so the raw value never lands in a recorded
+        header string. A multipart upload declares no Content-Type so the client owns the boundary.
         """
+        if self.payload_profile == _PROFILE_COPILOT_DOCUMENT_UPLOAD:
+            return {"Accept": "application/json"}
+        if self.payload_profile in _GET_ONLY_PROFILES:
+            return {"Accept": "application/json, image/png, text/plain"}
         return {"Content-Type": "application/json", "Accept": "application/json"}
 
     def _auth(self) -> _BearerAuth | None:
@@ -340,41 +462,94 @@ class OpenEmrAdapter(TargetAdapter):
         HTTPS call boundary), never in a header string that a client would record. The auth
         object's ``repr`` redacts, so it is safe even if a client logs its kwargs.
 
-        In the ``copilot_chat`` profile there is NO Authorization header at all — the scoped
-        session credential travels in the request BODY (see :meth:`_build_body`), so this returns
-        ``None`` regardless of whether a credential is present.
+        Only the default ``openemr_turns`` profile authenticates with an ``Authorization: Bearer``
+        header. Every ``copilot_*`` profile carries the scoped session credential elsewhere (in the
+        body, the multipart form, or the query string) or needs none at all, so this returns
+        ``None`` for them regardless of whether a credential is present.
         """
-        if self.payload_profile == _PROFILE_COPILOT_CHAT:
+        if self.payload_profile != _PROFILE_OPENEMR_TURNS:
             return None
         if self.credential is None:
             return None
         return _BearerAuth(self.credential)
 
-    def _build_body(self, request: TargetRequest) -> dict[str, Any]:
-        """Shape the request into the target's API body per the configured payload profile.
+    def _build_request_kwargs(self, request: TargetRequest) -> dict[str, Any]:
+        """Shape the outgoing request per the configured payload profile.
 
-        * ``openemr_turns`` (default) — ``{"turns", "metadata"}`` (credential in the Bearer header).
-        * ``copilot_chat`` — ``{"session_id", "message"}`` per the owner's /chat contract. The
-          injected credential Secret is REVEALED here (at the send boundary only) as
-          ``session_id`` in the BODY. The Policy Gateway passes exactly one turn per physical
-          request and retains one campaign-persistent client/session across the sequence.
+        Returns the keyword arguments (``json`` / ``data`` + ``files`` / ``params`` / none) passed
+        to the injected client alongside ``method``/``url``/``headers``/``auth``. Where a credential
+        is required it is REVEALED here — at the send boundary only — into the outgoing structure
+        the client transmits, never into a header string, log, or the adapter's repr.
 
-        The revealed session value never lands in a log/repr: it is placed into the outgoing body
-        dict that only the injected client sees at the HTTPS boundary, exactly as the Bearer header
-        reveal happens only inside the auth flow.
+        * ``openemr_turns``            — ``json={"turns","metadata"}`` (credential in the Bearer
+                                         header).
+        * ``copilot_chat``             — ``json={"session_id","message"}`` (session in the body).
+        * ``copilot_public_get``       — no body, no credential (liveness/readiness).
+        * ``copilot_evidence_search``  — ``json={"query","k"}``, no credential (anonymous
+                                         retrieval).
+        * ``copilot_document_upload``  — ``data={"session_id","doc_type"}`` + a synthetic fixture as
+                                         ``files={"file": ...}`` (session in the form).
+        * ``copilot_document_read``    — ``params={"session_id": ...}`` (session in the query; the
+                                         document_id is already substituted into the URL path).
         """
-        if self.payload_profile == _PROFILE_COPILOT_CHAT:
-            if self.credential is None:
-                raise AdapterError(
-                    "OpenEMR /chat contract requires an injected session credential (session_id)"
-                )
+        profile = self.payload_profile
+        if profile == _PROFILE_COPILOT_PUBLIC_GET:
+            return {}
+        if profile == _PROFILE_COPILOT_EVIDENCE_SEARCH:
             return {
-                # Reveal the scoped SMART session ONLY here, at the send boundary — never logged,
-                # never inlined into a recorded header, never in the adapter's repr.
-                "session_id": self.credential.reveal(),
-                "message": self._message_from_turns(request),
+                "json": {"query": self._message_from_turns(request), "k": self._search_k(request)}
             }
-        return {"turns": list(request.turns), "metadata": dict(request.metadata)}
+        if profile == _PROFILE_COPILOT_CHAT:
+            return {
+                "json": {
+                    "session_id": self._require_credential("/chat").reveal(),
+                    "message": self._message_from_turns(request),
+                }
+            }
+        if profile == _PROFILE_COPILOT_DOCUMENT_UPLOAD:
+            credential = self._require_credential("document upload")
+            if self.fixture_resolver is None:
+                raise AdapterError(
+                    "OpenEMR document upload requires an injected synthetic fixture resolver"
+                )
+            metadata = dict(request.metadata or {})
+            doc_type = metadata.get("doc_type")
+            fixture_ref = metadata.get("fixture_ref")
+            if not isinstance(doc_type, str) or not doc_type:
+                raise AdapterError("OpenEMR document upload requires a doc_type")
+            if not isinstance(fixture_ref, str) or not fixture_ref.startswith("fixture://"):
+                raise AdapterError("OpenEMR document upload requires a synthetic fixture reference")
+            filename, content, content_type = self.fixture_resolver(fixture_ref)
+            return {
+                "data": {"session_id": credential.reveal(), "doc_type": doc_type},
+                "files": {"file": (filename, content, content_type)},
+            }
+        if profile == _PROFILE_COPILOT_DOCUMENT_READ:
+            return {"params": {"session_id": self._require_credential("document read").reveal()}}
+        return {"json": {"turns": list(request.turns), "metadata": dict(request.metadata)}}
+
+    def _require_credential(self, surface: str) -> Secret:
+        """Return the injected session credential or fail closed for a credentialed profile."""
+        if self.credential is None:
+            raise AdapterError(
+                f"OpenEMR {surface} contract requires an injected session credential (session_id)"
+            )
+        return self.credential
+
+    @staticmethod
+    def _search_k(request: TargetRequest) -> int:
+        """Parse the evidence-search ``k`` (default 5), fail-closed on a non-integer /
+        out-of-range."""
+        raw = dict(request.metadata or {}).get("k")
+        if raw is None:
+            return 5
+        try:
+            k = int(raw)
+        except (TypeError, ValueError) as exc:
+            raise AdapterError("OpenEMR evidence search k must be an integer") from exc
+        if not 1 <= k <= 50:
+            raise AdapterError("OpenEMR evidence search k is out of range")
+        return k
 
     @staticmethod
     def _message_from_turns(request: TargetRequest) -> str:

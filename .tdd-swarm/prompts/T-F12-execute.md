@@ -1,0 +1,6 @@
+# T-F12 Execute — Model: capable
+Worktree `<WORKTREE>`; branch `ticket/T-F12-architecture-reconciliation`. Inputs ticket, landed reports, and every T-F05d through T-F05p contract/test/gate/code/security-review hash. Allowed writes `ARCHITECTURE.md` and two ADRs. No test path; cover T-F05p Web/Runner catalog parity and target/chat/session/patient pin; H/I/E trust/grammar; bounded J config/persistence, K loader, fixed L source, non-cached M provider; O/N ordered history; F sanitized message/code/status and per-attempt cleanup; G complete-chain zero overlap. Reject disabled-surface enablement, secret/local-artifact content, combined/final-only state, undeclared source, or invented facts. No code.
+No network/spend/live traffic; no main merge/push; max 3. Output `.tdd-swarm/reports/T-F12-execute.md`. Return four-status contract + line.
+Strict local contract: exact ticket input `tickets/T-F12.md`; there is no test scope and no production-code permission; use only the named mechanical verifier above. Return exactly `DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED(reason)` plus one-line summary; full output stays in the declared report path.
+No main merge/push.
+Exact inputs: `tickets/T-F12.md` and dependency/authorization artifacts named there; exact output: `.tdd-swarm/reports/T-F12-execute.md`.

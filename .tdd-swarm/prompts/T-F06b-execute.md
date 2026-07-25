@@ -1,0 +1,6 @@
+# T-F06b Execute — Model: capable
+Worktree `<WORKTREE>`; branch `ticket/T-F06b-replay-evidence`. Inputs ticket, T-F05b/T-F06a manifests, all T-F05d through T-F05p artifacts/reviews, and exact replay or still-valid campaign authority. Allowed writes `docs/evidence/regression/**`. No test path; verify exact T-F05p target/chat/session and pinned patient, J/K binding, fresh L→H/I through M, sanitized rejection, and complete O/N rotation chain. Invalid authority, disabled surface, target/session/patient drift, missing chain stage, or source failure means exit 4/zero resolution/adapter/calls; no credential/session value, combined/final-only state, cache, second resolution, reload, or rotation.
+Network/spend/live only within named authorization; no main merge/push; max 3 authorized attempts. Output `.tdd-swarm/reports/T-F06b-execute.md`. Return four-status contract + line.
+Strict local contract: exact ticket input `tickets/T-F06b.md`; there is no test scope and no production-code permission; use only the named mechanical verifier above. Return exactly `DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED(reason)` plus one-line summary; full output stays in the declared report path.
+No main merge/push.
+Exact inputs: `tickets/T-F06b.md` and dependency/authorization artifacts named there; exact output: `.tdd-swarm/reports/T-F06b-execute.md`.

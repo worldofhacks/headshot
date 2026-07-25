@@ -66,6 +66,7 @@ python -m venv "$work/venv"
 echo "== copy ONLY corpus DATA (schemas ride in the wheel, never copied) =="
 mkdir -p "$work/corpus"
 cp -R "$repo_root/evals/seeds" "$work/corpus/seeds"
+cp -R "$repo_root/evals/drafts" "$work/corpus/drafts"
 cp -R "$repo_root/evals/ground-truth" "$work/corpus/ground-truth"
 cp -R "$repo_root/evals/fixtures" "$work/corpus/fixtures"
 

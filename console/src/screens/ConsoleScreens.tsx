@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import type { ApiClient } from "../api/client";
 import {
@@ -9,20 +9,22 @@ import {
 import { COMMAND_PATHS, RESOURCE_PATHS } from "../api/paths";
 import {
   decodeApprovals,
+  decodeApprovalDetail,
   decodeAttempts,
   decodeAuditHistory,
   decodeBirdseye,
   decodeCampaigns,
   decodeComponents,
   decodeConfiguration,
-  decodeCoverage,
   decodeEvidence,
   decodeFinding,
   decodeFindings,
-  decodeResilience,
+  decodeReports,
+  decodeTargetCatalog,
   decodeTargets,
 } from "../api/read-models";
 import { AdversarialText } from "../components/AdversarialText";
+import { AgentActivityPanel } from "../components/AgentActivityPanel";
 import { Birdseye } from "../components/Birdseye";
 import {
   count,
@@ -45,11 +47,20 @@ import {
   StateNotice,
 } from "../components/ResourceView";
 import { useConsoleEvents } from "../hooks/useConsoleEvents";
-import { useResource } from "../hooks/useResource";
+import {
+  LIVE_RESOURCE_POLL_INTERVAL_MS,
+  useResource,
+} from "../hooks/useResource";
 import { navigateTo } from "../router";
+import {
+  FINDING_DECISION_OPTIONS,
+  type FindingDecisionReasonCode,
+  reasonCodeMatchesDecision,
+} from "../finding-decisions";
 import {
   PERMISSIONS,
   type ApprovalReadModel,
+  type ApprovalDetailReadModel,
   type AttemptReadModel,
   type AuditReadModel,
   type BirdseyeAttentionReadModel,
@@ -57,11 +68,12 @@ import {
   type CampaignReadModel,
   type ComponentReadModel,
   type ConfigurationReadModel,
-  type CoverageReadModel,
   type EvidenceReadModel,
   type FindingDetailReadModel,
   type FindingReadModel,
-  type ResilienceReadModel,
+  type FindingVerificationReadModel,
+  type ReportReadModel,
+  type TargetCatalogEntryReadModel,
   type TargetReadModel,
 } from "../types";
 import { CostsScreen, TracesScreen } from "./ObservabilityScreens";
@@ -107,6 +119,11 @@ const distribution = (values: string[]) => frequency(values).map((row) => ({
 const timelineTone = (value: string): "success" | "queued" | "failure" | undefined => {
   const tone = toneFor(value);
   return tone === "brand" ? undefined : tone;
+};
+
+const isPublished = (value: string) => {
+  const normalized = value.toLowerCase();
+  return normalized === "published" || normalized === "published_after_human_approval";
 };
 
 const unique = (values: string[]) => [...new Set(values)].sort();
@@ -157,7 +174,7 @@ function CampaignAttempts({
                   { key: "ordinal", label: "Ordinal", mono: true },
                   { key: "case_id", label: "Case", mono: true },
                   { key: "verdict", label: "Server verdict" },
-                  { key: "executed_at", label: "Executed", mono: true },
+                  { key: "executed_at", label: "Executed", mono: true, timestamp: true },
                 ]}
                 onSelect={(record) => {
                   const attemptId = identity(record, ["attempt_id"]);
@@ -184,10 +201,6 @@ function AttemptEvidence({ client, attemptId }: { client: ApiClient; attemptId: 
         {(data) => {
           const record = data;
           const textFields = [
-            "content",
-            "request_text",
-            "response_text",
-            "raw_content",
             "attack_attempt",
             "request_transcript",
             "response_transcript",
@@ -276,7 +289,7 @@ export function LiveScreen({ client, principal, entityId, getToken }: ScreenProp
   // A persisted campaign is an immutable historical scope. A rerun must use the current
   // server-prepared target/corpus template, bounded by both that target and the prior run's
   // operator-selected budget/rate/timeout. A fresh nonce prevents authorization replay.
-  const preparedScope = effectiveCampaign && rerunTemplate
+  const preparedScope = effectiveCampaign && rerunTemplate && rerunTemplate.hosted_run
     && rerunTemplate.maximum_caps.max_attempts_per_run >= rerunTemplate.case_count
     ? {
         target_id: rerunTemplate.target_id,
@@ -302,6 +315,7 @@ export function LiveScreen({ client, principal, entityId, getToken }: ScreenProp
           ),
         },
         run_nonce: rerunNonce,
+        hosted_run: rerunTemplate.hosted_run,
         expires_in_seconds: 900,
       }
     : null;
@@ -315,6 +329,9 @@ export function LiveScreen({ client, principal, entityId, getToken }: ScreenProp
   );
   const completedCampaigns = campaignRecords.filter((campaign) => campaign.state === "complete").length;
   const activeCampaigns = campaignRecords.filter((campaign) => ["queued", "running"].includes(campaign.state)).length;
+  const campaignAbortable = Boolean(
+    effectiveCampaign && ["queued", "running"].includes(effectiveCampaign.state),
+  );
 
   return (
     <div className="screen-stack">
@@ -396,7 +413,7 @@ export function LiveScreen({ client, principal, entityId, getToken }: ScreenProp
                 { key: "state", label: "State" },
                 { key: "scope_hash", label: "Operation hash", mono: true },
                 { key: "attempt_count", label: "Attempts", mono: true },
-                { key: "created_at", label: "Created", mono: true },
+                { key: "created_at", label: "Created", mono: true, timestamp: true },
               ]}
               onSelect={setSelectedCampaign}
             />
@@ -428,8 +445,10 @@ export function LiveScreen({ client, principal, entityId, getToken }: ScreenProp
               path={COMMAND_PATHS.abortCampaign(selectedCampaignId)}
               payload={{ reason: "operator_abort" }}
               label="Abort selected campaign"
-              allowed={hasPermission(principal, PERMISSIONS.campaignAbort)}
-              unavailableReason={PERMISSIONS.campaignAbort}
+              allowed={campaignAbortable && hasPermission(principal, PERMISSIONS.campaignAbort)}
+              unavailableReason={campaignAbortable
+                ? PERMISSIONS.campaignAbort
+                : "a queued or running campaign"}
               destructive
               onAcknowledged={campaigns.refresh}
             />
@@ -452,7 +471,7 @@ export function LiveScreen({ client, principal, entityId, getToken }: ScreenProp
                   { key: "kind", label: "Kind" },
                   { key: "availability", label: "Server state" },
                   { key: "detail", label: "Evidence" },
-                  { key: "heartbeat_at", label: "Heartbeat", mono: true },
+                  { key: "heartbeat_at", label: "Heartbeat", mono: true, timestamp: true },
                 ]}
               />
             )}
@@ -492,6 +511,150 @@ export function LiveScreen({ client, principal, entityId, getToken }: ScreenProp
       </div>
         </>
       )}
+      <AgentActivityPanel
+        client={client}
+        campaignRunId={selectedCampaignId}
+        title="Selected campaign agents"
+      />
+    </div>
+  );
+}
+
+function VerificationChain({
+  verification,
+}: {
+  verification: FindingVerificationReadModel;
+}) {
+  if (verification.availability === "unavailable") {
+    return (
+      <StateNotice
+        state="unavailable"
+        reason={verification.reason_code ?? "verification_unavailable"}
+        detail="This source has no campaign transcript chain. No evidence has been inferred."
+      />
+    );
+  }
+  const judge = verification.judge;
+  const attackCase = verification.attack_case;
+  const integrity = verification.integrity;
+  const dispositionTone = judge ? toneFor(judge.state) : "queued";
+  return (
+    <div className="evidence-stack" aria-label="Full verification chain">
+      <p className="field-label">Attack case and deterministic basis</p>
+      <EvidenceGrid values={[
+        { label: "Case", value: attackCase?.case_id ?? "Unavailable" },
+        { label: "Classification", value: attackCase?.attack_class ?? "Unavailable" },
+        {
+          label: "Judge disposition",
+          value: judge?.state ?? "Unavailable",
+          tone: dispositionTone === "brand" ? undefined : dispositionTone,
+        },
+        { label: "Basis source", value: judge?.confirmation_source ?? "Unavailable" },
+      ]} />
+      {attackCase && (
+        <RecordDetails
+          data={attackCase}
+          preferredKeys={[
+            "case_id",
+            "category",
+            "attack_class",
+            "owasp_mappings",
+            "oracle_expectation",
+            "case_content_sha256",
+            "corpus_reconciliation",
+          ]}
+        />
+      )}
+      {verification.input_sequence.length > 0 && (
+        <div>
+          <p className="field-label">Input sequence · identifiers redacted</p>
+          {verification.input_sequence.map((turn, index) => (
+            <AdversarialText key={index}>{`${index + 1}. ${turn}`}</AdversarialText>
+          ))}
+        </div>
+      )}
+      {verification.attack_attempt && (
+        <div>
+          <p className="field-label">Attack attempt · identifiers redacted</p>
+          <AdversarialText>{JSON.stringify(verification.attack_attempt, null, 2)}</AdversarialText>
+        </div>
+      )}
+      {verification.request_transcript && (
+        <div>
+          <p className="field-label">Request transcript · identifiers redacted</p>
+          <AdversarialText>{JSON.stringify(verification.request_transcript, null, 2)}</AdversarialText>
+        </div>
+      )}
+      {verification.response_transcript && (
+        <div>
+          <p className="field-label">Response transcript · identifiers redacted</p>
+          <AdversarialText>{verification.response_transcript}</AdversarialText>
+        </div>
+      )}
+      {judge && (
+        <div>
+          <p className="field-label">Independent Judge rationale</p>
+          <RecordDetails
+            data={judge}
+            preferredKeys={[
+              "state",
+              "confidence",
+              "confirmation_source",
+              "oracle_refs",
+              "canary_refs",
+              "reason_codes",
+              "rationale",
+              "rationale_availability",
+              "rationale_detail",
+              "error_code",
+            ]}
+          />
+        </div>
+      )}
+      {verification.minimal_reproduction.length > 0 && (
+        <div>
+          <p className="field-label">Minimal reproduction · draft only</p>
+          <ol>
+            {verification.minimal_reproduction.map((step, index) => (
+              <li key={index}><AdversarialText>{step}</AdversarialText></li>
+            ))}
+          </ol>
+        </div>
+      )}
+      {verification.regression && (
+        <div>
+          <p className="field-label">Regression admission</p>
+          <RecordDetails
+            data={verification.regression}
+            preferredKeys={[
+              "state",
+              "reason_codes",
+              "reproduction_attempted",
+              "deterministic_reproduction",
+              "passes_for_right_reason",
+              "human_approved",
+              "admitted",
+            ]}
+          />
+        </div>
+      )}
+      {integrity && (
+        <div>
+          <p className="field-label">Integrity and reconciliation</p>
+          <RecordDetails
+            data={integrity}
+            preferredKeys={[
+              "evidence_record",
+              "finding_link",
+              "stored_content_sha256",
+              "finding_link_sha256",
+              "recomputed_content_sha256",
+              "observability_reconciliation",
+              "observability_detail",
+            ]}
+          />
+        </div>
+      )}
     </div>
   );
 }
@@ -511,8 +674,10 @@ function FindingDetail({
     client,
     RESOURCE_PATHS.finding(findingId),
     decodeFinding,
+    { pollIntervalMs: LIVE_RESOURCE_POLL_INTERVAL_MS },
   );
   const [rationale, setRationale] = useState("");
+  const [reasonCode, setReasonCode] = useState<FindingDecisionReasonCode | "">("");
   const refresh = () => {
     detail.refresh();
     refreshList();
@@ -534,12 +699,13 @@ function FindingDetail({
                 "evidence_integrity",
               ]}
             />
+            <VerificationChain verification={data.verification} />
             {data.history.length > 0 ? (
               <div className="evidence-stack">
                 <Timeline rows={[...data.history].reverse().map((entry, index) => ({
                   id: `${entry.created_at}:${entry.actor_user_id}:${index}`,
                   title: entry.decision,
-                  detail: `${shortId(entry.actor_user_id)} · ${entry.rationale}`,
+                  detail: `${shortId(entry.actor_user_id)} · ${entry.reason_code ?? "legacy reason unavailable"} · ${entry.rationale}`,
                   at: entry.created_at,
                   tone: timelineTone(entry.decision),
                 }))} />
@@ -548,15 +714,45 @@ function FindingDetail({
                   identityKeys={["created_at", "actor_user_id"]}
                   columns={[
                     { key: "decision", label: "Decision" },
+                    { key: "reason_code", label: "Reason code", mono: true },
                     { key: "actor_user_id", label: "Actor", mono: true },
                     { key: "rationale", label: "Rationale" },
-                    { key: "created_at", label: "Occurred", mono: true },
+                    { key: "created_at", label: "Occurred", mono: true, timestamp: true },
                   ]}
                 />
               </div>
             ) : (
               <StateNotice state="empty" detail="No finding history is recorded." />
             )}
+            <label className="form-field">
+              <span>Decision reason</span>
+              <select
+                value={reasonCode}
+                onChange={(event) => setReasonCode(
+                  event.currentTarget.value as FindingDecisionReasonCode | "",
+                )}
+              >
+                <option value="">Select a structured reason</option>
+                <optgroup label="Approval">
+                  {FINDING_DECISION_OPTIONS
+                    .filter((option) => option.decision === "approved")
+                    .map((option) => (
+                      <option key={option.reasonCode} value={option.reasonCode}>
+                        {option.label}
+                      </option>
+                    ))}
+                </optgroup>
+                <optgroup label="Rejection">
+                  {FINDING_DECISION_OPTIONS
+                    .filter((option) => option.decision === "rejected")
+                    .map((option) => (
+                      <option key={option.reasonCode} value={option.reasonCode}>
+                        {option.label}
+                      </option>
+                    ))}
+                </optgroup>
+              </select>
+            </label>
             <label className="form-field">
               <span>Decision rationale</span>
               <textarea
@@ -570,19 +766,27 @@ function FindingDetail({
               <CommandButton
                 client={client}
                 path={COMMAND_PATHS.decideFinding(findingId)}
-                payload={{ decision: "approved", rationale: rationale.trim() }}
+                payload={{
+                  decision: "approved",
+                  rationale: rationale.trim(),
+                  reason_code: reasonCode,
+                }}
                 label="Approve finding"
-                allowed={data.source_kind !== "security_tool" && hasPermission(principal, PERMISSIONS.findingsApprove) && rationale.trim().length > 0}
-                unavailableReason={data.source_kind === "security_tool" ? "independent validation before a finding decision" : rationale.trim() ? PERMISSIONS.findingsApprove : "a decision rationale"}
+                allowed={data.source_kind !== "security_tool" && hasPermission(principal, PERMISSIONS.findingsApprove) && rationale.trim().length > 0 && reasonCodeMatchesDecision(reasonCode, "approved")}
+                unavailableReason={data.source_kind === "security_tool" ? "independent validation before a finding decision" : !rationale.trim() ? "a decision rationale" : !reasonCodeMatchesDecision(reasonCode, "approved") ? "an approval reason" : PERMISSIONS.findingsApprove}
                 onAcknowledged={refresh}
               />
               <CommandButton
                 client={client}
                 path={COMMAND_PATHS.decideFinding(findingId)}
-                payload={{ decision: "rejected", rationale: rationale.trim() }}
+                payload={{
+                  decision: "rejected",
+                  rationale: rationale.trim(),
+                  reason_code: reasonCode,
+                }}
                 label="Reject finding"
-                allowed={data.source_kind !== "security_tool" && hasPermission(principal, PERMISSIONS.findingsApprove) && rationale.trim().length > 0}
-                unavailableReason={data.source_kind === "security_tool" ? "independent validation before a finding decision" : rationale.trim() ? PERMISSIONS.findingsApprove : "a decision rationale"}
+                allowed={data.source_kind !== "security_tool" && hasPermission(principal, PERMISSIONS.findingsApprove) && rationale.trim().length > 0 && reasonCodeMatchesDecision(reasonCode, "rejected")}
+                unavailableReason={data.source_kind === "security_tool" ? "independent validation before a finding decision" : !rationale.trim() ? "a decision rationale" : !reasonCodeMatchesDecision(reasonCode, "rejected") ? "a rejection reason" : PERMISSIONS.findingsApprove}
                 onAcknowledged={refresh}
               />
               <CommandButton
@@ -607,7 +811,11 @@ export function FindingsScreen({ client, principal, entityId }: ScreenProps) {
     client,
     RESOURCE_PATHS.findings,
     decodeFindings,
+    { pollIntervalMs: LIVE_RESOURCE_POLL_INTERVAL_MS },
   );
+  const selectedFinding = entityId
+    ? findings.result.data?.find((finding) => finding.finding_id === entityId) ?? null
+    : null;
   return (
     <div className="screen-stack">
       <ScreenHeading
@@ -617,15 +825,18 @@ export function FindingsScreen({ client, principal, entityId }: ScreenProps) {
       <ResourceView result={findings.result} emptyLabel="No findings have been persisted.">
         {(data) => {
           const elevated = data.filter((finding) => ["critical", "high"].includes(finding.severity.toLowerCase())).length;
-          const published = data.filter((finding) => finding.publication_status.toLowerCase().includes("publish")).length;
-          const integrityVerified = data.filter((finding) => ["verified", "valid", "bound"].some((value) => finding.evidence_integrity.toLowerCase().includes(value))).length;
+          const published = data.filter((finding) => isPublished(finding.publication_status)).length;
+          const categories = data.map((finding) => finding.category ?? "unavailable");
+          const integrityVerified = data.filter(
+            (finding) => finding.evidence_integrity === "verified",
+          ).length;
           return (
             <>
               <MetricStrip label="Finding summary" values={[
-                { label: "Persisted findings", value: count(data.length), note: `${unique(data.map((finding) => finding.category)).length} categories` },
+                { label: "Persisted findings", value: count(data.length), note: `${unique(categories).length} category labels` },
                 { label: "Critical / high", value: count(elevated), note: `${percent(data.length ? elevated / data.length : 0)} of register` },
-                { label: "Published", value: count(published), note: `${data.length - published} gated or withheld` },
-                { label: "Evidence verified", value: `${integrityVerified}/${data.length}`, note: "server integrity state" },
+                { label: "Published after approval", value: count(published), note: `${data.length - published} draft, gated, or withheld` },
+                { label: "Evidence verified", value: `${integrityVerified}/${data.length}`, note: "record or artifact binding" },
               ]} />
               <div className="panel-grid analytical-grid">
                 <Panel title="Risk distribution" meta="server severity" eyebrow="FINDING POSTURE">
@@ -640,7 +851,7 @@ export function FindingsScreen({ client, principal, entityId }: ScreenProps) {
               </div>
               <Panel title="Taxonomy and provenance" meta="normalized evidence" eyebrow="FINDING POSTURE">
                 <TagMatrix groups={[
-                  { label: "Categories", values: unique(data.map((finding) => finding.category)) },
+                  { label: "Categories", values: unique(categories) },
                   { label: "Sources", values: unique(data.map((finding) => finding.source_kind)) },
                   { label: "Provenance", values: unique(data.map((finding) => finding.evidence_provenance)) },
                   { label: "Execution profiles", values: unique(data.map((finding) => finding.execution_profile)) },
@@ -670,12 +881,72 @@ export function FindingsScreen({ client, principal, entityId }: ScreenProps) {
       </ResourceView>
       {entityId && (
         <FindingDetail
+          key={entityId}
           client={client}
           principal={principal}
           findingId={entityId}
           refreshList={findings.refresh}
         />
       )}
+      <AgentActivityPanel
+        client={client}
+        campaignRunId={selectedFinding?.campaign_run_id}
+        title={selectedFinding ? "Finding verification agents" : "Recent finding agents"}
+      />
+    </div>
+  );
+}
+
+function ApprovalVerificationDetail({
+  client,
+  requestId,
+  onCampaignRunId,
+}: {
+  client: ApiClient;
+  requestId: string;
+  onCampaignRunId: (campaignRunId: string | null) => void;
+}) {
+  const detail = useResource<ApprovalDetailReadModel>(
+    client,
+    RESOURCE_PATHS.approval(requestId),
+    decodeApprovalDetail,
+    { pollIntervalMs: LIVE_RESOURCE_POLL_INTERVAL_MS },
+  );
+  const campaignRunId = detail.result.data?.campaign_run_id;
+  useEffect(() => {
+    if (detail.result.data !== null) {
+      onCampaignRunId(campaignRunId ?? null);
+    }
+  }, [campaignRunId, detail.result.data, onCampaignRunId]);
+  return (
+    <div className="evidence-stack">
+      <p className="field-label">Post-run verification chain</p>
+      <ResourceView
+        result={detail.result}
+        emptyLabel="No organization-scoped approval detail was returned."
+      >
+        {(data) => data.verification_chain.length > 0 ? (
+          <>
+            <EvidenceGrid values={[
+              { label: "Campaign", value: data.campaign_run_id ?? "Not consumed" },
+              { label: "Verified findings", value: count(data.verification_chain.length) },
+              { label: "Authorization", value: data.status },
+              { label: "Scope hash", value: shortId(data.scope_hash) },
+            ]} />
+            {data.verification_chain.map((verification) => (
+              <VerificationChain
+                key={`${verification.finding_id}:${verification.attempt_id ?? "unavailable"}`}
+                verification={verification}
+              />
+            ))}
+          </>
+        ) : (
+          <StateNotice
+            state="empty"
+            detail="This authorization has no confirmed finding evidence. Pending approvals are intentionally pre-evidence."
+          />
+        )}
+      </ResourceView>
     </div>
   );
 }
@@ -685,20 +956,28 @@ export function ApprovalsScreen({ client, principal, entityId }: ScreenProps) {
     client,
     RESOURCE_PATHS.approvals,
     decodeApprovals,
+    { pollIntervalMs: LIVE_RESOURCE_POLL_INTERVAL_MS },
   );
   const records = approvals.result.data ?? [];
   const selected = entityId
     ? records.find((record) => identity(record, ["request_id", "approval_id"]) === entityId) ?? null
     : null;
   const requestId = selected ? identity(selected, ["request_id", "approval_id"]) : null;
+  const [selectedCampaignRunId, setSelectedCampaignRunId] = useState<
+    string | null | undefined
+  >(undefined);
+  useEffect(() => {
+    setSelectedCampaignRunId(undefined);
+  }, [requestId]);
   const launcher = selected && typeof selected.launcher_user_id === "string"
     ? selected.launcher_user_id
     : null;
   const distinctHuman = launcher === null || launcher !== principal.user_id;
   const canApproveIdentity = distinctHuman;
   const isLauncher = launcher !== null && launcher === principal.user_id;
-  const pending = selected?.status === "pending";
-  const approved = selected?.status === "approved";
+  const actionable = Boolean(selected && !selected.expired && !selected.consumed);
+  const pending = selected?.status === "pending" && actionable;
+  const approved = selected?.status === "approved" && actionable;
   const canAuthorize =
     hasPermission(principal, PERMISSIONS.campaignAuthorize) && canApproveIdentity && pending;
 
@@ -711,7 +990,6 @@ export function ApprovalsScreen({ client, principal, entityId }: ScreenProps) {
       <ResourceView result={approvals.result} emptyLabel="No approval requests are pending or recorded.">
         {(data) => {
           const pendingCount = data.filter((approval) => approval.status === "pending").length;
-          const approvedCount = data.filter((approval) => approval.status === "approved").length;
           const decidedCount = data.length - pendingCount;
           const totalBudget = data.reduce((total, approval) => total + approval.caps.budget_usd, 0);
           const totalAttempts = data.reduce((total, approval) => total + approval.caps.max_attempts_per_run, 0);
@@ -720,7 +998,6 @@ export function ApprovalsScreen({ client, principal, entityId }: ScreenProps) {
               <MetricStrip label="Approval summary" values={[
                 { label: "Authorization scopes", value: count(data.length), note: `${unique(data.map((approval) => approval.target_id)).length} targets` },
                 { label: "Pending review", value: count(pendingCount), note: `${decidedCount} decided` },
-                { label: "Approval rate", value: decidedCount ? percent(approvedCount / decidedCount) : "—", note: `${approvedCount} approved` },
                 { label: "Budget authorized", value: money(totalBudget), note: `${count(totalAttempts)} maximum attempts` },
               ]} />
               <div className="panel-grid analytical-grid">
@@ -747,7 +1024,7 @@ export function ApprovalsScreen({ client, principal, entityId }: ScreenProps) {
                     { key: "target_id", label: "Target", mono: true },
                     { key: "scope_hash", label: "Operation hash", mono: true },
                     { key: "launcher_user_id", label: "Launcher", mono: true },
-                    { key: "expires_at", label: "Expires", mono: true },
+                    { key: "expires_at", label: "Expires", mono: true, timestamp: true },
                   ]}
                   onSelect={(record) => {
                     const id = identity(record, ["request_id", "approval_id"]);
@@ -770,6 +1047,51 @@ export function ApprovalsScreen({ client, principal, entityId }: ScreenProps) {
             { label: "Request rate", value: `${selected.caps.target_requests_per_second}/s` },
             { label: "Run timeout", value: `${selected.caps.run_timeout_seconds}s` },
           ]} />
+          {selected.hosted_run ? (
+            <div className="evidence-stack">
+              <p className="field-label">Exact hosted four-role binding</p>
+              <StateNotice
+                state="ready"
+                detail="This approval binds the immutable hosted configuration, generation policy, and provider call envelope shown below. It contains no credential reference."
+              />
+              <EvidenceGrid values={[
+                {
+                  label: "Provider call cap",
+                  value: count(selected.hosted_run.provider_model_call_limit),
+                },
+                {
+                  label: "Provider spend cap",
+                  value: `$${selected.hosted_run.provider_model_spend_limit_usd}`,
+                },
+                {
+                  label: "Provider retries",
+                  value: count(selected.hosted_run.provider_max_retries),
+                },
+                {
+                  label: "Provider timeout",
+                  value: `${selected.hosted_run.provider_timeout_seconds}s`,
+                },
+              ]} />
+              <RecordDetails
+                data={selected.hosted_run}
+                preferredKeys={[
+                  "configuration_set_sha256",
+                  "generation_policy_sha256",
+                  "session_generation",
+                  "provider_model_call_limit",
+                  "provider_model_spend_limit_usd",
+                  "provider_max_retries",
+                  "provider_max_concurrency",
+                  "provider_timeout_seconds",
+                ]}
+              />
+            </div>
+          ) : (
+            <StateNotice
+              state="empty"
+              detail="This authorization does not permit hosted role model calls."
+            />
+          )}
           <RecordDetails
             data={selected}
             preferredKeys={[
@@ -788,8 +1110,29 @@ export function ApprovalsScreen({ client, principal, entityId }: ScreenProps) {
               "approver_user_id",
               "self_approval_override",
               "expires_at",
+              "expired",
+              "consumed",
             ]}
           />
+          <ApprovalVerificationDetail
+            client={client}
+            requestId={requestId}
+            onCampaignRunId={setSelectedCampaignRunId}
+          />
+          {selected.expired && (
+            <StateNotice
+              state="unavailable"
+              reason="authorization_expired"
+              detail="This authorization window has expired and cannot be decided or launched."
+            />
+          )}
+          {selected.consumed && (
+            <StateNotice
+              state="unavailable"
+              reason="authorization_consumed"
+              detail="This authorization has already been consumed by a campaign."
+            />
+          )}
           {!distinctHuman && (
             <StateNotice
               state="unavailable"
@@ -842,146 +1185,129 @@ export function ApprovalsScreen({ client, principal, entityId }: ScreenProps) {
           </div>
         </Panel>
       )}
+      {!selected && !entityId && (
+        <AgentActivityPanel
+          client={client}
+          title="Recent authorization and review agents"
+        />
+      )}
+      {selected && selectedCampaignRunId && (
+        <AgentActivityPanel
+          client={client}
+          campaignRunId={selectedCampaignRunId}
+          title="Selected authorization agents"
+        />
+      )}
+      {selected && selectedCampaignRunId === null && (
+        <Panel title="Selected authorization agents" eyebrow="AGENT EXECUTION LEDGER">
+          <StateNotice
+            state="empty"
+            detail="No campaign has consumed this authorization, so it has no scoped agent executions."
+          />
+        </Panel>
+      )}
     </div>
   );
 }
 
-type SimpleResourceName = "coverage" | "resilience";
-type ResourceScreenName = SimpleResourceName | "traces" | "costs";
-
-function CoverageScreen({ client }: { client: ApiClient }) {
-  const controller = useResource<CoverageReadModel[]>(client, RESOURCE_PATHS.coverage, decodeCoverage);
-  return (
-    <div className="screen-stack">
-      <ScreenHeading title="Coverage" detail="Only server-derived, hash-verified and nonce-deduplicated coverage is shown." />
-      <ResourceView result={controller.result} emptyLabel="No verified coverage records are available.">
-        {(data) => {
-          const verified = data.reduce((total, record) => total + record.verified_attempt_count, 0);
-          const cases = data.reduce((total, record) => total + record.total_case_count, 0);
-          const covered = data.filter((record) => record.covered).length;
-          const verdicts = new Map<string, number>();
-          for (const record of data) {
-            for (const [verdict, rawCount] of Object.entries(record.verdict_counts)) {
-              if (typeof rawCount === "number") verdicts.set(verdict, (verdicts.get(verdict) ?? 0) + rawCount);
-            }
-          }
-          return (
-            <>
-              <MetricStrip label="Coverage summary" values={[
-                { label: "Verified attempts", value: count(verified), note: `${count(cases)} total cases` },
-                { label: "Case execution", value: cases ? percent(verified / cases) : "—", note: "verified / total" },
-                { label: "Covered versions", value: `${covered}/${data.length}`, note: "server coverage decision" },
-                { label: "Mapped controls", value: count(unique(data.flatMap((record) => [...record.owasp_web, ...record.owasp_llm])).length), note: "OWASP Web + LLM" },
-              ]} />
-              <div className="panel-grid analytical-grid">
-                <Panel title="Execution by target version" meta="verified / total" eyebrow="COVERAGE POSTURE">
-                  <DistributionBars rows={data.map((record) => ({
-                    label: record.target_version,
-                    value: record.verified_attempt_count,
-                    display: `${record.verified_attempt_count} / ${record.total_case_count}`,
-                    tone: record.covered ? "success" as const : "queued" as const,
-                  }))} />
-                </Panel>
-                <Panel title="Verdict distribution" meta="verified attempts" eyebrow="COVERAGE POSTURE">
-                  {verdicts.size > 0
-                    ? <DistributionBars rows={[...verdicts.entries()].map(([label, value]) => ({ label, value, tone: toneFor(label) }))} />
-                    : <StateNotice state="empty" detail="No verdict counts are present in the coverage projection." />}
-                </Panel>
-              </div>
-              <Panel title="Taxonomy coverage" meta="deduplicated mappings" eyebrow="COVERAGE POSTURE">
-                <TagMatrix groups={[
-                  { label: "Classifications", values: unique(data.flatMap((record) => record.classifications)) },
-                  { label: "OWASP Web Top 10", values: unique(data.flatMap((record) => record.owasp_web)) },
-                  { label: "OWASP LLM Top 10", values: unique(data.flatMap((record) => record.owasp_llm)) },
-                  { label: "Evidence provenance", values: unique(data.map((record) => record.evidence_provenance)) },
-                ]} />
-              </Panel>
-              <Panel title="Coverage ledger" meta="authoritative snapshots">
-                <RecordTable
-                  data={data}
-                  identityKeys={["target_version"]}
-                  columns={[
-                    { key: "target_version", label: "Target version", mono: true },
-                    { key: "verified_attempt_count", label: "Verified", mono: true },
-                    { key: "total_case_count", label: "Cases", mono: true },
-                    { key: "category_count", label: "Categories", mono: true },
-                    { key: "execution_profile", label: "Profile" },
-                    { key: "covered", label: "Coverage decision" },
-                    { key: "as_of", label: "As of", mono: true },
-                  ]}
-                />
-              </Panel>
-            </>
-          );
-        }}
-      </ResourceView>
-    </div>
+export function ReportsScreen({ client, entityId }: ScreenProps) {
+  const reports = useResource<ReportReadModel[]>(
+    client,
+    RESOURCE_PATHS.reports,
+    decodeReports,
   );
-}
-
-function ResilienceScreen({ client }: { client: ApiClient }) {
-  const controller = useResource<ResilienceReadModel[]>(client, RESOURCE_PATHS.resilience, decodeResilience);
+  const selected = entityId
+    ? reports.result.data?.find((report) => report.report_id === entityId) ?? null
+    : null;
   return (
     <div className="screen-stack">
-      <ScreenHeading title="Resilience" detail="Version and regression history is read from the authoritative projection." />
-      <ResourceView result={controller.result} emptyLabel="No resilience or regression history is recorded.">
+      <ScreenHeading
+        title="Reports"
+        eyebrow="DOCUMENTATION AGENT DRAFTS"
+        detail="Schema-validated vulnerability reports remain unpublished until a separate human decision. Every report below is reconciled to immutable evidence before display."
+      />
+      <ResourceView result={reports.result} emptyLabel="No vulnerability reports have been drafted.">
         {(data) => {
-          const passing = data.filter((record) => timelineTone(record.status) === "success").length;
-          const failing = data.filter((record) => timelineTone(record.status) === "failure").length;
-          const latest = [...data].sort((left, right) => Date.parse(right.recorded_at) - Date.parse(left.recorded_at))[0];
+          const gated = data.filter(
+            (report) => report.publication_state === "blocked_pending_human_approval",
+          ).length;
+          const admitted = data.filter((report) => report.regression?.admitted === true).length;
           return (
             <>
-              <MetricStrip label="Resilience summary" values={[
-                { label: "Regression checks", value: count(data.length), note: `${unique(data.map((record) => record.version)).length} target versions` },
-                { label: "Passing", value: count(passing), note: `${percent(data.length ? passing / data.length : 0)} of history` },
-                { label: "Regressions", value: count(failing), note: "failed or degraded states" },
-                { label: "Latest version", value: latest?.version ?? "—", note: latest?.status ?? "No status" },
+              <MetricStrip label="Report summary" values={[
+                { label: "Validated drafts", value: count(data.length), note: "Documentation output, never publication authority" },
+                { label: "Human-gated", value: count(gated), note: `${data.length - gated} draft unpublished` },
+                { label: "Regression admitted", value: count(admitted), note: "Requires deterministic replay and human approval" },
+                { label: "Integrity verified", value: `${data.filter((report) => report.report_integrity === "verified").length}/${data.length}`, note: "Report, lineage and reproduction hash" },
               ]} />
-              <div className="panel-grid analytical-grid">
-                <Panel title="Regression posture" meta="all recorded checks" eyebrow="RESILIENCE POSTURE">
-                  <DistributionBars rows={distribution(data.map((record) => record.status))} />
-                </Panel>
-                <Panel title="Version activity" meta="checks per version" eyebrow="RESILIENCE POSTURE">
-                  <DistributionBars rows={distribution(data.map((record) => record.version))} />
-                </Panel>
-              </div>
-              <Panel title="Regression timeline" meta="newest first" eyebrow="RESILIENCE POSTURE">
-                <Timeline rows={[...data]
-                  .sort((left, right) => Date.parse(right.recorded_at) - Date.parse(left.recorded_at))
-                  .map((record) => ({
-                    id: `${record.regression_id}:${record.version}:${record.recorded_at}`,
-                    title: `${record.version} · ${record.status}`,
-                    detail: record.regression_id,
-                    at: record.recorded_at,
-                    tone: timelineTone(record.status),
-                  }))} />
-              </Panel>
-              <Panel title="Resilience ledger" meta="authoritative history">
+              <Panel title="Report register" meta="select a report for the full chain">
                 <RecordTable
                   data={data}
-                  identityKeys={["regression_id", "version"]}
+                  identityKeys={["report_id"]}
                   columns={[
-                    { key: "version", label: "Version", mono: true },
-                    { key: "regression_id", label: "Regression", mono: true },
+                    { key: "report_id", label: "Report", mono: true },
+                    { key: "finding_id", label: "Finding", mono: true },
+                    { key: "severity", label: "Severity" },
+                    { key: "category", label: "Category" },
                     { key: "status", label: "Status" },
-                    { key: "recorded_at", label: "Recorded", mono: true },
+                    { key: "publication_state", label: "Publication gate" },
+                    { key: "report_integrity", label: "Integrity" },
                   ]}
+                  onSelect={(record) => {
+                    const reportId = identity(record, ["report_id"]);
+                    if (reportId) navigateTo({ screen: "reports", entityId: reportId });
+                  }}
                 />
               </Panel>
             </>
           );
         }}
       </ResourceView>
+      {entityId && selected && (
+        <Panel title="Vulnerability report" meta={selected.report_id} eyebrow="DRAFT · HUMAN GATED">
+          <RecordDetails
+            data={selected}
+            preferredKeys={[
+              "report_id",
+              "finding_id",
+              "source_case_id",
+              "severity",
+              "category",
+              "status",
+              "publication_state",
+              "report_integrity",
+              "reproduction_sha256",
+              "created_at",
+            ]}
+          />
+          {[
+            ["Description", selected.description],
+            ["Clinical impact", selected.clinical_impact],
+            ["Observed behavior", selected.observed_behavior],
+            ["Expected behavior", selected.expected_behavior],
+            ["Recommended remediation", selected.recommended_remediation],
+          ].map(([label, value]) => (
+            <div key={label}>
+              <p className="field-label">{label}</p>
+              <AdversarialText>{value}</AdversarialText>
+            </div>
+          ))}
+          <VerificationChain verification={selected.verification} />
+        </Panel>
+      )}
+      {entityId && !selected && reports.result.state !== "loading" && (
+        <Panel title="Vulnerability report">
+          <StateNotice state="empty" detail="That report is not in the organization-scoped response." />
+        </Panel>
+      )}
     </div>
   );
 }
+
+type ResourceScreenName = "traces" | "costs";
 
 export function SimpleResourceScreen({ client, resource }: { client: ApiClient; resource: ResourceScreenName }) {
   switch (resource) {
-    case "coverage":
-      return <CoverageScreen client={client} />;
-    case "resilience":
-      return <ResilienceScreen client={client} />;
     case "traces":
       return <TracesScreen client={client} />;
     case "costs":
@@ -1001,25 +1327,25 @@ function TargetManagement({
   refresh: () => void;
 }) {
   const targetId = identity(selected, ["target_id"]);
-  const version = typeof selected.version === "string" ? selected.version : null;
-  const transitions = Array.isArray(selected.allowed_lifecycle_transitions)
-    ? selected.allowed_lifecycle_transitions.filter((value): value is string => typeof value === "string")
-    : [];
-  const probePayload = isJsonRecord(selected.probe_authorization_payload)
-    ? selected.probe_authorization_payload
-    : null;
   const surfaces = selected.surfaces;
-  const allowed = hasPermission(principal, PERMISSIONS.targetsManage);
-  const canAuthorizeProbe = hasPermission(principal, PERMISSIONS.campaignAuthorize);
   const template = selected.campaign_template;
+  const canManageTargets = hasPermission(principal, PERMISSIONS.targetsManage);
   // Pre-filled bounded defaults so an Operator can request a campaign without hand-entering
   // caps or a nonce. The nonce is freshly generated per mount (unused → replay-safe); every
   // field stays editable, and the server still validates caps against the target's ceiling.
   const [runNonce, setRunNonce] = useState(() => `live-${globalThis.crypto.randomUUID()}`);
-  const [budgetUsd, setBudgetUsd] = useState("1");
-  const [maxAttempts, setMaxAttempts] = useState(() => String(template?.case_count ?? 9));
-  const [requestsPerSecond, setRequestsPerSecond] = useState("1");
-  const [timeoutSeconds, setTimeoutSeconds] = useState("900");
+  const [budgetUsd, setBudgetUsd] = useState(
+    () => template ? String(template.maximum_caps.budget_usd) : "",
+  );
+  const [maxAttempts, setMaxAttempts] = useState(
+    () => template ? String(template.case_count) : "",
+  );
+  const [requestsPerSecond, setRequestsPerSecond] = useState(
+    () => template ? String(template.maximum_caps.target_requests_per_second) : "",
+  );
+  const [timeoutSeconds, setTimeoutSeconds] = useState(
+    () => template ? String(template.maximum_caps.run_timeout_seconds) : "",
+  );
   const parsedCaps = {
     budget_usd: Number(budgetUsd),
     max_attempts_per_run: Number(maxAttempts),
@@ -1038,7 +1364,8 @@ function TargetManagement({
       && parsedCaps.target_requests_per_second <= template.maximum_caps.target_requests_per_second
       && parsedCaps.run_timeout_seconds <= template.maximum_caps.run_timeout_seconds
     : false;
-  const requestPayload = template && fullScanFitsTarget && capsValid && capsWithinTarget
+  const requestPayload = template && template.hosted_run
+    && fullScanFitsTarget && capsValid && capsWithinTarget
     && runNonce.trim().length >= 16
     ? {
         target_id: template.target_id,
@@ -1050,11 +1377,12 @@ function TargetManagement({
         execution_profile: template.execution_profile,
         caps: parsedCaps,
         run_nonce: runNonce.trim(),
+        hosted_run: template.hosted_run,
         expires_in_seconds: 900,
       }
     : null;
   return (
-    <Panel title="Target administration" meta={targetId ?? undefined}>
+    <Panel title="Registered target" meta={targetId ?? undefined}>
       <RecordDetails
         data={selected}
         preferredKeys={[
@@ -1085,44 +1413,60 @@ function TargetManagement({
             : <StateNotice state="empty" detail="No versioned surfaces are attached." />}
         </div>
       </div>
-      <div className="command-row">
-        {targetId && version && transitions[0] ? (
-          <CommandButton
-            client={client}
-            path={COMMAND_PATHS.changeTargetLifecycle(targetId)}
-            payload={{ version, lifecycle: transitions[0] }}
-            label={`Move to ${transitions[0]}`}
-            allowed={allowed}
-            unavailableReason={PERMISSIONS.targetsManage}
-            onAcknowledged={refresh}
-          />
+      <div className="evidence-stack">
+        <p className="field-label">Immutable surface state</p>
+        {surfaces.length > 0 ? (
+          <div className="surface-stack">
+            {surfaces.map((surface) => {
+              const mayEnable = !surface.enabled && selected.lifecycle === "draft";
+              const allowed = canManageTargets && (surface.enabled || mayEnable);
+              return (
+                <div
+                  className="surface-row"
+                  key={`${surface.surface_id}:${surface.version}`}
+                >
+                  <span>
+                    <span className="mono">{surface.surface_id}@{surface.version}</span>
+                    {" · "}
+                    {surface.enabled ? "enabled" : "disabled"}
+                    {" · "}
+                    {surface.kind}
+                  </span>
+                  <CommandButton
+                    client={client}
+                    path={COMMAND_PATHS.changeSurfaceState(
+                      selected.target_id,
+                      surface.surface_id,
+                    )}
+                    payload={{ version: surface.version, enabled: !surface.enabled }}
+                    label={surface.enabled ? "Disable surface" : "Enable surface"}
+                    allowed={allowed}
+                    unavailableReason={!canManageTargets
+                      ? PERMISSIONS.targetsManage
+                      : "a server-reported draft target before re-enabling"}
+                    destructive={surface.enabled}
+                    onAcknowledged={refresh}
+                  />
+                </div>
+              );
+            })}
+          </div>
         ) : (
-          <MissingCommand label="Change lifecycle" dependency="a server-returned allowed transition" />
+          <StateNotice state="empty" detail="No immutable surfaces are attached." />
         )}
-        {probePayload ? (
-          <CommandButton
-            client={client}
-            path={COMMAND_PATHS.createProbeAuthorizationRequest}
-            payload={probePayload}
-            label="Request live probe authorization"
-            allowed={canAuthorizeProbe}
-            unavailableReason={PERMISSIONS.campaignAuthorize}
-            onAcknowledged={refresh}
-          />
-        ) : (
-          <MissingCommand label="Request live probe authorization" dependency="a server-prepared probe scope" />
-        )}
-        <MissingCommand label="Revise target" dependency="a trusted target authoring catalog" />
-        <MissingCommand label="Create attack surface" dependency="a trusted surface authoring catalog" />
-        <MissingCommand label="Revise attack surface" dependency="a trusted surface revision contract" />
+        <p className="data-note">
+          Disabling an existing immutable surface is immediately fail-closed. The backend permits
+          re-enabling only while its target is in the draft lifecycle; reviewed targets expose no
+          recovery control here.
+        </p>
       </div>
       {template && (
         <div className="evidence-stack">
           <p className="field-label">Exact campaign authorization request</p>
           <MetricStrip label="Full scan profile" values={[
             { label: "Planned attacks", value: count(template.case_count), note: "Exact corpus bound into authorization" },
-            { label: "Authored core", value: count(9), note: "Injection · exfiltration · tool misuse" },
-            { label: "Tool-generated", value: count(Math.max(0, template.case_count - 9)), note: template.tool_sources.join(" · ") || "No reviewed tool candidates" },
+            { label: "Corpus", value: template.corpus_id, note: shortId(template.corpus_hash) },
+            { label: "Reviewed tool sources", value: count(template.tool_sources.length), note: template.tool_sources.join(" · ") || "No reviewed tool sources" },
             { label: "Execution", value: template.execution_profile, note: "Every request passes the policy gateway" },
           ]} />
           <RecordDetails
@@ -1140,6 +1484,32 @@ function TargetManagement({
               "maximum_caps",
             ]}
           />
+          {template.hosted_run ? (
+            <>
+              <StateNotice
+                state="ready"
+                detail="This request activates the latest staged four-role set only for the exact target, corpus, caps, and credential generation below. A distinct approver must still approve it."
+              />
+              <RecordDetails
+                data={template.hosted_run}
+                preferredKeys={[
+                  "configuration_set_sha256",
+                  "generation_policy_sha256",
+                  "session_generation",
+                  "provider_model_call_limit",
+                  "provider_model_spend_limit_usd",
+                  "provider_max_retries",
+                  "provider_max_concurrency",
+                  "provider_timeout_seconds",
+                ]}
+              />
+            </>
+          ) : (
+            <StateNotice
+              state="degraded"
+              detail="No server-owned atomic four-role configuration set is staged. Campaign authorization cannot activate hosted roles."
+            />
+          )}
           <div className="panel-grid">
             <label className="form-field">
               <span>Run nonce (16+ characters)</span>
@@ -1170,7 +1540,9 @@ function TargetManagement({
             allowed={Boolean(requestPayload) && hasPermission(principal, PERMISSIONS.campaignLaunch)}
             unavailableReason={requestPayload
               ? PERMISSIONS.campaignLaunch
-              : "a complete full-scan cap envelope and valid nonce"}
+              : template.hosted_run
+                ? "a complete full-scan cap envelope and valid nonce"
+                : "a staged server-owned four-role configuration set"}
             onAcknowledged={() => {
               // Roll a fresh unused nonce after each accepted request so the next campaign
               // can be requested immediately without a replayed-nonce rejection.
@@ -1180,47 +1552,34 @@ function TargetManagement({
           />
         </div>
       )}
-      {surfaces.length > 0 ? (
-        <div className="surface-stack">
-          {surfaces.map((surface, index) => {
-            const surfaceId = identity(surface, ["surface_id"]);
-            const surfaceVersion = typeof surface.version === "string" ? surface.version : null;
-            const enabled = typeof surface.enabled === "boolean" ? surface.enabled : null;
-            if (!targetId || !surfaceId || !surfaceVersion || enabled === null) return null;
-            return (
-              <div className="surface-row" key={`${surfaceId}:${surfaceVersion}:${index}`}>
-                <span className="mono">{surfaceId} · {surfaceVersion}</span>
-                <CommandButton
-                  client={client}
-                  path={COMMAND_PATHS.changeSurfaceState(targetId, surfaceId)}
-                  payload={{ version: surfaceVersion, enabled: !enabled }}
-                  label={enabled ? "Disable surface" : "Enable surface"}
-                  allowed={allowed}
-                  unavailableReason={PERMISSIONS.targetsManage}
-                  destructive={enabled}
-                  onAcknowledged={refresh}
-                />
-              </div>
-            );
-          })}
-        </div>
-      ) : (
-        <div className="command-row">
-          <MissingCommand label="Enable or disable surface" dependency="a selected versioned surface record" />
-        </div>
-      )}
     </Panel>
   );
 }
 
 export function TargetsScreen({ client, principal }: ScreenProps) {
+  const catalog = useResource<TargetCatalogEntryReadModel[]>(
+    client,
+    RESOURCE_PATHS.targetCatalog,
+    decodeTargetCatalog,
+  );
   const targets = useResource<TargetReadModel[]>(
     client,
     RESOURCE_PATHS.targets,
     decodeTargets,
   );
-  const [selected, setSelected] = useState<TargetReadModel | null>(null);
+  const [selectedIdentity, setSelectedIdentity] = useState<string | null>(null);
+  const [catalogIdentity, setCatalogIdentity] = useState("");
   const records = targets.result.data ?? [];
+  const catalogRecords = catalog.result.data ?? [];
+  const selectedCatalog = catalogRecords.find(
+    (entry) => `${entry.target_id}\n${entry.version}` === catalogIdentity,
+  ) ?? null;
+  const canManageTargets = hasPermission(principal, PERMISSIONS.targetsManage);
+  const selected = selectedIdentity
+    ? records.find(
+        (target) => `${target.target_id}\n${target.version}` === selectedIdentity,
+      ) ?? null
+    : null;
   const surfaces = records.flatMap((target) => target.surfaces);
   const enabledSurfaces = surfaces.filter((surface) => surface.enabled).length;
   const readyTargets = records.filter((target) => target.lifecycle.toLowerCase().includes("ready")).length;
@@ -1231,6 +1590,79 @@ export function TargetsScreen({ client, principal }: ScreenProps) {
         title="Targets"
         detail="Only persisted immutable target and attack-surface versions may be selected for dispatch."
       />
+      <Panel
+        title="Trusted target catalog"
+        meta="server-owned registration"
+        eyebrow="CONTROL PLANE"
+      >
+        <ResourceView
+          result={catalog.result}
+          emptyLabel="No reviewed target versions are available in the server catalog."
+        >
+          {(data) => (
+            <div className="evidence-stack">
+              <label className="form-field">
+                <span>Reviewed target version</span>
+                <select
+                  aria-label="Reviewed target version"
+                  value={catalogIdentity}
+                  onChange={(event) => setCatalogIdentity(event.currentTarget.value)}
+                >
+                  <option value="">Select an exact catalog entry</option>
+                  {data.map((entry) => (
+                    <option
+                      key={`${entry.target_id}:${entry.version}`}
+                      value={`${entry.target_id}\n${entry.version}`}
+                    >
+                      {entry.name} · {entry.target_id}@{entry.version} · {entry.registration_state}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              {selectedCatalog && (
+                <EvidenceGrid values={[
+                  { label: "Target", value: selectedCatalog.target_id },
+                  { label: "Version", value: selectedCatalog.version },
+                  { label: "Environment", value: selectedCatalog.environment },
+                  { label: "Surfaces", value: count(selectedCatalog.surface_count) },
+                  { label: "Registration", value: selectedCatalog.registration_state },
+                ]} />
+              )}
+              <CommandButton
+                client={client}
+                path={COMMAND_PATHS.createTarget}
+                payload={selectedCatalog
+                  ? {
+                      target_id: selectedCatalog.target_id,
+                      version: selectedCatalog.version,
+                    }
+                  : {}}
+                label="Register exact catalog target"
+                allowed={Boolean(
+                  canManageTargets
+                  && selectedCatalog?.registration_state === "available",
+                )}
+                unavailableReason={!canManageTargets
+                  ? PERMISSIONS.targetsManage
+                  : selectedCatalog?.registration_state === "registered"
+                    ? "an unregistered catalog target"
+                    : selectedCatalog?.registration_state === "conflict"
+                      ? "manual resolution of the persisted immutable-state conflict"
+                      : "an exact reviewed target version"}
+                onAcknowledged={() => {
+                  catalog.refresh();
+                  targets.refresh();
+                }}
+              />
+              <p className="data-note">
+                The browser submits only the selected target ID and version. URLs, hosts,
+                adapters, credentials, authorization references, and surface definitions remain
+                server-owned.
+              </p>
+            </div>
+          )}
+        </ResourceView>
+      </Panel>
       {records.length > 0 && (
         <>
           <MetricStrip label="Target summary" values={[
@@ -1272,16 +1704,15 @@ export function TargetsScreen({ client, principal }: ScreenProps) {
                 { key: "lifecycle", label: "Lifecycle" },
                 { key: "environment", label: "Environment" },
               ]}
-              onSelect={setSelected}
+              onSelect={(target) =>
+                setSelectedIdentity(`${target.target_id}\n${target.version}`)}
             />
           )}
         </ResourceView>
-        <div className="command-row">
-          <MissingCommand label="Create target" dependency="a trusted target authoring catalog" />
-        </div>
       </Panel>
       {selected && (
         <TargetManagement
+          key={`${selected.target_id}:${selected.version}`}
           client={client}
           principal={principal}
           selected={selected}
@@ -1328,7 +1759,7 @@ function AuditHistory({ client }: { client: ApiClient }) {
                 { key: "event_type", label: "Event" },
                 { key: "actor_user_id", label: "Actor", mono: true },
                 { key: "aggregate_id", label: "Resource", mono: true },
-                { key: "created_at", label: "Occurred", mono: true },
+                { key: "created_at", label: "Occurred", mono: true, timestamp: true },
               ]}
             />
           </div>
@@ -1350,26 +1781,6 @@ export function ConfigurationScreen({ client, principal }: ScreenProps) {
     decodeComponents,
   );
   const configRecord = configuration.result.data;
-  const candidate = configRecord && isJsonRecord(configRecord.candidate_configuration)
-    ? configRecord.candidate_configuration
-    : null;
-  const snapshotId = configRecord && typeof configRecord.validated_snapshot_id === "string"
-    ? configRecord.validated_snapshot_id
-    : null;
-  const validationId = configRecord && typeof configRecord.validation_id === "string"
-    ? configRecord.validation_id
-    : snapshotId;
-  const agentName = configRecord && typeof configRecord.agent_name === "string"
-    ? configRecord.agent_name
-    : null;
-  const baseVersion = configRecord && typeof configRecord.base_version === "number"
-    ? configRecord.base_version
-    : null;
-  const configurationPayload = candidate && agentName && baseVersion !== null
-    ? { agent_name: agentName, base_version: baseVersion, configuration: candidate }
-    : null;
-  const [rationale, setRationale] = useState("");
-  const allowed = hasPermission(principal, PERMISSIONS.configManage);
   const componentRecords = components.result.data ?? [];
   const operationalComponents = componentRecords.filter((component) => component.availability === "operational and evidenced").length;
   const configurationKeys = configRecord ? Object.keys(configRecord.configuration) : [];
@@ -1383,12 +1794,12 @@ export function ConfigurationScreen({ client, principal }: ScreenProps) {
     <div className="screen-stack">
       <ScreenHeading
         title="Configuration"
-        detail="Immutable effective configuration, validation and publication acknowledgements remain server-owned."
+        detail="Read-only effective application state from the existing deployment. Runtime topology, secrets, targets, and activation are frozen in this recovery."
       />
       {configRecord && (
         <MetricStrip label="Configuration summary" values={[
           { label: "Snapshot", value: shortId(configRecord.snapshot_id), note: `version ${configRecord.version}` },
-          { label: "Publication state", value: configRecord.status, note: configRecord.published_at },
+          { label: "Runtime snapshot state", value: configRecord.status, note: `Observed ${configRecord.published_at}` },
           { label: "Configuration areas", value: count(configurationKeys.length), note: configurationKeys.slice(0, 3).join(" · ") || "No top-level keys" },
           { label: "Components/tools evidenced", value: `${operationalComponents}/${componentRecords.length}`, note: components.result.state },
         ]} />
@@ -1398,12 +1809,12 @@ export function ConfigurationScreen({ client, principal }: ScreenProps) {
           {configRecord ? (
             <TagMatrix groups={[
               { label: "Effective areas", values: configurationKeys },
-              { label: "Publication status", values: [configRecord.status] },
-              { label: "Publisher", values: [shortId(configRecord.published_by)] },
+              { label: "Runtime status", values: [configRecord.status] },
+              { label: "Snapshot source", values: [shortId(configRecord.published_by)] },
               { label: "Snapshot", values: [shortId(configRecord.snapshot_id)] },
             ]} />
           ) : (
-            <ResourceView result={configuration.result} emptyLabel="No configuration snapshot is published.">{() => null}</ResourceView>
+            <ResourceView result={configuration.result} emptyLabel="No effective runtime snapshot is available.">{() => null}</ResourceView>
           )}
         </Panel>
         <Panel title="Component and tool status" meta="heartbeat + catalog verification" eyebrow="RUNTIME POSTURE">
@@ -1451,8 +1862,8 @@ export function ConfigurationScreen({ client, principal }: ScreenProps) {
           <ResourceView result={components.result} emptyLabel="No security-tool records are available.">{() => null}</ResourceView>
         )}
       </Panel>
-      <Panel title="Effective configuration">
-        <ResourceView result={configuration.result} emptyLabel="No configuration snapshot is published.">
+      <Panel title="Effective runtime snapshot">
+        <ResourceView result={configuration.result} emptyLabel="No effective runtime snapshot is available.">
           {(data) => (
             <div className="evidence-stack">
               <RecordDetails
@@ -1466,53 +1877,17 @@ export function ConfigurationScreen({ client, principal }: ScreenProps) {
                 ]}
               />
               <div>
-                <p className="field-label">Effective server configuration</p>
+                <p className="field-label">Effective server state</p>
                 <AdversarialText>{JSON.stringify(data.configuration, null, 2)}</AdversarialText>
               </div>
             </div>
           )}
         </ResourceView>
-        <div className="command-row">
-          {configurationPayload ? (
-            <CommandButton
-              client={client}
-              path={COMMAND_PATHS.validateConfiguration}
-              payload={configurationPayload}
-              label="Validate candidate configuration"
-              allowed={allowed}
-              unavailableReason={PERMISSIONS.configManage}
-              onAcknowledged={configuration.refresh}
-            />
-          ) : (
-            <MissingCommand label="Validate candidate configuration" dependency="a server-returned candidate" />
-          )}
-          {configurationPayload && validationId ? (
-            <CommandButton
-              client={client}
-              path={COMMAND_PATHS.publishConfiguration}
-              payload={{
-                ...configurationPayload,
-                validation_id: validationId,
-                rationale: rationale.trim(),
-              }}
-              label="Publish validated snapshot"
-              allowed={allowed && rationale.trim().length > 0}
-              unavailableReason={rationale.trim() ? PERMISSIONS.configManage : "a publication rationale"}
-              onAcknowledged={configuration.refresh}
-            />
-          ) : (
-            <MissingCommand label="Publish validated snapshot" dependency="a server-validated snapshot" />
-          )}
-        </div>
-        <label className="form-field">
-          <span>Publication rationale</span>
-          <textarea
-            value={rationale}
-            maxLength={2000}
-            onChange={(event) => setRationale(event.currentTarget.value)}
-            placeholder="Required for configuration publication"
-          />
-        </label>
+        <StateNotice
+          state="unavailable"
+          reason="frozen_application_configuration"
+          detail="Candidate validation, snapshot publication, and runtime activation are unavailable here. Four-role hosted sets may only be staged atomically through the protected API v1 resource."
+        />
       </Panel>
       <Panel title="Append-only audit history">
         {hasPermission(principal, PERMISSIONS.auditRead) ? (

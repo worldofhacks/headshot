@@ -2,8 +2,8 @@ export type ScreenName =
   | "live"
   | "findings"
   | "approvals"
+  | "reports"
   | "coverage"
-  | "resilience"
   | "agents"
   | "tooling"
   | "traces"
@@ -20,8 +20,8 @@ const screens = new Set<ScreenName>([
   "live",
   "findings",
   "approvals",
+  "reports",
   "coverage",
-  "resilience",
   "agents",
   "tooling",
   "traces",
@@ -45,7 +45,10 @@ export function parseConsoleRoute(pathname: string): ConsoleRoute {
     return { screen: "live", entityId: null };
   }
   const screen = screenPart as ScreenName;
-  const supportsEntity = screen === "live" || screen === "findings" || screen === "approvals";
+  const supportsEntity = screen === "live"
+    || screen === "findings"
+    || screen === "approvals"
+    || screen === "reports";
   if (entityPart && !supportsEntity) return { screen: "live", entityId: null };
   return { screen, entityId: supportsEntity ? safeDecode(entityPart) : null };
 }

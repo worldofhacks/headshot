@@ -19,6 +19,7 @@ import pytest
 from agentforge.evals.validation import (
     MAX_CORPUS_ARTIFACTS,
     MAX_FILE_BYTES,
+    REQUIRED_OWASP_LLM_IDS,
     EvalValidationCode,
     EvalValidationError,
     canonicalize_input_sequence,
@@ -947,17 +948,35 @@ def test_duplicate_diagnostics_sanitize_untrusted_case_ids() -> None:
     assert "\x1b" not in rendered
 
 
-def test_repository_corpus_is_valid_and_has_offline_mvp_counts() -> None:
+def test_repository_corpus_reports_active_and_draft_authoring_counts() -> None:
     root = Path(__file__).resolve().parents[2] / "evals"
     summary = validate_corpus(root)
-    assert summary.case_count == 9
-    assert summary.ground_truth_label_count == 15
-    assert summary.categories == frozenset({"prompt_injection", "data_exfiltration", "tool_misuse"})
+    assert summary.case_count == 16
+    assert summary.active_case_count == 9
+    assert summary.draft_case_count == 7
+    assert summary.retired_case_count == 0
+    # 9 labels per category across the six mandated categories. Expressed as a floor plus the
+    # per-category invariant rather than a bare literal, so growing the corpus does not require
+    # editing this test — only losing coverage should fail it.
+    assert summary.ground_truth_label_count == 54
+    assert summary.ground_truth_label_count % len(summary.categories) == 0
+    assert summary.ground_truth_label_count // len(summary.categories) >= 5
+    assert summary.categories == frozenset(
+        {
+            "prompt_injection",
+            "data_exfiltration",
+            "state_corruption",
+            "tool_misuse",
+            "denial_of_service",
+            "identity_role_exploitation",
+        }
+    )
 
 
 def test_repository_category_owasp_unions_cover_binding_threat_model_mappings() -> None:
-    root = Path(__file__).resolve().parents[2] / "evals" / "seeds"
-    cases = [json.loads(path.read_text()) for path in sorted(root.glob("*.json"))]
+    root = Path(__file__).resolve().parents[2] / "evals"
+    paths = [*(root / "seeds").glob("*.json"), *(root / "drafts").glob("*.json")]
+    cases = [json.loads(path.read_text()) for path in sorted(paths)]
     actual: dict[str, set[tuple[str, str, str]]] = {}
     for case in cases:
         actual.setdefault(case["category"], set()).update(
@@ -983,6 +1002,20 @@ def test_repository_category_owasp_unions_cover_binding_threat_model_mappings() 
             ("OWASP LLM", "2025", "LLM05"),
             ("OWASP LLM", "2025", "LLM06"),
         },
+        "state_corruption": {
+            ("OWASP Web", "2021", "A08"),
+            ("OWASP LLM", "2025", "LLM04"),
+            ("OWASP LLM", "2025", "LLM09"),
+        },
+        "denial_of_service": {
+            ("OWASP Web", "2021", "A04"),
+            ("OWASP LLM", "2025", "LLM10"),
+        },
+        "identity_role_exploitation": {
+            ("OWASP Web", "2021", "A01"),
+            ("OWASP Web", "2021", "A07"),
+            ("OWASP LLM", "2025", "LLM06"),
+        },
     }
     for category, mappings in expected.items():
         assert mappings <= actual[category]
@@ -998,8 +1031,9 @@ def test_repository_corpus_union_covers_every_mandated_owasp_category() -> None:
     # unique carrier turns this red.
     from agentforge.api.postgres import _REQUIRED_LLM, _REQUIRED_WEB
 
-    root = Path(__file__).resolve().parents[2] / "evals" / "seeds"
-    cases = [json.loads(path.read_text()) for path in sorted(root.glob("*.json"))]
+    root = Path(__file__).resolve().parents[2] / "evals"
+    paths = [*(root / "seeds").glob("*.json"), *(root / "drafts").glob("*.json")]
+    cases = [json.loads(path.read_text()) for path in sorted(paths)]
     assert cases, "expected the offline seed corpus to be present"
 
     web_union: set[str] = set()
@@ -1015,6 +1049,45 @@ def test_repository_corpus_union_covers_every_mandated_owasp_category() -> None:
     missing_llm = sorted(_REQUIRED_LLM - llm_union)
     assert not missing_web, f"mandated OWASP Web categories have no seed carrier: {missing_web}"
     assert not missing_llm, f"mandated OWASP LLM categories have no seed carrier: {missing_llm}"
+    assert not REQUIRED_OWASP_LLM_IDS - llm_union
+
+
+def test_missing_prd_category_subcategory_or_llm_mapping_fails_completeness(
+    tmp_path: Path,
+) -> None:
+    corpus = tmp_path / "evals"
+    shutil.copytree(Path(__file__).resolve().parents[2] / "evals", corpus)
+    for path in (corpus / "drafts").glob("AF-M11-SC-*.json"):
+        path.unlink()
+    (corpus / "ground-truth" / "state-corruption.v1.json").unlink()
+
+    with pytest.raises(EvalValidationError) as exc:
+        validate_corpus(corpus)
+    coverage_details = [
+        issue.detail
+        for issue in exc.value.issues
+        if issue.code == EvalValidationCode.COVERAGE_INCOMPLETE
+    ]
+    assert any("state_corruption" in detail for detail in coverage_details)
+    assert any("LLM09" in detail for detail in coverage_details)
+
+
+def test_new_category_cases_are_inert_drafts_and_claim_no_execution() -> None:
+    root = Path(__file__).resolve().parents[2] / "evals" / "drafts"
+    prefixes = ("AF-M11-SC-", "AF-M11-DS-", "AF-M11-IR-")
+    cases = [
+        json.loads(path.read_text())
+        for path in sorted(root.glob("*.json"))
+        if path.stem.startswith(prefixes)
+    ]
+
+    assert len(cases) == 7
+    for case in cases:
+        assert case["lifecycle_status"] == "draft"
+        assert case["execution_status"] == "NOT_EXECUTED"
+        assert case["observed_behavior"] is None
+        assert case["result_ref"] is None
+        assert all(turn.startswith("SYNTHETIC_CASE_REF ") for turn in case["input_sequence"])
 
 
 def test_corpus_rejects_ground_truth_backlink_to_a_different_case(tmp_path: Path) -> None:

@@ -1,0 +1,4 @@
+# T-F05n Code Review — Model: capable
+Worktree `<WORKTREE>`; branch `ticket/T-F05n-runner-rotation-evidence`. Inputs: ticket, diff, implementation/gate reports, frozen tests, E/F/H/I/J/O reviews. Write only `.tdd-swarm/reports/T-F05n-code-review.md`; source/tests are read-only. Re-run gates for schema parity, receipt signature/trust/result, all five separate stage hashes, exact set/identity chain, sequence/nonce/time order, cross-authority hash ordering, final one generation, no opaque/snapshot shortcut, paired create-only output, and no activation action.
+
+No network/controller/database/Railway/deployment/provider/target, secrets/PHI, spend, main merge, or push. Maximum three reviews. Return exactly `DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED(reason)` plus verdict; full output stays in the report.

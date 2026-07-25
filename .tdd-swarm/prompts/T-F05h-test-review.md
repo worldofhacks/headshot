@@ -1,0 +1,4 @@
+# T-F05h Test Review — Model: capable
+Worktree `<WORKTREE>`; branch `ticket/T-F05h-runner-deployment-state`. Inputs: ticket, `tests/test_runner_deployment_state.py`, test report, landed T-F05a/T-F05d, and frozen review. Write only `.tdd-swarm/reports/T-F05h-test-review.md`; tests/source are read-only. Attack fake/serialized runtime receipt, evidence-only entry-point use by M/Runner, canonical/signature/trust/request-nonce/sequence swaps, every phase/nullable-hash invariant, false zero/final state, caller source/state options, create-only races, and missing authority.
+
+Freeze only criterion-complete clean RED after Critical/Important findings close. Synthetic fixtures only; no network/controller/Railway/database/provider/target, secrets/PHI, spend, main merge, or push. Maximum three review attempts. Return exactly `DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED(reason)` plus freeze verdict; full output stays in the report.

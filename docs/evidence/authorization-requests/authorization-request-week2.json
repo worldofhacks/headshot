@@ -1,0 +1,26 @@
+{
+  "artifact": "authorization-request",
+  "content_hash": "ab7e2ca60a4c4dd9b0332bf0a430ac2e15eeaf28785b070c5c69e6f8af625277",
+  "notice": "This is an authorization REQUEST, not a grant. It does NOT authorize any run. A distinct AUTHENTICATED Approver (two-person control) must approve this EXACT operation_hash before a RunAuthorization can be minted. This command cannot approve or mint an authorization, and this artifact — carrying no deadline and no grant — is refused if presented to `run` as an authorization.",
+  "operation_hash": "085f3cb030ab26c7ae3c09164c2cd16d53cb9473423851a79f086a57b715f983",
+  "run_nonce": "platform-live-run-20260724-week2",
+  "schema_version": "1",
+  "scope": {
+    "adapter_kind": "openemr",
+    "auth_mode": "session",
+    "caps": {
+      "budget_usd": 1.0,
+      "logical_case_limit": 40,
+      "max_attempts_per_run": 40,
+      "physical_request_limit": 60,
+      "run_timeout_seconds": 1800.0,
+      "target_requests_per_second": 0.5,
+      "target_retries_per_turn": 1
+    },
+    "corpus_id": "m11-seed-corpus-v1",
+    "corpus_sha": "011d2f2f231e13ce1b84b2ed4d393bd808dfd2e3a7370cc42f4fdfd494fcbedd",
+    "credential_marker": "cred-sha256:6a35790d408ae3dbefed64d8c0b34f4901dac4e17ba2f829cd4d8e18c14dd9ae",
+    "host": "agent-production-9f62.up.railway.app",
+    "target_id": "copilot-week2"
+  }
+}

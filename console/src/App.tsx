@@ -18,17 +18,22 @@ import {
   decodeCampaigns,
   decodePrincipal,
 } from "./api/read-models";
-import { useResource } from "./hooks/useResource";
+import {
+  LIVE_RESOURCE_POLL_INTERVAL_MS,
+  useResource,
+} from "./hooks/useResource";
 import { parseConsoleRoute, routePath, type ConsoleRoute, type ScreenName } from "./router";
 import {
   ApprovalsScreen,
   ConfigurationScreen,
   FindingsScreen,
   LiveScreen,
+  ReportsScreen,
   SimpleResourceScreen,
   TargetsScreen,
 } from "./screens/ConsoleScreens";
 import { AgentsScreen, ToolingScreen } from "./screens/AgentToolScreens";
+import { CoverageRegressionScreen } from "./screens/CoverageRegressionScreen";
 import type {
   ApprovalReadModel,
   BirdseyeSnapshotReadModel,
@@ -39,8 +44,8 @@ const navigation: Array<{ screen: ScreenName; label: string; icon: string }> = [
   { screen: "live", label: "Live", icon: "M3 12h3.5l2.5 7 4.5-14 2.5 7H21" },
   { screen: "findings", label: "Findings", icon: "M12 3l7 2.5v5.5c0 4.3-3 7.4-7 8.5-4-1.1-7-4.2-7-8.5V5.5L12 3z M9 12l2 2 4-4" },
   { screen: "approvals", label: "Approvals", icon: "M4 6.5A2.5 2.5 0 0 1 6.5 4h11A2.5 2.5 0 0 1 20 6.5v11a2.5 2.5 0 0 1-2.5 2.5h-11A2.5 2.5 0 0 1 4 17.5z M8.5 12l2.5 2.5 5-5" },
-  { screen: "coverage", label: "Coverage", icon: "M4 4h7v7H4z M13 4h7v7h-7z M4 13h7v7H4z M13 13h7v7h-7z" },
-  { screen: "resilience", label: "Resilience", icon: "M4 17l5-5 3.5 3.5L20 8 M15 8h5v5" },
+  { screen: "reports", label: "Reports", icon: "M6 3h9l4 4v14H6z M14 3v5h5 M9 12h7 M9 16h7" },
+  { screen: "coverage", label: "Coverage & Regression", icon: "M4 4h7v7H4z M13 4h7v7h-7z M4 13h7v7H4z M13 13h7v7h-7z" },
   { screen: "agents", label: "Agents", icon: "M5 7h5 M14 7h5 M7.5 7v5 M16.5 7v5 M7.5 12h9 M12 12v5 M9 20h6 M7.5 12a2 2 0 1 0 0 4 2 2 0 0 0 0-4 M16.5 12a2 2 0 1 0 0 4 2 2 0 0 0 0-4" },
   { screen: "tooling", label: "Tooling", icon: "M14.5 5.5a4 4 0 0 0-5 5L4 16l4 4 5.5-5.5a4 4 0 0 0 5-5l-3 3-3-3z" },
   { screen: "traces", label: "Traces", icon: "M4 6h11 M4 12h15 M4 18h8" },
@@ -132,12 +137,23 @@ function ConsoleShell({
   const [route, navigate] = useBrowserRoute();
   const [theme, setTheme] = useState<"dark" | "light">("dark");
   const [mobileMore, setMobileMore] = useState(false);
-  const campaigns = useResource<CampaignReadModel[]>(client, RESOURCE_PATHS.campaigns, decodeCampaigns);
-  const approvals = useResource<ApprovalReadModel[]>(client, RESOURCE_PATHS.approvals, decodeApprovals);
+  const campaigns = useResource<CampaignReadModel[]>(
+    client,
+    RESOURCE_PATHS.campaigns,
+    decodeCampaigns,
+    { pollIntervalMs: LIVE_RESOURCE_POLL_INTERVAL_MS },
+  );
+  const approvals = useResource<ApprovalReadModel[]>(
+    client,
+    RESOURCE_PATHS.approvals,
+    decodeApprovals,
+    { pollIntervalMs: LIVE_RESOURCE_POLL_INTERVAL_MS },
+  );
   const birdseye = useResource<BirdseyeSnapshotReadModel>(
     client,
     RESOURCE_PATHS.birdseye,
     decodeBirdseye,
+    { pollIntervalMs: LIVE_RESOURCE_POLL_INTERVAL_MS },
   );
   const activeCampaign = campaigns.result.data?.find((campaign) => campaign.state === "running")
     ?? campaigns.result.data?.find((campaign) => campaign.state === "queued")
@@ -172,8 +188,12 @@ function ConsoleShell({
     case "approvals":
       screen = <ApprovalsScreen {...common} />;
       break;
+    case "reports":
+      screen = <ReportsScreen {...common} />;
+      break;
     case "coverage":
-    case "resilience":
+      screen = <CoverageRegressionScreen client={client} />;
+      break;
     case "traces":
     case "costs":
       screen = <SimpleResourceScreen client={client} resource={route.screen} />;

@@ -8,7 +8,7 @@ export const meta = {
   ],
 }
 
-const REPO = '/Users/quietguy/Documents/Dev/Gauntlet/Adversarial Machine'
+const REPO = '<repo>'
 const DSN = 'postgresql+psycopg://agentforge:local_dev_only@localhost:5432/agentforge'
 
 const SPEC = `

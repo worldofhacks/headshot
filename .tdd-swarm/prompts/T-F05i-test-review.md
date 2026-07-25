@@ -1,0 +1,4 @@
+# T-F05i Test Review — Model: capable
+Worktree `<WORKTREE>`; branch `ticket/T-F05i-runner-control-state`. Inputs: ticket, focused test/report, dependencies, frozen review. Write only `.tdd-swarm/reports/T-F05i-test-review.md`; tests/source are read-only. Attack transaction/snapshot/DB/query/trust drift, empty-set rejection, abort omission, job/campaign/worker/token-hash substitution, missing stable IDs/lineage/sequences, raw-token disclosure, DSN/state injection, rollback, path replacement, and absent authority.
+
+Freeze only criterion-complete clean RED. Fake DB/attestor only; no network/PostgreSQL/Railway/controller/provider/target, secrets/PHI, spend, main merge, or push. Maximum three reviews. Return exactly `DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED(reason)` plus freeze verdict; full output stays in the report.

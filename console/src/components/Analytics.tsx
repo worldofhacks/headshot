@@ -1,5 +1,7 @@
 import type { ReactNode } from "react";
 
+import type { ProviderEventStatus } from "../types";
+
 export interface MetricValue {
   label: string;
   value: string;
@@ -22,6 +24,36 @@ export const money = (value: number) =>
 
 export const shortId = (value: string | null | undefined) =>
   value ? `${value.slice(0, 8)}…${value.slice(-4)}` : "—";
+
+export const providerEventStatusLabel = (
+  status: ProviderEventStatus | null,
+) => status === null ? "Unavailable" : status.replaceAll("_", " ").toUpperCase();
+
+export const servedModel = (row: {
+  model: string;
+  returned_model: string | null;
+  model_substituted: boolean;
+  execution_mode: "deterministic" | "hosted_advisory";
+  provider_event_status: ProviderEventStatus | null;
+}) => {
+  if (row.execution_mode === "deterministic") {
+    return row.returned_model ?? row.model;
+  }
+  const status = row.provider_event_status;
+  const statusSuffix = status !== null && status !== "succeeded" && status !== "model_mismatch"
+    ? ` · ${providerEventStatusLabel(status)}`
+    : "";
+  if (
+    row.returned_model === null
+    || row.returned_model.startsWith("unsafe-provider-text-")
+  ) {
+    return `${row.model} → unavailable${statusSuffix}`;
+  }
+  if (row.model_substituted) {
+    return `${row.model} → ${row.returned_model} SUBSTITUTED`;
+  }
+  return `${row.returned_model}${statusSuffix}`;
+};
 
 export const time = (value: string) => new Intl.DateTimeFormat("en-US", {
   month: "short",

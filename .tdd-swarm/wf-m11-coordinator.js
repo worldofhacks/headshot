@@ -8,7 +8,7 @@ export const meta = {
   ],
 }
 
-const REPO = '/Users/quietguy/Documents/Dev/Gauntlet/Adversarial Machine'
+const REPO = '<repo>'
 const SPEC = `
 REPO (main repo): ${REPO}   BRANCH: run/m11-live-results (off merged main; has M2/M4/M5/M6a/M8/M9 + corpus +
 packaged schemas). venv at ${REPO}/.venv — activate for EVERY command:

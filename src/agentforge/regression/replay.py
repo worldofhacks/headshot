@@ -14,7 +14,13 @@ from agentforge.contracts import validate
 
 _EVIDENCE_REF = re.compile(r"\Aevidence://sha256/[0-9a-f]{64}\Z")
 _SHA256 = re.compile(r"\A[0-9a-f]{64}\Z")
-_TRIGGERS = frozenset({"target_version_changed", "manual_authorized_replay"})
+_TRIGGERS = frozenset(
+    {
+        "deterministic_reproduction",
+        "target_version_changed",
+        "manual_authorized_replay",
+    }
+)
 
 
 class RegressionReplayError(ValueError):
@@ -50,7 +56,15 @@ class RegressionReplayGate:
         disposition_payload = self._contract("regression_disposition", disposition)
         report_payload = self._contract("vuln_report", report)
         attempt_payload = self._contract("attack_attempt", attack_attempt)
-        if disposition_payload["state"] != "admitted" or not disposition_payload["admitted"]:
+        if trigger == "deterministic_reproduction":
+            if (
+                disposition_payload["state"] != "pending_deterministic_reproduction"
+                or disposition_payload["admitted"]
+            ):
+                raise RegressionReplayError(
+                    "deterministic reproduction requires a pending confirmed finding"
+                )
+        elif disposition_payload["state"] != "admitted" or not disposition_payload["admitted"]:
             raise RegressionReplayError("only an admitted regression may be planned for replay")
         for key in ("finding_id", "report_id", "campaign_run_id", "attempt_id"):
             if disposition_payload[key] != report_payload[key]:
@@ -166,6 +180,9 @@ class RegressionReplayGate:
             for item in normalized
         )
         any_judge_error = any(item["verdict_state"] == "ERROR" for item in normalized)
+        any_judge_indeterminate = any(
+            item["verdict_state"] == "INDETERMINATE" for item in normalized
+        )
         contradictory = any(
             (
                 any(signal["hit"] for signal in item["required_signals"])
@@ -182,7 +199,12 @@ class RegressionReplayGate:
             all(signal["hit"] is False for signal in item["required_signals"])
             for item in normalized
         )
-        unsafe_judge_states = {"EXPLOIT_CONFIRMED", "EXPLOIT_LIKELY", "ERROR"}
+        unsafe_judge_states = {
+            "EXPLOIT_CONFIRMED",
+            "EXPLOIT_LIKELY",
+            "INDETERMINATE",
+            "ERROR",
+        }
         if deterministic and reappeared:
             state = "failing"
             # The *target* failed, while the regression check itself passed for the right
@@ -207,6 +229,8 @@ class RegressionReplayGate:
                 reasons.append("replay_non_deterministic")
             if any_judge_error:
                 reasons.append("judge_error")
+            if any_judge_indeterminate:
+                reasons.append("judge_indeterminate")
             if contradictory:
                 reasons.append("evidence_contradictory")
             if not reasons:

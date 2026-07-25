@@ -1,0 +1,4 @@
+# T-F06a Test Review — Model: capable
+Worktree `<WORKTREE>`; branch `ticket/T-F06a-replay-code`. Inputs: ticket, focused test/RED report, and T-F05d through T-F05p reviews. Write only `.tdd-swarm/reports/T-F06a-test-review.md`; tests/source are read-only. Verify identity/comparator/timing/zero-call blockers, exact catalog target/chat/session/patient, J/K binding, L/M per-attempt refresh, sanitized rejection, one resolution/cleanup, and no replay route around complete O/N rotation history; attack disabled surfaces, target/session/patient swap, cache, combined state, and final-only proof.
+
+Freeze only criterion-complete clean feature-missing RED. No network, raw credential/session input, Railway action, spend, live traffic, main merge, or push. Maximum three review attempts. Return exactly `DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED(reason)` plus freeze verdict; full output stays in the report.

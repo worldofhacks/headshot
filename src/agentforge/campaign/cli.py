@@ -1,4 +1,4 @@
-"""Authorized bounded-run CLI — ``python -m agentforge.campaign {run,scope} …`` (M11-coordinator).
+"""Legacy campaign CLI — network-free ``scope`` plus a retired direct ``run`` command.
 
 Two network-free subcommands:
 
@@ -9,30 +9,13 @@ Two network-free subcommands:
   authenticated Approver (the future Clerk two-person path) must approve that exact hash. This
   command is a request, not an approval.
 
-* ``run`` — replay the authored seed corpus against the bound live target under a run-scoped grant.
-  It runs a PREPARE/GATE phase FIRST: parse binding + caps, load and hash the corpus, compute the
-  canonical operation hash, and VERIFY the authorization (missing / expired / nonce / scope) —
-  BEFORE the live adapter is ever constructed. Only after that gate passes is ``adapter_factory``
-  invoked. The coordinator then RE-VERIFIES the same gate per case (defense in depth).
+* ``run`` — refused before inputs, credentials, database, adapter, or network are touched. A local
+  grant and manifest directory cannot provide the durable agent/target/Langfuse accounting required
+  of a live campaign. Operators must use the authenticated Railway control plane and private Runner.
 
-WITHOUT a valid, in-scope grant ``run`` REFUSES (non-zero exit) and NEVER constructs the live
-adapter — a configured binding + caps is not authorization. The grant's own bound operation_hash +
-run_nonce + deadline are loaded from disk (the CLI fabricates nothing); the coordinator
-independently recomputes and fail-closed-BLOCKS a stale/expired/out-of-scope grant.
-
-``main(argv, ...)`` is INJECTION-DRIVEN for ``run``: the engine, ``adapter_factory``, clock, and
-accounting are passed in. The CLI's OWN code opens no socket — the only outbound path is the
-injected adapter, and only at the first POST-GATE dispatch inside ``run_case``. Tests inject fakes
-(fully network-free); the production composition root (:mod:`agentforge.campaign.__main__`) injects
-the real engine + a real ``OpenEmrAdapter`` (lazy client). A confirmed exploit does NOT stop the run
-(D13):
-every case is replayed and confirmed findings are recorded approval-required with publication /
-remediation / regression-promotion BLOCKED.
-
-**NOT live-operational yet.** ``run`` accepts a pre-minted ``authorization.json``, but this repo
-provides NO authenticated Approver / two-person service that mints one — the ``scope`` command only
-*requests*. Until that service exists, a valid approved grant for the exact scope is a BLOCKER, not
-merely an operator step.
+The old injection-driven implementation is retained privately for structural, socket-disabled unit
+tests of authorization and coordinator behavior. It is not an operational entry point and its test
+artifacts are never live evidence.
 """
 
 from __future__ import annotations
@@ -58,6 +41,7 @@ from agentforge.campaign.coordinator import (
     verify_authorization_gate,
 )
 from agentforge.campaign.manifest import ManifestStore
+from agentforge.campaign.runtime import refuse_legacy_live_execution
 
 # Exit codes: 0 success, 1 a fail-closed refusal (unauthorized / blocked / malformed caps),
 # 2 an operational error (a missing/unreadable input file, or an immutable-artifact collision).
@@ -74,7 +58,10 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="python -m agentforge.campaign")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    run = subparsers.add_parser("run", help="run an AUTHORIZED bounded live campaign")
+    run = subparsers.add_parser(
+        "run",
+        help="RETIRED: use the authenticated Railway control plane and private durable Runner",
+    )
     run.add_argument("--binding", type=Path, required=True, help="immutable binding.json")
     run.add_argument("--caps", type=Path, required=True, help="run caps.json (fail-closed)")
     run.add_argument("--seeds-dir", type=Path, required=True, help="authored seed corpus dir")
@@ -132,12 +119,32 @@ def main(
     environment: str = "production",
     fallback_adapter: Any | None = None,
 ) -> int:
-    """Parse argv and dispatch to the ``run`` or ``scope`` command; return an exit code.
+    """Dispatch network-free ``scope`` and refuse the retired operational ``run`` command."""
 
-    ``run`` needs the injected effectful collaborators (engine / adapter_factory / clock /
-    accounting); ``scope`` is pure and needs none. Tests call this directly (injecting fakes for
-    ``run``); the production composition root injects the real collaborators for ``run`` only.
+    args = _parser().parse_args(argv)
+    if args.command == "scope":
+        return _scope_command(args)
+    if args.command == "run":
+        return refuse_legacy_live_execution()
+    return _EXIT_OPERATIONAL  # argparse guarantees a subcommand; defensive.
+
+
+def _main_for_structural_test(
+    argv: list[str] | None = None,
+    *,
+    engine: Engine | None = None,
+    adapter_factory: Any | None = None,
+    clock: Any | None = None,
+    accounting: Any | None = None,
+    environment: str = "production",
+    fallback_adapter: Any | None = None,
+) -> int:
+    """Exercise the retired coordinator seam only in socket-disabled structural tests.
+
+    Keeping this separate from :func:`main` prevents injected dependencies from turning the
+    supported CLI back into a live bypass. Test doubles exercised here are not deployment evidence.
     """
+
     args = _parser().parse_args(argv)
     if args.command == "scope":
         return _scope_command(args)
@@ -368,6 +375,18 @@ def _scope_command(args: argparse.Namespace) -> int:
     # it carries the credential MARKER (a no-auth marker or a ref digest) — never the raw credential
     # reference, never a secret value — and it deliberately carries NO deadline / grant, so it
     # cannot be used as (or silently become) a RunAuthorization.
+    caps_payload: dict[str, float | int] = {
+        "budget_usd": policy.budget_usd,
+        "max_attempts_per_run": policy.max_attempts_per_run,
+        "target_requests_per_second": policy.target_requests_per_second,
+        "run_timeout_seconds": policy.run_timeout_seconds,
+    }
+    if policy.logical_case_limit is not None:
+        caps_payload["logical_case_limit"] = policy.logical_case_limit
+    if policy.physical_request_limit is not None:
+        caps_payload["physical_request_limit"] = policy.physical_request_limit
+    if policy.target_retries_per_turn is not None:
+        caps_payload["target_retries_per_turn"] = policy.target_retries_per_turn
     request: dict[str, Any] = {
         "artifact": _AUTHORIZATION_REQUEST_ARTIFACT,
         "schema_version": "1",
@@ -381,12 +400,7 @@ def _scope_command(args: argparse.Namespace) -> int:
             "credential_marker": binding.credential_marker(),
             "corpus_id": args.corpus_id,
             "corpus_sha": corpus_sha,
-            "caps": {
-                "budget_usd": policy.budget_usd,
-                "max_attempts_per_run": policy.max_attempts_per_run,
-                "target_requests_per_second": policy.target_requests_per_second,
-                "run_timeout_seconds": policy.run_timeout_seconds,
-            },
+            "caps": caps_payload,
         },
         "notice": (
             "This is an authorization REQUEST, not a grant. It does NOT authorize any run. A "

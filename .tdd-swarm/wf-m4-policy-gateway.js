@@ -8,7 +8,7 @@ export const meta = {
   ],
 }
 
-const REPO = '/Users/quietguy/Documents/Dev/Gauntlet/wt-m4'
+const REPO = '<worktree>'
 
 const SPEC = `
 REPO (git worktree, ISOLATED): ${REPO}   BRANCH: ticket/m4-policy-gateway (off swarm; has M2).

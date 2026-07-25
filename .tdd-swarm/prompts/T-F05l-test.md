@@ -1,0 +1,4 @@
+# T-F05l Test — Model: capable
+Worktree `<WORKTREE>`; branch `ticket/T-F05l-controller-observation-source`. Inputs: ticket, landed H/J, Linux IPC/trust conventions, frozen review. Write only `tests/test_deployment_controller_observation_source.py` and `.tdd-swarm/reports/T-F05l-test.md`. Own RED for fixed Unix seqpacket path/no override, no-follow endpoint and peer credentials, canonical bounded request, fresh challenge, one-frame response, signed nonce/binding/freshness/sequence/replay checks, single-use receipt, stable redacted failures, and two distinct acquisitions.
+
+Inject nonce/clock/transport/stat/peer abstractions and synthetic signatures; patch production socket, AF_INET, DNS/HTTP, controller/Railway/database/provider/target hooks to fail. No network, secrets/PHI, spend, main merge, or push. Maximum three attempts. Return exactly `DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED(reason)` plus RED mapping; full output stays in the report.

@@ -1,0 +1,4 @@
+# T-F05m Test Review — Model: capable
+Worktree `<WORKTREE>`; branch `ticket/T-F05m-authenticated-runner-state-provider`. Inputs: ticket, focused test/report, landed E/H/I/J/K/L, frozen review. Write only `.tdd-swarm/reports/T-F05m-test-review.md`; tests/source are read-only. Attack serialized/fake context/claim, skipped/reordered source, H offline path use, caller observation file, cached observation/transaction/result, partial pair reuse, stale/replayed source, source disagreement, other claim/hard abort, failure leakage, and fallback.
+
+Freeze only clean criterion-complete RED. Fake authorities only; no filesystem/network/live controller/database/Railway/provider/target, secrets/PHI, spend, main merge, or push. Maximum three reviews. Return exactly `DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED(reason)` plus freeze verdict; full output stays in the report.

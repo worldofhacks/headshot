@@ -91,6 +91,9 @@ class RunPolicy:
     max_attempts_per_run: int
     target_requests_per_second: float
     run_timeout_seconds: float
+    logical_case_limit: int | None = None
+    physical_request_limit: int | None = None
+    target_retries_per_turn: int | None = None
 
 
 @dataclass(frozen=True)
@@ -109,6 +112,22 @@ class AttemptResult:
     content_hash: str
     fields: dict[str, Any]
     credential: Secret | None = None
+    # The MEASURED consumption dimensions a black-box POST /chat exposes, collected by the gateway
+    # during THIS dispatch: ``elapsed_ms`` (the gateway's OWN wall-clock duration of the physical
+    # send(s), from the injected clock), ``request_count`` (the physical sends performed for this
+    # attempt, incl. retries), and ``response_size`` (the response body's byte length). Target-
+    # internal input/output TOKENS, tool_calls, and target LLM COST are NOT observable from /chat
+    # and are deliberately absent here — they are never fabricated onto the measurement.
+    resource_measurements: dict[str, Any] | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class WorkUnitCoordinates:
+    """Stable identity for one physical send within a logical campaign attempt."""
+
+    attempt_id: str
+    turn_index: int
+    retry_index: int
 
 
 @dataclass
@@ -128,11 +147,18 @@ class PolicyGateway:
     recorder: ExecutionRecorder = field(default_factory=ExecutionRecorder)
     credentials: dict[str, Any] = field(default_factory=dict)
     sleeper: Callable[[float], None] = field(default=time.sleep, repr=False)
+    pre_physical_send_gate: Callable[[WorkUnitCoordinates], None] | None = field(
+        default=None, repr=False
+    )
+    post_physical_send_observer: Callable[[WorkUnitCoordinates, str], None] | None = field(
+        default=None, repr=False
+    )
 
     # Per-gateway run accounting (deterministic, clock/accounting-driven).
     audit_log: list[dict] = field(default_factory=list)
     queued_attempts: list[dict] = field(default_factory=list)
     _attempts_used: int = field(default=0, init=False)
+    _physical_sends_used: int = field(default=0, init=False)
     _last_dispatch_at: float | None = field(default=None, init=False)
     _run_started_at: float | None = field(default=None, init=False)
 
@@ -146,6 +172,11 @@ class PolicyGateway:
         campaign_run_id: str | None = None,
         attempt_id: str | None = None,
         organization_id: str = "",
+        target_version: str = "",
+        surface_id: str = "",
+        surface_version: str = "",
+        execution_profile: str = "",
+        red_team_execution_id: str | None = None,
     ) -> AttemptResult:
         """Enforce the gate, then dispatch exactly one logical attempt through the adapter.
 
@@ -192,13 +223,36 @@ class PolicyGateway:
             "organization_id": organization_id,
             "case_id": str(attack_attempt.get("case_ref", "")),
             "attack_category": str(attack_attempt.get("category", "")),
+            "target_id": target_id,
+            "target_version": target_version,
+            "surface_id": surface_id,
+            "surface_version": surface_version,
+            "execution_profile": execution_profile,
         }
+        if red_team_execution_id:
+            request_metadata["red_team_execution_id"] = red_team_execution_id
         request = TargetRequest(
             turns=tuple(attack_attempt.get("input_sequence", [])),
             metadata=request_metadata,
         )
         self._enforce_sequence_capacity(request, policy)
-        response = self._dispatch_with_backoff(request, attack_attempt, policy)
+
+        # MEASURE the black-box-observable dimensions ACROSS the physical dispatch. The gateway's
+        # OWN wall-clock (the injected clock) is sampled immediately before and after the send(s),
+        # so ``elapsed_ms`` is a real measurement of how long THIS attempt took — the only timing a
+        # black-box /chat exposes. The physical-send counter is sampled the same way so
+        # ``request_count`` is exactly the sends (incl. retries) performed for THIS attempt.
+        dispatch_started_at = self.clock.now()
+        sends_before = self._physical_sends_used
+        response = self._dispatch_with_backoff(
+            request,
+            attack_attempt,
+            policy,
+            attempt_id=attempt_id or "",
+        )
+        elapsed_ms = int(round(max(0.0, self.clock.now() - dispatch_started_at) * 1000.0))
+        request_count = self._physical_sends_used - sends_before
+        response_size = len(response.output.encode("utf-8"))
 
         # (6) Count the logical attempt after a real dispatch, then build hashed evidence.
         # (charge + _last_dispatch_at are committed per physical send in _dispatch_with_backoff.)
@@ -211,7 +265,20 @@ class PolicyGateway:
             credential,
             campaign_run_id=campaign_run_id,
             attempt_id=attempt_id,
+            resource_measurements={
+                "elapsed_ms": elapsed_ms,
+                "request_count": request_count,
+                "response_size": response_size,
+            },
         )
+
+    @property
+    def completed_logical_cases(self) -> int:
+        return self._attempts_used
+
+    @property
+    def physical_send_count(self) -> int:
+        return self._physical_sends_used
 
     # ------------------------------------------------------------------ gate steps
 
@@ -244,11 +311,24 @@ class PolicyGateway:
             )
 
         # ATTEMPT — the per-run attempt ceiling is reached; a further call is refused.
-        if self._attempts_used >= policy.max_attempts_per_run:
+        logical_limit = policy.max_attempts_per_run
+        if policy.logical_case_limit is not None:
+            logical_limit = min(logical_limit, policy.logical_case_limit)
+        if self._attempts_used >= logical_limit:
             raise AbortError(
                 f"attempt cap: {self._attempts_used} attempt(s) used reaches the limit of "
-                f"{policy.max_attempts_per_run} — HARD ABORT before dispatch",
+                f"{logical_limit} — HARD ABORT before dispatch",
                 code="abort",
+            )
+
+        if (
+            policy.physical_request_limit is not None
+            and self._physical_sends_used >= policy.physical_request_limit
+        ):
+            raise AbortError(
+                f"physical request cap: {self._physical_sends_used} send(s) reaches the limit of "
+                f"{policy.physical_request_limit} — HARD ABORT before dispatch",
+                code="physical-request-cap-exceeded",
             )
 
         # BUDGET — the projected spend (current + the next call's cost) would breach the
@@ -310,6 +390,15 @@ class PolicyGateway:
                 "multi-turn sequence contains no request turns — HARD ABORT before dispatch",
                 code="abort",
             )
+        if (
+            policy.physical_request_limit is not None
+            and self._physical_sends_used + turn_count > policy.physical_request_limit
+        ):
+            raise AbortError(
+                "physical request cap: the complete turn sequence cannot fit inside the "
+                "remaining authorized sends — HARD ABORT before dispatch",
+                code="physical-request-cap-exceeded",
+            )
         try:
             per_call = float(self.accounting.per_call_usd)
         except AttributeError as exc:
@@ -336,7 +425,12 @@ class PolicyGateway:
                 )
 
     def _dispatch_with_backoff(
-        self, request: TargetRequest, attack_attempt: dict, policy: RunPolicy
+        self,
+        request: TargetRequest,
+        attack_attempt: dict,
+        policy: RunPolicy,
+        *,
+        attempt_id: str,
     ) -> TargetResponse:
         """Dispatch one logical attempt as one atomic request or a paced turn sequence.
 
@@ -347,7 +441,13 @@ class PolicyGateway:
         """
 
         if getattr(self.adapter, "turn_delivery", "atomic") != "sequential":
-            return self._dispatch_one_with_backoff(request, attack_attempt, policy)
+            return self._dispatch_one_with_backoff(
+                request,
+                attack_attempt,
+                policy,
+                attempt_id=attempt_id,
+                turn_index=0,
+            )
 
         responses: list[TargetResponse] = []
         total = len(request.turns)
@@ -366,11 +466,19 @@ class PolicyGateway:
                 turn_request,
                 attack_attempt,
                 policy,
+                attempt_id=attempt_id,
+                turn_index=index,
             )
             responses.append(response)
             if not 200 <= response.status < 300:
                 break
 
+        if len(responses) != total:
+            raise AbortError(
+                "multi-turn sequence ended before every authorized turn was sent — "
+                "HARD ABORT without logical completion",
+                code="incomplete-multi-turn-attempt",
+            )
         final = responses[-1]
         transcript = {
             "delivery": "sequential",
@@ -423,6 +531,9 @@ class PolicyGateway:
         request: TargetRequest,
         attack_attempt: dict,
         policy: RunPolicy,
+        *,
+        attempt_id: str,
+        turn_index: int,
     ) -> TargetResponse:
         """Dispatch one physical request, retrying typed AdapterError with backoff.
 
@@ -436,13 +547,31 @@ class PolicyGateway:
         synthetic 200.
         """
         last_error: AdapterError | None = None
-        for dispatch_no in range(1, _MAX_DISPATCH_ATTEMPTS + 1):
-            # Re-enforce EVERY cap before THIS physical dispatch — the accumulated retries
-            # (spend charged, clock advanced) can themselves breach budget/rate/timeout.
+        retry_limit = (
+            _MAX_DISPATCH_ATTEMPTS - 1
+            if policy.target_retries_per_turn is None
+            else policy.target_retries_per_turn
+        )
+        for dispatch_no in range(1, retry_limit + 2):
+            coordinates = WorkUnitCoordinates(
+                attempt_id=attempt_id,
+                turn_index=turn_index,
+                retry_index=dispatch_no - 1,
+            )
+            # Re-check local caps immediately before durable reservation.  Reservation is the last
+            # admission action: once it commits, no later local check may strand an unobserved row
+            # without an adapter invocation.
             self._enforce_caps(policy, self.clock.now())
+            if self.pre_physical_send_gate is not None:
+                self.pre_physical_send_gate(coordinates)
+            # Reserve the physical-send slot before handing control to the adapter.  The counter
+            # therefore includes failed sends and makes the first over-limit call unreachable.
+            self._physical_sends_used += 1
             try:
                 response = self.adapter.send(request)
             except AdapterError as exc:
+                if self.post_physical_send_observer is not None:
+                    self.post_physical_send_observer(coordinates, "raised")
                 # A failed physical dispatch still consumes budget and advances the rate window.
                 self.accounting.charge()
                 self._last_dispatch_at = self.clock.now()
@@ -466,7 +595,13 @@ class PolicyGateway:
                 backoff = float(retry_after) if retry_after else float(2**dispatch_no)
                 self._wait(backoff)
                 continue
+            except BaseException:
+                if self.post_physical_send_observer is not None:
+                    self.post_physical_send_observer(coordinates, "raised")
+                raise
             # Success: charge this physical dispatch and advance the rate window, then return.
+            if self.post_physical_send_observer is not None:
+                self.post_physical_send_observer(coordinates, "returned")
             self.accounting.charge()
             self._last_dispatch_at = self.clock.now()
             return response
@@ -480,12 +615,12 @@ class PolicyGateway:
         )
         if isinstance(last_error, RateLimitedError):
             raise AbortError(
-                f"adapter rate-limited after {_MAX_DISPATCH_ATTEMPTS} backoff attempts; "
+                f"adapter rate-limited after {retry_limit + 1} dispatch attempt(s); "
                 "attempt queued — HARD ABORT (never a synthetic 200)",
                 code="abort",
             ) from last_error
         raise AbortError(
-            f"target unreachable after {_MAX_DISPATCH_ATTEMPTS} backoff attempts; attempt "
+            f"target unreachable after {retry_limit + 1} dispatch attempt(s); attempt "
             "queued — HARD ABORT (never a synthetic 200)",
             code="abort",
         ) from last_error
@@ -500,8 +635,16 @@ class PolicyGateway:
         *,
         campaign_run_id: str | None = None,
         attempt_id: str | None = None,
+        resource_measurements: dict[str, Any] | None = None,
     ) -> AttemptResult:
-        """Mint a fresh run-nonce (S3) + policy_decision_id and build hashed D14 evidence."""
+        """Mint a fresh run-nonce (S3) + policy_decision_id and build hashed D14 evidence.
+
+        The MEASURED consumption trio (``elapsed_ms`` / ``request_count`` / ``response_size``) is
+        carried BOTH on the returned :class:`AttemptResult` (``resource_measurements``) and folded
+        into the hashed ``fields`` under ``resource_measurements`` — so the recorder persists it
+        append-only and the coordinator can RE-READ the measured dimensions before adjudicating,
+        never trusting the in-memory value alone.
+        """
         campaign_run_id = campaign_run_id or uuid.uuid4().hex
         attempt_id = attempt_id or uuid.uuid4().hex
         policy_decision_id = f"pd-{uuid.uuid4().hex}"
@@ -519,6 +662,9 @@ class PolicyGateway:
             "policy_decision_id": policy_decision_id,
             "recorder_identity": "policy-gateway@1",
         }
+        if resource_measurements is not None:
+            # A hashed evidence field: the measured trio is part of the tamper-evident record.
+            fields["resource_measurements"] = dict(resource_measurements)
         content_hash = self.recorder.canonical_hash(fields)
         return AttemptResult(
             campaign_run_id=campaign_run_id,
@@ -528,4 +674,7 @@ class PolicyGateway:
             content_hash=content_hash,
             fields=fields,
             credential=credential,
+            resource_measurements=(
+                dict(resource_measurements) if resource_measurements is not None else None
+            ),
         )

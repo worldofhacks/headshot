@@ -1,0 +1,4 @@
+# T-F05c Code Review — Model: capable
+Worktree `<WORKTREE>`; branch `ticket/T-F05c-live-campaign-preflight`. Exact inputs: ticket, diff/reports/frozen tests, and T-F05d through T-F05p reviews. Write only code-review report; source/tests read-only. Re-run gates for catalog parity and target-chat-session-patient pin, disabled surfaces, grant expectations, fresh sources, fixed provider, all rotation stages, `None` zero rows, no combined/final-only/parser state, sanitation compatibility, redacted exit-4 ordering, and zero side effects.
+
+No network, raw credential/session input, Railway/database/controller/provider/target action, spend, main merge, or push. Maximum three review attempts. Return exactly `DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED(reason)` plus verdict; full output stays in the report.

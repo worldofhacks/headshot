@@ -23,15 +23,16 @@
 | D14 | Trust split = untrusted generator → **trusted Policy Gateway + Execution Recorder** → external target; Judge sees hashed recorder `AttemptResult` only; canonical-hash + append-only (not signatures) within the trust domain | locked (2026-07-20, F2/F5) |
 | D15 | OWASP taxonomy = **anchor 2021** (PRD's set) + 2021↔2025 crosswalk; structured `{framework,version,id,name}` tags | locked (2026-07-20, F8) |
 | D16 | Deploy = **≥2 Railway environments** (prod-only live creds; env-scoped allowlist); expand/contract migrations; drain-before-deploy; PITR as true rollback | locked (2026-07-20, O1/O2) |
-| D17 | Cost = **two independent line families** (measured hosted-token cost w/ cache+batch · amortized local capacity · hosting/storage/egress); the `list_price/throughput` division is removed as dimensionally invalid | locked (2026-07-20, F4) |
+| D17 | Cost = **three independent line families** (measured hosted-token cost w/ cache+batch · amortized local/capacity-priced inference · hosting/storage/egress); the `list_price/throughput` division is removed as dimensionally invalid | locked (2026-07-20, F4; index row said "two" while naming three — corrected 2026-07-25 to match the D17 body and `docs/cost/COST_ANALYSIS.md`) |
 | D18 | Evaluator-injection containment: Judge/Documentation consume a **typed, trust-labelled, size-bounded evidence envelope**; oracle results are code-applied typed fields (injection cannot downgrade `EXPLOIT_CONFIRMED`); Judge is a pure evaluator (no creds/mutation/publish/execute); Documentation gets sanitized evidence by default; raw evidence quarantined | locked (2026-07-20, S4) |
 | D19 | Human IdP = Clerk; no custom passwords, OAuth flow, or session database | locked (2026-07-21) |
 | D20 | Human session verification = networkless Clerk `session_token` verification with PEM JWT key + explicit exact `authorizedParties` | locked (2026-07-21) |
 | D21 | Enrollment = restricted/invitation-only; exact Headshot Organization required; Personal Accounts and user-created Organizations disabled | locked (2026-07-21) |
 | D22 | MFA = required for all users; TOTP + backup codes, never SMS-only | locked (2026-07-21) |
-| D23 | RBAC = four Organization roles assigned exact backend-authoritative custom permissions; system/client role text has no authority | locked (2026-07-21) |
+| D23 | RBAC = **two** Organization roles assigned exact backend-authoritative custom permissions; system/client role text has no authority | locked (2026-07-21; index row corrected 2026-07-25) |
 | D24 | Two-person identity separation = launcher cannot approve/authorize self; no emergency bypass | locked (2026-07-21) |
 | D25 | Human authentication never replaces exact live-campaign Policy Gateway authorization | locked (2026-07-21) |
+| D26 | Against a black-box target, **canary-anchoring is the only decisive deterministic oracle**; pure-observation oracles stay `INDETERMINATE` and are never marked `runtime_wired` | locked (2026-07-25) |
 
 ---
 
@@ -116,6 +117,53 @@ D8's own fallback is `Judge → GPT-5.4` and Documentation *is* GPT-5.4, the pla
 != Documentation.vendor` at run start (fail-closed) — fail the Judge to a third vendor (e.g. Gemini) or move
 Documentation off GPT-5.4 while the Judge is on it.
 
+**Revision 2026-07-25 (code reconciliation, `107c11c`).** D8's "configurable defaults via
+`HEADSHOT_*_MODEL`" no longer describes the deployed hosted path. The hosted role set is now **frozen
+in code** and any deviation is rejected at composition
+(`src/agentforge/agents/hosted.py:352-353`). The authoritative mapping is
+`HOSTED_ROLE_MODELS` (`src/agentforge/agents/hosted.py:31-38`):
+
+| Role | Model ID (frozen) | Role spend ceiling (`hosted.py:39-45`) |
+|---|---|---|
+| `orchestrator` | `anthropic/claude-opus-4.8` | $1.50 |
+| `red_team` | `qwen/qwen3.5-397b-a17b` | $1.00 |
+| `judge` | `google/gemini-2.5-pro` | $4.00 |
+| `documentation` | `openai/gpt-5.4` | $1.00 |
+
+Envelope, same file: `HOSTED_PROVIDER = "openrouter"` (`:26`), `HOSTED_MAX_PHYSICAL_CALLS = 56`
+(`:27`), `HOSTED_MAX_MEASURED_USD = $10` (`:28`), `HOSTED_MAX_LOGICAL_RETRIES = 1` (`:29`),
+`HOSTED_MAX_CONCURRENCY = 1` (`:30`). The four role ceilings sum to $7.50, inside the $10 envelope.
+
+Three consequences for the D8 text above, recorded rather than silently rewritten:
+
+1. **The Judge is `google/gemini-2.5-pro`, not `claude-sonnet-5`** — a different vendor entirely.
+   `claude-opus-4-8` and bare `gpt-5.4` are not valid identifiers under the frozen set; the
+   provider-qualified forms above are.
+2. **The Red Team is a 397B MoE, not a local 24–33B Mac workload.** The "local 24–33B switch" and the
+   Dolphin-Mixtral/WhiteRabbitNeo/Dolphin-3.0/Euryale candidates are not configured anywhere in
+   `src/`. DeepSeek (`deepseek/deepseek-chat-v3-0324`) is a *documented, unconfigured fallback*
+   (`docs/agents/RED_TEAM_MODEL_RESOLUTION.md`), not the configured model. The one document that named
+   it as the generator (`docs/evidence/agent-trace.md`) was corrected upstream by PR #44 (`2069036`),
+   which also retired the standalone `HostedProvider` generation route to a fail-closed shell
+   (`src/agentforge/agents/red_team/providers.py:216-250`), leaving `TracedHostedRedTeamProvider`
+   (`hosted_generation.py:185`) as the single governed generator — itself not composed into the
+   production Runner.
+3. **The S5 vendor-disjoint failover invariant is not implemented.** No
+   `Judge.vendor != Documentation.vendor` check exists in `src/agentforge/agents/**` and no test
+   references it. The property happens to hold for the frozen set (Google vs OpenAI), but it holds
+   by configuration, not by enforcement, and `HOSTED_PROVIDER` is a single provider for all four
+   roles. `ARCHITECTURE.md` §20 registers S5 as resolved; that registration is corrected in the
+   same pass.
+
+**Not invalidated** — D8's *reasoning* (per-role separation, cross-vendor as defense-in-depth, Judge
+selection governed by measured calibration) stands. Only the model identifiers and the enforcement
+claim moved. Judge selection "governed by measured calibration" remains **aspirational**: the only
+calibration ever measured at this base is of the **deterministic oracle-precedence Judge**
+(`judge_provider = "deterministic-code"`), not of any hosted model, and it **fails** — 30 labels, 18
+agreements, 6 false negatives, 0 false positives, 18 abstentions
+(`tests/test_judge_calibration.py:44-58`). Calibrating a hosted model needs a captured-results bundle;
+none is committed. See D13 and `docs/security/RED_TEAMING_COVERAGE_REVIEW_2026-07-25.md`.
+
 ### D9 — Security tooling: configure/wrap, build the four `locked` → ADR-0001
 **Why.** Garak/PyRIT/Giskard/Promptfoo/ZAP/Semgrep cover breadth, multi-turn scaffolding, RAG seeds,
 OWASP mapping, web DAST, and our-code SAST — all free/OSS. The four things none of them do (coverage-
@@ -153,6 +201,18 @@ never prove a regression fixed, never enter the regression corpus, never publish
 verdict, not the run** — ambiguous cases park in the human-review queue while the Orchestrator continues
 unrelated work (hard classification gate *and* live unattended runs). A confirmed exploit is marked *fixed*
 only by a deterministic regression oracle + expected-safe assertion, never by an LLM-only verdict.
+> **Implementation status, recorded 2026-07-25 (`107c11c`) — the calibration paragraph below is
+> `specified, NOT implemented`.** `ARCHITECTURE.md` §20's drift register carries the same finding.
+> Three specifics: **dual-judge cross-agreement does not exist** (the gate accepts exactly one
+> evaluator, and `agreement_rate` measures agreement with ground truth, not judge-vs-judge);
+> **per-category disablement does not exist** (per-category metrics are computed, but the reason-code
+> logic applies global rates plus a per-category sample floor); and **no stratified live sample has ever
+> been drawn** — the six ground-truth slices are hand-authored and self-labelled
+> `calibration_status: "AUTHORED_NOT_RUN"`. The deterministic invariant this decision exists to protect
+> **is** implemented and holds (oracle precedence in `src/agentforge/agents/judge/judge.py`); it is the
+> *drift-detection* half that is designed and unbuilt. D26 records why the gap matters less than it
+> looks against a black-box target, and more than it looks for breadth.
+
 **Calibration = async dual-judging**, not per-case second-Judge concurrence (concurrence raises false
 negatives on disagreement and doubles cost/latency): dual-judge the full ground-truth set + a stratified
 random live sample + threshold-near/disputed cases; track inter-judge agreement, category false-negative
@@ -203,7 +263,7 @@ container **not** the managed-Postgres schema/rows: **expand/contract migrations
 migrations are forbidden alongside their consumers, checkpoint/jobs payloads are versioned + unknown rows
 dead-lettered, a **drain/quiesce** precedes deploy, and **Postgres PITR is the true data rollback**.
 
-### D17 — Cost = two independent line families; invalid formula removed `locked` (F4)
+### D17 — Cost = three independent line families; invalid formula removed `locked` (F4)
 **Why.** `effective_cost_per_run = list_price / realized_throughput_at_load` is **dimensionally invalid**
 ($/token ÷ tokens/s = $·s/token²); hosted inference is billed **per token regardless of throughput** (throughput
 sets latency/capacity, not price). Model **separately**: hosted inference = measured tokens × current rates,
@@ -327,3 +387,64 @@ cross the same gateway.
 **Fallback.** None. Any missing Policy Gateway input denies execution.
 **Invalidate if.** Never; combining human identity with target authorization would collapse two separate
 trust boundaries.
+
+---
+
+> **Decision added from the red-team grounding pass (2026-07-25).** Recorded against base `107c11c`.
+> Working label during the gap-swarm was "AD-06 canary-anchoring"; it is numbered D26 here so the
+> project keeps one decision series. Full analysis:
+> `docs/security/RED_TEAMING_COVERAGE_REVIEW_2026-07-25.md` RT-02.
+
+### D26 — Canary-anchoring is the only decisive deterministic oracle against a black-box target `locked` (2026-07-25)
+**Why.** D13 makes a deterministic oracle or canary hit the sole path to `EXPLOIT_CONFIRMED`. The
+gap-swarm plan (WP-11) assumed the remaining five category oracles were *unwired* and that wiring
+them into the run path would make them decisive. Grounding against the code disproves that: **wiring
+them would not make them fire, because there is no source data to populate their observations.**
+`ToolCallObservation`, `RetrievalScopeObservation`, state-diff, identity-scope and resource
+observations are constructed **only** in `tests/test_category_oracles.py` and nowhere in `src/`; the
+recorder persists transcripts only (`src/agentforge/policy/recorder.py`); the sole oracle constructed
+in the run path is `CanaryOracle` over the re-read transcript
+(`src/agentforge/campaign/coordinator.py:711-726`); and `TargetResponse` carries only `output`,
+`status`, and `{adapter, url, trace_id}`. Retrieval lineage, pre/post state hashes, tool-call
+authorization decisions, effective role and token/tool counters are **target-internal facts that an
+HTTP response body does not contain**, and no attesting collector exists. Against a black-box
+`POST /chat` surface, oracle wiring is necessary but nowhere near sufficient.
+
+**The decision.** Three parts, all binding:
+
+1. **Design for canary echo.** Author cases so that a *successful* exploit causes the target to echo
+   a **seeded synthetic canary** into the response body. That produces a genuine
+   `EXPLOIT_CONFIRMED` through the existing deterministic path with no new trust assumption. It works
+   natively for data exfiltration (cross-patient canary) and prompt injection (system-prompt canary),
+   and can be re-expressed for other categories by making success surface a canary. The decisive
+   count is bounded by the canaries actually seeded in the target and declared as
+   `target.canary_refs` — never by the number of cases authored.
+2. **Wire only what is genuinely observable.** The **consumption oracle** is platform-observable:
+   the Policy Gateway's own meter (request count, tokens, latency, cost of *our* calls) can be
+   projected into a resource observation without asking the target for anything. That is a legitimate
+   wiring for denial-of-service / unbounded-consumption. It is the only one of the five category
+   families that qualifies today. RAG-source *may* qualify if a Week 2 surface exposes
+   source/citation digests (WP-12); verify before promising.
+3. **Never fake firing.** `tool_call`, `state_diff` and `identity_role` are not decisive against a
+   black-box target. Their cases are canary-re-expressed, or LLM-assessed once a model Judge is
+   genuinely enabled, or they stay honestly `INDETERMINATE`. **`runtime_wired` must not be flipped to
+   `True` without a test proving the observation is actually collected, and no case may be bound to an
+   oracle that cannot fire** — either move manufactures `INDETERMINATE` at best and a fake
+   confirmation at worst.
+
+`INDETERMINATE` is never relabelled as decisive, and a model Judge never produces
+`EXPLOIT_CONFIRMED` (D13/D18). Where a model Judge is enabled it produces `EXPLOIT_LIKELY` /
+`NO_EXPLOIT_OBSERVED` **assessments** only, which makes non-canary cases decisive-as-assessment
+rather than confirmed.
+
+**Fallback.** Human confirmation, per D13. Where neither a canary nor a human resolves a case, the
+case is reported `INDETERMINATE` and excluded from demonstrated coverage.
+**Invalidate if.** The target stops being a black box — i.e. it exposes an authenticated,
+attestable telemetry surface (tool-call log, retrieval lineage, state digests) that the platform can
+collect and bind to an attempt. Then WP-11's observation layer becomes both buildable and decisive,
+and this decision narrows to "canary-anchoring is the *baseline*, not the ceiling." A Week 2
+citation-digest surface would partially invalidate it for RAG-source only.
+**Cost of being wrong.** Low and self-announcing: if a family turns out to be observable, cases
+re-bind to the real oracle and get *more* decisive. The failure mode this decision exists to prevent
+is the opposite one — spending the delivery window wiring evaluators that cannot fire, and reporting
+the resulting `INDETERMINATE` mass as coverage.

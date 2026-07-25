@@ -1,0 +1,6 @@
+# T-F10a Evidence Review — Model: capable
+Worktree `<WORKTREE>`; branch `ticket/T-F10a-release`. Inputs ticket/release manifest/CI/deploy outputs/execute report. Allowed write `.tdd-swarm/reports/T-F10a-evidence-review.md`. No test path; verify equal SHAs, green CIs, staging deployment/rollback/auth/topology/sanitation.
+Read-only network only if authorized; no spend/live attack/main merge/push; max 3. Return four-status contract + verdict.
+Strict local contract: exact ticket input `tickets/T-F10a.md`; there is no test scope and no production-code permission; use only the named mechanical verifier above. Return exactly `DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED(reason)` plus one-line summary; full output stays in the declared report path.
+No main merge/push.
+Exact inputs: `tickets/T-F10a.md`, ticket file_scopes, `.tdd-swarm/reports/T-F10a-execute.md`, and named artifact manifests; exact output: `.tdd-swarm/reports/T-F10a-evidence-review.md`.

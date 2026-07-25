@@ -10,12 +10,12 @@
 >
 > **Status-label convention (F11 — never claim a system you have not built).** Every load-bearing claim
 > is one of `[implemented]` (code exists + runs), `[selected]` (decided, not yet built), `[measured]`
-> (a real number from a real trace), or `[planned]` (designed, scheduled). Local foundations now exist,
-> but every claim still needs its own evidence. Railway provisioning, Clerk Dashboard configuration,
-> real-user verification, and authenticated deployment remain `[selected]`/`[planned]`. The same-origin
-> FastAPI/console bearer wiring, revision `0006` control/results plane, durable Runner, and image/process packaging are
-> `[implemented locally]`; that label is not a deployment claim. Do not infer a deployed/green state
-> from local tests.
+> (a real result from a real trace or probe), or `[planned]` (designed, scheduled). Candidate
+> `2069036e` has `[measured]` Railway staging smoke evidence: Runner-first deployment, schema `0021`,
+> `/health` and `/ready` at `200`, unauthenticated protected access at `401`, and the console shell
+> loading. Clerk Dashboard configuration and a signed-in real-user flow, a campaign, rollback exercise,
+> and production promotion remain `[selected]`/`[planned]`. Do not infer any of those from the staging
+> infrastructure smoke.
 
 | # | Beat | What it lands | Time |
 |---|---|---|---|
@@ -158,8 +158,22 @@ for development and the local cost-baseline. The **Judge default is Claude Sonne
 calibration, false-negative rate, consistency, latency, and cost** — *not* because of refusal behavior:
 the 'never approve a confirmed exploit' invariant is enforced **deterministically** (oracle/canary
 precedence, fail-closed), and refusal is a model *characteristic and failure mode*, not a security
-control. Documentation default is **GPT-5.4 (`gpt-5.4`)** — a *different vendor from the Judge*, so a single-vendor failure
+control. Documentation default is **GPT-5.4 (`openai/gpt-5.4`)** — a *different vendor from the Judge*, so a single-vendor failure
 can't corrupt the trust chain (defense-in-depth, not the invariant)."
+
+> **Say the current model names (reconciled 2026-07-25).** The frozen hosted set is
+> `orchestrator=anthropic/claude-opus-4.8`, `red_team=qwen/qwen3.5-397b-a17b`,
+> **`judge=google/gemini-2.5-pro`**, `documentation=openai/gpt-5.4`
+> (`src/agentforge/agents/hosted.py:31-38`, rejected on deviation at `:352-353`). The vendor-separation
+> conclusion still holds — Google Judge vs OpenAI Documentation — but do **not** reach it via
+> "the Judge is Anthropic Sonnet": that premise is stale, and a reviewer who checks `hosted.py` will
+> catch it.
+>
+> **If pushed on enforcement, concede immediately.** The `Judge.vendor != Documentation.vendor` check is
+> **specified but not implemented** — no such check exists in `src/agentforge/agents/**` and no test
+> references it. The property holds *by configuration*, and one provider (`openrouter`) fronts all four
+> roles, so provider-level correlated failure is not mitigated. Say that plainly; it is recorded in
+> `ARCHITECTURE.md` §20 and the drift register.
 
 **Why it holds.** Each role's model is chosen for the property that role must guarantee, and vendor
 diversity across Judge and Documentation breaks correlated failure.
@@ -226,26 +240,24 @@ oracle the ownership boundary denies; the ground-truth calibration set is the co
 
 ### S4e — Railway hosting boundary `must-land`
 
-**Say.** "`[selected]` Railway hosts the **full platform**, not only a worker: one public Web service for
-the console/API and only the minimal health/authentication shell; private runner, scheduler, and Postgres
-services behind it. `[implemented locally]` One multi-stage image carries only the Python runtime, built
-console, corpus, and complete Alembic apply path; the no-listener private Runner is composed and the
-Scheduler remains explicitly deferred.
-`[planned]` Staging and production have different databases, variables, target authorization, Clerk
-applications, exact Organization IDs, and origins. No Railway URL is claimed until it is provisioned and
-verified."
+**Say.** "`[measured]` Railway staging hosts the **full platform**, not only a worker: one public Web
+service for the console/API and minimal health/authentication shell; private Runner, Scheduler, and
+Postgres services behind it. Candidate `2069036e` deployed Runner-first, migrated to sole head `0021`,
+then brought Scheduler and Web up. `[planned]` Production promotion and the signed-in Clerk audit remain
+separate gates."
 
 **Why it holds.** Public exposure is intentionally one service. By contract the scheduler only enqueues
 and the runner claims durable work; Postgres carries queue, checkpoints, evidence, findings, approvals,
-and audit data. The current private entrypoints refuse startup until those compositions exist.
+and audit data. The private entrypoints require the exact schema head and expose no public listener.
 Pre-deploy Alembic migrations use expand/contract discipline, `/health` proves liveness, `/ready` gates
 DB/schema/local-auth-config readiness, and deployment-history rollback is paired with Postgres PITR because
 rolling back a container does not roll back data.
 
-**If pushed — "what is actually live?"** "Nothing in this beat is presented as deployed or live. The
-container/process topology and migration head `0006` are local artifacts. Domains,
-sealed variables, private-service inspection, smoke tests, rollback exercise, and URLs remain a
-human-authorized integration task. README says `PENDING`."
+**If pushed — "what is actually live?"** "Staging Web is public at
+`https://web-staging-8e30.up.railway.app`; Runner and Scheduler are private, PostgreSQL is at `0021`,
+the public probes return `200`, a protected request without a token returns `401`, and the console shell
+loads. No one signed in, no campaign or provider/target call ran, rollback was not exercised, and
+production was not promoted."
 
 **Concede.** Railway private networking is not application authorization. Every service still uses
 least-privilege bindings and per-agent DB roles, and the Web service still defaults every non-allowlisted
@@ -273,11 +285,12 @@ the application action; the role is assignment/audit context. Campaign execution
 Gateway. Approval also proves a second identity — role or permission never overrides
 `approver.user_id != launcher_user_id`."
 
-**Concede.** `[implemented locally]` The React console obtains a session token at request time, the
-FastAPI `/api/v1` boundary requires it as Bearer authentication, and revision `0006` persists the exact
-authorization scope and immutable launcher. Application and database controls reject self-approval;
-queue completion cannot approve. `[planned]` Clerk Dashboard resources, two real users, and Railway auth
-smoke remain unverified. Networkless JWT verification also means permission revocation freshness is
+**Concede.** `[implemented]` The React console obtains a session token at request time and FastAPI
+requires it as Bearer authentication; that code is present in the staged artifact. `[measured]` Staging
+proved config/readiness, shell delivery, and missing-token `401` only. `[planned]` Clerk Dashboard
+resources, exact Organization/permissions/MFA, two real users, cross-Organization denial, and the
+signed-in flow remain unverified. Application and database controls reject self-approval; queue
+completion cannot approve. Networkless JWT verification also means permission revocation freshness is
 bounded by session-token refresh/expiry; short-lived sessions and a future critical-action
 freshness/step-up check are the hardening path. Verifier/config failures fail closed (`503`), not open.
 
@@ -310,11 +323,11 @@ with the reason — the eval suite draws its ≥3 categories from the live-testa
 | How is this not turned against systems it shouldn't attack? | Allowlist + per-target credential binding + synthetic-data assertion + budget/rate caps + abort — all enforced in the **Policy Gateway's runtime code, independent of trigger** (not a skill flag). Every live run is fully traced. |
 | What if the Red Team produces genuinely harmful content? | Quarantined; holds no credentials; only ever executed via the trusted gateway against the allowlisted target; never runs against our control plane; treated as untrusted data even by the Judge/Documentation. |
 | How is cost not tokens × N? | Two line families on different functions: **hosting** is a step function of peak concurrency; **inference** is modeled *separately* — hosted = measured tokens × current rates (prompt-cache + Batch adjusted), local = amortized capacity — never a `list_price ÷ throughput` figure (that is dimensionally invalid). Each tier (100→100K) names the architectural change it forces. **Numbers are deferred to measurement.** |
-| Deploy / rollback? | `[planned]` Railway Docker-from-GitHub; **≥2 environments** (prod alone holds live-target creds); managed Postgres; scheduler enqueues but never executes. Rollback: deployment history reverts *code*; **expand/contract migrations + Postgres PITR** roll back *data*; drain-before-deploy avoids mid-lease landings. Perf baselines will be measured on Railway. |
-| Who can access the console/API? | `[implemented locally; deployment unverified]` The API accepts only an active Bearer `session_token` from an exact authorized party and Headshot Organization. Backend custom permissions authorize actions; frontend labels and Clerk system permissions do not. Public responses are limited to `/health`, `/ready`, built assets, and the non-data SPA/Clerk shell. |
+| Deploy / rollback? | `[measured]` Staging used the required Runner-first sequence from candidate `2069036e`, reached schema `0021`, then activated Scheduler and public Web; probes passed. `[planned]` Production and the rollback exercise remain. Deployment history reverts *code*; **expand/contract migrations + Postgres PITR** are the data-recovery design. |
+| Who can access the console/API? | `[measured]` In staging, public responses are limited to `/health`, `/ready`, built assets, and the non-data SPA/Clerk shell; a protected request without a token returned `401`. `[implemented]` The code accepts only an active Bearer `session_token` from the exact authorized party and Headshot Organization. `[planned]` Real-user Organization/permission/MFA verification remains. |
 | What happens if Clerk or auth config fails? | Issued sessions verify networklessly from the pinned PEM key, so JWKS is not a hot-path dependency. Missing/invalid auth is `401`, valid identity without org/permission/distinct approver is `403`, and SDK/verifier/security-config failure is fail-closed `503`. Never log the token or authorization header. |
 | Can the launcher approve their own campaign? | No. The authenticated launcher is persisted with the exact authorization scope; approval reloads it server-side, and both application logic and a database trigger compare immutable verified user IDs. The browser cannot provide launcher identity. Queue completion is not approval. There is no solo or emergency bypass. |
-| Is campaign launch operational? | Locally, yes: an exact approved request creates a real queue job and the private Runner completes the nine-case synthetic profile. Deployment and a live-target campaign remain unverified and blocked until their exact Clerk/target authorization and preflight evidence exist. Authentication or approval alone never bypasses those gates. |
+| Is campaign launch operational? | The private staging Runner is deployed and healthy, but the deployment was smoke-only: no campaign, provider call, or target call ran. A live launch remains unverified until exact target authorization, a distinct approver, preflight, and the governed role composition all pass. Authentication or deployment readiness never bypasses those gates. |
 | What backs the queue, and what happens when it backs up? | One Postgres (`SKIP LOCKED`); jobs accumulate *durably* — nothing dropped — depth is visible, and the cost governor throttles new campaigns. Graceful, observable degradation. |
 | One honest weakness? | LangGraph checkpoints are crash-persistence, not exactly-once durable execution — mitigated with an app-level lock; DBOS-on-Postgres is the path if unattended multi-hour campaigns come into scope. |
 
@@ -328,7 +341,8 @@ with the reason — the eval suite draws its ≥3 categories from the live-testa
 4. Dry-run S2–S4 aloud (~8 min).
 5. Stand up Langfuse Cloud Hobby so the demo shows inter-agent traces + per-agent cost.
 6. Confirm the deployed target URL is in hand (Stage-1 hard gate).
-7. Keep Railway platform URLs marked `PENDING` until staging/production provisioning and smoke tests pass.
+7. Use the verified staging URL only for staging smoke claims; keep production marked `PENDING` until
+   its separate promotion passes.
 8. Verify Clerk Restricted mode, Headshot Organization, required MFA, the exact two-role permission
    matrix, and two distinct test users before presenting auth as implemented.
 
@@ -343,11 +357,12 @@ specific deployed claims."
 - Whether the target exposes a web surface for ZAP.
 - Real per-agent token profiles + Mac tok/s — measured at MVP **before any cost number is presented**.
 - PyRIT/Garak/Giskard wrapping deferred to post-MVP (D12 is the only `proposed` decision).
-- Railway staging/production services, domains, rollback smoke, and URLs — selected/planned, not deployed.
-- Clerk Dashboard resources, exact Operator/Approver assignments, two distinct users, and Railway auth smoke —
-  selected/planned, not deployed.
-- Trusted runner credential resolution/execution and authoritative scheduler composition — absent;
-  both private processes fail closed rather than manufacture work.
+- Railway staging services, domain, schema, and public probes are deployed; production and rollback
+  exercise remain open.
+- Clerk Dashboard resources, exact Operator/Approver assignments, two distinct users, and a signed-in
+  Railway auth smoke remain unverified.
+- Runner and Scheduler are deployed privately, but the governed q Red Team composition and a real
+  four-role campaign trace remain absent from staging evidence.
 - Server-prepared campaign composition, finding/evidence linkage, nonce-deduplicated verified coverage,
   persisted traces, measured accounting, configuration snapshots, component heartbeats, and resilience
   history — explicit unavailable states, never demo data.

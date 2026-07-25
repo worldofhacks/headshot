@@ -18,13 +18,43 @@ OFFLINE: no hosted-model call, no network, no side effect — evaluating an enve
 from __future__ import annotations
 
 from agentforge.agents.judge.calibration import (
+    ACCEPTED_MODEL_JUDGE_THRESHOLDS,
+    STRICT_THRESHOLDS,
+    THRESHOLD_POLICIES,
     CalibrationGate,
     CalibrationGateClosed,
     CalibrationInputError,
     CalibrationThresholds,
     JudgeIdentity,
+    resolve_threshold_policy,
 )
+from agentforge.agents.judge.calibration_runtime import (
+    JudgeCalibrationStatus,
+    load_judge_calibration_status,
+)
+from agentforge.agents.judge.enablement import require_model_judge_enablement
 from agentforge.agents.judge.judge import Judge, is_safe
+
+_HOSTED_EXPORTS = frozenset(
+    {
+        "HostedEvaluator",
+        "HostedEvaluatorError",
+        "HostedEvaluatorResult",
+        "JudgeReconciliation",
+        "reconcile_judge_assessment",
+    }
+)
+
+
+def __getattr__(name: str):
+    """Load hosted evaluator symbols lazily to avoid a hosted-runtime import cycle."""
+
+    if name not in _HOSTED_EXPORTS:
+        raise AttributeError(name)
+    from agentforge.agents.judge import hosted
+
+    return getattr(hosted, name)
+
 
 __all__ = [
     "Judge",
@@ -33,5 +63,17 @@ __all__ = [
     "CalibrationGateClosed",
     "CalibrationInputError",
     "CalibrationThresholds",
+    "ACCEPTED_MODEL_JUDGE_THRESHOLDS",
+    "STRICT_THRESHOLDS",
+    "THRESHOLD_POLICIES",
+    "resolve_threshold_policy",
     "JudgeIdentity",
+    "require_model_judge_enablement",
+    "JudgeCalibrationStatus",
+    "load_judge_calibration_status",
+    "HostedEvaluator",
+    "HostedEvaluatorError",
+    "HostedEvaluatorResult",
+    "JudgeReconciliation",
+    "reconcile_judge_assessment",
 ]

@@ -1,0 +1,4 @@
+# T-F05e Code Review — Model: capable
+Worktree `<WORKTREE>`; branch `ticket/T-F05e-smart-session-lease-context`. Inputs: ticket/diff/reports/frozen tests and landed D/H/I/P. Write only `.tdd-swarm/reports/T-F05e-code-review.md`; source/tests are read-only. Re-run gates for fixed catalog/hash, exact one enabled chat target/session/patient pin, canonical/lexical/immutable separation, source reauthentication, `None` zero rows, trusted exact self claim, disabled/cross-target/other-claim/hard-abort rejection, no alternate catalog/combined state, stable failures, and raw-secret isolation.
+
+No network, raw credential/session material, Railway/database/controller/provider/target action, spend, main merge, or push. Maximum three review attempts. Return exactly `DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED(reason)` plus verdict; full output stays in the report.

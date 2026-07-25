@@ -28,6 +28,9 @@ _OPERATIONAL = "operational and evidenced"
 _DEFERRED = "adapter integrated, execution deferred"
 _REJECTED = "evaluated and rejected"
 _BLOCKED = "blocked pending authorization"
+_UNOBSERVED = "runtime execution not observed"
+_EXECUTION_FAILED = "latest execution failed"
+_EXECUTION_SKIPPED = "latest execution skipped"
 
 
 def _rows(connection: Any, statement: str, parameters: Mapping[str, Any]) -> list[dict[str, Any]]:
@@ -92,6 +95,43 @@ def _runtime_state(availability: str, *, fresh: bool, active: bool) -> str:
     return "working" if active else "ready"
 
 
+def _agent_availability(status: object) -> str:
+    if status is None:
+        return _UNOBSERVED
+    if status == "failed":
+        return _EXECUTION_FAILED
+    if status == "skipped":
+        return _EXECUTION_SKIPPED
+    return _OPERATIONAL
+
+
+def _agent_runtime_state(status: object, *, fresh: bool) -> str:
+    if status is None:
+        return "unavailable"
+    if not fresh:
+        return "stale"
+    return {
+        "running": "working",
+        "failed": "error",
+        "succeeded": "ready",
+        "skipped": "waiting",
+    }.get(status, "degraded")
+
+
+def _judge_outcome_bucket(state: object) -> str:
+    """Use one security-outcome semantic across posture and regression projections.
+
+    ``EXPLOIT_LIKELY`` is conservatively an exploited outcome. Only
+    ``NO_EXPLOIT_OBSERVED`` is held; indeterminate/error states require review.
+    """
+
+    if state == "NO_EXPLOIT_OBSERVED":
+        return "held"
+    if state in {"EXPLOIT_CONFIRMED", "EXPLOIT_LIKELY"}:
+        return "exploited"
+    return "review"
+
+
 def _integrity_verified(row: Mapping[str, Any]) -> bool:
     candidate: dict[str, Any] = {}
     for column in PERSISTED_EVIDENCE_COLUMNS:
@@ -153,23 +193,15 @@ def build_birdseye_snapshot(
     queue_leased = int(queue["leased"] or 0)
     queue_dead_letter = int(queue["dead_letter"] or 0)
 
-    verdicts = _one(
-        connection,
-        "SELECT count(*) FILTER (WHERE state = 'EXPLOIT_CONFIRMED'::verdict_state) "
-        "AS confirmed, count(*) FILTER (WHERE state = 'EXPLOIT_LIKELY'::verdict_state) "
-        "AS likely, count(*) FILTER (WHERE state IN "
-        "('INDETERMINATE'::verdict_state, 'ERROR'::verdict_state)) AS review "
-        "FROM verdict WHERE organization_id = :org "
-        "AND (CAST(:run_id AS varchar) IS NULL OR campaign_run_id = :run_id)",
-        run_parameters,
-    ) or {"confirmed": 0, "likely": 0, "review": 0}
-
     request_metrics = (
         _one(
             connection,
             "SELECT count(*) FILTER (WHERE langfuse_status = 'queued') AS export_queued, "
             "count(*) FILTER (WHERE langfuse_status = 'error') AS export_error, "
+            "count(*) FILTER (WHERE langfuse_status = 'disabled') AS export_disabled, "
             "count(*) FILTER (WHERE langfuse_status = 'exported') AS export_complete, "
+            "count(*) FILTER (WHERE langfuse_verified_at IS NOT NULL) AS verified_count, "
+            "max(langfuse_verified_at) AS last_verified_at, "
             "coalesce(sum(measured_cost), 0) AS measured_cost, "
             "percentile_cont(0.5) WITHIN GROUP (ORDER BY duration_ms) "
             "FILTER (WHERE duration_ms IS NOT NULL) AS p50_ms, "
@@ -186,7 +218,7 @@ def build_birdseye_snapshot(
     summary = (
         _one(
             connection,
-            "SELECT measured_cost, attempt_count, started_at, ended_at "
+            "SELECT measured_cost, attempt_count, confirmed_finding_count, started_at, ended_at "
             "FROM campaign_run_summaries "
             "WHERE organization_id = :org AND run_id = :run_id",
             run_parameters,
@@ -194,11 +226,16 @@ def build_birdseye_snapshot(
         if run_id
         else None
     )
-    measured_cost = float(
+    target_measured_cost = float(
         summary["measured_cost"]
         if summary is not None
         else request_metrics.get("measured_cost") or 0
     )
+    # The authorization scope's budget is the Policy Gateway cap for physical target
+    # dispatches. Hosted-agent provider spend has its own independently enforced cap, so mixing
+    # agent execution cost into this value would mislabel utilization and projections. Agent
+    # spend remains exposed on the corresponding agent nodes below.
+    measured_cost = target_measured_cost
     budget = max(0.0, float(caps.get("budget_usd") or 0))
     budget_utilization = measured_cost / budget if budget > 0 else 0.0
     scope_target_id = scope.get("target_id")
@@ -257,6 +294,55 @@ def build_birdseye_snapshot(
         seen_outcomes.add(identity)
         verified_outcomes.append(row)
 
+    # Both the current-campaign Judge dispositions and the version/category outcome posture use
+    # this same integrity-verified evidence set. The instrumentation keeps confirmed and likely
+    # separate for triage; the outcome posture conservatively groups both as ``exploited``.
+    verified_current_outcomes = [
+        row for row in verified_outcomes if run_id is not None and row["campaign_run_id"] == run_id
+    ]
+    judge_dispositions = {"confirmed": 0, "likely": 0, "review": 0}
+    for row in verified_current_outcomes:
+        verdict_state = str(row["verdict_state"])
+        if verdict_state == "EXPLOIT_CONFIRMED":
+            judge_dispositions["confirmed"] += 1
+        elif verdict_state == "EXPLOIT_LIKELY":
+            judge_dispositions["likely"] += 1
+        elif _judge_outcome_bucket(verdict_state) == "review":
+            judge_dispositions["review"] += 1
+
+    # A completed run's append-only summary is authoritative. During an active run, expose only
+    # finding links whose linked verdict is confirmed and whose attempt evidence passed the same
+    # content-hash verification used for outcomes.
+    if summary is not None:
+        confirmed_finding_count = int(summary["confirmed_finding_count"] or 0)
+    elif run_id is not None:
+        current_verified_by_identity = {
+            (str(row["campaign_run_id"]), str(row["attempt_id"])): row
+            for row in verified_current_outcomes
+        }
+        confirmed_link_rows = _rows(
+            connection,
+            "SELECT fel.finding_id, fel.campaign_run_id, fel.attempt_id, "
+            "fel.evidence_content_hash, v.state::text AS verdict_state "
+            "FROM finding_evidence_links fel JOIN verdict v ON v.id = fel.verdict_id "
+            "WHERE fel.organization_id = :org AND fel.campaign_run_id = :run_id",
+            run_parameters,
+        )
+        confirmed_finding_count = sum(
+            1
+            for link in confirmed_link_rows
+            if link["verdict_state"] == "EXPLOIT_CONFIRMED"
+            and (
+                source := current_verified_by_identity.get(
+                    (str(link["campaign_run_id"]), str(link["attempt_id"]))
+                )
+            )
+            is not None
+            and str(link["evidence_content_hash"]) == str(source["content_hash"])
+        )
+    else:
+        confirmed_finding_count = 0
+
     category_groups: dict[tuple[str, str], dict[str, Any]] = defaultdict(
         lambda: {
             "case_ids": set(),
@@ -273,13 +359,7 @@ def build_birdseye_snapshot(
         group = category_groups[(version, category)]
         group["case_ids"].add(str(row["case_id"]))
         group["attempt_count"] += 1
-        verdict_state = str(row["verdict_state"])
-        if verdict_state == "NO_EXPLOIT_OBSERVED":
-            group["held"] += 1
-        elif verdict_state in {"EXPLOIT_CONFIRMED", "EXPLOIT_LIKELY"}:
-            group["exploited"] += 1
-        else:
-            group["review"] += 1
+        group[_judge_outcome_bucket(row["verdict_state"])] += 1
         group["as_of"] = row["verdict_at"]
 
     version_activity: dict[str, datetime.datetime] = {}
@@ -395,13 +475,7 @@ def build_birdseye_snapshot(
             continue
         version = str(row.get("target_version") or "unattributed")
         group = regression_groups[version]
-        verdict_state = str(row["verdict_state"])
-        if verdict_state == "NO_EXPLOIT_OBSERVED":
-            group["held"] += 1
-        elif verdict_state in {"EXPLOIT_CONFIRMED", "EXPLOIT_LIKELY"}:
-            group["exploited"] += 1
-        else:
-            group["review"] += 1
+        group[_judge_outcome_bucket(row["verdict_state"])] += 1
         group["as_of"] = row["verdict_at"]
     ordered_regression_versions = sorted(
         regression_groups,
@@ -467,8 +541,13 @@ def build_birdseye_snapshot(
         elapsed_seconds = 0.0
     cost_velocity = measured_cost / (elapsed_seconds / 60) if elapsed_seconds > 0 else None
     attempt_cap = int(caps.get("max_attempts_per_run") or 0)
-    projected_cost_at_attempt_cap = (
+    unbounded_projected_cost = (
         cost_per_attempt * attempt_cap if cost_per_attempt is not None and attempt_cap > 0 else None
+    )
+    projected_cost_at_attempt_cap = (
+        min(unbounded_projected_cost, budget)
+        if unbounded_projected_cost is not None and budget > 0
+        else unbounded_projected_cost
     )
 
     orchestration_priority = (
@@ -639,7 +718,8 @@ def build_birdseye_snapshot(
     latest_agent_executions = _rows(
         connection,
         "SELECT DISTINCT ON (agent_role) agent_role, status, provider, model, execution_mode, "
-        "attempt_id, started_at, finished_at, duration_ms, error_code "
+        "returned_model, upstream_provider, provider_request_id, "
+        "attempt_id, started_at, finished_at, duration_ms, error_code, langfuse_status "
         "FROM agent_executions WHERE organization_id = :org "
         "AND (CAST(:run_id AS varchar) IS NULL OR campaign_run_id = :run_id) "
         "ORDER BY agent_role, id DESC",
@@ -648,6 +728,71 @@ def build_birdseye_snapshot(
     execution_by_role = {
         str(execution["agent_role"]): execution for execution in latest_agent_executions
     }
+    agent_metric_rows = _rows(
+        connection,
+        "SELECT agent_role, count(*) AS execution_count, "
+        "coalesce(sum(measured_cost), 0) AS measured_cost, "
+        "sum(input_tokens) AS input_tokens, sum(output_tokens) AS output_tokens, "
+        "count(*) FILTER (WHERE input_tokens IS NOT NULL OR output_tokens IS NOT NULL) "
+        "AS token_observation_count, "
+        "count(*) FILTER (WHERE execution_mode = 'hosted_advisory') "
+        "AS hosted_execution_count, "
+        "count(*) FILTER (WHERE execution_mode = 'hosted_advisory' "
+        "AND cost_measurement_state = 'measured') AS hosted_measured_count, "
+        "count(*) FILTER (WHERE execution_mode = 'hosted_advisory' "
+        "AND cost_measurement_state = 'partial') AS hosted_partial_count, "
+        "percentile_cont(0.5) WITHIN GROUP (ORDER BY duration_ms) "
+        "FILTER (WHERE duration_ms IS NOT NULL) AS p50_ms, "
+        "percentile_cont(0.95) WITHIN GROUP (ORDER BY duration_ms) "
+        "FILTER (WHERE duration_ms IS NOT NULL) AS p95_ms, "
+        "count(*) FILTER (WHERE langfuse_status = 'not_attempted') "
+        "AS export_not_attempted, "
+        "count(*) FILTER (WHERE langfuse_status = 'disabled') AS export_disabled, "
+        "count(*) FILTER (WHERE langfuse_status = 'exported') AS export_count, "
+        "count(*) FILTER (WHERE langfuse_status = 'queued') AS export_queued, "
+        "count(*) FILTER (WHERE langfuse_status = 'error') AS export_errors, "
+        "count(*) FILTER (WHERE langfuse_verified_at IS NOT NULL) AS verified_count, "
+        "max(langfuse_verified_at) AS last_verified_at, "
+        "max(finished_at) AS last_activity_at "
+        "FROM agent_executions WHERE organization_id = :org "
+        "AND (CAST(:run_id AS varchar) IS NULL OR campaign_run_id = :run_id) "
+        "GROUP BY agent_role",
+        run_parameters,
+    )
+    agent_metrics_by_role = {str(metric["agent_role"]): metric for metric in agent_metric_rows}
+    agent_export_queued = sum(int(metric.get("export_queued") or 0) for metric in agent_metric_rows)
+    agent_export_errors = sum(int(metric.get("export_errors") or 0) for metric in agent_metric_rows)
+    agent_export_disabled = sum(
+        int(metric.get("export_disabled") or 0) for metric in agent_metric_rows
+    )
+    agent_export_not_attempted = sum(
+        int(metric.get("export_not_attempted") or 0) for metric in agent_metric_rows
+    )
+    agent_verified_count = sum(
+        int(metric.get("verified_count") or 0) for metric in agent_metric_rows
+    )
+    agent_last_verified_at = max(
+        (
+            metric["last_verified_at"]
+            for metric in agent_metric_rows
+            if metric.get("last_verified_at") is not None
+        ),
+        default=None,
+    )
+    observed_observation_count = (
+        int(request_metrics.get("verified_count") or 0) + agent_verified_count
+    )
+    awaiting_verification_count = (
+        int(request_metrics.get("export_queued") or 0) + agent_export_queued
+    )
+    agent_export_activity = max(
+        (
+            metric["last_activity_at"]
+            for metric in agent_metric_rows
+            if metric.get("last_activity_at") is not None
+        ),
+        default=None,
+    )
     for definition in AGENT_DEFINITIONS:
         configuration = configuration_by_role.get(definition.role)
         if configuration is None:
@@ -655,16 +800,47 @@ def build_birdseye_snapshot(
         else:
             assignment = configuration
         execution = execution_by_role.get(definition.role)
+        metrics = agent_metrics_by_role.get(definition.role, {})
+        observed_provider = (
+            execution.get("upstream_provider")
+            if execution is not None and execution.get("returned_model") is not None
+            else None
+        )
+        observed_model = (
+            execution.get("returned_model")
+            if execution is not None and execution.get("upstream_provider") is not None
+            else None
+        )
+        displayed_provider = observed_provider or assignment["provider"]
+        displayed_model = observed_model or assignment["model"]
+        displayed_mode = (
+            execution["execution_mode"]
+            if observed_model is not None and execution is not None
+            else assignment["execution_mode"]
+        )
+        execution_count = int(metrics.get("execution_count", 0))
+        hosted_execution_count = int(metrics.get("hosted_execution_count", 0))
+        hosted_measured_count = int(metrics.get("hosted_measured_count", 0))
+        hosted_partial_count = int(metrics.get("hosted_partial_count", 0))
+        if execution_count == 0:
+            accounting_status = "not_applicable"
+        elif hosted_execution_count == 0 or hosted_measured_count == hosted_execution_count:
+            accounting_status = "measured"
+        elif hosted_partial_count > 0:
+            accounting_status = "partial"
+        elif hosted_measured_count == 0 and hosted_execution_count == execution_count:
+            accounting_status = "unavailable"
+        else:
+            accounting_status = "partial"
         component_rows.append(
             {
                 "component_id": f"agent:{definition.role}",
                 "name": definition.display_name,
                 "kind": f"agent:{definition.role}",
-                "availability": _OPERATIONAL,
-                "detail": (
-                    f"{assignment['provider']}/{assignment['model']} · "
-                    f"{assignment['execution_mode']}"
+                "availability": _agent_availability(
+                    execution.get("status") if execution is not None else None
                 ),
+                "detail": (f"{displayed_provider}/{displayed_model} · {displayed_mode}"),
                 "heartbeat_at": (
                     execution.get("finished_at") or execution.get("started_at")
                     if execution is not None
@@ -679,6 +855,24 @@ def build_birdseye_snapshot(
                 "agent_error_code": (
                     execution.get("error_code") if execution is not None else None
                 ),
+                "agent_langfuse_status": (
+                    execution.get("langfuse_status") if execution is not None else None
+                ),
+                "agent_execution_count": execution_count,
+                "agent_measured_cost": float(metrics.get("measured_cost", 0.0)),
+                "agent_accounting_status": accounting_status,
+                "agent_input_tokens": metrics.get("input_tokens"),
+                "agent_output_tokens": metrics.get("output_tokens"),
+                "agent_token_observation_count": int(metrics.get("token_observation_count", 0)),
+                "agent_p50_ms": metrics.get("p50_ms"),
+                "agent_p95_ms": metrics.get("p95_ms"),
+                "agent_export_not_attempted": int(metrics.get("export_not_attempted", 0)),
+                "agent_export_disabled": int(metrics.get("export_disabled", 0)),
+                "agent_export_queued": int(metrics.get("export_queued", 0)),
+                "agent_export_count": int(metrics.get("export_count", 0)),
+                "agent_export_errors": int(metrics.get("export_errors", 0)),
+                "agent_verified_count": int(metrics.get("verified_count", 0)),
+                "agent_last_verified_at": metrics.get("last_verified_at"),
             }
         )
 
@@ -704,20 +898,14 @@ def build_birdseye_snapshot(
                     else f"Running {role_label} campaign work"
                 )
             elif agent_status is None:
-                task = "Configured and ready; no execution is recorded for this campaign"
+                task = "Configured; runtime execution is not observed for this campaign"
             else:
                 task = (
                     f"Latest execution {agent_status}"
                     if not component.get("agent_error_code")
                     else f"Latest execution failed: {component['agent_error_code']}"
                 )
-            state = {
-                "running": "working",
-                "failed": "error",
-                "succeeded": "ready",
-                "skipped": "waiting",
-                None: "ready",
-            }.get(agent_status, "degraded")
+            state = _agent_runtime_state(agent_status, fresh=fresh)
         elif component_id == "web-api":
             task = "Serving the protected console snapshot"
         elif component_id == "postgres":
@@ -729,11 +917,15 @@ def build_birdseye_snapshot(
                 else (f"Awaiting {queue_queued} queued job(s)" if queue_queued else "Queue clear")
             )
         elif component_id == "langfuse":
-            export_queued = int(request_metrics.get("export_queued") or 0)
             task = (
-                f"Exporting {export_queued} queued observation(s)"
-                if export_queued
-                else "Telemetry export queue clear"
+                f"Awaiting exact remote verification for {awaiting_verification_count} "
+                "observation(s)"
+                if awaiting_verification_count
+                else (
+                    f"Remote query-back verified {observed_observation_count} observation(s)"
+                    if observed_observation_count
+                    else "Telemetry verification queue clear"
+                )
             )
         else:
             task = str(component["detail"])
@@ -753,23 +945,99 @@ def build_birdseye_snapshot(
                 "freshness_seconds": freshness_seconds,
                 "is_fresh": fresh,
                 "healthy_instances": (
-                    1
-                    if availability == _OPERATIONAL
-                    and (component.get("agent_role") and state != "error" or fresh)
-                    else 0
+                    1 if availability == _OPERATIONAL and state in {"ready", "working"} else 0
                 ),
                 "total_instances": 1,
                 "p50_latency_ms": (
-                    float(request_metrics["p50_ms"])
-                    if component_id == "runner" and request_metrics.get("p50_ms") is not None
-                    else None
+                    float(component["agent_p50_ms"])
+                    if component.get("agent_p50_ms") is not None
+                    else (
+                        float(request_metrics["p50_ms"])
+                        if component_id == "runner" and request_metrics.get("p50_ms") is not None
+                        else None
+                    )
                 ),
                 "p95_latency_ms": (
-                    float(request_metrics["p95_ms"])
-                    if component_id == "runner" and request_metrics.get("p95_ms") is not None
+                    float(component["agent_p95_ms"])
+                    if component.get("agent_p95_ms") is not None
+                    else (
+                        float(request_metrics["p95_ms"])
+                        if component_id == "runner" and request_metrics.get("p95_ms") is not None
+                        else None
+                    )
+                ),
+                "execution_count": (
+                    int(component["agent_execution_count"]) if component.get("agent_role") else None
+                ),
+                "measured_cost_usd": (
+                    float(component["agent_measured_cost"])
+                    if component.get("agent_role") and int(component["agent_execution_count"]) > 0
                     else None
                 ),
-                "queue_depth": (queue_queued + queue_leased if component_id == "runner" else None),
+                "accounting_status": (
+                    str(component["agent_accounting_status"])
+                    if component.get("agent_role")
+                    else None
+                ),
+                "currency": (
+                    "USD"
+                    if component.get("agent_role") and int(component["agent_execution_count"]) > 0
+                    else None
+                ),
+                "input_tokens": (
+                    int(component["agent_input_tokens"])
+                    if component.get("agent_role")
+                    and component.get("agent_input_tokens") is not None
+                    else None
+                ),
+                "output_tokens": (
+                    int(component["agent_output_tokens"])
+                    if component.get("agent_role")
+                    and component.get("agent_output_tokens") is not None
+                    else None
+                ),
+                "token_observation_count": (
+                    int(component["agent_token_observation_count"])
+                    if component.get("agent_role")
+                    else None
+                ),
+                "langfuse_not_attempted_count": (
+                    int(component["agent_export_not_attempted"])
+                    if component.get("agent_role")
+                    else None
+                ),
+                "langfuse_disabled_count": (
+                    int(component["agent_export_disabled"]) if component.get("agent_role") else None
+                ),
+                "langfuse_queued_count": (
+                    int(component["agent_export_queued"]) if component.get("agent_role") else None
+                ),
+                "langfuse_exported_count": (
+                    int(component["agent_export_count"]) if component.get("agent_role") else None
+                ),
+                "langfuse_error_count": (
+                    int(component["agent_export_errors"]) if component.get("agent_role") else None
+                ),
+                "langfuse_verified_count": (
+                    int(component["agent_verified_count"]) if component.get("agent_role") else None
+                ),
+                "last_langfuse_verified_at": (
+                    component["agent_last_verified_at"] if component.get("agent_role") else None
+                ),
+                "langfuse_status": (
+                    str(component["agent_langfuse_status"])
+                    if component.get("agent_langfuse_status") is not None
+                    else None
+                ),
+                "queue_depth": (
+                    queue_queued + queue_leased
+                    if component_id == "runner"
+                    else (
+                        int(request_metrics.get("export_queued") or 0) + agent_export_queued
+                        if component_id == "langfuse"
+                        else None
+                    )
+                ),
                 "target_access": str(component["target_access"]),
             }
         )
@@ -837,15 +1105,39 @@ def build_birdseye_snapshot(
         "TraceObservation",
         (
             "error"
-            if int(request_metrics.get("export_error") or 0)
+            if int(request_metrics.get("export_error") or 0) + agent_export_errors
             else (
                 "active"
-                if int(request_metrics.get("export_queued") or 0)
-                else ("complete" if int(request_metrics.get("export_complete") or 0) else "idle")
+                if int(request_metrics.get("export_queued") or 0) + agent_export_queued
+                else (
+                    "unavailable"
+                    if int(request_metrics.get("export_disabled") or 0)
+                    + agent_export_disabled
+                    + agent_export_not_attempted
+                    else ("complete" if observed_observation_count else "idle")
+                )
             )
         ),
-        "Fail-soft export; PostgreSQL remains authoritative",
-        at=request_metrics.get("last_activity_at"),
+        (
+            f"{observed_observation_count} remotely verified; "
+            f"{awaiting_verification_count} awaiting exact query-back; "
+            "PostgreSQL remains authoritative"
+            if observed_observation_count or awaiting_verification_count
+            else "Fail-soft export; PostgreSQL remains authoritative"
+        ),
+        at=max(
+            (
+                value
+                for value in (
+                    request_metrics.get("last_activity_at"),
+                    agent_export_activity,
+                    request_metrics.get("last_verified_at"),
+                    agent_last_verified_at,
+                )
+                if value is not None
+            ),
+            default=None,
+        ),
     )
     add_edge(
         "postgres-to-web",
@@ -1056,11 +1348,16 @@ def build_birdseye_snapshot(
 
     healthy_components = sum(node["healthy_instances"] for node in nodes)
     total_components = sum(node["total_instances"] for node in nodes)
-    system_state = (
-        "unavailable"
-        if total_components == 0
-        else ("nominal" if healthy_components == total_components else "degraded")
+    runtime_evidence_present = any(
+        node["component_id"] not in {"web-api", "postgres"} and node["heartbeat_at"] is not None
+        for node in nodes
     )
+    if not runtime_evidence_present:
+        system_state = "unavailable"
+    elif healthy_components == total_components:
+        system_state = "nominal"
+    else:
+        system_state = "degraded"
     campaign = None
     if campaign_row:
         execution_profile = str(scope.get("execution_profile") or "")
@@ -1094,9 +1391,10 @@ def build_birdseye_snapshot(
             "queue_queued": queue_queued,
             "queue_leased": queue_leased,
             "queue_dead_letter": queue_dead_letter,
-            "confirmed_count": int(verdicts["confirmed"] or 0),
-            "likely_count": int(verdicts["likely"] or 0),
-            "review_count": int(verdicts["review"] or 0),
+            "confirmed_count": judge_dispositions["confirmed"],
+            "likely_count": judge_dispositions["likely"],
+            "review_count": judge_dispositions["review"],
+            "confirmed_finding_count": confirmed_finding_count,
             "healthy_components": healthy_components,
             "total_components": total_components,
             "system_state": system_state,

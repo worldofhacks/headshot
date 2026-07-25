@@ -16,6 +16,7 @@ SECURITY_SCANNER_MARKERS = {
     "zap": "zap-baseline.py -t",
 }
 LLM_TOOL_RUNNER = "scripts/run_offline_llm_tools.sh"
+LANGFUSE_VERIFIER = "/app/scripts/verify_langfuse_campaign.py"
 
 
 def _workflow(path: str) -> str:
@@ -37,6 +38,12 @@ def test_github_ci_runs_frontend_browser_bundle_and_audit_gates() -> None:
         assert command in workflow
 
 
+def test_github_ci_runs_for_redteam_branches() -> None:
+    workflow = _workflow(".github/workflows/ci.yml")
+    push_section = workflow.split("  push:", maxsplit=1)[1].split("  pull_request:", maxsplit=1)[0]
+    assert '"redteam/**"' in push_section
+
+
 def test_github_ci_runs_in_image_migrations_runtime_and_secret_scan() -> None:
     workflow = _workflow(".github/workflows/ci.yml")
     assert "scripts/verify_runtime_image.sh" in workflow
@@ -46,6 +53,12 @@ def test_github_ci_runs_in_image_migrations_runtime_and_secret_scan() -> None:
     assert "gitleaks git . --redact --verbose" in workflow
     assert "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb" in workflow
     assert "sha256sum --check --strict" in workflow
+
+
+def test_runtime_image_gate_requires_the_langfuse_queryback_verifier() -> None:
+    verifier = _workflow("scripts/verify_runtime_image.sh")
+    assert f"test -s {LANGFUSE_VERIFIER}" in verifier
+    assert f"python {LANGFUSE_VERIFIER} --help >/dev/null" in verifier
 
 
 def test_gitlab_ci_keeps_material_gates_on_the_unprivileged_runner() -> None:
@@ -86,11 +99,20 @@ def test_gitlab_daemonless_dockerfile_preserves_the_runtime_boundary() -> None:
         "COPY alembic.ini /app/alembic.ini",
         "COPY migrations /app/migrations",
         "COPY evals /app/evals",
+        (
+            "COPY --chown=app:app scripts/verify_langfuse_campaign.py "
+            "/app/scripts/verify_langfuse_campaign.py"
+        ),
         "USER app",
         'CMD ["python", "-m", "agentforge.web"]',
     ):
         assert marker in canonical
         assert marker in daemonless
+
+
+def test_daemonless_archive_gate_requires_the_langfuse_queryback_verifier() -> None:
+    verifier = _workflow("scripts/verify_container_archive.sh")
+    assert f'test -s "$rootfs_dir{LANGFUSE_VERIFIER}"' in verifier
 
 
 def test_github_ci_runs_every_pinned_security_scanner() -> None:

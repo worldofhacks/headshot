@@ -3,6 +3,8 @@
 from agentforge.evals.validation import (
     MAX_CORPUS_ARTIFACTS,
     MAX_FILE_BYTES,
+    REQUIRED_OWASP_LLM_IDS,
+    REQUIRED_PRD_CATEGORIES,
     CorpusSummary,
     EvalValidationCode,
     EvalValidationError,
@@ -22,6 +24,8 @@ from agentforge.evals.validation import (
 __all__ = [
     "MAX_FILE_BYTES",
     "MAX_CORPUS_ARTIFACTS",
+    "REQUIRED_OWASP_LLM_IDS",
+    "REQUIRED_PRD_CATEGORIES",
     "CorpusSummary",
     "EvalValidationCode",
     "EvalValidationError",

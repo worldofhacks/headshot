@@ -13,5 +13,43 @@ from agentforge.agents.judge.oracles.base import (
     Oracle,
     trusted_signal,
 )
+from agentforge.agents.judge.oracles.category import (
+    IdentityRoleOracle,
+    OracleObservationError,
+    ResourceLimitOracle,
+    ResourceObservation,
+    RetrievalScopeObservation,
+    RetrievalScopeOracle,
+    RoleBoundaryObservation,
+    StateCorruptionOracle,
+    StateDiffObservation,
+    ToolAuthorizationOracle,
+    ToolCallObservation,
+)
+from agentforge.agents.judge.oracles.registry import (
+    AUTHORED_DETERMINISTIC_ORACLES,
+    AuthoredOracleRegistration,
+    OracleRegistryError,
+    resolve_authored_oracle,
+)
 
-__all__ = ["Oracle", "CanaryOracle", "trusted_signal"]
+__all__ = [
+    "AUTHORED_DETERMINISTIC_ORACLES",
+    "AuthoredOracleRegistration",
+    "CanaryOracle",
+    "IdentityRoleOracle",
+    "Oracle",
+    "OracleObservationError",
+    "OracleRegistryError",
+    "ResourceLimitOracle",
+    "ResourceObservation",
+    "RetrievalScopeObservation",
+    "RetrievalScopeOracle",
+    "RoleBoundaryObservation",
+    "StateCorruptionOracle",
+    "StateDiffObservation",
+    "ToolAuthorizationOracle",
+    "ToolCallObservation",
+    "resolve_authored_oracle",
+    "trusted_signal",
+]

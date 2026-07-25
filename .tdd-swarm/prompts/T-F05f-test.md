@@ -1,0 +1,4 @@
+# T-F05f Test — Model: capable
+Worktree `<WORKTREE>`; branch `ticket/T-F05f-smart-session-runner`. Inputs: ticket, landed T-F05a/d/e/h/i/j/k/l/m/p and queue/Runner tests. Write only `tests/test_smart_session_lease_runner.py` and `.tdd-swarm/reports/T-F05f-test.md`. Own RED for one P target/chat/session/patient, claim-only mutation, J/K pin, M per-call L→H/I, one resolution/cleanup, and only public message `worker-supplied failure detail omitted` with separate code/status/outcome. Attack disabled surface, cross-target/session/patient, Web resolver access, and internal-detail exposure.
+
+Use synthetic states/clocks and fake queue/loader/provider. No network/live database/controller/Railway/provider/target, raw secrets/PHI, spend, main merge, or push. Maximum three attempts. Return exactly `DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED(reason)` plus RED mapping; full output stays in the report.

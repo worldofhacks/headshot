@@ -1,0 +1,4 @@
+# T-F06a Security Review — Model: capable
+Worktree `<WORKTREE>`; branch `ticket/T-F06a-replay-code`. Inputs: ticket, diff/reports/frozen tests, T-F05d through T-F05p reviews. Write only `.tdd-swarm/reports/T-F06a-security.md`; all else is read-only. Inspect unauthorized replay, catalog/disabled-surface/target-session-patient substitution, Web credential access, context/job/ref swap, L/M bypass/cache/replay, combined/final-only rotation state, trust drift, internal rejection detail leak, reload/second resolution, cleanup, queue abuse, and cost amplification.
+
+No network, raw credential/session input, Railway action, spend, live traffic, main merge, or push. Maximum three review attempts. Return exactly `DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED(reason)` plus highest severity; full output stays in the report.

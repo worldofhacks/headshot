@@ -1,0 +1,4 @@
+# T-F04g Security Review — Model: capable
+Worktree `<WORKTREE>`; branch `ticket/T-F04g-hosted-authority-preflight`. Exact inputs: `tickets/T-F04g.md`, `.tdd-swarm/diffs/T-F04g.patch`, `.tdd-swarm/reports/T-F04g-implement.md`, `.tdd-swarm/reports/T-F04g-gates.md`. Allowed write only: `.tdd-swarm/reports/T-F04g-security.md`; frozen tests are read-only. Re-run `.tdd-swarm/run-local-gates.sh tickets/T-F04g.md <DIFF_BASE>`; inspect set/release/fixture/hash/price/cap substitution, confused-deputy authorization, drift races, projection leakage, TOCTOU approval, mutable check-only behavior, activation bypass, secret-bearing errors/logs, and resolver/provider/target side effects.
+
+No network, credentials, spend, target traffic, main merge, or push. Maximum three review attempts. Return exactly `DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED(reason)` plus highest severity and one-line summary; full output stays in the declared report.

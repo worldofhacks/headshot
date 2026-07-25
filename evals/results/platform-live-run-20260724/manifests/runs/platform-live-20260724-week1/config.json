@@ -1,0 +1,17 @@
+{
+  "attempt_id": null,
+  "content_hash": "2e0f5636350e82427dd71eec34210d909639c25500a11cae4aabab060bdf54e5",
+  "kind": "config",
+  "payload": {
+    "adapter_kind": "openemr",
+    "auth_mode": "session",
+    "corpus_id": "m11-seed-corpus-v1",
+    "corpus_sha": "011d2f2f231e13ce1b84b2ed4d393bd808dfd2e3a7370cc42f4fdfd494fcbedd",
+    "credential_marker": "***REDACTED***",
+    "environment": "production",
+    "host": "agent-production-9f62.up.railway.app",
+    "run_nonce": "platform-live-run-20260724-week1",
+    "target_id": "copilot-week1"
+  },
+  "run_id": "platform-live-20260724-week1"
+}

@@ -43,3 +43,12 @@ evals/results/**/raw/
 
 # Local Playwright CLI debug snapshots — never ship.
 .playwright-cli/
+
+# Scratch working dir (PDF text/page extractions). The PRD PDF is tracked at repo root.
+tmp/
+
+# Live-target adversarial bundle & SMART session material — NEVER commit (defense in depth; the
+# authorized bundle lives OUTSIDE this repo, and raw SIDs stay in the private Runner / .env.campaign).
+**/Runtime.bru
+**/adversarial-smart-bruno-*/
+**/claude-adversarial-run/

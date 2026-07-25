@@ -1,0 +1,4 @@
+# T-F05p Test Review — Model: capable
+Worktree `<WORKTREE>`; branch `ticket/T-F05p-clinical-copilot-target-catalog`. Inputs: ticket, focused test/report, catalog/config conventions. Write only `.tdd-swarm/reports/T-F05p-test-review.md`; tests/config/source are read-only. Attack missing/extra/duplicate target, Web–Runner hash/path drift, inline catalog fallback, Web credential resolution, cross-target/generation binding, non-chat enablement, unknown/catch-all surface, multi-target/session campaign, patient swap, and secret/local-artifact leakage.
+
+Freeze only clean criterion-complete RED. No network/Railway/provider/target, credential/session values, PHI, spend, main merge, or push. Maximum three reviews. Return exactly `DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED(reason)` plus freeze verdict; full output stays in the report.

@@ -11,13 +11,11 @@ turn to append). Two families:
   EMPTY generation is retried/switched to the next strategy — never a silent stall. If EVERY
   strategy refuses/empties, generation fails LOUDLY with a typed :class:`ProviderExhaustedError`.
   These power the offline slice and every test.
-* :class:`HostedProvider` — the OpenRouter / Together boundary. It is guarded by a provider/model
-  VALIDATION preflight (:func:`preflight_hosted_provider`): the provider must be supported,
-  ``HEADSHOT_RED_TEAM_MODEL`` (carried on the config) must be non-empty, and a credential
-  reference must be present. A passing preflight is NOT permission to run — the hosted provider
-  additionally requires EXPLICIT authorization, and even then dispatches through the SAME trusted
-  gateway. Its provider-SDK import is LAZY (inside :meth:`HostedProvider._build_client` only,
-  never at module load) and is never reached in a test.
+* :class:`HostedProvider` — a fail-closed compatibility shell for the retired standalone hosted
+  generator. It preserves provider/model validation and the explicit authorization denial, but a
+  fully valid, authorized call raises :class:`ProviderPreflightError` before any client, SDK, or
+  network boundary. The canonical traced qwen component lives in ``hosted_generation.py`` and is
+  not production-live until its governed review and fresh-authorization composition is complete.
 
 ``HEADSHOT_RED_TEAM_MODEL`` is the single canonical model setting — there is deliberately no
 provider-specific alias (no ``OPENROUTER_MODEL``).
@@ -46,8 +44,9 @@ class ProviderPreflightError(RuntimeError):
     """The hosted provider/model validation preflight failed (typed, fail-closed).
 
     Raised when the provider is unsupported, ``HEADSHOT_RED_TEAM_MODEL`` is unset/empty, or the
-    credential reference is missing. A ``RuntimeError`` subclass so a broad ``except`` still
-    catches it, while the dedicated type lets a caller distinguish a validation refusal from an
+    credential reference is missing, and when the retired standalone generator receives an
+    otherwise valid authorized request. A ``RuntimeError`` subclass so a broad ``except`` still
+    catches it, while the dedicated type lets a caller distinguish a preflight refusal from an
     incidental bug. The offline fake/cassette/seed modes never raise this — only the hosted path.
     """
 
@@ -215,14 +214,14 @@ def preflight_hosted_provider(config: HostedProviderConfig) -> PreflightResult:
 
 @dataclass
 class HostedProvider:
-    """The OpenRouter / Together boundary — preflight- AND authorization-gated, SDK import lazy.
+    """Fail-closed compatibility shell for the retired standalone hosted generator.
 
     :meth:`generate` runs the validation preflight FIRST (so a model-unset config typed-fails even
     if authorized), then refuses unless ``authorized`` is explicitly True, raising
-    :class:`ProviderAuthorizationError` BEFORE any SDK is built or any socket is opened. Only past
-    both gates is the lazy provider SDK constructed (via :meth:`_build_client`) and a real hosted
-    call made — a path this M8 slice never exercises in a test, and which itself dispatches
-    generated attempts through the SAME trusted gateway (budget/rate/abort) as every other attempt.
+    :class:`ProviderAuthorizationError` before any external boundary. A fully valid, authorized
+    request still raises :class:`ProviderPreflightError`: lane d's standalone implementation is
+    retired in favor of the canonical traced qwen component, which is not yet composed into the
+    governed production flow.
     """
 
     config: HostedProviderConfig
@@ -242,41 +241,10 @@ class HostedProvider:
                 "provider is not authorized to run (no SDK built, no network touched)"
             )
 
-        # (3) Only past both gates is the lazy SDK constructed and a real hosted call made. This
-        # branch is never reached in a test (the gates fire first) and dispatches through the
-        # SAME trusted gateway as every other attempt.
-        client = self._build_client()  # pragma: no cover - lazy SDK boundary, never hit in tests
-        return self._generate_via_client(  # pragma: no cover - real hosted call, gated + lazy
-            client, seed, count=count, category=category
-        )
-
-    def _build_client(self) -> Any:  # pragma: no cover - lazy SDK import, never hit in tests
-        """Lazily construct the provider SDK client — imported INSIDE this method only.
-
-        The provider SDK import lives here so importing this module never pulls an
-        OpenRouter/Together/OpenAI SDK into ``sys.modules``. This method is reached only after the
-        preflight and authorization gates pass, so a test (which never authorizes a hosted run)
-        never triggers the import or a network connection.
-        """
-        provider = self.config.provider.strip().lower()
-        if provider == "together":
-            from together import Together  # noqa: PLC0415 - lazy, boundary-only import
-
-            return Together()
-        # Default supported provider: OpenRouter speaks the OpenAI wire protocol.
-        from openai import OpenAI  # noqa: PLC0415 - lazy, boundary-only import
-
-        return OpenAI()
-
-    def _generate_via_client(  # pragma: no cover - real hosted call, never hit in tests
-        self, client: Any, seed: dict[str, Any], *, count: int, category: str
-    ) -> list[dict[str, Any]]:
-        """Perform the real hosted generation through an already-built SDK client.
-
-        Never reached in a test — the preflight/authorization gates fire first. Left as the
-        explicit real-call boundary so the gated path is legible.
-        """
-        raise NotImplementedError(
-            "the live hosted generation path is intentionally unexercised in this slice; it is "
-            "reached only under explicit authorization and dispatches via the trusted gateway"
+        # (3) The legacy implementation stops here. In particular, do not construct a client,
+        # import an SDK, or open a socket. The traced qwen component has its own governed
+        # composition requirements; this compatibility surface must never become a second route.
+        raise ProviderPreflightError(
+            "the standalone HostedProvider generator is retired; use the canonical traced qwen "
+            "component only after its governed review and fresh-authorization composition exists"
         )

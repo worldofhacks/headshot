@@ -21,6 +21,8 @@ docker run --rm --entrypoint sh "$image" -c '
     test "$(id -u)" != 0
     test -f /app/alembic.ini
     test -f /app/migrations/env.py
+    test -s /app/scripts/verify_langfuse_campaign.py
+    python /app/scripts/verify_langfuse_campaign.py --help >/dev/null
     test -f /app/console/index.html
     test -d /app/console/assets
     ! command -v node >/dev/null 2>&1

@@ -1,0 +1,4 @@
+# T-F05k Test Review — Model: capable
+Worktree `<WORKTREE>`; branch `ticket/T-F05k-smart-session-context-loader`. Inputs: ticket, focused test/report, landed E/J, frozen review. Write only `.tdd-swarm/reports/T-F05k-test-review.md`; tests/source are read-only. Attack path/root override, ancestor/final symlink, hard links, ownership/mode/size, partial writes, fsync omission, replacement races, startup/post-claim inode drift, attempt reload, content disclosure, and non-session regressions.
+
+Freeze only clean criterion-complete RED. No live filesystem/network/Railway/controller/database/provider/target, secrets/PHI, spend, main merge, or push. Maximum three reviews. Return exactly `DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED(reason)` plus freeze verdict; full output stays in the report.

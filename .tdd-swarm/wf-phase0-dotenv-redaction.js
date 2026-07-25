@@ -8,7 +8,7 @@ export const meta = {
   ],
 }
 
-const REPO = '/Users/quietguy/Documents/Dev/Gauntlet/Adversarial Machine'
+const REPO = '<repo>'
 
 const SPEC = `
 REPO: ${REPO}   BRANCH: ticket/dotenv-isolation-redaction (already checked out)

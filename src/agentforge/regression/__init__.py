@@ -1,6 +1,7 @@
 """Deterministic regression admission and replay boundaries."""
 
 from agentforge.regression.admission import RegressionAdmissionError, RegressionAdmissionGate
+from agentforge.regression.lifecycle import RegressionLifecycle, RegressionLifecycleError
 from agentforge.regression.replay import (
     RegressionReplayError,
     RegressionReplayGate,
@@ -10,6 +11,8 @@ from agentforge.regression.replay import (
 __all__ = [
     "RegressionAdmissionError",
     "RegressionAdmissionGate",
+    "RegressionLifecycle",
+    "RegressionLifecycleError",
     "RegressionReplayError",
     "RegressionReplayGate",
     "ReplayObservation",

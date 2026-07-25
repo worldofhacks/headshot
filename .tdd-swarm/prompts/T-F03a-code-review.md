@@ -1,0 +1,4 @@
+# T-F03a Code Review — Model: capable
+Worktree `<WORKTREE>`; branch `ticket/T-F03a-judge-code`. Exact inputs: `tickets/T-F03a.md`, `.tdd-swarm/diffs/T-F03a.patch`, `.tdd-swarm/reports/T-F03a-implement.md`, `.tdd-swarm/reports/T-F03a-gates.md`. Allowed write only: `.tdd-swarm/reports/T-F03a-code-review.md`; tests frozen. Re-run `.tdd-swarm/run-local-gates.sh tickets/T-F03a.md <DIFF_BASE>`; verify strict repository Verdict adapter, Judge-only persisted configuration/client, complete metadata, all independence collision dimensions, calibration/drift, oracle precedence after parsing, no fallback, and baseline failure.
+
+No network, credentials, spend, target traffic, main merge, or push. Maximum three review attempts. Return exactly `DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED(reason)` plus verdict; full output stays in the report.

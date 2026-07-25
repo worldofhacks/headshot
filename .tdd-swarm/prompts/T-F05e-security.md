@@ -1,0 +1,4 @@
+# T-F05e Security Review — Model: capable
+Worktree `<WORKTREE>`; branch `ticket/T-F05e-smart-session-lease-context`. Inputs: ticket/diff/reports/frozen tests/readiness reviews including P. Write only `.tdd-swarm/reports/T-F05e-security.md`; all else read-only. Inspect catalog/hash/path substitution, Web credential confusion, disabled surface, cross-target/session/patient switch, canonical/reference/time/policy/release confusion, ephemeral state, forged source, trust drift, fake/other claim, hard abort, `None` active rows, combined state, raw/local-artifact disclosure, and fail-open errors.
+
+No network, raw credential/session material, Railway/database/controller/provider/target action, spend, main merge, or push. Maximum three review attempts. Return exactly `DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED(reason)` plus highest severity; full output stays in the report.

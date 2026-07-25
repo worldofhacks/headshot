@@ -1,0 +1,6 @@
+# T-F13 Execute — Model: capable
+Worktree `<WORKTREE>`; branch `ticket/T-F13-integration-packet`. Inputs ticket, dependency manifests including every T-F05d through T-F05p contract/test/gate/review hash, and live trace. Allowed writes `docs/integration/**`. No test path; prove exact catalog target/chat/session/patient, Web/Runner parity, Runner-only resolver, split J/K/L/M interfaces, fresh per-attempt source, F sanitized rejection, O/N complete history, shared validators, disabled surfaces, and no credential/session/local-artifact content, combined/final-only state, cache, or alternate parser. No code.
+No network/spend/live traffic; no main merge/push; max 3. Output `.tdd-swarm/reports/T-F13-execute.md`. Return four-status contract + line.
+Strict local contract: exact ticket input `tickets/T-F13.md`; there is no test scope and no production-code permission; use only the named mechanical verifier above. Return exactly `DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED(reason)` plus one-line summary; full output stays in the declared report path.
+No main merge/push.
+Exact inputs: `tickets/T-F13.md` and dependency/authorization artifacts named there; exact output: `.tdd-swarm/reports/T-F13-execute.md`.

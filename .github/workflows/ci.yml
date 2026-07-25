@@ -2,9 +2,14 @@ name: CI
 
 on:
   push:
-    branches: [main, "swarm/**", "run/**", "codex/**"]
+    branches:
+      [main, "swarm/**", "run/**", "codex/**", "redteam/**", "agent/**", "sub/**"]
   pull_request:
-    branches: [main]
+    # Lanes integrate through codex/** integration branches, not directly into
+    # main, so PRs into those bases must be gated too. Without this a lane PR
+    # whose head branch is outside the push allowlist (e.g. agent/**) merges
+    # with zero checks.
+    branches: [main, "codex/**"]
 
 permissions:
   contents: read
