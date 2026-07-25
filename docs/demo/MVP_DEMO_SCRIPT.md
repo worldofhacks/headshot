@@ -118,7 +118,10 @@ committed, not nine; and **no cost value is recorded in any result artifact** �
 have no cost field. The per-request figure came from a configured constant in the outbound telemetry
 layer, which is an accounting cap, not a measurement. If asked about cost, say the caps: `$1.00`
 budget, 40 attempts, 60 physical requests, 0.5 req/s, 1800 s
-(`docs/evidence/authorization-requests/caps.json`) — and that measured spend is unrecorded.
+for the retained 2026-07-24 run — and that measured spend is unrecorded. For the prepared
+100-case release envelope, the current reviewed caps are a `$50` hard reservation, 130 attempts,
+100 logical cases, 121 physical requests, 0.5 req/s, 3600 s, and zero retries
+(`docs/evidence/authorization-requests/caps.json`); the `$50` ceiling is not reported as spend.
 
 ## 4:05 — Close
 

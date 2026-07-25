@@ -70,9 +70,17 @@ Envelope, same file: provider `openrouter` (`:26`), `HOSTED_MAX_PHYSICAL_CALLS =
 `HOSTED_MAX_CONCURRENCY = 1` (`:30`). The four role ceilings sum to $7.50, inside the $10 envelope.
 
 Campaign-side caps, committed at `docs/evidence/authorization-requests/caps.json` and mirrored in the
-three target-catalog files: `budget_usd 1.00`, `max_attempts_per_run 40`, `logical_case_limit 40`,
-`physical_request_limit 60`, `target_requests_per_second 0.5`, `run_timeout_seconds 1800`,
-`target_retries_per_turn 1`.
+three target-catalog files: `budget_usd 50.00`, `max_attempts_per_run 130`,
+`logical_case_limit 100`, `physical_request_limit 121`, `target_requests_per_second 0.5`,
+`run_timeout_seconds 3600`, `target_retries_per_turn 0`. The `$50` value is a hard reservation,
+not spend; the expected full-run spend range is `$10–25`.
+
+The 100 cases cannot fit one hosted authority. The landed generation policy reserves four
+cumulative calls per case, while the global hosted ceiling remains 56, so the current safe plan is
+seven 14-case batches plus one two-case batch. This is stricter than an illustrative `2 × 50`
+split: 50 cases would reserve 200 cumulative calls and fail preflight. Batch results must be
+aggregated from retained manifests, and final runtime integration must prove subset-manifest
+authorization before the live run.
 
 **Per-model prices are not in this repository.** Runtime prices come from an operator-staged hosted
 configuration set held in Postgres; `hosted.py` carries model IDs and ceilings but no prices. The only
