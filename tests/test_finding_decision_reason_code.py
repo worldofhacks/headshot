@@ -19,6 +19,7 @@ from agentforge.api.postgres import PostgresApiBackend, _finding_histories
 from agentforge.api.router import FindingDecisionInput
 from agentforge.auth.permissions import FINDINGS_APPROVE
 from agentforge.auth.principal import Principal
+from agentforge.control_plane import AuthorizationDeniedError, ControlPlaneStore
 from agentforge.policy.recorder import ExecutionRecorder
 
 ORG_ID = "org_ReasonCodeFixture"
@@ -43,6 +44,7 @@ def _seed_confirmed_finding(
     engine: Engine,
     *,
     organization_id: str = ORG_ID,
+    launcher_user_id: str = "user_ReasonLauncher",
 ) -> str:
     """Insert an oracle/canary-confirmed finding with linked, integrity-verified evidence."""
     finding_id = f"finding-{uuid.uuid4().hex}"
@@ -50,7 +52,6 @@ def _seed_confirmed_finding(
     attempt_id = uuid.uuid4().hex
     authorization_request_id = f"request-{uuid.uuid4().hex}"
     authorization_decision_id = f"decision-{uuid.uuid4().hex}"
-    launcher_user_id = "user_ReasonLauncher"
     launcher_session_id = "sess_ReasonLauncher"
     evidence_fields = {
         "schema_version": "1",
@@ -229,6 +230,74 @@ def test_finding_decision_input_requires_reason_code() -> None:
         FindingDecisionInput(
             decision="rejected",
             rationale="Not reproducible.",
+        )
+
+
+def test_finding_approval_denies_submitter_self_approval(migrated_db: Engine) -> None:
+    finding_id = _seed_confirmed_finding(
+        migrated_db,
+        launcher_user_id=APPROVER_ID,
+    )
+    store = ControlPlaneStore(migrated_db, environment="staging")
+
+    with pytest.raises(
+        AuthorizationDeniedError,
+        match="submitter cannot approve own finding",
+    ):
+        store.record_finding_decision(
+            principal=_approver(),
+            finding_id=finding_id,
+            decision="approved",
+            rationale="The submitter must not approve this finding.",
+            reason_code="human_confirmed",
+            idempotency_key="finding-self-approval-denied",
+        )
+
+
+def test_finding_approval_accepts_distinct_approver(migrated_db: Engine) -> None:
+    finding_id = _seed_confirmed_finding(migrated_db)
+    store = ControlPlaneStore(migrated_db, environment="staging")
+
+    decision = store.record_finding_decision(
+        principal=_approver(),
+        finding_id=finding_id,
+        decision="approved",
+        rationale="A distinct human approver verified the retained evidence.",
+        reason_code="human_confirmed",
+        idempotency_key="finding-distinct-approval-succeeds",
+    )
+
+    assert decision.finding_id == finding_id
+    assert decision.actor_user_id == APPROVER_ID
+    assert decision.decision == "approved"
+
+
+def test_finding_approval_rejects_missing_submitter_lineage(migrated_db: Engine) -> None:
+    finding_id = f"finding-{uuid.uuid4().hex}"
+    with migrated_db.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO finding "
+                "(finding_id, organization_id, state, severity, category, target_version, "
+                "source_kind, execution_profile) VALUES "
+                "(:finding, :org, 'candidate', 'high', 'access-control', '1.0.0', "
+                "'campaign', 'synthetic')"
+            ),
+            {"finding": finding_id, "org": ORG_ID},
+        )
+    store = ControlPlaneStore(migrated_db, environment="staging")
+
+    with pytest.raises(
+        AuthorizationDeniedError,
+        match="approval lineage is unavailable",
+    ):
+        store.record_finding_decision(
+            principal=_approver(),
+            finding_id=finding_id,
+            decision="approved",
+            rationale="This must fail closed without immutable submitter lineage.",
+            reason_code="human_confirmed",
+            idempotency_key="finding-missing-lineage-denied",
         )
 
 
