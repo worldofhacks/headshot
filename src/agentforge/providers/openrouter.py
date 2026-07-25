@@ -491,6 +491,10 @@ class OpenRouterTransport:
         last_error: Exception | None = None
         physical_attempts = 0
         conservative_input_bound = self._conservative_input_token_bound(messages)
+        if conservative_input_bound > input_tokens_upper_bound:
+            raise HostedProviderError(
+                "encoded hosted messages exceed the authorization-bound input token ceiling"
+            )
         with self._concurrency:
             for attempt in range(1, attempts + 1):
                 try:
@@ -519,10 +523,7 @@ class OpenRouterTransport:
                 try:
                     reservation = self._ledger.reserve(
                         role,
-                        input_tokens=max(
-                            input_tokens_upper_bound,
-                            conservative_input_bound,
-                        ),
+                        input_tokens=input_tokens_upper_bound,
                         output_tokens=max_output_tokens,
                         reasoning_tokens=max_reasoning_tokens,
                     )
@@ -1051,8 +1052,8 @@ class OpenRouterTransport:
     ) -> int:
         """Bound prompt tokens by encoded bytes plus fixed chat-format overhead.
 
-        This deliberately over-reserves. A caller-supplied estimate can widen the
-        reservation, but cannot lower it and make a large prompt look cheap.
+        This deliberately overestimates.  The authorization-bound input ceiling must cover the
+        result before any credential, budget, lineage, observation, or provider side effect.
         """
 
         content_bytes = sum(

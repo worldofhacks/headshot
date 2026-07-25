@@ -539,7 +539,10 @@ def _canonical_q_provider(
         configuration_sha256=configuration.configuration_sha256,
         generation_policy_sha256=_GENERATION_POLICY,
         call_bounds=HostedCallBounds(
-            input_tokens=2_048,
+            # This fixture exercises successful physical lineage. Keep its explicit authority
+            # above the conservative encoded-message bound rather than relying on transport
+            # widening.
+            input_tokens=10_000,
             output_tokens=1_024,
             reasoning_tokens=512,
             timeout_seconds=30,

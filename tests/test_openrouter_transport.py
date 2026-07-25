@@ -51,6 +51,7 @@ _USD_CAPS = {
     "documentation": Decimal("1"),
 }
 _PROMPTS = {record.role: record for record in load_prompt_registry()}
+_TEST_INPUT_TOKEN_BOUND = 10_000
 
 
 def _digest(value: str) -> str:
@@ -339,6 +340,107 @@ def test_transport_rejects_wrong_prompt_version_before_any_side_effect() -> None
     assert transport.ledger.snapshot.physical_calls == 0
 
 
+def test_transport_rejects_encoded_input_above_authorized_bound_before_any_side_effect() -> None:
+    configuration = _configuration()
+    recorder = _ProviderRecorder()
+    observer = _AttemptObserver(recorder)
+    ledger = HostedUsageLedger(configuration)
+    messages = _messages(user="Authorization-bound input.")
+    conservative_bound = OpenRouterTransport._conservative_input_token_bound(messages)
+    credential_calls = 0
+    network_calls = 0
+
+    def credential(_reference: str) -> Secret:
+        nonlocal credential_calls
+        credential_calls += 1
+        return Secret("test-provider-value")
+
+    def send(_request: httpx.Request) -> httpx.Response:
+        nonlocal network_calls
+        network_calls += 1
+        return _success()
+
+    transport = OpenRouterTransport(
+        configuration=configuration,
+        credential_resolver=credential,
+        client=httpx.Client(transport=httpx.MockTransport(send)),
+        ledger=ledger,
+        lineage_recorder=recorder,
+        attempt_observer=observer,
+    )
+
+    with pytest.raises(HostedProviderError, match="authorization-bound input token ceiling"):
+        transport.invoke(
+            role="judge",
+            messages=messages,
+            output_schema={"type": "object"},
+            schema_name="judge_verdict",
+            generation_policy_sha256=_digest("generation-policy"),
+            input_tokens_upper_bound=conservative_bound - 1,
+            max_output_tokens=50,
+            max_reasoning_tokens=20,
+            timeout_seconds=5,
+            provider_context=_provider_context(configuration),
+        )
+
+    assert credential_calls == 0
+    assert network_calls == 0
+    assert ledger.snapshot.physical_calls == 0
+    assert ledger.snapshot.measured_usd == 0
+    assert ledger.snapshot.unresolved_exposure_usd == 0
+    assert recorder.invocations == recorder.events == []
+    assert observer.started == observer.finished == []
+
+
+@pytest.mark.parametrize("authorization_headroom", (0, 1))
+def test_transport_accepts_encoded_input_at_or_below_authorized_bound(
+    authorization_headroom: int,
+) -> None:
+    configuration = _configuration()
+    messages = _messages(user="Authorization-bound input.")
+    conservative_bound = OpenRouterTransport._conservative_input_token_bound(messages)
+    credential_calls = 0
+    network_calls = 0
+
+    def credential(_reference: str) -> Secret:
+        nonlocal credential_calls
+        credential_calls += 1
+        return Secret("test-provider-value")
+
+    def send(_request: httpx.Request) -> httpx.Response:
+        nonlocal network_calls
+        network_calls += 1
+        return _success()
+
+    transport = OpenRouterTransport(
+        configuration=configuration,
+        credential_resolver=credential,
+        client=httpx.Client(transport=httpx.MockTransport(send)),
+    )
+
+    result = transport.invoke(
+        role="judge",
+        messages=messages,
+        output_schema={
+            "type": "object",
+            "properties": {"verdict": {"type": "string"}},
+            "required": ["verdict"],
+            "additionalProperties": False,
+        },
+        schema_name="judge_verdict",
+        generation_policy_sha256=_digest("generation-policy"),
+        input_tokens_upper_bound=conservative_bound + authorization_headroom,
+        max_output_tokens=50,
+        max_reasoning_tokens=20,
+        timeout_seconds=5,
+    )
+
+    assert result.request_id == "gen-1"
+    assert credential_calls == 1
+    assert network_calls == 1
+    assert transport.ledger.snapshot.physical_calls == 1
+
+
 @pytest.mark.parametrize(
     ("configured", "served", "expected"),
     (
@@ -381,7 +483,7 @@ def test_transport_disables_fallback_and_verifies_usage_and_identity() -> None:
         },
         schema_name="judge_verdict",
         generation_policy_sha256=_digest("generation-policy"),
-        input_tokens_upper_bound=100,
+        input_tokens_upper_bound=_TEST_INPUT_TOKEN_BOUND,
         max_output_tokens=50,
         max_reasoning_tokens=20,
         timeout_seconds=5,
@@ -438,7 +540,7 @@ def test_transport_sends_only_hash_bound_max_tokens_parameter() -> None:
         output_schema={"type": "object"},
         schema_name="judge_verdict",
         generation_policy_sha256=_digest("generation-policy"),
-        input_tokens_upper_bound=100,
+        input_tokens_upper_bound=_TEST_INPUT_TOKEN_BOUND,
         max_output_tokens=50,
         max_reasoning_tokens=20,
         timeout_seconds=5,
@@ -473,7 +575,7 @@ def test_transport_permits_only_one_retry_and_counts_both_physical_calls() -> No
         output_schema={"type": "object"},
         schema_name="judge_verdict",
         generation_policy_sha256=_digest("generation-policy"),
-        input_tokens_upper_bound=100,
+        input_tokens_upper_bound=_TEST_INPUT_TOKEN_BOUND,
         max_output_tokens=50,
         max_reasoning_tokens=20,
         timeout_seconds=5,
@@ -510,7 +612,7 @@ def test_transport_records_each_actual_send_and_retry_as_physical_facts() -> Non
         output_schema={"type": "object"},
         schema_name="judge_verdict",
         generation_policy_sha256=_digest("generation-policy"),
-        input_tokens_upper_bound=100,
+        input_tokens_upper_bound=_TEST_INPUT_TOKEN_BOUND,
         max_output_tokens=50,
         max_reasoning_tokens=20,
         timeout_seconds=5,
@@ -558,7 +660,7 @@ def test_attempt_observer_tracks_success_and_retry_in_physical_order() -> None:
         output_schema={"type": "object"},
         schema_name="judge_verdict",
         generation_policy_sha256=_digest("generation-policy"),
-        input_tokens_upper_bound=100,
+        input_tokens_upper_bound=_TEST_INPUT_TOKEN_BOUND,
         max_output_tokens=50,
         max_reasoning_tokens=20,
         timeout_seconds=5,
@@ -598,7 +700,7 @@ def test_attempt_observer_start_failure_prevents_http_and_retry() -> None:
             output_schema={"type": "object"},
             schema_name="judge_verdict",
             generation_policy_sha256=_digest("generation-policy"),
-            input_tokens_upper_bound=100,
+            input_tokens_upper_bound=_TEST_INPUT_TOKEN_BOUND,
             max_output_tokens=50,
             max_reasoning_tokens=20,
             timeout_seconds=5,
@@ -638,7 +740,7 @@ def test_attempt_observer_completion_failure_after_send_never_retries() -> None:
             output_schema={"type": "object"},
             schema_name="judge_verdict",
             generation_policy_sha256=_digest("generation-policy"),
-            input_tokens_upper_bound=100,
+            input_tokens_upper_bound=_TEST_INPUT_TOKEN_BOUND,
             max_output_tokens=50,
             max_reasoning_tokens=20,
             timeout_seconds=5,
@@ -674,7 +776,7 @@ def test_q_generator_with_a_recorder_refuses_before_network_without_logical_cont
             output_schema={"type": "object"},
             schema_name="generated_attack",
             generation_policy_sha256=_digest("generation-policy"),
-            input_tokens_upper_bound=100,
+            input_tokens_upper_bound=_TEST_INPUT_TOKEN_BOUND,
             max_output_tokens=50,
             max_reasoning_tokens=20,
             timeout_seconds=5,
@@ -706,7 +808,7 @@ def test_unrepresentable_provider_cost_is_invalid_not_rounded() -> None:
             output_schema={"type": "object"},
             schema_name="judge_verdict",
             generation_policy_sha256=_digest("generation-policy"),
-            input_tokens_upper_bound=100,
+            input_tokens_upper_bound=_TEST_INPUT_TOKEN_BOUND,
             max_output_tokens=50,
             max_reasoning_tokens=20,
             timeout_seconds=5,
@@ -740,7 +842,7 @@ def test_retry_exhaustion_exposes_consumed_physical_attempts_without_inventing_u
             output_schema={"type": "object"},
             schema_name="judge_verdict",
             generation_policy_sha256=_digest("generation-policy"),
-            input_tokens_upper_bound=100,
+            input_tokens_upper_bound=_TEST_INPUT_TOKEN_BOUND,
             max_output_tokens=50,
             max_reasoning_tokens=20,
             timeout_seconds=5,
@@ -771,7 +873,7 @@ def test_transport_fails_closed_on_model_or_provider_substitution() -> None:
             output_schema={"type": "object"},
             schema_name="judge_verdict",
             generation_policy_sha256=_digest("generation-policy"),
-            input_tokens_upper_bound=100,
+            input_tokens_upper_bound=_TEST_INPUT_TOKEN_BOUND,
             max_output_tokens=50,
             max_reasoning_tokens=20,
             timeout_seconds=5,
@@ -802,7 +904,7 @@ def test_transport_records_served_provider_substitution_as_invalid_output() -> N
             output_schema={"type": "object"},
             schema_name="judge_verdict",
             generation_policy_sha256=_digest("generation-policy"),
-            input_tokens_upper_bound=100,
+            input_tokens_upper_bound=_TEST_INPUT_TOKEN_BOUND,
             max_output_tokens=50,
             max_reasoning_tokens=20,
             timeout_seconds=5,
@@ -852,7 +954,7 @@ def test_retry_then_pacing_failure_preserves_durable_attempt_count() -> None:
             output_schema={"type": "object"},
             schema_name="judge_verdict",
             generation_policy_sha256=_digest("generation-policy"),
-            input_tokens_upper_bound=100,
+            input_tokens_upper_bound=_TEST_INPUT_TOKEN_BOUND,
             max_output_tokens=50,
             max_reasoning_tokens=20,
             timeout_seconds=5,
@@ -897,7 +999,7 @@ def test_retry_then_credential_failure_preserves_durable_attempt_count() -> None
             output_schema={"type": "object"},
             schema_name="judge_verdict",
             generation_policy_sha256=_digest("generation-policy"),
-            input_tokens_upper_bound=100,
+            input_tokens_upper_bound=_TEST_INPUT_TOKEN_BOUND,
             max_output_tokens=50,
             max_reasoning_tokens=20,
             timeout_seconds=5,
@@ -953,7 +1055,7 @@ def test_transport_requires_one_exact_selected_router_endpoint(
             output_schema={"type": "object"},
             schema_name="judge_verdict",
             generation_policy_sha256=_digest("generation-policy"),
-            input_tokens_upper_bound=100,
+            input_tokens_upper_bound=_TEST_INPUT_TOKEN_BOUND,
             max_output_tokens=50,
             max_reasoning_tokens=20,
             timeout_seconds=5,
@@ -987,7 +1089,7 @@ def test_charged_invalid_output_exposes_exact_observed_usage() -> None:
             },
             schema_name="judge_verdict",
             generation_policy_sha256=_digest("generation-policy"),
-            input_tokens_upper_bound=100,
+            input_tokens_upper_bound=_TEST_INPUT_TOKEN_BOUND,
             max_output_tokens=50,
             max_reasoning_tokens=20,
             timeout_seconds=5,
@@ -1024,7 +1126,7 @@ def test_transport_rejects_reasoning_outside_completion_total() -> None:
             output_schema={"type": "object"},
             schema_name="judge_verdict",
             generation_policy_sha256=_digest("generation-policy"),
-            input_tokens_upper_bound=100,
+            input_tokens_upper_bound=_TEST_INPUT_TOKEN_BOUND,
             max_output_tokens=50,
             max_reasoning_tokens=20,
             timeout_seconds=5,
