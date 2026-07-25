@@ -181,6 +181,8 @@ def _authority_shape_constraint(*, include_governed: bool) -> str:
             "AND launcher_user_id IS NOT NULL AND launcher_session_id IS NOT NULL "
             "AND acceptance_configuration_sha256 IS NOT NULL "
             "AND acceptance_generation_policy_sha256 IS NOT NULL "
+            "AND acceptance_context_sha256 IS NOT NULL "
+            "AND acceptance_attempt_id IS NOT NULL "
             "AND acceptance_limits IS NOT NULL AND acceptance_expires_at IS NOT NULL "
             "AND acceptance_actor_id IS NULL AND acceptance_provenance IS NULL)"
         )
