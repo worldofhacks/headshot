@@ -39,7 +39,11 @@ from agentforge.agents.red_team.hosted_generation import (
 )
 from agentforge.agents.red_team.providers import REFUSAL_SENTINEL, ProviderExhaustedError
 from agentforge.control_plane.store import ControlPlaneStore
-from agentforge.providers.openrouter import HostedProviderResponseError, OpenRouterTransport
+from agentforge.providers.openrouter import (
+    HostedProviderError,
+    HostedProviderResponseError,
+    OpenRouterTransport,
+)
 from agentforge.runner import _DurableHostedExecutionLifecycle
 from agentforge.secrets import Secret
 from agentforge.telemetry import OutboundHttpTelemetry
@@ -334,6 +338,42 @@ def test_duplicate_json_key_response_is_refused_and_terminalizes(
     # The duplicate-key response was still a real, billed call.
     assert row["cost_measurement_state"] == "measured"
     assert Decimal(str(row["measured_cost"])) == Decimal("0.0007125")
+
+
+def test_dispatched_unbilled_500_records_not_observed_with_one_physical_attempt(
+    migrated_db: Engine,
+) -> None:
+    """A dispatched call that 500s unbilled is neither free nor never-made (the fix-3 path).
+
+    This path was deleted in the terminalization reconcile and left uncovered. A 500 is
+    non-retryable, so exactly one physical attempt is dispatched and the transport records it as
+    `not_observed` (the upstream carried no usage or cost). The terminal record must therefore keep
+    `physical_attempts == 1` — a dispatched call is NEVER recorded as never-made — while cost stays
+    honestly `not_observed`. That distinguishes it from `test_no_physical_attempt...`, where NO call
+    was dispatched and `physical_attempts` is 0/None. Conflating the two would either understate
+    spend risk (a made call read as never-made) or overstate it.
+    """
+
+    store, run_id, configuration = _authorized_run(migrated_db)
+    provider, lifecycle = _traced_provider(
+        migrated_db,
+        store,
+        run_id,
+        configuration,
+        lambda _request: httpx.Response(500, json={"error": {"message": "upstream failure"}}),
+    )
+    with (
+        lifecycle.invocation(role="red_team"),
+        pytest.raises((TracedRedTeamGenerationError, HostedProviderError)),
+    ):
+        provider.generate(dict(_SEED), count=1, category="prompt_injection")
+
+    row = _execution_row(migrated_db)
+    assert row["status"] == "failed"
+    assert row["cost_measurement_state"] == "not_observed"
+    assert row["measured_cost"] is None
+    # The call WAS dispatched — the unbilled 500 must not erase the physical attempt.
+    assert row["physical_attempts"] == 1
 
 
 def test_no_physical_attempt_still_records_not_observed(
