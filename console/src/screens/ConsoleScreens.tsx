@@ -53,6 +53,11 @@ import {
 } from "../hooks/useResource";
 import { navigateTo } from "../router";
 import {
+  FINDING_DECISION_OPTIONS,
+  type FindingDecisionReasonCode,
+  reasonCodeMatchesDecision,
+} from "../finding-decisions";
+import {
   PERMISSIONS,
   type ApprovalReadModel,
   type ApprovalDetailReadModel,
@@ -672,6 +677,7 @@ function FindingDetail({
     { pollIntervalMs: LIVE_RESOURCE_POLL_INTERVAL_MS },
   );
   const [rationale, setRationale] = useState("");
+  const [reasonCode, setReasonCode] = useState<FindingDecisionReasonCode | "">("");
   const refresh = () => {
     detail.refresh();
     refreshList();
@@ -699,7 +705,7 @@ function FindingDetail({
                 <Timeline rows={[...data.history].reverse().map((entry, index) => ({
                   id: `${entry.created_at}:${entry.actor_user_id}:${index}`,
                   title: entry.decision,
-                  detail: `${shortId(entry.actor_user_id)} · ${entry.rationale}`,
+                  detail: `${shortId(entry.actor_user_id)} · ${entry.reason_code ?? "legacy reason unavailable"} · ${entry.rationale}`,
                   at: entry.created_at,
                   tone: timelineTone(entry.decision),
                 }))} />
@@ -708,6 +714,7 @@ function FindingDetail({
                   identityKeys={["created_at", "actor_user_id"]}
                   columns={[
                     { key: "decision", label: "Decision" },
+                    { key: "reason_code", label: "Reason code", mono: true },
                     { key: "actor_user_id", label: "Actor", mono: true },
                     { key: "rationale", label: "Rationale" },
                     { key: "created_at", label: "Occurred", mono: true, timestamp: true },
@@ -717,6 +724,35 @@ function FindingDetail({
             ) : (
               <StateNotice state="empty" detail="No finding history is recorded." />
             )}
+            <label className="form-field">
+              <span>Decision reason</span>
+              <select
+                value={reasonCode}
+                onChange={(event) => setReasonCode(
+                  event.currentTarget.value as FindingDecisionReasonCode | "",
+                )}
+              >
+                <option value="">Select a structured reason</option>
+                <optgroup label="Approval">
+                  {FINDING_DECISION_OPTIONS
+                    .filter((option) => option.decision === "approved")
+                    .map((option) => (
+                      <option key={option.reasonCode} value={option.reasonCode}>
+                        {option.label}
+                      </option>
+                    ))}
+                </optgroup>
+                <optgroup label="Rejection">
+                  {FINDING_DECISION_OPTIONS
+                    .filter((option) => option.decision === "rejected")
+                    .map((option) => (
+                      <option key={option.reasonCode} value={option.reasonCode}>
+                        {option.label}
+                      </option>
+                    ))}
+                </optgroup>
+              </select>
+            </label>
             <label className="form-field">
               <span>Decision rationale</span>
               <textarea
@@ -730,19 +766,27 @@ function FindingDetail({
               <CommandButton
                 client={client}
                 path={COMMAND_PATHS.decideFinding(findingId)}
-                payload={{ decision: "approved", rationale: rationale.trim() }}
+                payload={{
+                  decision: "approved",
+                  rationale: rationale.trim(),
+                  reason_code: reasonCode,
+                }}
                 label="Approve finding"
-                allowed={data.source_kind !== "security_tool" && hasPermission(principal, PERMISSIONS.findingsApprove) && rationale.trim().length > 0}
-                unavailableReason={data.source_kind === "security_tool" ? "independent validation before a finding decision" : rationale.trim() ? PERMISSIONS.findingsApprove : "a decision rationale"}
+                allowed={data.source_kind !== "security_tool" && hasPermission(principal, PERMISSIONS.findingsApprove) && rationale.trim().length > 0 && reasonCodeMatchesDecision(reasonCode, "approved")}
+                unavailableReason={data.source_kind === "security_tool" ? "independent validation before a finding decision" : !rationale.trim() ? "a decision rationale" : !reasonCodeMatchesDecision(reasonCode, "approved") ? "an approval reason" : PERMISSIONS.findingsApprove}
                 onAcknowledged={refresh}
               />
               <CommandButton
                 client={client}
                 path={COMMAND_PATHS.decideFinding(findingId)}
-                payload={{ decision: "rejected", rationale: rationale.trim() }}
+                payload={{
+                  decision: "rejected",
+                  rationale: rationale.trim(),
+                  reason_code: reasonCode,
+                }}
                 label="Reject finding"
-                allowed={data.source_kind !== "security_tool" && hasPermission(principal, PERMISSIONS.findingsApprove) && rationale.trim().length > 0}
-                unavailableReason={data.source_kind === "security_tool" ? "independent validation before a finding decision" : rationale.trim() ? PERMISSIONS.findingsApprove : "a decision rationale"}
+                allowed={data.source_kind !== "security_tool" && hasPermission(principal, PERMISSIONS.findingsApprove) && rationale.trim().length > 0 && reasonCodeMatchesDecision(reasonCode, "rejected")}
+                unavailableReason={data.source_kind === "security_tool" ? "independent validation before a finding decision" : !rationale.trim() ? "a decision rationale" : !reasonCodeMatchesDecision(reasonCode, "rejected") ? "a rejection reason" : PERMISSIONS.findingsApprove}
                 onAcknowledged={refresh}
               />
               <CommandButton
@@ -837,6 +881,7 @@ export function FindingsScreen({ client, principal, entityId }: ScreenProps) {
       </ResourceView>
       {entityId && (
         <FindingDetail
+          key={entityId}
           client={client}
           principal={principal}
           findingId={entityId}

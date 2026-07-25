@@ -75,6 +75,7 @@ from agentforge.target.spec import (
     SafetyCaps,
     TargetDefinition,
     TargetLifecycle,
+    validate_relative_path,
 )
 
 _BEARER = re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]{8,}")
@@ -124,6 +125,7 @@ _REQUIRED_WEB = frozenset({"A01", "A03", "A04", "A06", "A07", "A09", "A10"})
 _REQUIRED_LLM = frozenset({"LLM01", "LLM02", "LLM03", "LLM05", "LLM06"})
 _REQUIRED_CATEGORIES = frozenset({"prompt_injection", "data_exfiltration", "tool_misuse"})
 _RUNNER_HEARTBEAT_FRESHNESS_SECONDS = 30
+_FINDING_HISTORY_LIMIT = 50
 # Hosted credential readiness is refreshed on a 30-second cadence. Give one missed refresh room
 # without allowing an old Runner observation to become durable launch authority.
 _HOSTED_RUNTIME_HEARTBEAT_FRESHNESS_SECONDS = 90
@@ -260,6 +262,41 @@ def _provider_lineage_state(execution_mode: object, detail: object) -> str:
     if state not in {"canonical_physical", "historical_not_instrumented"}:
         raise ApiBackendUnavailable("persisted provider lineage state is invalid")
     return str(state)
+
+
+def _finding_histories(
+    connection,
+    *,
+    organization_id: str,
+    finding_ids: set[str],
+) -> dict[str, list[dict[str, Any]]]:
+    """Load the newest bounded history for all projected findings in one query."""
+
+    histories = {finding_id: [] for finding_id in finding_ids}
+    if not finding_ids:
+        return histories
+    rows = _rows(
+        connection,
+        "WITH ranked_history AS ("
+        "SELECT decision_id, finding_id, decision, actor_user_id, rationale, reason_code, "
+        "created_at, row_number() OVER (PARTITION BY finding_id "
+        "ORDER BY created_at DESC, decision_id DESC) AS history_rank "
+        "FROM finding_decision_events WHERE organization_id = :org "
+        "AND finding_id = ANY(CAST(:finding_ids AS varchar[]))"
+        ") SELECT decision_id, finding_id, decision, actor_user_id, rationale, reason_code, "
+        "created_at FROM ranked_history WHERE history_rank <= :history_limit "
+        "ORDER BY finding_id, created_at ASC, decision_id ASC",
+        {
+            "org": organization_id,
+            "finding_ids": sorted(finding_ids),
+            "history_limit": _FINDING_HISTORY_LIMIT,
+        },
+    )
+    for row in rows:
+        finding_id = str(row.pop("finding_id"))
+        row.pop("decision_id")
+        histories[finding_id].append(row)
+    return histories
 
 
 def _unavailable_provider_budget() -> dict[str, Any]:
@@ -794,7 +831,7 @@ def _scope_projection(value: Any, *, target_base_url: Any = None) -> dict[str, A
     """Return the reviewable authorization scope without its credential reference."""
 
     if not isinstance(value, Mapping):
-        return {}
+        raise EvidenceIntegrityError("authorization scope payload is unavailable")
     projected = {
         key: value.get(key)
         for key in (
@@ -820,10 +857,25 @@ def _scope_projection(value: Any, *, target_base_url: Any = None) -> dict[str, A
     protocol = projected.get("protocol")
     host = projected.get("exact_host")
     path = projected.get("relative_path")
-    if all(isinstance(part, str) and part for part in (protocol, host, path, target_base_url)):
-        parsed_base = urlsplit(target_base_url)
-        if parsed_base.scheme == protocol and parsed_base.netloc == host:
-            projected["endpoint"] = f"{target_base_url.rstrip('/')}/{path}"
+    if not all(isinstance(part, str) and part for part in (protocol, host, path, target_base_url)):
+        raise EvidenceIntegrityError("authorization endpoint inputs are unavailable")
+    parsed_base = urlsplit(target_base_url)
+    try:
+        validate_relative_path(path)
+    except Exception as exc:
+        raise EvidenceIntegrityError("authorization relative path is invalid") from exc
+    if (
+        parsed_base.scheme != protocol
+        or parsed_base.netloc != host
+        or parsed_base.username is not None
+        or parsed_base.password is not None
+        or parsed_base.query
+        or parsed_base.fragment
+        or path.startswith("/")
+        or any(segment in {"", ".", ".."} for segment in path.split("/"))
+    ):
+        raise EvidenceIntegrityError("authorization endpoint inputs do not reconcile")
+    projected["endpoint"] = f"{target_base_url.rstrip('/')}/{path}"
     projected["auth_posture"] = (
         "explicit_no_auth"
         if projected.get("explicit_no_auth") is True
@@ -2460,6 +2512,11 @@ class PostgresApiBackend(ApiBackend):
                     )
                     if any(count != 1 for count in finding_link_counts.values()):
                         return ResourceResult.unavailable("finding_evidence_identifier_ambiguous")
+                    histories = _finding_histories(
+                        connection,
+                        organization_id=principal.organization_id,
+                        finding_ids={str(source["linked_finding_id"]) for source in source_rows},
+                    )
                     rows = []
                     for source in source_rows:
                         try:
@@ -2470,16 +2527,7 @@ class PostgresApiBackend(ApiBackend):
                             _validated_finding_lineage(source)
                         except EvidenceIntegrityError:
                             return ResourceResult.unavailable("finding_evidence_integrity_failed")
-                        history = _rows(
-                            connection,
-                            "SELECT decision, actor_user_id, rationale, created_at "
-                            "FROM finding_decision_events WHERE organization_id = :org "
-                            "AND finding_id = :finding ORDER BY created_at ASC",
-                            {
-                                "org": principal.organization_id,
-                                "finding": source["linked_finding_id"],
-                            },
-                        )
+                        history = histories[str(source["linked_finding_id"])]
                         for event in history:
                             event["rationale"] = str(_redact_evidence_display(event["rationale"]))
                         latest = history[-1]["decision"] if history else None
@@ -3728,15 +3776,18 @@ class PostgresApiBackend(ApiBackend):
             return ResourceResult.unavailable("database_projection_unavailable")
 
         if resource in {"campaigns", "campaign", "approvals", "approval"}:
-            for row in rows:
-                row.update(
-                    _scope_projection(
-                        row.pop("scope_payload", None),
-                        target_base_url=row.pop("target_base_url", None),
+            try:
+                for row in rows:
+                    row.update(
+                        _scope_projection(
+                            row.pop("scope_payload", None),
+                            target_base_url=row.pop("target_base_url", None),
+                        )
                     )
-                )
-                if resource in {"approvals", "approval"}:
-                    row["status"] = row.get("decision") or "pending"
+                    if resource in {"approvals", "approval"}:
+                        row["status"] = row.get("decision") or "pending"
+            except EvidenceIntegrityError:
+                return ResourceResult.unavailable("authorization_scope_endpoint_unavailable")
 
         sanitized = _safe(rows)
         if resource in {
@@ -3939,6 +3990,7 @@ class PostgresApiBackend(ApiBackend):
                     finding_id=identifiers.get("finding_id", ""),
                     decision=decision,
                     rationale=str(payload["rationale"]),
+                    reason_code=payload.get("reason_code"),
                     idempotency_key=idempotency_key,
                 )
                 return CommandResult.completed(record.decision_id, resource_id=record.finding_id)

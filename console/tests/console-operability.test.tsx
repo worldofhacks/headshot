@@ -12,6 +12,7 @@ import type { ApiClient } from "../src/api/client";
 import type { Principal } from "../src/api/contracts";
 import {
   ApprovalsScreen,
+  FindingsScreen,
   TargetsScreen,
 } from "../src/screens/ConsoleScreens";
 import { AgentsScreen } from "../src/screens/AgentToolScreens";
@@ -128,6 +129,64 @@ const approval = {
   expired: false,
   consumed: true,
 } as const;
+
+const reviewFinding = {
+  finding_id: "finding-review-1",
+  state: "confirmed",
+  severity: "high",
+  category: "prompt_injection",
+  target_version: "1.0.0",
+  publication_status: "blocked_pending_human_approval",
+  evidence_integrity: "verified",
+  source_kind: "campaign",
+  execution_profile: "synthetic",
+  evidence_provenance: "synthetic_offline",
+  campaign_run_id: "run-review-1",
+  attempt_id: "attempt-review-1",
+  evidence_content_hash: "f".repeat(64),
+  history: [{
+    decision: "rejected",
+    actor_user_id: "approver-prior",
+    rationale: "Prior review did not establish an exploit.",
+    reason_code: "not_a_real_exploit",
+    created_at: "2026-07-24T00:00:00Z",
+  }],
+} as const;
+
+const unavailableFindingVerification = {
+  availability: "unavailable",
+  reason_code: "campaign_verification_unavailable",
+  finding_id: reviewFinding.finding_id,
+  campaign_run_id: null,
+  attempt_id: null,
+  attack_case: null,
+  attack_attempt: null,
+  input_sequence: [],
+  request_transcript: null,
+  response_transcript: null,
+  policy_decision_id: null,
+  executed_at: null,
+  trace_id: null,
+  judge: null,
+  report_id: null,
+  minimal_reproduction: [],
+  reproduction_sha256: null,
+  regression: null,
+  integrity: null,
+  redaction_state: "synthetic_identifiers_redacted",
+} as const;
+
+const findingApprover = {
+  ...principal,
+  user_id: "approver-1",
+  organization_role: "org:approver",
+  organization_permissions: [
+    PERMISSIONS.consoleRead,
+    PERMISSIONS.findingsRead,
+    PERMISSIONS.evidenceRead,
+    PERMISSIONS.findingsApprove,
+  ],
+};
 
 const activity = (
   campaignRunId: string,
@@ -691,6 +750,166 @@ describe("approval execution visibility", () => {
     expect(panel).not.toBeNull();
     expect(within(panel as HTMLElement).getByText(new RegExp(selectedModel))).toBeTruthy();
     expect(within(panel as HTMLElement).queryByText(new RegExp(unrelatedModel))).toBeNull();
+  });
+});
+
+describe("finding decision operability", () => {
+  it("requires a decision-compatible structured reason and sends it with rationale", async () => {
+    const command = vi.fn(async () => ({
+      status: "completed" as const,
+      acknowledgement_id: "finding-decision-ack",
+      resource_id: reviewFinding.finding_id,
+    }));
+    const client = {
+      read: vi.fn(async (path: string) => {
+        if (path === "findings") {
+          return { state: "ready" as const, data: [reviewFinding] };
+        }
+        if (path === `findings/${reviewFinding.finding_id}`) {
+          return {
+            state: "ready" as const,
+            data: {
+              ...reviewFinding,
+              verification: unavailableFindingVerification,
+            },
+          };
+        }
+        if (path === "agent-activity") {
+          return { state: "ready" as const, data: [] };
+        }
+        throw new Error(`Unexpected read: ${path}`);
+      }),
+      command,
+    } as unknown as ApiClient;
+    render(
+      <FindingsScreen
+        client={client}
+        principal={findingApprover}
+        entityId={reviewFinding.finding_id}
+        getToken={async () => "session"}
+      />,
+    );
+
+    const reason = await screen.findByLabelText("Decision reason");
+    const rationale = screen.getByLabelText("Decision rationale");
+    const approve = screen.getByRole("button", { name: "Approve finding" });
+    const reject = screen.getByRole("button", { name: "Reject finding" });
+    fireEvent.change(rationale, { target: { value: "Reviewed durable evidence." } });
+
+    expect((approve as HTMLButtonElement).disabled).toBe(true);
+    expect((reject as HTMLButtonElement).disabled).toBe(true);
+
+    fireEvent.change(reason, { target: { value: "human_confirmed" } });
+    expect((approve as HTMLButtonElement).disabled).toBe(false);
+    expect((reject as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(approve);
+    await waitFor(() => expect(command).toHaveBeenCalledWith(
+      `findings/${reviewFinding.finding_id}/decisions`,
+      {
+        decision: "approved",
+        rationale: "Reviewed durable evidence.",
+        reason_code: "human_confirmed",
+      },
+      undefined,
+      expect.any(String),
+    ));
+
+    fireEvent.change(reason, { target: { value: "not_a_real_exploit" } });
+    expect((approve as HTMLButtonElement).disabled).toBe(true);
+    expect((reject as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(reject);
+    await waitFor(() => expect(command).toHaveBeenLastCalledWith(
+      `findings/${reviewFinding.finding_id}/decisions`,
+      {
+        decision: "rejected",
+        rationale: "Reviewed durable evidence.",
+        reason_code: "not_a_real_exploit",
+      },
+      undefined,
+      expect.any(String),
+    ));
+    expect(screen.getAllByText("not_a_real_exploit").length).toBeGreaterThan(0);
+  });
+
+  it("clears draft rationale and reason when navigation changes the finding", async () => {
+    const secondFinding = {
+      ...reviewFinding,
+      finding_id: "finding-review-2",
+      campaign_run_id: "run-review-2",
+      attempt_id: "attempt-review-2",
+      evidence_content_hash: "e".repeat(64),
+      history: [],
+    };
+    const client = {
+      read: vi.fn(async (path: string) => {
+        if (path === "findings") {
+          return { state: "ready" as const, data: [reviewFinding, secondFinding] };
+        }
+        if (path === `findings/${reviewFinding.finding_id}`) {
+          return {
+            state: "ready" as const,
+            data: {
+              ...reviewFinding,
+              verification: unavailableFindingVerification,
+            },
+          };
+        }
+        if (path === `findings/${secondFinding.finding_id}`) {
+          return {
+            state: "ready" as const,
+            data: {
+              ...secondFinding,
+              verification: {
+                ...unavailableFindingVerification,
+                finding_id: secondFinding.finding_id,
+              },
+            },
+          };
+        }
+        if (path === "agent-activity") {
+          return { state: "ready" as const, data: [] };
+        }
+        throw new Error(`Unexpected read: ${path}`);
+      }),
+      command: vi.fn(),
+    } as unknown as ApiClient;
+    const view = render(
+      <FindingsScreen
+        client={client}
+        principal={findingApprover}
+        entityId={reviewFinding.finding_id}
+        getToken={async () => "session"}
+      />,
+    );
+    const firstRationale = await screen.findByLabelText("Decision rationale");
+    const firstReason = screen.getByLabelText("Decision reason");
+    fireEvent.change(firstRationale, { target: { value: "Unsaved review for finding A." } });
+    fireEvent.change(firstReason, { target: { value: "human_confirmed" } });
+    expect((firstRationale as HTMLTextAreaElement).value).toBe(
+      "Unsaved review for finding A.",
+    );
+    expect((firstReason as HTMLSelectElement).value).toBe("human_confirmed");
+
+    view.rerender(
+      <FindingsScreen
+        client={client}
+        principal={findingApprover}
+        entityId={secondFinding.finding_id}
+        getToken={async () => "session"}
+      />,
+    );
+
+    await screen.findAllByText(secondFinding.finding_id);
+    const secondRationale = await screen.findByLabelText("Decision rationale");
+    const secondReason = screen.getByLabelText("Decision reason");
+    expect((secondRationale as HTMLTextAreaElement).value).toBe("");
+    expect((secondReason as HTMLSelectElement).value).toBe("");
+    expect((screen.getByRole("button", {
+      name: "Approve finding",
+    }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole("button", {
+      name: "Reject finding",
+    }) as HTMLButtonElement).disabled).toBe(true);
   });
 });
 
