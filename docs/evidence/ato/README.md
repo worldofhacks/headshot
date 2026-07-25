@@ -48,7 +48,7 @@ campaign, Langfuse query-back, performance, and cost/invoice evidence remain pen
 | Control family | Implemented evidence | Current live evidence | Residual or gate |
 |---|---|---|---|
 | External attack authorization | Exact target/surface/corpus/caps/nonce scope, distinct decision, target-bound credential, synthetic assertion, timeout and abort | No final-release governed campaign | Distinct authenticated launcher/approver and a new exact operation hash required |
-| Judge independence | Recorder-owned evidence, deterministic oracle precedence, typed verdicts, model authority bounded by calibration | No final-release execution row | Final Judge identity/calibration and campaign evidence pending |
+| Judge independence | Recorder-owned evidence, deterministic oracle precedence, typed verdicts, model authority bounded by exact-identity calibration | No final-release execution row | Stage the canonical config, prove Runner/Agents identity, re-attest and human-enable that Judge calibration; otherwise campaign launch remains blocked |
 | Agent separation | Orchestrator, Red Team, Judge, Documentation roles and parent execution lineage | No final-release four-role ledger | Integrate `0022`, deploy, execute, and query the ledger |
 | Human access | Networkless Clerk JWT verification, exact organization, backend custom permissions, distinct approver check | Protected-route denial exists; full real-user configuration not accepted here | Lowest-priority external verification, still not claimed complete |
 | Storage integrity | Append-only evidence, role grants, content hashes, FKs, uniqueness, work-unit reservations | Staging historically reached `0021`; production is `0013` | Apply the final single `0022` head on the exact image |

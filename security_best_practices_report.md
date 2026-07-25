@@ -14,7 +14,8 @@ target scan or hosted-model execution.
 - The Red Team selects only cases already present in the authorized immutable corpus.
 - The Judge remains independent of attack generation and gives deterministic oracle/canary
   evidence precedence.
-- Critical publication and regression admission remain human-gated.
+- Publication of every finding/report remains human-gated; regression admission remains separately
+  fail-closed on deterministic reproduction.
 - Agent activity stores bounded structured detail plus input/output hashes, not raw prompts,
   transcripts, target credentials, or secrets.
 - Deterministic agent engines report zero measured model cost and unknown token counts instead of

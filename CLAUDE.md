@@ -31,7 +31,8 @@ nice-to-have. `arch-draft` and `arch-finalize` judge their audits against this p
 - **Multi-agent, not a pipeline.** Distinct agents, distinct trust levels.
 - The **Judge is independent** of attack generation — an agent that both attacks and
   judges is compromised by design.
-- **Human approval gates** before publishing critical findings or any remediation.
+- **Human approval gates** before publishing any finding/report, regardless of severity, or performing
+  any remediation.
 - Every eval case exercises a **boundary, invariant, or regression** — never happy-path
   only. The Judge must **never** approve a confirmed exploit (an invariant).
 - Every attack case maps to **OWASP Top 10 (web)** and **OWASP LLM Top 10**.
@@ -83,7 +84,7 @@ public. Everything not explicitly allowlisted defaults to authenticated and auth
 **Identity separation.** Clerk principals represent human users. Agent/workload identity continues to
 use service boundaries, per-agent database roles, and target-scoped credential bindings; a Clerk token
 is never an agent credential. Human authentication alone never constitutes authorization to attack a
-target, publish a critical finding, or perform remediation.
+target, publish any finding/report, or perform remediation.
 
 ## Runtime agents (application code — defined in ARCHITECTURE.md, not yet written)
 - **Orchestrator** — reads observability (coverage gaps, open findings, regressions),

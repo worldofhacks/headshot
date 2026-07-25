@@ -50,8 +50,9 @@ idempotent. For execution evidence, retain the existing `attempt_result` uniquen
 where possible, commit the authoritative result and queue completion in one database
 transaction in a future integration API rather than assuming exactly-once target execution.
 
-F3 approval workflows may use versioned `agent_work` payloads, but critical publication and
-remediation still require the separate human gate. Queue completion is not approval.
+F3 approval workflows may use versioned `agent_work` payloads, but publication of every
+finding/report and any remediation still require the separate human gate. Queue completion is not
+approval.
 
 F4 regression consumers should use `regression_run`; each actual regression dispatch still
 needs a fresh `campaign_run_id`. Verdicts and live results must never be reused.

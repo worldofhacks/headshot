@@ -21,7 +21,7 @@ hosted-OSS default** (F7) · Judge invariant is **deterministic fail-closed** (F
 
 **Architecture-changing outcomes to carry forward:** the enforcement boundary is a **trusted** Policy
 Gateway (not the red adapter); the Judge evaluates the **recorder's** hashed transcript only; per-agent DB
-roles; a deterministic verdict state machine; ≥2 deploy environments; the cost model is two line families
+roles; a deterministic verdict state machine; ≥2 deploy environments; the cost model is three line families
 with **no invented numbers**.
 
 **Supporting artifacts corrected (content-only, no format changes):** `THREAT_MODEL.md` (F8 versioning),
@@ -81,24 +81,22 @@ requirements, not deferrable. The standard is "defend it to a hospital CISO."
 - `docs/adrs/0001-build-vs-configure.md` · `docs/defense/DEFENSE_SCRIPT.md`
 
 ## Locked decisions (do not silently reopen; challenge only with cause)
-Standard mode · production-grade · Python · Railway (Docker/GitHub, managed Postgres, cron,
-deployment-history rollback, no GPU) · LangGraph OSS engine + PostgresSaver · **Langfuse Cloud (Hobby)
-for MVP, self-host post-MVP** (F3; exploit DB = authoritative system-of-record for finding status;
-Langfuse failure → Postgres-derived coverage/priority) · one Postgres for DB+checkpoints+`SKIP LOCKED`
-queue · per-role models (configurable defaults via `HEADSHOT_*_MODEL`: RedTeam hosted-OSS default /
-local 24–33B switch · Judge `claude-sonnet-5` · Orchestrator `claude-opus-4-8` · Docs `gpt-5.4`) ·
-configure/wrap OSS + build the four capabilities (ADR-0001) · versioned framework-
-neutral JSON-Schema contracts + typed error taxonomy · compliance = synthetic-data simulation.
+Standard mode · production-grade · Python · Railway (Docker/GitHub, managed Postgres, scheduler,
+deployment-history rollback, no GPU) · custom Python orchestration with Postgres durable
+queue/reservations · **Langfuse Cloud** projection (Postgres remains authoritative; Langfuse failure
+falls back to Postgres-derived coverage/priority) · one Postgres for evidence + `SKIP LOCKED` queue ·
+one content-addressed OpenRouter role set (Opus 4.8 Orchestrator / Qwen 3.5 397B-A17B Red Team /
+Gemini 2.5 Pro Judge / GPT-5.4 Documentation) · configure/wrap OSS + build the four capabilities
+(ADR-0001) · versioned framework-neutral JSON-Schema contracts + typed error taxonomy · compliance =
+synthetic-data simulation.
 
 ## Still-open questions the finalize pass should track (never invent values)
 - **OQ1** target auth mode · **OQ2** target API shape + rate limits + **whether it exposes a web
   surface for ZAP** (freezes the OWASP-Web slot) · **OQ3** seeded-demo-data provenance (confirm no real
   PHI).
-- **Measure at MVP, don't guess:** per-agent token profiles, Mac tok/s (local-vs-hosted Red Team
-  crossover), `exploit_rate` (Documentation call volume) — no cost number is CISO-defensible until
-  these are measured from real traces.
-- **Pin the LangGraph 1.x version** before the ADR is frozen; settle the Langfuse-vs-exploit-DB
-  ownership split for observability Q3/Q4.
+- **Measure, don't guess:** per-agent latency/usage/cost, campaign throughput and memory, and
+  Documentation call volume — no cost number is defensible until it is retained from real traces and
+  reconciled with the invoice export.
 - **D12 (proposed):** MVP ships a hand-authored seed corpus + custom mutation loop; wrap PyRIT/Garak/
   Giskard post-MVP. Ratify in `tasks-gen`.
 

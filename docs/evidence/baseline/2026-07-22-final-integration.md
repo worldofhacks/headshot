@@ -30,7 +30,8 @@ The Python run emitted one non-failing Starlette deprecation warning about the c
 
 The durable Runner now obtains a contract-valid Orchestrator decision from hash-recomputed PostgreSQL evidence, passes the directive through a deterministic Red Team proposal boundary, rejects any proposal that differs from the exact authorization-bound corpus, dispatches only through the Policy Gateway, persists append-only evidence, and invokes the independent Judge. Confirmed findings produce contract-valid draft reports and fail-closed regression dispositions that remain pending deterministic reproduction and human approval. Migration `0008` persists both artifacts with uniqueness, foreign-key, draft-state, and admitted-state checks; database grants keep Red Team and Judge away from these tables.
 
-No live target campaign was run. Passive deployment checks are not campaign authorization, and critical publication/remediation/regression promotion remain blocked.
+No live target campaign was run. Passive deployment checks are not campaign authorization, and
+publication of every finding/report, remediation, and regression promotion remain blocked.
 
 ## Public deployment probes
 

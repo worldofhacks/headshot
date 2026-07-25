@@ -3,8 +3,9 @@
 ## Status
 
 The backend authentication, custom-permission checks, exact-Organization check, generic failure
-semantics, and distinct launcher/campaign-Approver rule are **implemented and locally tested**. At
-the packet preparation base, finding approval still checks permission without enforcing a distinct
+semantics, and distinct launcher/campaign-Approver rule are **implemented and locally tested**.
+Publication of every finding/report, regardless of severity, requires human approval. At the packet
+preparation base, finding approval still checks permission without enforcing a distinct
 raiser/approver lineage in both application and database layers. That is an explicit release gap:
 self-approval and missing approval lineage must fail closed before the final release is bound.
 
@@ -28,8 +29,9 @@ to attack a target by itself.
 6. The Policy Gateway independently verifies the target, surface, corpus hash, execution profile,
    authorization expiry/nonce, allowlist, credential binding, synthetic-data assertion, budget,
    rate, logical/physical limits, retries, timeout, monitoring, and abort before any target send.
-7. Finding approval must likewise reject the raiser as approver and reject missing raiser lineage.
-   This final rule is a release requirement, not a capability claimed for the preparation base.
+7. Before any finding/report publication, regardless of severity, approval must reject the raiser as
+   approver and reject missing raiser lineage. This final rule is a release requirement, not a
+   capability claimed for the preparation base.
 
 Missing/invalid authentication returns generic 401. A valid session missing the required Organization
 or custom permission returns generic 403. Auth verifier/configuration failure returns 503 and denies

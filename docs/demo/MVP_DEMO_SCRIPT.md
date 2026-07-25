@@ -17,15 +17,24 @@ Stop rather than record if any prerequisite is missing:
 
 1. GitHub Actions is green for the exact commit shown by Railway Web, Runner, and Scheduler.
 2. Railway reports the same source commit and the database reports the single packaged Alembic head.
-3. The normal Web/API workflow has a persisted, unexpired exact-scope authorization for the security
-   owner's frozen corpus hash and Judge/configuration identity.
-4. The target, allowlist, synthetic-data assertion/attestation, budget, logical and physical request
+3. A `CONFIG_MANAGE` principal staged the exact four-role set for that release, and the command's
+   `resource_id` equals the independently recomputed canonical `configuration_sha256`.
+4. Runner resolved all four sealed OpenRouter references and Langfuse authentication for that same
+   hash. **Agents** shows an operational heartbeat, provider `openrouter`, and the exact
+   requested/returned role identities.
+5. The observed Judge identity/hash from that view was handed to calibration. Calibration re-attested
+   the versioned ground truth, passed, and was explicitly human-enabled for the same identity and
+   configuration. Missing, failed, passed-but-not-enabled, invalidated, or drifted calibration stops
+   here; do not launch or record.
+6. The normal Web/API workflow has a persisted, unexpired exact-scope authorization for the frozen
+   corpus hash and that Judge/configuration identity.
+7. The target, allowlist, synthetic-data assertion/attestation, budget, logical and physical request
    caps, rate, timeout, retry policy, nonce, and abort control are visible and correct.
-5. A distinct Operator and Approver are available. Never show passwords, bearer/session values,
+8. A distinct Operator and Approver are available. Never show passwords, bearer/session values,
    organization IDs, target SIDs, provider credentials, or Langfuse keys.
-6. The campaign has completed and `scripts/verify_langfuse_campaign.py` has reconciled PostgreSQL with
+9. The campaign has completed and `scripts/verify_langfuse_campaign.py` has reconciled PostgreSQL with
    Langfuse Cloud. Keep only the redacted query-back artifact.
-7. The demo-video URL is not yet present in this repository; attach the actual URL after recording.
+10. The demo-video URL is not yet present in this repository; attach the actual URL after recording.
 
 ## 0:00–0:30 — Release and trust boundary
 
@@ -66,8 +75,9 @@ Show persisted events in order:
 
 > “These are persisted executions, not optimistic UI nodes. PostgreSQL records role order, parent
 > campaign/run/attempt IDs, provider and returned model, latency, usage, retries, errors, and actual
-> cost where the provider supplied it. Deterministic evidence remains decisive; an uncalibrated model
-> assessment is advisory and does not block the campaign.”
+> cost where the provider supplied it. This campaign could start only after the exact observed Judge
+> identity/hash passed calibration and a human enabled it; any unavailable, failed, unenabled,
+> invalidated, or drifted state fails closed before dispatch. Deterministic evidence remains decisive.”
 
 If the hosted Red Team was not part of the final composed run, say so. Do not call a deterministic
 seed-selection execution a hosted generation.
@@ -80,8 +90,8 @@ Show the attempt/result/verdict/finding/report lineage and human publication sta
 redacted evidence.
 
 > “The Red Team cannot author evidence or judge itself. The recorder's content-addressed result feeds
-> the independent Judge. Documentation drafts only from validated findings, and critical publication
-> remains human-gated.”
+> the independent Judge. Documentation drafts only from validated findings, and every finding/report
+> publication remains human-gated regardless of severity.”
 
 State the actual campaign totals and verdict states. Do not present scanner-only, simulated,
 `NOT_EXECUTED`, `INDETERMINATE`, or `ERROR` rows as confirmed exploits. Describe regression as planned,

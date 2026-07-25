@@ -49,11 +49,10 @@ PRD-described capability or defense and do not authorize an attack. Input filter
 guardrails, patient authorization, rate limits, tool allowlists, upload/RAG behavior, and write-back
 remain empirical questions for an explicitly authorized synthetic-data campaign.
 
-The security owner's
-[coverage review](docs/security/RED_TEAMING_COVERAGE_REVIEW_2026-07-24.md) is authoritative for the
-current corpus/Judge assessment: taxonomy mappings are broader than demonstrated coverage, the reviewed
-corpus exercises three of six threat categories, and no checked-in live LLM campaign proves the rest.
-This threat model does not reinterpret that conclusion.
+Historical coverage reviews are audit inputs, not current-release authority. The frozen corpus
+manifest and the exact campaign/finding manifests are authoritative for what executed and what was
+observed. Until those final artifacts exist, taxonomy mappings remain broader than demonstrated
+coverage and no checked-in live LLM campaign proves the unexecuted categories.
 
 **Risk scoring** below is qualitative (Likelihood × Clinical Impact → Critical/High/Medium),
 appropriate for a first pass; the MVP threat model attaches measured pass/fail evidence per category.
@@ -184,5 +183,5 @@ target authorization, allowlist, scoped credentials, synthetic data, budget/rate
 
 `1 Prompt Injection (Critical)` → `2 Data Exfiltration (Critical)` → `4 Tool Misuse (Critical)` →
 `3 State Corruption (High)` → `5 DoS/Cost (High)` → `6 Identity/Role (High)`. Priority is
-the intended policy. The current Runner/corpus does not yet demonstrate this full adaptive loop; use the
-security owner's coverage review for actual status.
+the intended policy. The current Runner/corpus does not yet demonstrate this full adaptive loop; use
+only the final content-addressed corpus and campaign manifests for actual status.

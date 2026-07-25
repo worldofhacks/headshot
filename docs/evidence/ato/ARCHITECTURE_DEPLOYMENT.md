@@ -105,4 +105,9 @@ additive serialized migrations, quiescence, and compatible image rollback.
 
 Campaign acceptance is a separate runtime authorization boundary: distinct authenticated launcher
 and approver principals authorize the exact synthetic operation, then ordered durable executions and
-Langfuse query-back are retained. Deployment authority never substitutes for campaign authority.
+Langfuse query-back are retained. Before that authorization, the exact deployed release must stage
+one canonical four-role configuration with `resource_id == configuration_sha256`; Runner must prove
+all sealed OpenRouter bindings and Langfuse readiness for that hash; Agents must show the exact
+OpenRouter identities; and calibration must re-attest and human-enable the observed Judge
+identity/hash. Any missing, failed, unenabled, invalidated, drifted, or hash-mismatched state blocks
+campaign launch. Deployment authority never substitutes for campaign authority.

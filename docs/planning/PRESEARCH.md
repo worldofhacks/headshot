@@ -44,7 +44,7 @@ CISO deciding whether to trust the platform.
 regressions) → prioritizes the next campaign → tasks the Red Team → Red Team generates/mutates
 adversarial inputs (multi-turn) against the target via its adapter → transcripts captured → the
 **independent** Judge returns success / fail / partial → partials feed back to the Red Team for
-mutation; confirmed exploits go to Documentation (human-gated for critical) → confirmed exploits are
+mutation; confirmed exploits go to Documentation (every publication human-gated) → confirmed exploits are
 admitted to the regression harness → regression replays run on target change (Railway cron) →
 everything is traced into observability → loop.
 
@@ -77,8 +77,8 @@ the ADR workflow; "stand up the target" reduces to confirming a live URL (target
 ### 2.1 Human actors
 | Actor | Does | Cannot |
 |---|---|---|
-| **Security Engineer / Operator** (primary) | Authorizes + launches live campaigns, reviews findings, approves critical reports + remediation, sets budget/rate caps, reads observability | — |
-| **Reviewer / Approver** (human gate) | Approves/denies publication of critical findings and any remediation; can be the same person as Operator but is a distinct *role* | Be bypassed by any agent |
+| **Security Engineer / Operator** (primary) | Authorizes + launches live campaigns, reviews findings, requests report publication/remediation, sets budget/rate caps, reads observability | — |
+| **Reviewer / Approver** (human gate) | Approves/denies publication of every finding/report and any remediation; must satisfy the applicable distinct-principal rule | Be bypassed by any agent |
 | **Hospital CISO / Compliance** (judging stakeholder) | Judges whether the platform is trustworthy; consumes ATO packet, trust boundaries, AI-use disclosure | (not an operator) |
 
 ### 2.2 Machine actors (agents) — trust levels + permissions `locked` (shape)
@@ -90,13 +90,13 @@ which may only read, what needs human approval) is load-bearing.
 | **Orchestrator** | governor | observability, coverage, findings, budget | campaign queue, regression triggers, budget/abort signals | generate attacks or render verdicts |
 | **Red Team** | **low / quarantined** (produces + handles adversarial content) | seed corpus, target via adapter, prior partials | candidate attempts + transcripts | write to the regression store; publish; render its own verdict |
 | **Judge** | **independent** | attack transcripts, expected-safe behavior, ground truth | verdicts (success/fail/partial), uncertainty/escalation | generate or mutate attacks; approve a confirmed exploit as safe (invariant) |
-| **Documentation** | gated | confirmed exploits | draft vuln reports | publish a **critical** report without human approval |
+| **Documentation** | gated | confirmed exploits | draft vuln reports | publish any report without human approval |
 | **Regression harness** | deterministic | regression store, target | regression run results, regression/reappearance flags | admit a case that only "passes because model behavior changed" |
 | **Observability** | append-only | all agent events | traces, metrics, cost records | mutate historical records |
 
 ### 2.3 Access-control invariants
-- Only the Documentation flow (post-Judge) may create a *published* finding; only a human may
-  publish a **critical** one. `hardening`
+- Only the Documentation flow (post-Judge) may create a publication candidate; only a human may
+  publish a finding/report of any severity. `hardening`
 - Only the regression-admission path may write to `evals/regressions/`; the Red Team cannot.
 - Credentials are **bound to their target**; cross-target credential use is impossible by
   construction (per-target credential provider, secrets by reference). `locked`
@@ -125,7 +125,7 @@ signal). *Stop conditions:* budget cap, no-signal window, abort.
 **promoted** to `evals/regressions/` (only if deterministic + passes-for-the-right-reason).
 
 **F3 — Finding / vulnerability lifecycle.** candidate → judged(confirmed | rejected | partial) →
-documented (draft, `vuln-report` schema) → **human approval gate (critical)** → published →
+documented (draft, `vuln-report` schema) → **human approval gate (every severity)** → published →
 remediation proposed → fix validated (re-run) → resolved | reopened(regressed).
 
 **F4 — Regression lifecycle.** target change → cron/Orchestrator trigger → full regression replay →
@@ -136,8 +136,8 @@ alert + reopen finding.
 assertion (no real PHI) → budget + rate caps armed → full trace capture → abort conditions live.
 Live attacks are always intentional. `locked`
 
-**F6 — Human-approval flow.** critical finding OR any remediation → pause → notify Reviewer →
-approve/deny → resume. No autonomous publication of critical severity. `hardening`
+**F6 — Human-approval flow.** any finding/report publication OR any remediation → pause → notify
+Reviewer → approve/deny → resume. No autonomous publication at any severity. `hardening`
 
 ---
 
@@ -162,7 +162,7 @@ CoverageMetric · CostRecord · GroundTruthLabel · ContractVersion · Incident.
 2. No agent both attacks and judges; the Judge is independent of attack generation.
 3. A regression case is admitted only if it reproduces **deterministically** *and* passes for the
    right reason (a real fix, not changed model behavior).
-4. No **critical** finding is published, and no remediation is applied, without human approval.
+4. No finding/report is published, and no remediation is applied, without human approval.
 5. No live attack runs without passing the F5 authorization gate.
 6. Every exploit record has a unique ID, all required fields, referential integrity, and no
    duplicate attack sequence.

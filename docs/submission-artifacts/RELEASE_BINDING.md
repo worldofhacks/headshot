@@ -39,6 +39,25 @@ candidate.
 | Private topology | Runner, Scheduler, and PostgreSQL have no public route | `pending final-candidate recheck` |
 | Blank-surface contingency | If blank, Web-only rollback while Runner/data remain | Procedure defined; execution `not applicable` unless triggered |
 
+## Hosted configuration and Judge gate
+
+These fields are sequential. A later field cannot be accepted when an earlier one is pending or
+different.
+
+| Field | Required value | Current value |
+|---|---|---|
+| Staged four-role configuration | Canonical set bound to final release SHA | `pending` |
+| Command acknowledgement | `resource_id` equals independently recomputed `configuration_sha256` | `pending` |
+| Runner sealed bindings | All four OpenRouter references resolve for that hash; no value is recorded here | `pending` |
+| Runner Langfuse readiness | Authenticated and heartbeat `operational and evidenced` for the same hash | `pending` |
+| Agents read model | Same configuration hash, provider `openrouter`, exact requested/returned role identities | `pending` |
+| Judge calibration handoff | Observed provider/model/version/criteria/implementation and Red Team identity plus `identity_sha256` | `pending` |
+| Re-attestation | Versioned ground-truth slices and thresholds; content-addressed passing artifact | `pending` |
+| Human enablement | Same identity; `human_approved=true`, `runtime_enabled=true` | `pending` |
+
+Missing, failed, passed-but-not-enabled, invalidated, drifted, or hash-mismatched calibration blocks
+campaign authorization and launch. It does not degrade to an advisory campaign.
+
 ## Production proof
 
 Historical Railway state observed while this packet was prepared:
@@ -75,6 +94,7 @@ in place while the surface is investigated.
 | Provider/model identities | Exact returned identities | `pending` |
 | Langfuse reconciliation | Expected/observed/missing/extra and verification timestamp | `pending` |
 | Finding manifest | Content hash and regenerated severity/count summary | `pending` |
+| Publication decisions | Human approval for every finding/report severity; distinct raiser/approver lineage | `pending; no report is publication-authorized by this packet` |
 | Performance report | Content hash; p50/p95, throughput, memory and method | `pending` |
 | Usage and invoice exports | Redacted hashes and measured totals | `pending` |
 

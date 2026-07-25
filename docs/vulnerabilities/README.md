@@ -150,8 +150,8 @@ relative to `src/agentforge/` unless noted.
 | Control | Status |
 |---|---|
 | Contract forbids a published state | ✅ `contracts/v1/vuln_report.json:76-78` — `publication_state` enum is `draft_unpublished` / `blocked_pending_human_approval` only |
-| Critical severity forces `blocked_pending_human_approval` | ✅ `contracts/v1/vuln_report.json:82-85` (`allOf`); `agents/documentation/agent.py:122-125` |
-| Database check constraint pins drafts | ✅ `storage/models.py:457` (`status = 'draft'`) and `:458-461` (`publication_state IN (…)`) |
+| Every severity is draft-only and unpublished | ✅ `contracts/v1/vuln_report.json:76-78` exposes no published state; `storage/models.py:457-461` pins every report to `status = 'draft'` and an unpublished publication state |
+| Critical severity has an additional forced blocked state | ✅ `contracts/v1/vuln_report.json:82-85` (`allOf`); `agents/documentation/agent.py:122-125`. This narrower constraint does **not** authorize lower-severity publication; every actual publication still requires a separate human decision |
 | Two-person rule on **campaign authorization** | ✅ `control_plane/store.py:898-903` raises `launcher cannot approve own authorization request` when `principal.user_id == request.launcher_user_id` |
 | Two-person rule on **finding approval** | ❌ **not enforced** — the only gate is a permission check, `control_plane/store.py:5500` (`self._require_permission(principal, FINDINGS_APPROVE)`) and `api/router.py:53`; neither compares approver to launcher. `require_distinct_approver` (`auth/dependencies.py:94`) *does* enforce `principal.user_id != launcher_user_id`, but it is hard-wired to `CAMPAIGN_AUTHORIZE` and is wired to no API route — its only call sites are the package export in `auth/__init__.py` and `tests/auth/test_authorization.py` |
 | A "publish a finding" operation | ❌ none exists — `finding.published` is inserted as the literal `false` at `control_plane/store.py:4636-4643`. **Every** other reference to the column in `src/` is a read — `control_plane/store.py:4792`, `api/postgres.py:2599` and `:2672` — and no `UPDATE` sets it anywhere in `src/` or `migrations/` |

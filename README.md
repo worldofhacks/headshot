@@ -51,12 +51,14 @@ release only, not the final candidate. See the dated evidence record and remaini
   is not yet wired into the reviewed-candidate/fresh-authorization campaign loop. It must not be
   described as a deployed fourth hosted agent.
 - Deterministic-oracle precedence. Oracle/canary confirmation and evidence errors are decisive.
-  A model Judge is advisory unless the exact Judge identity has a valid, enabled calibration
-  artifact. Failed or unavailable calibration does not convert an exploit into a safe result.
+  The final hosted campaign is blocked unless the exact deployed Judge identity/hash has a passing,
+  content-addressed calibration that a human explicitly enabled. Missing, failed,
+  passed-but-not-enabled, invalidated, or drifted calibration cannot fall back to an advisory launch.
 - PostgreSQL-authoritative agent and physical-request accounting plus Langfuse Cloud projection.
   Agent observations carry parent/run/attempt identity, provider/model, latency, tokens, retries,
-  errors, and measured cost when supplied. Raw credentials and evidence bodies are not exported.
-  An SDK flush remains `queued`; only exact remote query-back can mark a row `exported`.
+  errors, and measured cost when supplied. Transcripts remain quarantined in PostgreSQL; raw bodies
+  and credentials are excluded from manifests and Langfuse. An SDK flush remains `queued`; only exact
+  remote query-back can mark a row `exported`.
 - An ATO-style packet, integration packet, migration notes, and evidence-classification rules. They
   deliberately leave final release, live campaign, performance, cost, demo, and social evidence
   pending where it does not yet exist.
@@ -93,9 +95,10 @@ the drift is recorded rather than papered over.
 | [docs/planning/DECISIONS.md](docs/planning/DECISIONS.md) | The numbered decision log, D1–D26, with each decision's rationale, fallback, and invalidation condition |
 | [docs/cost/COST_ANALYSIS.md](docs/cost/COST_ANALYSIS.md) | The cost model: three independent cost families on different scaling functions, scaled in complete test runs at 100 / 1K / 10K / 100K |
 
-Current honest status of the red-team capability itself lives in
-[docs/security/RED_TEAMING_COVERAGE_REVIEW_2026-07-25.md](docs/security/RED_TEAMING_COVERAGE_REVIEW_2026-07-25.md),
-which supersedes the 2026-07-24 review.
+Historical red-team reviews remain audit inputs. Current release status comes from the exact source
+SHA, content-addressed campaign/finding manifests, and the
+[final release binding ledger](docs/submission-artifacts/RELEASE_BINDING.md); no prose review
+supersedes those artifacts.
 
 ## Safety invariants
 
@@ -108,8 +111,8 @@ which supersedes the 2026-07-24 review.
 - Deterministic evidence outranks a model assessment. `INDETERMINATE` and `ERROR` never mean safe.
 - Human authentication never authorizes a campaign. A live run still needs the complete
   authorization envelope and a distinct approval decision.
-- Critical publication and remediation remain human-gated. Documentation creates drafts, not
-  autonomous publication.
+- Publication of every finding/report, regardless of severity, and every remediation remain
+  human-gated. Documentation creates drafts, not autonomous publication.
 
 ## Railway topology
 

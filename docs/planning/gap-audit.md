@@ -6,15 +6,17 @@
 > mandatory), a primary-source verification pass (F3/F8/F12), a cold-eyes re-audit (17 new
 > findings), and the user's resolution at the finalize gate. The binding record of each
 > resolution lives in **`ARCHITECTURE.md` §20** and **`DECISIONS.md`**; this file is the audit
-> trail. Section references (`§N`) are to the finalized repo-root `ARCHITECTURE.md`.
+> trail. It is not current release-status authority; exact source, content-addressed manifests, and
+> `docs/submission-artifacts/RELEASE_BINDING.md` control current claims. Section references (`§N`) are
+> to the finalized repo-root `ARCHITECTURE.md`.
 
 ## 0. Gate decisions (user, 2026-07-20)
 
 | Topic | Decision |
 |---|---|
 | **F3 observability** | **Langfuse Cloud (Hobby, free) for MVP**, synthetic data only; self-host documented as post-MVP with its full 6-container footprint. Keeps D6's one-Postgres/no-Redis true. |
-| **F7 Red Team inference** | **Config-switch; deployed default = hosted OSS uncensored**; local Mac reserved for dev + cost-baseline. Mac tok/s stays an `open question`. Makes "continuous/unattended" true on Railway. |
-| **F1 Judge invariant** | Adopt as prescribed (deterministic, fail-closed **verdict state machine**); **async dual-judging** in calibration, **not** per-case second-Judge concurrence. Full spec → `DECISIONS.md` D13. |
+| **F7 Red Team inference** | Reconciled later to the frozen OpenRouter Qwen 3.5 397B-A17B role in the canonical four-role configuration; this historical choice is not deployment evidence. |
+| **F1 Judge invariant** | Deterministic oracle precedence plus a fail-closed launch gate requiring passing, human-enabled calibration for the exact deployed Judge identity/hash. Full current spec → `DECISIONS.md` D13. |
 | **F2 trust split** | Adopt as prescribed (untrusted generator → **trusted policy gateway + execution recorder** → external target; Judge sees recorder `AttemptResult` only). **Canonical-hash + append-only** evidence integrity, **not** signatures, within the shared trust domain; signing/KMS = documented hardening path. Full spec → `DECISIONS.md` D14. |
 | **Fix scope** | **Full content propagation**: ARCHITECTURE.md + DECISIONS.md + content-only corrections to THREAT_MODEL (F8), ADR-0001 (F12), diagram spec (F2, render flagged for regen), DEFENSE_SCRIPT (F11 + F1/F2 content). No format changes to the hand-revised beat/legend files. |
 
@@ -94,7 +96,7 @@
 
 | # | Resolution | Recorded in |
 |---|---|---|
-| F1 | Judge invariant is **deterministic, fail-closed** — a verdict state machine (EXPLOIT_CONFIRMED / EXPLOIT_LIKELY / NO_EXPLOIT_OBSERVED / INDETERMINATE / ERROR) with oracle/canary precedence over the LLM Judge; fail-closed **on the verdict, not the run**; cross-provider separation demoted to defense-in-depth. Calibration = async dual-judging, not per-case concurrence. | §3, §5, §15; D13; D8 amended |
+| F1 | Judge invariant is **deterministic and fail-closed** — oracle/canary precedence plus no hosted campaign launch without passing, human-enabled calibration for the exact deployed Judge identity/hash; ambiguous cases remain non-closing. | §3, §5, §8, §15; D13; D8 amended |
 | F2 | Target Adapter **split**: untrusted generator → **trusted policy gateway + execution recorder** (allowlist, scoped creds, budget/rate, hard abort, canonical-hash + append-only `AttemptResult`) → external target. Judge evaluates recorder transcript **only**. Contract direction corrected (`ExecutionRecorder → Judge`), recorded as an interface migration. | §4, §5; D14; diagram spec |
 | F3 | Langfuse **Cloud** for MVP (synthetic-only); self-host full footprint documented as post-MVP. | §9, §12; D5 amended |
 | F4 | Cost = **two independent line families** (measured tokens × current rates w/ cache+batch adjustment for hosted inference; amortized capex+power+operator ÷ measured capacity for local; hosting/storage/egress separate). The `list_price / throughput` division is **removed** as dimensionally invalid. | §11; D17 |
@@ -120,7 +122,8 @@
 - **S6 (important)** — Coverage-map poisoning: Orchestrator steers on metrics the untrusted agents write. Fix: compute coverage/resilience only from hash-verified, nonce-deduped verdicts (never raw spans); sanity invariants (no "covered" without N distinct verified attempts + ≥1 oracle/human-checked case; unexplained resilience jump flagged). → §9, §13.
 - **S7 (important)** — Separation of duties: launcher must never equal approver. Fix: Clerk-verified
   immutable identities + exact custom permission + runtime two-person rule on campaign authorization,
-  critical publish, and remediation (`approver_user_id != launcher_user_id`, both in the audit log).
+  every finding/report publication, and remediation (`approver_user_id != launcher_user_id`, both in
+  the audit log).
   There is no single-operator exception; without a distinct authorized Approver, the action stays blocked.
   → §5, §14, §15, D24.
 - **S8 (important)** — Canary determinism assumes canaries in the **external** target's data. Fix: make canary provisioning an explicit owned step in `authorized-live-campaign` where the platform has write access; **where it does not, state PHI-exfil detection is Judge-judgment + human-escalation, not deterministic** — honestly. → §5, §10, §15.

@@ -50,8 +50,8 @@ target:
    correlated callback. Otherwise retain `BLOCKED_OWNER_ARCHITECTURE` or
    `BLOCKED_LIVE_OAST`.
 8. **Reporting:** render evidence-bound technical/executive drafts with live/partial/blocked/
-   unsupported states, redaction, claim/evidence parity, and the critical-finding human
-   publication gate. Do not publish.
+   unsupported states, redaction, claim/evidence parity, and the human gate before every
+   finding/report publication regardless of severity. Do not publish.
 
 Use fixed reviewed probes and exact surface-compatible requests only. Never use local
 fixtures, a local/fake target, loopback browser page, in-process OAST receiver, saved ZAP

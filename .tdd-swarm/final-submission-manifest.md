@@ -60,7 +60,7 @@
 - T-F05g consumes and reauthenticates every separate chain artifact. No caller-combined document, local queue count, process boolean, overwrite, reload, rolling overlap, or in-place session/patient swap is authority.
 - T-F05f permits only atomic queue claim before immediate J/K/M validation. All other mutation, resolution, adapter/client construction, network, and spend follow success. Every physical attempt obtains a new L→H/I refresh through M.
 - T-F05e timestamp/reference languages remain Python 3.12 ASCII `re.fullmatch` plus portable Draft 2020-12 patterns, exact lengths, semantic validation, and explicit control rejection including terminal CR/LF.
-- No PHI/secrets/sessions/raw hostile evidence in artifacts; staging/test is never called production. Swarm never merges main, publishes critical findings, remediates, load-tests, or posts socially autonomously.
+- No PHI/secrets/sessions/raw hostile evidence in artifacts; staging/test is never called production. Swarm never merges main, publishes any finding/report, remediates, load-tests, or posts socially autonomously.
 
 ## Deterministic order
 

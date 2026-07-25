@@ -24,7 +24,7 @@ Frontend role labels and client-supplied roles/permissions are display data only
 | Authenticated workflow | Clerk role | Backend-authoritative permissions | What the user does |
 |---|---|---|---|
 | **Operator** | `org:operator` | `org:console:read`, `org:findings:read`, `org:evidence:read`, `org:audit:read`, `org:campaign:launch`, `org:campaign:abort`, `org:targets:manage`, `org:config:manage` | Configures an allowed target, proposes/launches an authorized workflow, monitors or aborts it, and audits the resulting activity. |
-| **Approver** | `org:approver` | `org:console:read`, `org:findings:read`, `org:evidence:read`, `org:audit:read`, `org:campaign:authorize`, `org:findings:approve`, `org:findings:resolve` | Independently authorizes a launch, approves a critical finding, resolves findings/remediation decisions, and audits the resulting activity. |
+| **Approver** | `org:approver` | `org:console:read`, `org:findings:read`, `org:evidence:read`, `org:audit:read`, `org:campaign:authorize`, `org:findings:approve`, `org:findings:resolve` | Independently authorizes a launch, approves or denies publication of every finding/report, resolves findings/remediation decisions, and audits the resulting activity. |
 
 **Separation of launcher and approver is an identity invariant, not a role convention.** An Operator's
 operation requires a different authenticated Approver: `approver.user_id != launcher_user_id`. The
@@ -53,7 +53,8 @@ hand: craft a prompt, try it, eyeball the response, maybe save the good ones in 
   and rate caps, with synthetic data only and a hard abort. Launch permission does not bypass the separate
   campaign authorization gate.
 - As a **different authenticated Approver**, independently authorize the operation and approve or deny
-  publication of critical reports and remediation. The launcher can never approve their own operation.
+  publication of every finding/report and any remediation. The launcher can never approve their own
+  operation.
 - **Read the posture over time**: which categories are covered, pass/fail trend, is the target
   getting more or less resilient, what's open vs resolved, what it cost.
 
@@ -125,8 +126,8 @@ The PRD demands this justification, and it is defensible line by line:
 ## 4. Where automation deliberately stops (so it stays trustworthy)
 
 Automation earns trust by knowing its limits. AgentForge stops for a distinct authenticated Approver
-before **authorizing a live operation**, before **publishing a critical-severity finding**, and before
-**any remediation** — because "an agent that confidently
+before **authorizing a live operation**, before **publishing any finding/report regardless of
+severity**, and before **any remediation** — because "an agent that confidently
 documents a false positive wastes engineering time" and "an agent with the ability to push fixes
 without review can introduce entirely new vulnerabilities." Autonomy covers discovery, evaluation,
 regression, and drafting; humans own the gates where a wrong call has real cost. Role or permission

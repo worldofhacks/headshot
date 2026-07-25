@@ -71,7 +71,10 @@ has been deployed or executed.
 Release completion requires one exact commit with a single Alembic head at `0022`, green GitHub CI
 on that commit, and an exact GitLab mirror. Deploy that same image Runner-first to staging and then
 production; retain migration, health/readiness, protected-route, and console evidence. A live
-campaign additionally requires distinct authenticated launcher and approver principals and must
-produce content-addressed four-role, target-request, finding, cost, and Langfuse query-back evidence.
+campaign additionally requires a staged canonical four-role hash, matching command `resource_id`,
+Runner-resolved provider/Langfuse readiness, OpenRouter identities in Agents, and a passing
+human-enabled calibration re-attested for the observed Judge identity/hash. It also requires distinct
+authenticated launcher and approver principals and must produce content-addressed four-role,
+target-request, finding, cost, and Langfuse query-back evidence.
 Actual billing exports, measured performance, the demo URL, and the published social URL remain
 pending until supplied; none will be inferred.

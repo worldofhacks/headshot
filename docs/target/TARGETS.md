@@ -116,8 +116,9 @@ real SIDs and digests are never placed in the repo):
   (`target_requests_per_second: 0.5`, `physical_request_limit`, `max_attempts_per_run`,
   `target_retries_per_turn`).
 - Week 2's bundled synthetic document uploads are authorized.
-- Live attacks are gated by `authorized-live-campaign` + the Policy Gateway; publishing any critical
-  finding or remediation is a separate two-person human approval (approver ≠ launcher).
+- Live attacks are gated by `authorized-live-campaign` + the Policy Gateway; publishing any
+  finding/report regardless of severity, or performing remediation, is a separate human approval
+  (and the finding approver must be distinct from the raiser).
 
 ## Reproduce
 ```bash

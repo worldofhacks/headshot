@@ -68,7 +68,7 @@ WORKBENCH_CAPABILITIES: tuple[WorkbenchCapability, ...] = (
         headshot_control="OWASP ZAP + independent Judge",
         state="operational",
         llm_focus="Passive web DAST plus behavioral evaluation of agent responses and tool use",
-        safeguard="Exact-origin passive ZAP; critical publication remains human-gated",
+        safeguard="Exact-origin passive ZAP; every finding/report publication remains human-gated",
         evidence="normalized ToolFinding + Judge verdict",
     ),
     WorkbenchCapability(

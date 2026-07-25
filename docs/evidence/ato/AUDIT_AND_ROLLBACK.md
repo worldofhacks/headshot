@@ -58,7 +58,7 @@ commit, image digest, staging proof, and compatible rollback image.
 | Langfuse unavailable or flush succeeds without query-back | PostgreSQL remains authoritative; delivery stays queued/error, never exported | Migration `0016`, verifier tests | Pending exact remote query-back |
 | Database is below packaged head | `/ready` fails and private workers do not consume | Readiness/container migration tests | Pending final staging deployment |
 | Target session expires mid-run | Abort; no silent refresh/rotation; new scope and approval required | Session lease/runbook controls | Pending live drill |
-| Critical finding publication/remediation | Remains blocked until required different human approval | Finding decision/storage tests | Pending final workflow |
+| Any finding/report publication or remediation | Remains blocked until required different human approval | Finding decision/storage tests | Pending final workflow |
 
 ## Pre-deploy rollback binding
 

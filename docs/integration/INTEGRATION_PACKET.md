@@ -164,8 +164,9 @@ contracts, clean `0003 -> 0008` and `0008 -> 0007 -> 0008` container migration p
 fail-closed runtime smokes, zero Semgrep/pip-audit/npm-audit/gitleaks findings, and production image
 `sha256:4af41a54884a8cf918334e5a781c3e2aa510946048d82b9dfe934d4c9dbaf634`.
 
-The external gate remains unchanged: no live target request, hosted generation, critical publication,
-remediation, or regression promotion occurs until a distinct human approves the exact bounded scope.
+The external gate remains unchanged: no live target request, hosted generation, finding/report
+publication of any severity, remediation, or regression promotion occurs until the applicable human
+approves the exact bounded scope.
 
 ---
 

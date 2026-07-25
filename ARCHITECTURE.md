@@ -81,8 +81,8 @@ lifecycle and enable/disable transitions.
 **Defensible to a CISO.** Inter-agent messages are versioned, framework-neutral JSON Schemas with typed
 errors and both-sided contract tests. Adversarial content is quarantined and treated as untrusted data
 even by the Judge and Documentation agents. Credentials are bound to their target; every live campaign
-passes a runtime allowlist + synthetic-data + budget/rate gate with hard abort; critical findings and any
-remediation require a human approver distinct from the run's launcher. Cost is modeled at 100/1K/10K/100K
+passes a runtime allowlist + synthetic-data + budget/rate gate with hard abort; publication of every
+finding/report and any remediation requires a human approver. Cost is modeled at 100/1K/10K/100K
 **runs** as three independent line families — never tokens × N — each tier naming the architectural change
 it forces. Numbers are deliberately deferred to measurement (§11, §17).
 
@@ -125,7 +125,7 @@ assignment (PRD-13). An agent that both attacks and judges is compromised by des
 | **Red Team** | Generates novel adversarial inputs; mutates partial successes; multi-turn sequences | **Untrusted / quarantined** | Autonomous generation; cannot reach the target, hold credentials, produce evidence, self-judge, or publish | directive + seeds + prior partials → `AttackAttempt` |
 | **Policy Gateway + Execution Recorder** | Enforces allowlist, scoped creds, synthetic-data, budget, rate caps, hard abort; executes vs target; records request/response/policy decision; emits canonically-hashed `AttemptResult` | **Trusted enforcement boundary** | Deterministic policy code — no model | `AttackAttempt` → `AttemptResult` (append-only, hashed) |
 | **Judge** | Independent verdict via the deterministic state machine (§5); consistent cross-run criteria; escalates on ambiguity | **Independent evaluator** | Pure evaluator: emits a schema-validated `Verdict` and nothing else — **holds no target credentials, no mutation tools, no publish authority, executes no actions**; never generates/mutates attacks; **never approves a confirmed exploit as safe** | typed **Evidence Envelope** (§4): recorder `AttemptResult` + code-populated oracle/canary results + expected-safe behavior + ground truth → `Verdict` |
-| **Documentation** | Confirmed exploit → structured, reproducible vuln report; data-quality gated | **Gated** | Autonomous drafting; **human gate on critical publish** | confirmed exploit → `VulnReport` |
+| **Documentation** | Confirmed exploit → structured, reproducible vuln report; data-quality gated | **Gated** | Autonomous drafting; **human gate before any finding/report publication** | confirmed exploit → `VulnReport` |
 | **Regression harness** | Versioned exploit store; deterministic replay; reappearance + cross-category detection | **Deterministic** | Runs on Orchestrator trigger / target change | `RegressionAdmissionCandidate` → `RegressionRun` results |
 
 (The observability layer, §9, is the seventh, append-only component — the data substrate the Orchestrator
@@ -231,8 +231,8 @@ factor.
 5. Endpoint dependencies require authentication, the Headshot organization, and the exact custom
    permissions needed by that operation. PostgreSQL projections and commands then use the Principal's
    immutable Organization ID for lookup; no browser-supplied organization, role, or permission is
-   authoritative. Authentication is necessary but never sufficient for a live campaign, critical
-   publication, or remediation.
+   authoritative. Authentication is necessary but never sufficient for a live campaign, any
+   finding/report publication, or remediation.
 
 **Roles describe a membership; custom permissions authorize backend actions.** Clerk system
 permissions are not sufficient because they are not present in the session claims used here. A role
@@ -325,9 +325,11 @@ and precedence:
 regression corpus, and never publish as confirmed. A human may resolve `EXPLOIT_LIKELY`/`INDETERMINATE` →
 `EXPLOIT_CONFIRMED` with `confirmation_source: human`. A previously-confirmed exploit is marked *fixed*
 **only** by a deterministic regression oracle + expected-safe assertion — never by an LLM-only
-`NO_EXPLOIT_OBSERVED`. **Fail closed on the verdict, not the run:** ambiguous cases park in the human-review
-queue while the Orchestrator continues unrelated campaign work — the human classification gate stays hard
-*and* unattended runs keep going.
+`NO_EXPLOIT_OBSERVED`. Before a final hosted campaign starts, the exact deployed Judge identity must have
+a passing, content-addressed calibration that a human explicitly enabled; missing, failed,
+passed-but-not-enabled, invalidated, or identity-drifted calibration closes the campaign gate. Once that
+gate has opened, an ambiguous individual case still parks in the human-review queue while unrelated
+authorized work may continue; the ambiguity never becomes a safe verdict.
 
 **S4 — the evaluators consume hostile data, never instructions (D18).** Recorder transcripts and target
 output are **hostile data**: a successful indirect-injection payload echoed back by the target is a live
@@ -397,10 +399,12 @@ A01:2025; Injection A03:2021 → A05:2025; new A03:2025 Software Supply Chain Fa
 of Exceptional Conditions are forward-looking coverage candidates. LLM mappings already track OWASP LLM Top
 10 (2025). Full per-category mapping is in `THREAT_MODEL.md`.
 
-**Access control:** only the post-Judge documentation path creates published findings; only a verified
-Headshot Principal with `org:findings:approve` and an identity distinct from the launcher may publish a
-**critical** finding (§14); only the admission path writes the regression store; the Red Team can do none
-of these. Clerk controls human access to these application paths, while per-agent DB roles and target-scoped
+**Access control:** only the post-Judge documentation path creates publication candidates. Every
+finding/report, regardless of severity, remains blocked until a verified Headshot Principal with
+`org:findings:approve` approves it. The final release additionally rejects the raiser as approver and
+rejects missing raiser lineage in application and database; the preparation base does not yet claim
+that fix. Only the admission path writes the regression store; the Red Team can do none of these.
+Clerk controls human access to these application paths, while per-agent DB roles and target-scoped
 credentials control workloads; neither identity class can be substituted for the other.
 
 ## §6. Data Model & Storage
@@ -474,51 +478,45 @@ and `DurableScheduler` records target-version replay plans. PostgreSQL is the du
 ## §8. Models per Role
 
 A content-addressed configuration set binds every requested model, prompt, provider, upstream provider,
-limits, and retry policy before activation:
+limit, and retry policy before activation. The configured envelope is:
 
-> **Reconciled 2026-07-25 (`107c11c`): the hosted role set below is superseded by the frozen mapping in
-> code.** The design intent — one model per role, sized to refusal-vs-capability need, cross-vendor as
-> defense-in-depth — is unchanged. The identifiers are not. `HOSTED_ROLE_MODELS`
-> (`src/agentforge/agents/hosted.py:31-38`) is authoritative and any deviation is rejected at
-> composition (`:352-353`). See [`DECISIONS.md` D8, revision 2026-07-25](docs/planning/DECISIONS.md).
-
-**Authoritative (code, `107c11c`):**
-
-| Role | Frozen model ID | Role spend ceiling |
+| Role | Frozen OpenRouter model ID | Configuration ceiling (not spend) |
 |---|---|---|
+| **Orchestrator** | `anthropic/claude-opus-4.8` | $1.50 |
 | **Red Team** | `qwen/qwen3.5-397b-a17b` | $1.00 |
 | **Judge** | `google/gemini-2.5-pro` | $4.00 |
-| **Orchestrator** | `anthropic/claude-opus-4.8` | $1.50 |
 | **Documentation** | `openai/gpt-5.4` | $1.00 |
 
-Single provider for all four roles: `HOSTED_PROVIDER = "openrouter"` (`hosted.py:26`).
-`deepseek/deepseek-chat-v3-0324` is a **documented, unconfigured fallback**
-(`docs/agents/RED_TEAM_MODEL_RESOLUTION.md`), not the configured Red Team model. The one document that
-named it as the generator (`docs/evidence/agent-trace.md`) was corrected upstream by PR #44
-(`2069036`), which also retired the standalone `HostedProvider` route to a fail-closed shell
-(`src/agentforge/agents/red_team/providers.py:216-250`). The single governed generator is
-`TracedHostedRedTeamProvider`
-(`src/agentforge/agents/red_team/hosted_generation.py::TracedHostedRedTeamProvider`, currently line 204),
-and it is not composed into the production Runner.
+`HOSTED_PROVIDER = "openrouter"` and `HOSTED_ROLE_MODELS` in
+`src/agentforge/agents/hosted.py` are the source constraints. The governed Red Team implementation is
+`TracedHostedRedTeamProvider`; its composition into the final campaign Runner arrives with the pending
+`0022` runtime and is not claimed by this packet-preparation base.
 
-**Design intent (retained, identifiers superseded):**
+**Fail-closed release-to-calibration chain.** A final hosted campaign may start only after these
+identities cross one ordered boundary:
 
-| Role | Model | Why |
-|---|---|---|
-| **Orchestrator** | `anthropic/claude-opus-4.8` | `HostedPlanner` is composed by the Runner when hosted mode is enabled |
-| **Red Team** | `qwen/qwen3.5-397b-a17b` | Traced hosted generator exists and is tested; the Runner still selects authorized cases with `SeedReplayRedTeam` |
-| **Judge** | `google/gemini-2.5-pro` | Hosted assessment is composed, but deterministic oracles remain decisive unless the exact calibration artifact enables the model |
-| **Documentation** | `openai/gpt-5.4` | `HostedReportWriter` is composed for confirmed findings; schema and human publication gates still apply |
+1. Deploy the exact release candidate Runner-first.
+2. Through the `CONFIG_MANAGE` command, stage one four-role `HostedConfigurationSet` bound to that
+   release. The command's `resource_id` must equal the set's recomputed canonical
+   `configuration_sha256`; any mismatch is rejection, not a warning.
+3. The private Runner loads that exact release/configuration pair, resolves all four sealed OpenRouter
+   provider references, authenticates Langfuse, and publishes the hosted-runtime heartbeat keyed by the
+   same configuration hash.
+4. The Agents read model must show that hash, provider `openrouter`, and the requested/returned model
+   identities. Missing bindings, an unavailable Langfuse gate, a non-operational heartbeat, or identity
+   drift blocks the chain.
+5. Hand the observed Judge identity — provider, model, model version, criteria version,
+   implementation version, Red Team provider/model, and identity SHA-256 — to calibration. Calibration
+   re-attests the versioned ground-truth slices against that exact identity and emits a
+   content-addressed artifact.
+6. The artifact must pass the hard thresholds and then cross the separate human-enable transition
+   (`human_approved=true`, `runtime_enabled=true`). A merely passed artifact has no runtime authority.
+7. Only the same canonical configuration hash and enabled Judge identity may be included in the
+   distinct-principal campaign authorization and sent to the Runner.
 
-Three intents the frozen set does **not** honor: the Judge is Google, not Anthropic; the Red Team is a
-397B MoE, not a local 24–33B Mac workload (the local switch is configured nowhere in `src/`); and
-"selected by measured calibration" is aspirational. The only calibration ever measured at this base is
-of the **deterministic oracle-precedence Judge**, not of any hosted model — `judge_provider =
-"deterministic-code"`, `judge_model = "oracle-precedence"` — and it **fails**: 30 labels, 18 agreements,
-6 false negatives, 0 false positives, 18 abstentions
-(`tests/test_judge_calibration.py:44-58`). **No hosted model has ever been calibrated**, because doing
-so needs a captured-results bundle and none is committed. See
-`docs/security/RED_TEAMING_COVERAGE_REVIEW_2026-07-25.md`.
+Missing, failed, passed-but-not-enabled, invalidated, or drifted calibration closes the final hosted
+campaign gate. There is no advisory fallback that permits that campaign to launch. Deterministic
+oracle/canary precedence remains authoritative inside an enabled run.
 
 **Cross-vendor is defense-in-depth, not the invariant (D8 amended).** Refusal behavior is a model
 *characteristic and potential failure mode*, not a security control.
@@ -699,7 +697,7 @@ for unavailable billing evidence.
 | Failure | Handling |
 |---|---|
 | Red Team produces genuinely harmful content | Quarantine + containment (§5); only ever executed via the Policy Gateway against the allowlisted target; treated as untrusted data even by the Judge/Documentation (S4) |
-| Judge agrees with everything (drift) | Deterministic oracle precedence; exact-identity ground-truth calibration metrics and fail-closed advisory state; escalate on uncertainty. The current gate accepts one evaluator and does not implement dual-judge cross-agreement or per-category disablement |
+| Judge agrees with everything (drift) | Deterministic oracle precedence; one exact evaluator measured against versioned ground truth; missing, failed, unenabled, invalidated, or identity-drifted calibration blocks campaign start; uncertain individual cases remain non-closing |
 | Attacker forges/replays evidence | Canonical hash + append-only + per-agent DB roles (S1/S2); run-nonce + UNIQUE constraint (S3) reject replay |
 | Orchestrator has no clear next priority | Fallback policy: least-covered category → oldest open finding → regression sweep |
 | **Observability (Langfuse) unavailable/degraded (O7)** | Orchestrator falls back to the **exploit-DB system-of-record + queue table** for coverage/priority (the documented fallback policy above), degrading to structured signals rather than random or blocked; emits an alert. The coverage signal the Orchestrator needs is derivable from Postgres |
@@ -715,10 +713,10 @@ for unavailable billing evidence.
 
 ## §14. Human Approval Gates & Platform Trust/Safety
 
-- **Gates:** authorize a live campaign, **publish a critical-severity finding**, and approve **any
-  remediation**. Autonomy covers discovery, evaluation, regression, and drafting; humans own the
-  high-cost calls. The gates are **runtime-enforced** (§5, F5), not merely a queue pause or a
-  frontend button state.
+- **Gates:** authorize a live campaign, **publish any finding/report regardless of severity**, and
+  approve **any remediation**. Autonomy covers discovery, evaluation, regression, and drafting; humans
+  own publication and remediation. The gates are **runtime-enforced** (§5, F5), not merely a queue
+  pause or a frontend button state.
 - **Separation of duties (S7).** An Operator with `org:campaign:launch` may initiate an operation, but
   campaign authorization must be cleared by a **different** authenticated Headshot Principal with
   `org:campaign:authorize`; application and database checks enforce that rule. Finding approval also
@@ -744,17 +742,18 @@ residual risk remains.
   genuinely harmful content, which must remain quarantined.
 - **Judge (AI, governed):** Gemini may assess attempts, but deterministic oracle/canary confirmation and
   evidence errors have precedence. The model becomes decisive only for the exact identity whose calibration
-  artifact is valid and enabled; otherwise its output is advisory and deterministic ground truth remains
-  authoritative. Calibration unavailable or failed does not block the campaign and cannot downgrade a
-  confirmed exploit. Residual: categories without a deterministic oracle on an unseedable target require
-  model judgment plus human escalation (S8).
+  artifact is valid and human-enabled. Missing, failed, passed-but-not-enabled, invalidated, or drifted
+  calibration blocks the final hosted campaign before dispatch and cannot downgrade a confirmed exploit.
+  Residual: categories without a deterministic oracle on an unseedable target require model judgment plus
+  human escalation (S8).
 - **Orchestrator (AI, trusted):** prioritizes on **verified** metrics only (S6). Residual: coverage metric
   quality is per-target; poisoned aggregates are guarded by the integrity gate + sanity invariants (§9).
 - **Documentation (AI, gated):** drafts reports from the **validated `Verdict` + approved evidence references
   or sanitized excerpts by default** (S4/D18) — raw adversarial evidence stays quarantined and is revealed
   only by an **intentional, warned operator action**; never free-form summarization of raw payloads;
-  data-quality validated before write; **human approves critical publish** (§14). Residual: injection-laundering
-  into a human-facing report — mitigated by structured rendering, default sanitization, and the human gate.
+  data-quality validated before write; **a human approves every publication regardless of severity**
+  (§14). Residual: injection-laundering into a human-facing report — mitigated by structured rendering,
+  default sanitization, and the human gate.
 - **Where we deliberately did *not* use AI:** the Policy Gateway (deterministic policy), evidence hashing +
   DB-role enforcement, the deterministic oracles/canaries, and the shared validators (contract-compat,
   eval-case schema, duplicate-sequence, data-quality) + Semgrep/ZAP. AI where judgment is needed, determinism
@@ -795,10 +794,9 @@ residual risk remains.
   (freezes the OWASP-Web DAST slot).
 - **OQ3** seeded-demo-data provenance (confirm synthetic, no real PHI); whether the platform has **write
   access to plant canaries** (S8).
-- **Measure at MVP, do not guess:** per-agent **token profiles**, **Mac tok/s** (local-vs-hosted Red Team
-  crossover), **`exploit_rate`** (Documentation call volume). **No cost number is CISO-defensible until
-  measured** — §11 carries the method, not numbers.
-- **Pin the LangGraph 1.x version** before the ADR is frozen (§7).
+- **Measure at release, do not guess:** exact per-agent token/latency/cost observations and
+  **`exploit_rate`** (Documentation call volume). **No cost number is CISO-defensible until measured**
+  and reconciled to provider usage/invoice evidence — §11 carries the method, not numbers.
 - **D12 (implemented bounded slice):** MVP retains the hand-authored nine-case corpus + custom mutation
   loop. Native Garak/PyRIT/Giskard/Promptfoo artifacts can supply separately reviewed candidates, but a
   tool-augmented corpus has a different hash and requires fresh authorization. Tool orchestrators and
@@ -894,7 +892,7 @@ detail: `docs/planning/gap-audit.md`.
 
 | # | Resolution | Where |
 |---|---|---|
-| **F1** | Deterministic fail-closed Judge invariant (verdict state machine; oracle precedence; fail-closed on the verdict not the run). Dual-judge calibration remains a separately specified, unimplemented design | §3, §5, §15; D13; D8 |
+| **F1** | Deterministic oracle precedence plus a fail-closed campaign-start gate for missing, failed, unenabled, invalidated, or drifted exact-identity Judge calibration | §3, §5, §8, §15; D13; D8 |
 | **F2** | Trust split: untrusted generator → trusted Policy Gateway + Execution Recorder → external target; Judge sees hashed recorder `AttemptResult` only; contract direction corrected (migration note) | §3, §4, §5; D14; diagram spec |
 | **F3** | Langfuse Cloud for MVP; self-host full footprint documented post-MVP | §9, §12; D5 |
 | **F4** | Three independent cost line families; invalid `list_price/throughput` division removed | §11; D17 |
@@ -912,7 +910,7 @@ detail: `docs/planning/gap-audit.md`.
 | **S4** | Evaluators consume a typed, trust-labelled, size-bounded **evidence envelope**; oracle/canary results are code-applied typed fields so injection **cannot downgrade `EXPLOIT_CONFIRMED`**; Judge holds no creds/mutation/publish/execute and emits a schema-validated Verdict; Documentation gets the validated Verdict + sanitized excerpts by default; raw evidence quarantined behind a warned operator action; separation/encoding are mitigations, not proof (residual owned) | §3, §4, §5, §15, §18; **D18** |
 | **S5** | Vendor-disjoint Judge failover invariant — **`specified, NOT implemented` (corrected 2026-07-25).** No `Judge.vendor != Documentation.vendor` check exists in `src/agentforge/agents/**` and no test references it. The property holds by configuration only, and one provider (`openrouter`) fronts all four roles | §8; D8; drift register below |
 | **S6** | Coverage/resilience computed only from verified, deduped verdicts + sanity invariants | §9, §13 |
-| **S7** | Clerk-authenticated two-person rule on campaign authorization, critical publish, and remediation; distinct identity + custom permission required; no self-approval exception | §5, §14, §15 |
+| **S7** | Clerk-authenticated gates on campaign authorization, every finding/report publication, and remediation; distinct identity + custom permission required; no self-approval exception | §5, §14, §15 |
 | **S8** | Explicit canary provisioning where writable; honest "not deterministic" where the external target can't be seeded | §5, §10, §15 |
 | **S9** | Hashed `AttemptResult` is authoritative evidence; span carries same hash; reconciliation check | §6, §9 |
 | **O1** | ≥2 environments; prod-only live creds; environment-scoped target allowlist and Clerk origin/org configuration; only Web public; gated promotion | §12 |
@@ -924,39 +922,20 @@ detail: `docs/planning/gap-audit.md`.
 | **O7** | Langfuse-unavailable failure mode → Postgres fallback + alert | §9, §13 |
 | **O8** | CI substrate (ephemeral PG + mock adapter + cassettes); CI/dev as a cost line | §11, §18, §19 |
 
-### Architecture-vs-code drift register (2026-07-25, base `107c11c`)
+### Pre-release evidence reconciliation register
 
-This document is binding. Where it disagrees with the code, **the code is what runs** and the
-divergence is recorded here rather than quietly edited out. Every row was verified by reading the file
-at this commit. Full analysis:
-[`docs/security/RED_TEAMING_COVERAGE_REVIEW_2026-07-25.md`](docs/security/RED_TEAMING_COVERAGE_REVIEW_2026-07-25.md).
+Historical review files under `docs/security/` are audit inputs, not release-status authority. The
+exact shipped source, content-addressed manifests, and
+[`docs/submission-artifacts/RELEASE_BINDING.md`](docs/submission-artifacts/RELEASE_BINDING.md) decide
+what may be claimed. At packet preparation, these gaps remain explicit:
 
-Direction matters: this document mostly **understates** what now exists, which is the safer failure —
-but three rows are load-bearing claims that are simply not true, and those are the reviewer risk.
-
-| § | Doc says | Code at `107c11c` | Direction | Disposition |
-|---|---|---|---|---|
-| §1, §7; D4 | Orchestration is **LangGraph OSS engine** + PostgresSaver checkpoints; `interrupt()`/`Command(resume=…)` is the approval mechanic — `locked` | **LangGraph is not a dependency and is imported nowhere.** Absent from `pyproject.toml`; the only mention under `src/` is a prose docstring (`src/agentforge/storage/models.py:13`), and the only two code references are `tests/test_smoke.py:17` and `tests/test_target_adapter.py:77`, which **assert `"langgraph" not in sys.modules`** | **Doc overstates** | **Open — decision owner.** D4's own fallback ("thin custom asyncio orchestrator on the *same* JSON-Schema contracts — a swap, not a rewrite") appears to be what was actually built. Either re-record D4 as taken-the-fallback, or restore the dependency. Do not leave it `locked` as-is. |
-| §8; D8 | Judge = Claude Sonnet 4.6 / `claude-sonnet-5`; Red Team = hosted OSS with a local 24–33B Mac switch | Judge = `google/gemini-2.5-pro`; Red Team = `qwen/qwen3.5-397b-a17b`; frozen and rejected on deviation (`agents/hosted.py:31-38`, `:352-353`) | **Doc stale** | **Reconciled** in §8 above and D8 revision 2026-07-25. |
-| §8, §18, §20 S5 | The platform enforces `Judge.vendor != Documentation.vendor` at run start, fail-closed | No such check exists; no test references it | **Doc overstates** | **Corrected** — S5 row and §8 now read `specified, NOT implemented`. |
-| §12 | Packaged sole Alembic head is `0005` | Sole head is `0021_four_role_agent_acceptance` | Doc stale | **Corrected** in §12. |
-| §4 | Contracts live in `contracts/v1/` | `src/agentforge/contracts/v1/` (18 schemas); no repo-root `contracts/` | Doc stale (broken path) | **Corrected** in §4. |
-| §1, §12 | Live campaign launch "remains fail-closed unavailable"; runner/scheduler "refuse operation" | `POST /api/v1/campaigns` exists with a gated launch handler returning `CommandResult.accepted`; the Runner is a composed durable loop | **Doc understates** | **Partially corrected** in §12. The *gate* is real and still fail-closed on its preconditions; the blanket unavailability is not. |
-| §1 | "public target/surface authoring remains typed unavailable until a trusted catalog exists" | Only partly true now — surface create/revise still return `unavailable`, but the trusted catalog exists and target registration paths have moved | Doc understates | **Open** — needs a targeted §1/§5 rewrite by the architecture owner, not a one-line patch. |
-| §15; D13 | Earlier prose said calibration used async dual-judging, a stratified live sample, and per-category disablement | The gate accepts one evaluator; `agreement_rate` is against ground truth, not another Judge. Per-category metrics exist, but disablement is global and no stratified live sample is retained | **Historical overstatement** | **Corrected** in §13/§15: only exact-identity ground-truth calibration and fail-closed advisory behavior are claimed |
-| §11 | "All cost numbers are deferred to measurement; no placeholder number appears here" | Two appear 16 lines earlier in the same section: cached-input ≈0.1× input and Batch API ≈50%. They are unmeasured provider-discount assumptions | Doc self-contradicts | **Open** — either label them as assumptions or move them to the required-inputs table in `docs/cost/COST_ANALYSIS.md`. |
-| §19 | Baseline profiles (OPT-17) and load/stress (OPT-18) → `docs/performance/` | `docs/performance/` does not exist. Performance code exists (`src/agentforge/performance/`) with **zero producers** — no import from `src/`, `scripts/`, or `console/` | Doc overstates | **Open** — destination is empty; the report library is fed only by test samples. |
-
-One further item that belongs in this register because it contradicts an invariant this document
-registers as resolved (S4/F1): two Judge seams disagree about whether a model may emit
-`EXPLOIT_CONFIRMED`. `agents/judge/hosted.py:22` excludes it and `:313-318` rejects it — that is the
-seam the production runner composes. But
-`agents/hosted_runtime.py::HostedFourRoleRuntime.run_attempt` (Judge schema currently at line 754)
-hands the judge role an output enum that **includes** `EXPLOIT_CONFIRMED` (`_VERDICTS`, lines 31–37),
-and `HostedFourRoleRuntime._deterministic_precedence` returns the hosted verdict verbatim at lines
-863–866 with `deterministic_precedence: False`. It is unreachable today only because nothing in
-`src/` ever constructs `HostedFourRoleRuntime` — not because of any check in that function.
-**Flagged for the owning lane; not patched from a documentation branch.**
+| Boundary | Current evidence | Release disposition |
+|---|---|---|
+| Four-role hosted campaign composition | Three hosted roles exist on the preparation base; the governed Red Team composition is incoming with `0022` | Integrate `0022`, re-run the single-head/runtime checks, and prove all four ordered roles on the exact deployed configuration |
+| Judge authority | Calibration contracts, thresholds, drift invalidation, and human enablement are tested | Execute the §8 exact-identity handoff after deployment; missing or non-enabled calibration blocks campaign launch |
+| Finding publication separation | Campaign authorization enforces distinct principals; finding approval at the preparation base does not yet enforce distinct raiser/approver plus missing-lineage rejection | Land and test both application and database enforcement before any finding/report publication |
+| Performance and cost | Reporting libraries and cost method exist; no representative final artifact or invoice reconciliation exists | Keep values pending until measurements and usage/invoice exports are content-addressed |
+| Vendor-disjoint failover | Google Judge and OpenAI Documentation are distinct by current configuration, while one OpenRouter control plane fronts all roles | Do not claim enforced vendor-disjoint failover; the release uses the exact frozen configuration and fails on identity drift |
 
 ## §21. Non-Goals & Owned Tradeoffs
 
