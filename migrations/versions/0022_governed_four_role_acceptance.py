@@ -262,6 +262,148 @@ def _campaign_run_trigger(*, include_governed: bool) -> str:
     )
 
 
+# --- governed execution + provider guards: ISOLATED from the agent_acceptance guards ---
+#
+# The 0020/0021 agent_acceptance guards enforce an ABSOLUTE zero-target-traffic invariant and stay
+# untouched here. Governed acceptance gets its OWN guards so each kind's invariant stays absolute
+# and separately verifiable: a governed run has its four-role lineage + calibrated independent Judge
+# enforced at the DB level, AND its single bounded target dispatch is anchored by the existing
+# attempt_result UNIQUE(campaign_run_id, attempt_id) (a governed run has exactly one attempt, so at
+# most one recorded dispatch can ever exist). Each guard body is gated on its own run kind, so on a
+# governed row the agent_acceptance guard is a no-op and vice versa; on a campaign row both are.
+
+
+def _governed_execution_guard() -> str:
+    """Enforce the four-role lineage + calibrated independent Judge for a governed execution.
+
+    Unlike the target-free acceptance Judge (deliberately failed-calibration advisory), the governed
+    Judge is the real calibrated, human-enabled independent model Judge required to construct
+    ``HostedFourRoleRuntime`` — so it must be calibration-bound and carry an explicit decision
+    authority on success, while the deterministic oracle keeps precedence in composition code.
+    """
+
+    return (
+        "CREATE OR REPLACE FUNCTION public.m1d_validate_governed_acceptance_execution() "
+        "RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER "
+        "SET search_path = pg_catalog, pg_temp AS $$ "
+        "DECLARE parent_run_kind text; old_parent_run_kind text; expected_attempt text; "
+        "observed_parent_role text; BEGIN "
+        "SELECT run_kind, acceptance_attempt_id INTO parent_run_kind, expected_attempt "
+        "FROM public.campaign_runs WHERE organization_id = NEW.organization_id "
+        "AND run_id = NEW.campaign_run_id FOR SHARE; "
+        "IF TG_OP = 'UPDATE' THEN "
+        "SELECT run_kind INTO old_parent_run_kind "
+        "FROM public.campaign_runs WHERE organization_id = OLD.organization_id "
+        "AND run_id = OLD.campaign_run_id FOR SHARE; "
+        f"IF (old_parent_run_kind = '{_GOVERNED}' "
+        f"OR parent_run_kind = '{_GOVERNED}') AND ("
+        "NEW.id IS DISTINCT FROM OLD.id "
+        "OR NEW.execution_id IS DISTINCT FROM OLD.execution_id "
+        "OR NEW.organization_id IS DISTINCT FROM OLD.organization_id "
+        "OR NEW.campaign_run_id IS DISTINCT FROM OLD.campaign_run_id "
+        "OR NEW.attempt_id IS DISTINCT FROM OLD.attempt_id "
+        "OR NEW.agent_role IS DISTINCT FROM OLD.agent_role "
+        "OR NEW.parent_execution_id IS DISTINCT FROM OLD.parent_execution_id "
+        "OR NEW.provider IS DISTINCT FROM OLD.provider "
+        "OR NEW.model IS DISTINCT FROM OLD.model "
+        "OR NEW.execution_mode IS DISTINCT FROM OLD.execution_mode "
+        "OR NEW.configuration_version IS DISTINCT FROM OLD.configuration_version "
+        "OR NEW.input_sha256 IS DISTINCT FROM OLD.input_sha256 "
+        "OR NEW.trace_id IS DISTINCT FROM OLD.trace_id "
+        "OR NEW.configuration_set_sha256 IS DISTINCT FROM OLD.configuration_set_sha256 "
+        "OR NEW.role_configuration_sha256 IS DISTINCT FROM OLD.role_configuration_sha256 "
+        "OR NEW.generation_policy_sha256 IS DISTINCT FROM OLD.generation_policy_sha256 "
+        "OR NEW.judge_calibration_id IS DISTINCT FROM OLD.judge_calibration_id "
+        "OR NEW.judge_calibration_state IS DISTINCT FROM OLD.judge_calibration_state "
+        "OR NEW.currency IS DISTINCT FROM OLD.currency "
+        "OR NEW.started_at IS DISTINCT FROM OLD.started_at) THEN "
+        "RAISE EXCEPTION 'governed acceptance execution identity is immutable' "
+        "USING ERRCODE = '55000'; END IF; END IF; "
+        f"IF parent_run_kind = '{_GOVERNED}' THEN "
+        "IF NEW.agent_role NOT IN ('orchestrator','red_team','judge','documentation') "
+        "OR NEW.attempt_id IS DISTINCT FROM expected_attempt THEN "
+        "RAISE EXCEPTION "
+        "'governed acceptance execution is outside its role or attempt authority' "
+        "USING ERRCODE = '42501'; END IF; "
+        "IF NEW.agent_role = 'orchestrator' THEN "
+        "IF NEW.parent_execution_id IS NOT NULL THEN "
+        "RAISE EXCEPTION 'governed acceptance planner must be the lineage root' "
+        "USING ERRCODE = '23514'; END IF; "
+        "ELSIF NEW.parent_execution_id IS NULL THEN "
+        "RAISE EXCEPTION 'governed acceptance child requires its exact parent' "
+        "USING ERRCODE = '23514'; "
+        "ELSE "
+        "SELECT agent_role INTO observed_parent_role FROM public.agent_executions "
+        "WHERE organization_id = NEW.organization_id "
+        "AND campaign_run_id = NEW.campaign_run_id "
+        "AND attempt_id = NEW.attempt_id "
+        "AND execution_id = NEW.parent_execution_id; "
+        "IF (NEW.agent_role = 'red_team' "
+        "AND observed_parent_role IS DISTINCT FROM 'orchestrator') "
+        "OR (NEW.agent_role = 'judge' "
+        "AND observed_parent_role IS DISTINCT FROM 'red_team') "
+        "OR (NEW.agent_role = 'documentation' "
+        "AND observed_parent_role IS DISTINCT FROM 'judge') THEN "
+        "RAISE EXCEPTION 'governed acceptance child requires its exact parent' "
+        "USING ERRCODE = '23514'; END IF; "
+        "END IF; "
+        "IF NEW.agent_role = 'judge' THEN "
+        "IF NEW.judge_calibration_id IS NULL THEN "
+        "RAISE EXCEPTION 'governed acceptance Judge must be calibration-bound' "
+        "USING ERRCODE = '42501'; END IF; "
+        "IF NEW.status = 'succeeded' AND NEW.decision_authority IS NULL THEN "
+        "RAISE EXCEPTION "
+        "'governed acceptance Judge requires an explicit decision authority' "
+        "USING ERRCODE = '42501'; END IF; "
+        "END IF; "
+        "END IF; RETURN NEW; END $$"
+    )
+
+
+def _governed_provider_invocation_guard() -> str:
+    """Bind a governed provider invocation to the exact identity of its logical execution."""
+
+    return (
+        "CREATE OR REPLACE FUNCTION "
+        "public.m1d_validate_governed_acceptance_provider_invocation() "
+        "RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER "
+        "SET search_path = pg_catalog, pg_temp AS $$ "
+        "DECLARE requested_run_kind text; logical_run_kind text; "
+        "logical_run_id text; logical_attempt_id text; logical_parent_id text; "
+        "logical_role text; logical_model text; logical_configuration text; "
+        "logical_role_configuration text; logical_generation_policy text; BEGIN "
+        "SELECT run_kind INTO requested_run_kind FROM public.campaign_runs "
+        "WHERE organization_id = NEW.organization_id "
+        "AND run_id = NEW.campaign_run_id FOR SHARE; "
+        "SELECT r.run_kind, e.campaign_run_id, e.attempt_id, e.parent_execution_id, "
+        "e.agent_role, e.model, e.configuration_set_sha256, "
+        "e.role_configuration_sha256, e.generation_policy_sha256 "
+        "INTO logical_run_kind, logical_run_id, logical_attempt_id, logical_parent_id, "
+        "logical_role, logical_model, logical_configuration, "
+        "logical_role_configuration, logical_generation_policy "
+        "FROM public.agent_executions e JOIN public.campaign_runs r "
+        "ON r.organization_id = e.organization_id "
+        "AND r.run_id = e.campaign_run_id "
+        "WHERE e.organization_id = NEW.organization_id "
+        "AND e.execution_id = NEW.logical_execution_id FOR SHARE OF e, r; "
+        f"IF requested_run_kind = '{_GOVERNED}' "
+        f"OR logical_run_kind = '{_GOVERNED}' THEN "
+        f"IF requested_run_kind IS DISTINCT FROM '{_GOVERNED}' "
+        f"OR logical_run_kind IS DISTINCT FROM '{_GOVERNED}' "
+        "OR NEW.campaign_run_id IS DISTINCT FROM logical_run_id "
+        "OR NEW.campaign_attempt_id IS DISTINCT FROM logical_attempt_id "
+        "OR NEW.parent_execution_id IS DISTINCT FROM logical_parent_id "
+        "OR NEW.agent_role IS DISTINCT FROM logical_role "
+        "OR NEW.requested_model IS DISTINCT FROM logical_model "
+        "OR NEW.configuration_set_sha256 IS DISTINCT FROM logical_configuration "
+        "OR NEW.role_configuration_sha256 IS DISTINCT FROM logical_role_configuration "
+        "OR NEW.generation_policy_sha256 IS DISTINCT FROM logical_generation_policy THEN "
+        "RAISE EXCEPTION "
+        "'governed acceptance provider invocation differs from its logical execution' "
+        "USING ERRCODE = '42501'; END IF; END IF; RETURN NEW; END $$"
+    )
+
+
 def upgrade() -> None:
     op.drop_constraint("campaign_run_kind", "campaign_runs", type_="check")
     op.create_check_constraint(
@@ -282,6 +424,25 @@ def upgrade() -> None:
         _acceptance_limits_constraint(include_governed=True),
     )
     op.execute(_campaign_run_trigger(include_governed=True))
+    op.execute(_governed_execution_guard())
+    op.execute(
+        "REVOKE ALL ON FUNCTION public.m1d_validate_governed_acceptance_execution() FROM PUBLIC"
+    )
+    op.execute(
+        "CREATE TRIGGER trg_governed_acceptance_execution_guard "
+        "BEFORE INSERT OR UPDATE ON agent_executions FOR EACH ROW "
+        "EXECUTE FUNCTION public.m1d_validate_governed_acceptance_execution()"
+    )
+    op.execute(_governed_provider_invocation_guard())
+    op.execute(
+        "REVOKE ALL ON FUNCTION "
+        "public.m1d_validate_governed_acceptance_provider_invocation() FROM PUBLIC"
+    )
+    op.execute(
+        "CREATE TRIGGER trg_governed_acceptance_provider_invocation_guard "
+        "BEFORE INSERT ON provider_call_invocations FOR EACH ROW "
+        "EXECUTE FUNCTION public.m1d_validate_governed_acceptance_provider_invocation()"
+    )
 
 
 def downgrade() -> None:
@@ -292,6 +453,13 @@ def downgrade() -> None:
         "'cannot downgrade 0022 while immutable governed acceptance lineage exists' "
         "USING ERRCODE = '55000'; END IF; END $$"
     )
+    op.execute(
+        "DROP TRIGGER trg_governed_acceptance_provider_invocation_guard "
+        "ON provider_call_invocations"
+    )
+    op.execute("DROP FUNCTION public.m1d_validate_governed_acceptance_provider_invocation()")
+    op.execute("DROP TRIGGER trg_governed_acceptance_execution_guard ON agent_executions")
+    op.execute("DROP FUNCTION public.m1d_validate_governed_acceptance_execution()")
     op.execute(_campaign_run_trigger(include_governed=False))
     op.drop_constraint("campaign_run_acceptance_limits", "campaign_runs", type_="check")
     op.create_check_constraint(
