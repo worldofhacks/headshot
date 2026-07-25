@@ -5,11 +5,11 @@ from __future__ import annotations
 import datetime
 import hashlib
 import json
-import os
 import re
 from collections import Counter
 from collections.abc import Mapping
 from dataclasses import asdict, is_dataclass
+from decimal import Decimal
 from enum import Enum
 from typing import Any
 from urllib.parse import urlsplit
@@ -19,8 +19,14 @@ from sqlalchemy import Engine, create_engine, text
 from agentforge.agents.hosted import (
     HostedConfigurationSet,
     preflight_hosted_configuration_set,
+    resolve_hosted_prompt,
 )
-from agentforge.agents.hosted_prompts import hosted_prompt
+from agentforge.agents.hosted_policy import (
+    DEFAULT_HOSTED_GENERATION_POLICY,
+    HostedGenerationPolicyError,
+    resolve_hosted_generation_policy,
+)
+from agentforge.agents.prompts import PromptRegistryError, prompt_for_identity
 from agentforge.agents.runtime import AGENT_DEFINITIONS, default_assignment
 from agentforge.api.backend import ApiBackend, ApiBackendUnavailable, ApiConflict
 from agentforge.api.birdseye import build_birdseye_snapshot
@@ -38,6 +44,11 @@ from agentforge.control_plane.errors import (
     RecordConflictError,
     RecordNotFoundError,
 )
+from agentforge.control_plane.serialization import (
+    content_hash,
+    surface_payload,
+    target_payload,
+)
 from agentforge.correlation import campaign_trace_id
 from agentforge.migration_config import normalize_psycopg_url
 from agentforge.policy.recorder import (
@@ -52,7 +63,11 @@ from agentforge.security_tools.workbench import (
     inspect_sanitized_exchange,
     security_workbench_records,
 )
-from agentforge.target.catalog import SYNTHETIC_TARGET_ID, TrustedTargetCatalog
+from agentforge.target.catalog import (
+    SYNTHETIC_TARGET_ID,
+    TargetCatalogError,
+    TrustedTargetCatalog,
+)
 from agentforge.target.spec import (
     AttackSurfaceDefinition,
     HostedRunBinding,
@@ -60,6 +75,7 @@ from agentforge.target.spec import (
     SafetyCaps,
     TargetDefinition,
     TargetLifecycle,
+    validate_relative_path,
 )
 
 _BEARER = re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]{8,}")
@@ -109,6 +125,7 @@ _REQUIRED_WEB = frozenset({"A01", "A03", "A04", "A06", "A07", "A09", "A10"})
 _REQUIRED_LLM = frozenset({"LLM01", "LLM02", "LLM03", "LLM05", "LLM06"})
 _REQUIRED_CATEGORIES = frozenset({"prompt_injection", "data_exfiltration", "tool_misuse"})
 _RUNNER_HEARTBEAT_FRESHNESS_SECONDS = 30
+_FINDING_HISTORY_LIMIT = 50
 # Hosted credential readiness is refreshed on a 30-second cadence. Give one missed refresh room
 # without allowing an old Runner observation to become durable launch authority.
 _HOSTED_RUNTIME_HEARTBEAT_FRESHNESS_SECONDS = 90
@@ -121,9 +138,11 @@ _SAFE_ACCOUNTING_COUNTERS = frozenset(
         "physical_call_count",
         "physical_attempts",
         "role_physical_calls",
+        "role_unresolved_physical_calls",
         "role_calls_remaining",
         "role_call_overrun",
         "global_physical_calls",
+        "global_unresolved_physical_calls",
         "global_calls_remaining",
         "global_call_overrun",
         "oracle_comparison_count",
@@ -198,28 +217,138 @@ def _rows(connection, statement: str, parameters: Mapping[str, Any]) -> list[dic
     return [dict(row) for row in connection.execute(text(statement), parameters).mappings().all()]
 
 
+def _aggregate_cost_measurement_state(
+    *,
+    measured: int,
+    partial: int,
+    not_observed: int,
+    invalid: int,
+) -> str:
+    total = measured + partial + not_observed + invalid
+    if total == 0 or measured == total:
+        return "measured"
+    if partial > 0 or measured > 0:
+        return "partial"
+    if invalid > 0:
+        return "invalid"
+    return "not_observed"
+
+
+def _accounting_status(cost_measurement_state: str, *, applicable: bool = True) -> str:
+    if not applicable:
+        return "not_applicable"
+    return {
+        "measured": "measured",
+        "partial": "partial",
+        "not_observed": "unavailable",
+        "invalid": "unavailable",
+    }[cost_measurement_state]
+
+
+def _flatten_provider_event_ids(value: Any) -> list[str]:
+    if value is None:
+        return []
+    flattened: list[str] = []
+    for group in value:
+        if isinstance(group, list):
+            flattened.extend(str(item) for item in group)
+    return flattened
+
+
+def _provider_lineage_state(execution_mode: object, detail: object) -> str:
+    if execution_mode != "hosted_advisory":
+        return "not_applicable"
+    state = detail.get("provider_lineage_state") if isinstance(detail, Mapping) else None
+    if state not in {"canonical_physical", "historical_not_instrumented"}:
+        raise ApiBackendUnavailable("persisted provider lineage state is invalid")
+    return str(state)
+
+
+def _finding_histories(
+    connection,
+    *,
+    organization_id: str,
+    finding_ids: set[str],
+) -> dict[str, list[dict[str, Any]]]:
+    """Load the newest bounded history for all projected findings in one query."""
+
+    histories = {finding_id: [] for finding_id in finding_ids}
+    if not finding_ids:
+        return histories
+    rows = _rows(
+        connection,
+        "WITH ranked_history AS ("
+        "SELECT decision_id, finding_id, decision, actor_user_id, rationale, reason_code, "
+        "created_at, row_number() OVER (PARTITION BY finding_id "
+        "ORDER BY created_at DESC, decision_id DESC) AS history_rank "
+        "FROM finding_decision_events WHERE organization_id = :org "
+        "AND finding_id = ANY(CAST(:finding_ids AS varchar[]))"
+        ") SELECT decision_id, finding_id, decision, actor_user_id, rationale, reason_code, "
+        "created_at FROM ranked_history WHERE history_rank <= :history_limit "
+        "ORDER BY finding_id, created_at ASC, decision_id ASC",
+        {
+            "org": organization_id,
+            "finding_ids": sorted(finding_ids),
+            "history_limit": _FINDING_HISTORY_LIMIT,
+        },
+    )
+    for row in rows:
+        finding_id = str(row.pop("finding_id"))
+        row.pop("decision_id")
+        histories[finding_id].append(row)
+    return histories
+
+
 def _unavailable_provider_budget() -> dict[str, Any]:
     return {
         "status": "unavailable",
         "campaign_run_id": None,
         "configuration_set_sha256": None,
+        "role_cost_measurement_state": None,
         "role_usd_cap": None,
         "role_usd_spent": 0.0,
+        "role_unresolved_usd_exposure": 0.0,
         "role_usd_remaining": None,
+        "role_usd_remaining_upper_bound": None,
         "role_usd_overrun": 0.0,
         "role_call_cap": None,
         "role_physical_calls": 0,
+        "role_unresolved_physical_calls": 0,
+        "role_call_count_state": None,
         "role_calls_remaining": None,
         "role_call_overrun": 0,
+        "global_cost_measurement_state": None,
         "global_usd_cap": None,
         "global_usd_spent": 0.0,
+        "global_unresolved_usd_exposure": 0.0,
         "global_usd_remaining": None,
+        "global_usd_remaining_upper_bound": None,
         "global_usd_overrun": 0.0,
         "global_call_cap": None,
         "global_physical_calls": 0,
+        "global_unresolved_physical_calls": 0,
+        "global_call_count_state": None,
         "global_calls_remaining": None,
         "global_call_overrun": 0,
     }
+
+
+def _budget_run_for_role(
+    run: Mapping[str, Any] | None,
+    *,
+    role: str,
+) -> Mapping[str, Any] | None:
+    """Expose only the exact roles authorized by this acceptance envelope version."""
+
+    if run is not None and run.get("budget_status") == "agent_acceptance":
+        allowed_roles = run.get("acceptance_allowed_roles")
+        if (
+            not isinstance(allowed_roles, list)
+            or any(not isinstance(item, str) for item in allowed_roles)
+            or role not in allowed_roles
+        ):
+            return None
+    return run
 
 
 def _provider_budget_projection(
@@ -227,37 +356,244 @@ def _provider_budget_projection(
     configuration: HostedConfigurationSet,
     role: str,
     campaign_run_id: str | None,
+    campaign_state: str | None,
     role_spent: float,
+    role_cost_measurement_state: str,
     role_physical_calls: int,
+    role_unresolved_usd_exposure: float | None,
+    role_unresolved_physical_calls: int | None,
+    role_call_count_state: str,
     global_spent: float,
+    global_cost_measurement_state: str,
     global_physical_calls: int,
+    global_unresolved_usd_exposure: float | None,
+    global_unresolved_physical_calls: int | None,
+    global_call_count_state: str,
+    status: str | None = None,
 ) -> dict[str, Any]:
     role_configuration = next(item for item in configuration.roles if item.role == role)
     role_cap = float(role_configuration.limits.max_usd)
     role_call_cap = role_configuration.limits.max_calls
     global_cap = float(configuration.global_limits.max_usd)
     global_call_cap = configuration.global_limits.max_calls
+    role_available_usd = max(0.0, role_cap - role_spent)
+    role_exposure = min(
+        role_available_usd,
+        (
+            max(0.0, role_unresolved_usd_exposure)
+            if role_unresolved_usd_exposure is not None
+            else role_available_usd
+        ),
+    )
+    role_available_calls = max(0, role_call_cap - role_physical_calls)
+    role_unresolved_calls = min(
+        role_available_calls,
+        (
+            max(0, role_unresolved_physical_calls)
+            if role_unresolved_physical_calls is not None
+            else role_available_calls
+        ),
+    )
+    global_available_usd = max(0.0, global_cap - global_spent)
+    global_exposure = min(
+        global_available_usd,
+        (
+            max(0.0, global_unresolved_usd_exposure)
+            if global_unresolved_usd_exposure is not None
+            else global_available_usd
+        ),
+    )
+    global_available_calls = max(0, global_call_cap - global_physical_calls)
+    global_unresolved_calls = min(
+        global_available_calls,
+        (
+            max(0, global_unresolved_physical_calls)
+            if global_unresolved_physical_calls is not None
+            else global_available_calls
+        ),
+    )
+    status = status or (
+        "staged_pending_authorization"
+        if campaign_run_id is None
+        else "active"
+        if campaign_state in {"queued", "running"}
+        else "historical"
+    )
     return {
-        "status": "active" if campaign_run_id is not None else "staged_pending_authorization",
+        "status": status,
         "campaign_run_id": campaign_run_id,
         "configuration_set_sha256": configuration.configuration_sha256,
+        "role_cost_measurement_state": role_cost_measurement_state,
         "role_usd_cap": role_cap,
         "role_usd_spent": role_spent,
-        "role_usd_remaining": max(0.0, role_cap - role_spent),
+        "role_unresolved_usd_exposure": role_exposure,
+        "role_usd_remaining": max(0.0, role_cap - role_spent - role_exposure),
+        "role_usd_remaining_upper_bound": role_available_usd,
         "role_usd_overrun": max(0.0, role_spent - role_cap),
         "role_call_cap": role_call_cap,
         "role_physical_calls": role_physical_calls,
-        "role_calls_remaining": max(0, role_call_cap - role_physical_calls),
+        "role_unresolved_physical_calls": role_unresolved_calls,
+        "role_call_count_state": role_call_count_state,
+        "role_calls_remaining": max(
+            0,
+            role_call_cap - role_physical_calls - role_unresolved_calls,
+        ),
         "role_call_overrun": max(0, role_physical_calls - role_call_cap),
+        "global_cost_measurement_state": global_cost_measurement_state,
         "global_usd_cap": global_cap,
         "global_usd_spent": global_spent,
-        "global_usd_remaining": max(0.0, global_cap - global_spent),
+        "global_unresolved_usd_exposure": global_exposure,
+        "global_usd_remaining": max(0.0, global_cap - global_spent - global_exposure),
+        "global_usd_remaining_upper_bound": global_available_usd,
         "global_usd_overrun": max(0.0, global_spent - global_cap),
         "global_call_cap": global_call_cap,
         "global_physical_calls": global_physical_calls,
-        "global_calls_remaining": max(0, global_call_cap - global_physical_calls),
+        "global_unresolved_physical_calls": global_unresolved_calls,
+        "global_call_count_state": global_call_count_state,
+        "global_calls_remaining": max(
+            0,
+            global_call_cap - global_physical_calls - global_unresolved_calls,
+        ),
         "global_call_overrun": max(0, global_physical_calls - global_call_cap),
     }
+
+
+def _hosted_budget_usage(
+    rows: list[dict[str, Any]],
+    configurations: Mapping[str, HostedConfigurationSet],
+) -> tuple[
+    dict[tuple[str, str], dict[str, Any]],
+    dict[str, dict[str, Any]],
+]:
+    """Reconcile observed usage plus conservative in-flight provider exposure."""
+
+    by_run_role: dict[tuple[str, str], dict[str, Any]] = {}
+    for row in rows:
+        run_id = str(row["campaign_run_id"])
+        role = str(row["agent_role"])
+        usage = by_run_role.setdefault(
+            (run_id, role),
+            {
+                "measured_cost": 0.0,
+                "physical_calls": 0,
+                "unresolved_usd_exposure": 0.0,
+                "unresolved_physical_calls": 0,
+                "historical_lineage_count": 0,
+                "measured_cost_count": 0,
+                "partial_cost_count": 0,
+                "not_observed_cost_count": 0,
+                "invalid_cost_count": 0,
+            },
+        )
+        usage["measured_cost"] = float(usage["measured_cost"]) + float(
+            row.get("measured_cost") or 0
+        )
+        cost_state = str(row.get("cost_measurement_state") or "not_observed")
+        state_counter = f"{cost_state}_cost_count"
+        if state_counter in usage:
+            usage[state_counter] = int(usage[state_counter]) + 1
+        lineage_state = _provider_lineage_state(
+            row.get("execution_mode"),
+            row.get("detail"),
+        )
+        if lineage_state == "historical_not_instrumented":
+            usage["historical_lineage_count"] = int(usage["historical_lineage_count"]) + 1
+        observed_calls = int(row.get("physical_attempts") or 0)
+        usage["physical_calls"] = int(usage["physical_calls"]) + observed_calls
+        if lineage_state == "historical_not_instrumented":
+            usage["unresolved_usd_exposure"] = None
+            usage["unresolved_physical_calls"] = None
+            continue
+        configuration = configurations.get(str(row.get("configuration_set_sha256") or ""))
+        if configuration is None:
+            if row.get("status") == "running" or cost_state != "measured":
+                usage["unresolved_usd_exposure"] = None
+                usage["unresolved_physical_calls"] = None
+            continue
+        role_configuration = next(item for item in configuration.roles if item.role == role)
+        maximum_attempts = 1 + min(
+            role_configuration.limits.max_retries,
+            configuration.global_limits.max_retries,
+        )
+        unresolved_calls = (
+            max(0, maximum_attempts - observed_calls) if row.get("status") == "running" else 0
+        )
+        if usage["unresolved_physical_calls"] is not None:
+            usage["unresolved_physical_calls"] = (
+                int(usage["unresolved_physical_calls"]) + unresolved_calls
+            )
+        unresolved_cost_calls = (
+            maximum_attempts
+            if row.get("status") == "running"
+            else observed_calls
+            if cost_state != "measured"
+            else 0
+        )
+        if unresolved_cost_calls == 0:
+            continue
+        try:
+            policy = resolve_hosted_generation_policy(
+                str(row.get("generation_policy_sha256") or "")
+            )
+            bounds = policy.call_bounds[role]
+            prices = role_configuration.prices
+            reservation = (
+                prices.input_usd_per_million_tokens * bounds.input_tokens
+                + prices.output_usd_per_million_tokens * bounds.output_tokens
+                + max(
+                    prices.output_usd_per_million_tokens,
+                    prices.reasoning_usd_per_million_tokens,
+                )
+                * bounds.reasoning_tokens
+            ) / Decimal(1_000_000)
+        except (HostedGenerationPolicyError, KeyError):
+            usage["unresolved_usd_exposure"] = None
+        else:
+            if usage["unresolved_usd_exposure"] is not None:
+                usage["unresolved_usd_exposure"] = float(
+                    Decimal(str(usage["unresolved_usd_exposure"]))
+                    + reservation * unresolved_cost_calls
+                )
+
+    global_by_run: dict[str, dict[str, Any]] = {}
+    for (run_id, _), usage in by_run_role.items():
+        aggregate = global_by_run.setdefault(
+            run_id,
+            {
+                "measured_cost": 0.0,
+                "physical_calls": 0,
+                "unresolved_usd_exposure": 0.0,
+                "unresolved_physical_calls": 0,
+                "historical_lineage_count": 0,
+                "measured_cost_count": 0,
+                "partial_cost_count": 0,
+                "not_observed_cost_count": 0,
+                "invalid_cost_count": 0,
+            },
+        )
+        aggregate["measured_cost"] = float(aggregate["measured_cost"]) + float(
+            usage["measured_cost"]
+        )
+        aggregate["physical_calls"] = int(aggregate["physical_calls"]) + int(
+            usage["physical_calls"]
+        )
+        for field in (
+            "unresolved_usd_exposure",
+            "unresolved_physical_calls",
+        ):
+            if aggregate[field] is None or usage[field] is None:
+                aggregate[field] = None
+            else:
+                aggregate[field] += usage[field]
+        for field in (
+            "historical_lineage_count",
+            "measured_cost_count",
+            "partial_cost_count",
+            "not_observed_cost_count",
+            "invalid_cost_count",
+        ):
+            aggregate[field] = int(aggregate[field]) + int(usage[field])
+    return by_run_role, global_by_run
 
 
 def _evidence_hash_fields(row: Mapping[str, Any]) -> dict[str, Any]:
@@ -514,7 +850,7 @@ def _scope_projection(value: Any, *, target_base_url: Any = None) -> dict[str, A
     """Return the reviewable authorization scope without its credential reference."""
 
     if not isinstance(value, Mapping):
-        return {}
+        raise EvidenceIntegrityError("authorization scope payload is unavailable")
     projected = {
         key: value.get(key)
         for key in (
@@ -540,10 +876,25 @@ def _scope_projection(value: Any, *, target_base_url: Any = None) -> dict[str, A
     protocol = projected.get("protocol")
     host = projected.get("exact_host")
     path = projected.get("relative_path")
-    if all(isinstance(part, str) and part for part in (protocol, host, path, target_base_url)):
-        parsed_base = urlsplit(target_base_url)
-        if parsed_base.scheme == protocol and parsed_base.netloc == host:
-            projected["endpoint"] = f"{target_base_url.rstrip('/')}/{path}"
+    if not all(isinstance(part, str) and part for part in (protocol, host, path, target_base_url)):
+        raise EvidenceIntegrityError("authorization endpoint inputs are unavailable")
+    parsed_base = urlsplit(target_base_url)
+    try:
+        validate_relative_path(path)
+    except Exception as exc:
+        raise EvidenceIntegrityError("authorization relative path is invalid") from exc
+    if (
+        parsed_base.scheme != protocol
+        or parsed_base.netloc != host
+        or parsed_base.username is not None
+        or parsed_base.password is not None
+        or parsed_base.query
+        or parsed_base.fragment
+        or path.startswith("/")
+        or any(segment in {"", ".", ".."} for segment in path.split("/"))
+    ):
+        raise EvidenceIntegrityError("authorization endpoint inputs do not reconcile")
+    projected["endpoint"] = f"{target_base_url.rstrip('/')}/{path}"
     projected["auth_posture"] = (
         "explicit_no_auth"
         if projected.get("explicit_no_auth") is True
@@ -581,6 +932,7 @@ class PostgresApiBackend(ApiBackend):
         hosted_runtime_available: bool = False,
         hosted_provider_bindings_verified: bool = False,
         corpus: AuthoredCorpus | None = None,
+        target_catalog: TrustedTargetCatalog | None = None,
     ) -> None:
         self._engine = engine
         self._store = ControlPlaneStore(engine, environment=environment)
@@ -589,6 +941,63 @@ class PostgresApiBackend(ApiBackend):
         self._hosted_runtime_available = hosted_runtime_available
         self._hosted_provider_bindings_verified = hosted_provider_bindings_verified
         self._corpus = corpus
+        self._target_catalog = target_catalog or TrustedTargetCatalog.from_environment(environment)
+
+    @staticmethod
+    def _target_session_generation(target_payload: Mapping[str, Any]) -> str:
+        """Return only the non-secret immutable generation bound to a target credential."""
+
+        credential_reference = target_payload.get("credential_ref")
+        if credential_reference is None and target_payload.get("auth_mode") == "none":
+            return "no-auth"
+        if not isinstance(credential_reference, str):
+            raise ValueError("target credential generation is unavailable")
+        parsed = urlsplit(credential_reference)
+        segments = tuple(segment for segment in parsed.path.split("/") if segment)
+        if parsed.scheme != "secretref" or not segments:
+            raise ValueError("target credential generation is invalid")
+        return segments[-1]
+
+    def _latest_hosted_run_binding(
+        self,
+        connection: Any,
+        *,
+        organization_id: str,
+        target_payload: Mapping[str, Any],
+    ) -> dict[str, object] | None:
+        """Project the latest atomic set into a secret-free, server-derived run binding."""
+
+        row = (
+            connection.execute(
+                text(
+                    "SELECT configuration_sha256, payload FROM hosted_configuration_sets "
+                    "WHERE organization_id = :org "
+                    "ORDER BY created_at DESC, configuration_sha256 DESC LIMIT 1"
+                ),
+                {"org": organization_id},
+            )
+            .mappings()
+            .one_or_none()
+        )
+        if row is None:
+            return None
+        configuration = HostedConfigurationSet.from_payload(dict(row["payload"]))
+        if configuration.configuration_sha256 != row["configuration_sha256"]:
+            raise ValueError("hosted configuration-set integrity check failed")
+        policy = DEFAULT_HOSTED_GENERATION_POLICY
+        binding = HostedRunBinding(
+            configuration_set_sha256=configuration.configuration_sha256,
+            generation_policy_sha256=policy.policy_sha256,
+            session_generation=self._target_session_generation(target_payload),
+            provider_model_call_limit=configuration.global_limits.max_calls,
+            provider_model_spend_limit_usd=format(configuration.global_limits.max_usd, "f"),
+            provider_max_retries=configuration.global_limits.max_retries,
+            provider_max_concurrency=configuration.global_limits.max_concurrency,
+            provider_timeout_seconds=max(
+                float(role.bounds.timeout_seconds) for role in policy.roles
+            ),
+        )
+        return binding.canonical_payload()
 
     def _attack_case_evidence(self, source: Mapping[str, Any]) -> dict[str, Any]:
         case_id = str(source.get("case_id") or "unavailable")
@@ -810,6 +1219,85 @@ class PostgresApiBackend(ApiBackend):
             "redaction_state": "synthetic_identifiers_redacted",
         }
 
+    def _target_catalog_projection(
+        self,
+        connection: Any,
+        *,
+        organization_id: str,
+    ) -> list[dict[str, Any]]:
+        """Project only non-authoritative catalog identity and registration state."""
+
+        result: list[dict[str, Any]] = []
+        for entry in self._target_catalog.entries:
+            target = entry.target
+            target_row = (
+                connection.execute(
+                    text(
+                        "SELECT d.content_hash, "
+                        "(SELECT e.to_lifecycle FROM target_lifecycle_events e "
+                        " WHERE e.organization_id = d.organization_id "
+                        " AND e.target_id = d.target_id AND e.target_version = d.version "
+                        " ORDER BY e.id DESC LIMIT 1) AS lifecycle "
+                        "FROM target_definitions d "
+                        "WHERE d.organization_id = :org AND d.target_id = :target_id "
+                        "AND d.version = :version"
+                    ),
+                    {
+                        "org": organization_id,
+                        "target_id": target.target_id,
+                        "version": target.version,
+                    },
+                )
+                .mappings()
+                .one_or_none()
+            )
+            registration_state = "available"
+            if target_row is not None:
+                surface_rows = _rows(
+                    connection,
+                    "SELECT s.surface_id, s.version, s.content_hash "
+                    "FROM attack_surface_definitions s "
+                    "WHERE s.organization_id = :org AND s.target_id = :target_id "
+                    "AND s.target_version = :version",
+                    {
+                        "org": organization_id,
+                        "target_id": target.target_id,
+                        "version": target.version,
+                    },
+                )
+                expected_surfaces = {
+                    (surface.surface_id, surface.version): content_hash(surface_payload(surface))
+                    for surface in entry.surfaces
+                }
+                actual_surfaces = {
+                    (str(row["surface_id"]), str(row["version"])): str(row["content_hash"])
+                    for row in surface_rows
+                }
+                registration_state = (
+                    "registered"
+                    if target_row["content_hash"] == content_hash(target_payload(target))
+                    and target_row["lifecycle"]
+                    in {
+                        TargetLifecycle.READY.value,
+                        TargetLifecycle.DISABLED.value,
+                        TargetLifecycle.ARCHIVED.value,
+                    }
+                    and actual_surfaces == expected_surfaces
+                    else "conflict"
+                )
+            result.append(
+                {
+                    "target_id": target.target_id,
+                    "version": target.version,
+                    "name": target.name,
+                    "environment": target.environment.value,
+                    "synthetic_data_only": target.synthetic_data_only,
+                    "surface_count": len(entry.surfaces),
+                    "registration_state": registration_state,
+                }
+            )
+        return result
+
     def read(self, resource, principal, *, identifiers=None):
         identifiers = dict(identifiers or {})
         if resource == "principal":
@@ -853,53 +1341,176 @@ class PostgresApiBackend(ApiBackend):
                     )
                     served_identity_rows = _rows(
                         connection,
-                        "SELECT DISTINCT ON (agent_role, configuration_set_sha256) "
-                        "agent_role, configuration_set_sha256, returned_model, "
-                        "upstream_provider, provider_request_id, finished_at "
-                        "FROM agent_executions WHERE organization_id = :org "
-                        "AND status = 'succeeded' AND configuration_set_sha256 IS NOT NULL "
-                        "AND returned_model IS NOT NULL AND upstream_provider IS NOT NULL "
-                        "AND provider_request_id IS NOT NULL "
-                        "ORDER BY agent_role, configuration_set_sha256, finished_at DESC",
+                        "SELECT DISTINCT ON "
+                        "(e.agent_role, e.configuration_set_sha256) "
+                        "e.agent_role, e.configuration_set_sha256, e.returned_model, "
+                        "e.upstream_provider, e.provider_request_id, e.finished_at "
+                        "FROM agent_executions e JOIN campaign_runs r "
+                        "ON r.organization_id = e.organization_id "
+                        "AND r.run_id = e.campaign_run_id "
+                        "WHERE e.organization_id = :org AND r.run_kind = 'campaign' "
+                        "AND e.status = 'succeeded' "
+                        "AND e.configuration_set_sha256 IS NOT NULL "
+                        "AND e.returned_model IS NOT NULL "
+                        "AND e.upstream_provider IS NOT NULL "
+                        "AND e.provider_request_id IS NOT NULL "
+                        "ORDER BY e.agent_role, e.configuration_set_sha256, "
+                        "e.finished_at DESC, e.id DESC",
                         {"org": principal.organization_id},
                     )
                     served_identity_by_role_configuration = {
                         (row["agent_role"], row["configuration_set_sha256"]): row
                         for row in served_identity_rows
                     }
-                    bound_hosted_rows = _rows(
+                    acceptance_execution_rows = _rows(
                         connection,
-                        "SELECT DISTINCT "
+                        "SELECT DISTINCT ON (e.agent_role) "
+                        "e.agent_role, e.campaign_run_id AS acceptance_run_id, "
+                        "r.acceptance_attempt_id, e.execution_id, e.parent_execution_id, "
+                        "e.configuration_set_sha256, e.returned_model, "
+                        "e.upstream_provider, e.trace_id, e.measured_cost, "
+                        "e.cost_measurement_state, e.provider_event_ids, e.currency, "
+                        "e.input_tokens, e.output_tokens, e.reasoning_tokens, "
+                        "e.langfuse_status, e.langfuse_verified_at, e.finished_at "
+                        "FROM agent_executions e JOIN campaign_runs r "
+                        "ON r.organization_id = e.organization_id "
+                        "AND r.run_id = e.campaign_run_id "
+                        "JOIN LATERAL ("
+                        "SELECT count(*) AS event_count, "
+                        "count(*) FILTER (WHERE p.cost_measurement_state = 'measured') "
+                        "AS measured_event_count, "
+                        "coalesce(sum(p.measured_cost_usd), 0::numeric) AS measured_cost, "
+                        "coalesce(jsonb_agg(p.event_id ORDER BY p.physical_sequence), "
+                        "'[]'::jsonb) AS event_ids "
+                        "FROM provider_call_events p "
+                        "WHERE p.organization_id = e.organization_id "
+                        "AND p.logical_execution_id = e.execution_id"
+                        ") provider_ledger ON true "
+                        "WHERE e.organization_id = :org "
+                        "AND r.run_kind = 'agent_acceptance' "
+                        "AND r.run_id = ("
+                        "SELECT candidate.run_id FROM campaign_runs candidate "
+                        "WHERE candidate.organization_id = :org "
+                        "AND candidate.run_kind = 'agent_acceptance' "
+                        "AND (SELECT state FROM campaign_run_events state_event "
+                        "WHERE state_event.organization_id = candidate.organization_id "
+                        "AND state_event.run_id = candidate.run_id "
+                        "ORDER BY state_event.id DESC LIMIT 1) = 'complete' "
+                        "ORDER BY candidate.created_at DESC, candidate.run_id DESC LIMIT 1"
+                        ") "
+                        "AND e.agent_role IN "
+                        "('orchestrator', 'red_team', 'judge', 'documentation') "
+                        "AND e.attempt_id = r.acceptance_attempt_id "
+                        "AND e.status = 'succeeded' "
+                        "AND e.cost_measurement_state = 'measured' "
+                        "AND e.configuration_set_sha256 IS NOT NULL "
+                        "AND e.returned_model IS NOT NULL "
+                        "AND e.upstream_provider IS NOT NULL "
+                        "AND e.input_tokens IS NOT NULL "
+                        "AND e.output_tokens IS NOT NULL "
+                        "AND e.reasoning_tokens IS NOT NULL "
+                        "AND e.finished_at IS NOT NULL "
+                        "AND e.langfuse_status IN ('queued', 'exported') "
+                        "AND provider_ledger.event_count = e.physical_attempts "
+                        "AND provider_ledger.measured_event_count = provider_ledger.event_count "
+                        "AND provider_ledger.measured_cost = e.measured_cost "
+                        "AND provider_ledger.event_ids = e.provider_event_ids "
+                        "ORDER BY e.agent_role, e.finished_at DESC, e.id DESC",
+                        {"org": principal.organization_id},
+                    )
+                    acceptance_execution_by_role = {
+                        row["agent_role"]: {
+                            "scope": "agent_acceptance",
+                            "agent_role": row["agent_role"],
+                            "acceptance_run_id": row["acceptance_run_id"],
+                            "acceptance_attempt_id": row["acceptance_attempt_id"],
+                            "execution_id": row["execution_id"],
+                            "parent_execution_id": row["parent_execution_id"],
+                            "configuration_set_sha256": row["configuration_set_sha256"],
+                            "returned_model": row["returned_model"],
+                            "upstream_provider": row["upstream_provider"],
+                            "trace_id": row["trace_id"],
+                            "measured_cost": float(row["measured_cost"]),
+                            "cost_measurement_state": row["cost_measurement_state"],
+                            "provider_event_ids": list(row["provider_event_ids"]),
+                            "currency": row["currency"],
+                            "input_tokens": row["input_tokens"],
+                            "output_tokens": row["output_tokens"],
+                            "reasoning_tokens": row["reasoning_tokens"],
+                            "langfuse_status": row["langfuse_status"],
+                            "langfuse_verified_at": row["langfuse_verified_at"],
+                            "finished_at": row["finished_at"],
+                        }
+                        for row in acceptance_execution_rows
+                    }
+                    hosted_run_rows = _rows(
+                        connection,
+                        "SELECT DISTINCT ON "
+                        "(q.scope_payload->'hosted_run'->>'configuration_set_sha256') "
                         "q.scope_payload->'hosted_run'->>'configuration_set_sha256' "
-                        "AS configuration_sha256 "
+                        "AS configuration_sha256, r.run_id, r.created_at, "
+                        "(SELECT state FROM campaign_run_events e "
+                        "WHERE e.organization_id = r.organization_id "
+                        "AND e.run_id = r.run_id ORDER BY e.id DESC LIMIT 1) "
+                        "AS campaign_state "
                         "FROM campaign_runs r JOIN campaign_authorization_requests q "
                         "ON q.organization_id = r.organization_id "
                         "AND q.request_id = r.authorization_request_id "
                         "AND q.scope_hash = r.scope_hash "
                         "WHERE r.organization_id = :org "
                         "AND q.scope_payload->'hosted_run'->>'configuration_set_sha256' "
-                        "IS NOT NULL",
+                        "IS NOT NULL "
+                        "ORDER BY "
+                        "q.scope_payload->'hosted_run'->>'configuration_set_sha256', "
+                        "r.created_at DESC",
                         {"org": principal.organization_id},
                     )
-                    bound_hosted_hashes = {
-                        row["configuration_sha256"]
-                        for row in bound_hosted_rows
+                    hosted_run_by_configuration = {
+                        row["configuration_sha256"]: row
+                        for row in hosted_run_rows
                         if isinstance(row.get("configuration_sha256"), str)
                     }
+                    acceptance_run_rows = _rows(
+                        connection,
+                        "SELECT DISTINCT ON (acceptance_configuration_sha256) "
+                        "acceptance_configuration_sha256 AS configuration_sha256, "
+                        "run_id, created_at, 'agent_acceptance'::text AS budget_status, "
+                        "acceptance_limits->'allowed_roles' AS acceptance_allowed_roles "
+                        "FROM campaign_runs WHERE organization_id = :org "
+                        "AND run_kind = 'agent_acceptance' "
+                        "ORDER BY acceptance_configuration_sha256, created_at DESC",
+                        {"org": principal.organization_id},
+                    )
+                    budget_run_by_configuration = dict(hosted_run_by_configuration)
+                    for acceptance_run in acceptance_run_rows:
+                        configuration_sha256 = acceptance_run.get("configuration_sha256")
+                        if not isinstance(configuration_sha256, str):
+                            continue
+                        current = budget_run_by_configuration.get(configuration_sha256)
+                        if current is None or acceptance_run["created_at"] > current["created_at"]:
+                            budget_run_by_configuration[configuration_sha256] = acceptance_run
                     active_hosted_assignments: dict[str, dict[str, Any]] = {}
                     staged_hosted_assignments: dict[str, dict[str, Any]] = {}
                     hosted_configurations: dict[str, HostedConfigurationSet] = {}
                     for row in hosted_rows:
-                        configuration = HostedConfigurationSet.from_payload(dict(row["payload"]))
+                        try:
+                            configuration = HostedConfigurationSet.from_payload(
+                                dict(row["payload"])
+                            )
+                        except (TypeError, ValueError):
+                            return ResourceResult.unavailable(
+                                "hosted_configuration_integrity_failed"
+                            )
                         if configuration.configuration_sha256 != row["configuration_sha256"]:
                             return ResourceResult.unavailable(
                                 "hosted_configuration_integrity_failed"
                             )
                         hosted_configurations[configuration.configuration_sha256] = configuration
+                        activation = hosted_run_by_configuration.get(
+                            configuration.configuration_sha256
+                        )
                         activation_state = (
-                            "active"
-                            if configuration.configuration_sha256 in bound_hosted_hashes
-                            else "staged_pending_authorization"
+                            "active" if activation is not None else "staged_pending_authorization"
                         )
                         destination = (
                             active_hosted_assignments
@@ -907,15 +1518,16 @@ class PostgresApiBackend(ApiBackend):
                             else staged_hosted_assignments
                         )
                         for role in configuration.roles:
-                            if role.role in destination:
+                            if activation is None and role.role in destination:
                                 continue
-                            prompt = hosted_prompt(role.role)
-                            if role.prompt_sha256 != prompt.prompt_sha256:
+                            try:
+                                prompt = resolve_hosted_prompt(role.role, role.prompt_sha256)
+                            except ValueError:
                                 return ResourceResult.unavailable("hosted_prompt_integrity_failed")
                             served = served_identity_by_role_configuration.get(
                                 (role.role, configuration.configuration_sha256)
                             )
-                            destination[role.role] = {
+                            candidate = {
                                 "role": role.role,
                                 "provider": role.provider,
                                 "model": role.model_id,
@@ -925,7 +1537,7 @@ class PostgresApiBackend(ApiBackend):
                                 "upstream_provider": (
                                     served["upstream_provider"] if served is not None else None
                                 ),
-                                "prompt_sha256": prompt.prompt_sha256,
+                                "prompt_sha256": prompt.sha256,
                                 "prompt_version": prompt.version,
                                 "execution_mode": "hosted_advisory",
                                 "activation_state": activation_state,
@@ -933,7 +1545,17 @@ class PostgresApiBackend(ApiBackend):
                                 "configuration_sha256": configuration.configuration_sha256,
                                 "configured_at": row["created_at"],
                                 "configured_by": row["actor_user_id"],
+                                "_activation_at": (
+                                    activation["created_at"] if activation is not None else None
+                                ),
                             }
+                            previous = destination.get(role.role)
+                            if (
+                                previous is None
+                                or activation is not None
+                                and candidate["_activation_at"] > previous["_activation_at"]
+                            ):
+                                destination[role.role] = candidate
                     execution_rows = _rows(
                         connection,
                         "SELECT agent_role, count(*) AS execution_count, "
@@ -941,17 +1563,26 @@ class PostgresApiBackend(ApiBackend):
                         "count(*) FILTER (WHERE status = 'succeeded') AS succeeded_count, "
                         "count(*) FILTER (WHERE status = 'failed') AS failed_count, "
                         "count(*) FILTER (WHERE status = 'skipped') AS skipped_count, "
-                        "coalesce(sum(measured_cost), 0) AS measured_cost, "
+                        "sum(measured_cost) AS measured_cost, "
                         "sum(input_tokens) AS input_tokens, sum(output_tokens) AS output_tokens, "
                         "sum(reasoning_tokens) AS reasoning_tokens, "
                         "coalesce(sum(physical_attempts), 0) AS physical_call_count, "
+                        "count(*) FILTER (WHERE execution_mode = 'hosted_advisory' "
+                        "AND detail->>'provider_lineage_state' = "
+                        "'historical_not_instrumented') AS historical_lineage_count, "
+                        "count(*) FILTER (WHERE cost_measurement_state = 'measured') "
+                        "AS measured_cost_count, "
+                        "count(*) FILTER (WHERE cost_measurement_state = 'partial') "
+                        "AS partial_cost_count, "
+                        "count(*) FILTER (WHERE cost_measurement_state = 'not_observed') "
+                        "AS not_observed_cost_count, "
+                        "count(*) FILTER (WHERE cost_measurement_state = 'invalid') "
+                        "AS invalid_cost_count, "
+                        "array_agg(provider_event_ids ORDER BY id) AS provider_event_id_sets, "
                         "count(*) FILTER (WHERE input_tokens IS NOT NULL "
                         "OR output_tokens IS NOT NULL) AS token_observation_count, "
                         "count(*) FILTER (WHERE execution_mode = 'hosted_advisory') "
                         "AS hosted_execution_count, "
-                        "count(*) FILTER (WHERE execution_mode = 'hosted_advisory' "
-                        "AND input_tokens IS NOT NULL AND output_tokens IS NOT NULL) "
-                        "AS hosted_accounted_count, "
                         "avg(duration_ms) FILTER (WHERE duration_ms IS NOT NULL) "
                         "AS average_duration_ms, "
                         "percentile_cont(0.5) WITHIN GROUP (ORDER BY duration_ms) "
@@ -976,70 +1607,28 @@ class PostgresApiBackend(ApiBackend):
                         "(array_agg(campaign_run_id ORDER BY started_at DESC))[1] "
                         "AS last_campaign_run_id, "
                         "(array_agg(attempt_id ORDER BY started_at DESC))[1] AS last_attempt_id "
-                        ",count(*) FILTER (WHERE oracle_agreement IS NOT NULL) "
-                        "AS oracle_comparison_count, "
-                        "count(*) FILTER (WHERE oracle_agreement IS TRUE) "
-                        "AS oracle_agreement_count, "
-                        "(array_agg(judge_calibration_id ORDER BY started_at DESC) "
-                        "FILTER (WHERE judge_calibration_state IS NOT NULL))[1] "
-                        "AS judge_calibration_id, "
-                        "(array_agg(judge_calibration_state ORDER BY started_at DESC) "
-                        "FILTER (WHERE judge_calibration_state IS NOT NULL))[1] "
-                        "AS judge_calibration_state, "
-                        "(array_agg(decision_authority ORDER BY started_at DESC) "
-                        "FILTER (WHERE decision_authority IS NOT NULL))[1] "
-                        "AS decision_authority "
                         "FROM agent_executions WHERE organization_id = :org GROUP BY agent_role",
                         {"org": principal.organization_id},
                     )
                     execution_by_role = {row["agent_role"]: row for row in execution_rows}
-                    hosted_run_rows = _rows(
-                        connection,
-                        "SELECT DISTINCT ON "
-                        "(q.scope_payload->'hosted_run'->>'configuration_set_sha256') "
-                        "q.scope_payload->'hosted_run'->>'configuration_set_sha256' "
-                        "AS configuration_sha256, r.run_id, r.created_at "
-                        "FROM campaign_runs r JOIN campaign_authorization_requests q "
-                        "ON q.organization_id = r.organization_id "
-                        "AND q.request_id = r.authorization_request_id "
-                        "AND q.scope_hash = r.scope_hash "
-                        "WHERE r.organization_id = :org "
-                        "AND q.scope_payload->'hosted_run'->>'configuration_set_sha256' "
-                        "IS NOT NULL "
-                        "ORDER BY "
-                        "q.scope_payload->'hosted_run'->>'configuration_set_sha256', "
-                        "r.created_at DESC",
-                        {"org": principal.organization_id},
-                    )
-                    hosted_run_by_configuration = {
-                        row["configuration_sha256"]: row for row in hosted_run_rows
-                    }
                     hosted_budget_rows = _rows(
                         connection,
-                        "SELECT campaign_run_id, agent_role, "
-                        "coalesce(sum(measured_cost), 0) AS measured_cost, "
-                        "coalesce(sum(physical_attempts), 0) AS physical_calls "
+                        "SELECT campaign_run_id, agent_role, status, execution_mode, detail, "
+                        "measured_cost, cost_measurement_state, physical_attempts, "
+                        "configuration_set_sha256, "
+                        "generation_policy_sha256, returned_model, upstream_provider, "
+                        "provider_request_id, input_tokens, output_tokens, reasoning_tokens "
                         "FROM agent_executions WHERE organization_id = :org "
-                        "AND configuration_set_sha256 IS NOT NULL "
-                        "GROUP BY campaign_run_id, agent_role",
+                        "AND configuration_set_sha256 IS NOT NULL",
                         {"org": principal.organization_id},
                     )
-                    hosted_budget_by_run_role = {
-                        (row["campaign_run_id"], row["agent_role"]): row
-                        for row in hosted_budget_rows
-                    }
-                    hosted_budget_global_by_run: dict[str, dict[str, float | int]] = {}
-                    for budget_row in hosted_budget_rows:
-                        aggregate = hosted_budget_global_by_run.setdefault(
-                            budget_row["campaign_run_id"],
-                            {"measured_cost": 0.0, "physical_calls": 0},
-                        )
-                        aggregate["measured_cost"] = float(aggregate["measured_cost"]) + float(
-                            budget_row["measured_cost"] or 0
-                        )
-                        aggregate["physical_calls"] = int(aggregate["physical_calls"]) + int(
-                            budget_row["physical_calls"] or 0
-                        )
+                    (
+                        hosted_budget_by_run_role,
+                        hosted_budget_global_by_run,
+                    ) = _hosted_budget_usage(
+                        hosted_budget_rows,
+                        hosted_configurations,
+                    )
 
                     def budget_record(
                         *,
@@ -1050,35 +1639,15 @@ class PostgresApiBackend(ApiBackend):
                             assignment is None
                             or assignment.get("execution_mode") != "hosted_advisory"
                         ):
-                            return {
-                                "status": "unavailable",
-                                "campaign_run_id": None,
-                                "configuration_set_sha256": None,
-                                "role_usd_cap": None,
-                                "role_usd_spent": 0.0,
-                                "role_usd_remaining": None,
-                                "role_usd_overrun": 0.0,
-                                "role_call_cap": None,
-                                "role_physical_calls": 0,
-                                "role_calls_remaining": None,
-                                "role_call_overrun": 0,
-                                "global_usd_cap": None,
-                                "global_usd_spent": 0.0,
-                                "global_usd_remaining": None,
-                                "global_usd_overrun": 0.0,
-                                "global_call_cap": None,
-                                "global_physical_calls": 0,
-                                "global_calls_remaining": None,
-                                "global_call_overrun": 0,
-                            }
+                            return _unavailable_provider_budget()
                         configuration_sha256 = str(assignment["configuration_sha256"])
                         configuration = hosted_configurations.get(configuration_sha256)
                         if configuration is None:
                             return budget_record(role=role, assignment=None)
-                        role_configuration = next(
-                            item for item in configuration.roles if item.role == role
+                        run = _budget_run_for_role(
+                            budget_run_by_configuration.get(configuration_sha256),
+                            role=role,
                         )
-                        run = hosted_run_by_configuration.get(configuration_sha256)
                         run_id = run["run_id"] if run is not None else None
                         role_usage = (
                             hosted_budget_by_run_role.get((run_id, role), {})
@@ -1090,41 +1659,67 @@ class PostgresApiBackend(ApiBackend):
                             if run_id is not None
                             else {}
                         )
-                        role_cap = float(role_configuration.limits.max_usd)
-                        role_spent = float(role_usage.get("measured_cost", 0.0))
-                        role_remaining = max(0.0, role_cap - role_spent)
-                        role_overrun = max(0.0, role_spent - role_cap)
-                        role_call_cap = role_configuration.limits.max_calls
-                        role_calls = int(role_usage.get("physical_calls", 0))
-                        global_cap = float(configuration.global_limits.max_usd)
-                        global_spent = float(global_usage.get("measured_cost", 0.0))
-                        global_remaining = max(0.0, global_cap - global_spent)
-                        global_overrun = max(0.0, global_spent - global_cap)
-                        global_call_cap = configuration.global_limits.max_calls
-                        global_calls = int(global_usage.get("physical_calls", 0))
-                        return {
-                            "status": (
-                                "active" if run_id is not None else "staged_pending_authorization"
+                        role_cost_state = _aggregate_cost_measurement_state(
+                            measured=int(role_usage.get("measured_cost_count", 0)),
+                            partial=int(role_usage.get("partial_cost_count", 0)),
+                            not_observed=int(role_usage.get("not_observed_cost_count", 0)),
+                            invalid=int(role_usage.get("invalid_cost_count", 0)),
+                        )
+                        role_call_count_state = (
+                            "lower_bound"
+                            if int(role_usage.get("historical_lineage_count", 0)) > 0
+                            else "exact"
+                        )
+                        global_cost_state = _aggregate_cost_measurement_state(
+                            measured=int(global_usage.get("measured_cost_count", 0)),
+                            partial=int(global_usage.get("partial_cost_count", 0)),
+                            not_observed=int(global_usage.get("not_observed_cost_count", 0)),
+                            invalid=int(global_usage.get("invalid_cost_count", 0)),
+                        )
+                        global_call_count_state = (
+                            "lower_bound"
+                            if int(global_usage.get("historical_lineage_count", 0)) > 0
+                            else "exact"
+                        )
+                        return _provider_budget_projection(
+                            configuration=configuration,
+                            role=role,
+                            campaign_run_id=run_id,
+                            campaign_state=(
+                                str(run["campaign_state"])
+                                if run is not None and run.get("campaign_state") is not None
+                                else None
                             ),
-                            "campaign_run_id": run_id,
-                            "configuration_set_sha256": configuration_sha256,
-                            "role_usd_cap": role_cap,
-                            "role_usd_spent": role_spent,
-                            "role_usd_remaining": role_remaining,
-                            "role_usd_overrun": role_overrun,
-                            "role_call_cap": role_call_cap,
-                            "role_physical_calls": role_calls,
-                            "role_calls_remaining": max(0, role_call_cap - role_calls),
-                            "role_call_overrun": max(0, role_calls - role_call_cap),
-                            "global_usd_cap": global_cap,
-                            "global_usd_spent": global_spent,
-                            "global_usd_remaining": global_remaining,
-                            "global_usd_overrun": global_overrun,
-                            "global_call_cap": global_call_cap,
-                            "global_physical_calls": global_calls,
-                            "global_calls_remaining": max(0, global_call_cap - global_calls),
-                            "global_call_overrun": max(0, global_calls - global_call_cap),
-                        }
+                            role_spent=float(role_usage.get("measured_cost", 0.0)),
+                            role_cost_measurement_state=role_cost_state,
+                            role_physical_calls=int(role_usage.get("physical_calls", 0)),
+                            role_unresolved_usd_exposure=role_usage.get(
+                                "unresolved_usd_exposure",
+                                0.0,
+                            ),
+                            role_unresolved_physical_calls=role_usage.get(
+                                "unresolved_physical_calls",
+                                0,
+                            ),
+                            role_call_count_state=role_call_count_state,
+                            global_spent=float(global_usage.get("measured_cost", 0.0)),
+                            global_cost_measurement_state=global_cost_state,
+                            global_physical_calls=int(global_usage.get("physical_calls", 0)),
+                            global_unresolved_usd_exposure=global_usage.get(
+                                "unresolved_usd_exposure",
+                                0.0,
+                            ),
+                            global_unresolved_physical_calls=global_usage.get(
+                                "unresolved_physical_calls",
+                                0,
+                            ),
+                            global_call_count_state=global_call_count_state,
+                            status=(
+                                str(run["budget_status"])
+                                if run is not None and run.get("budget_status") is not None
+                                else None
+                            ),
+                        )
 
                     def assignment_record(source: Mapping[str, Any]) -> dict[str, Any]:
                         return {
@@ -1150,6 +1745,93 @@ class PostgresApiBackend(ApiBackend):
                             or source.get("configured_by"),
                         }
 
+                    def judge_calibration_record(
+                        assignment: Mapping[str, Any],
+                    ) -> dict[str, Any]:
+                        unavailable = {
+                            "state": "unavailable",
+                            "calibration_id": None,
+                            "decision_authority": "none",
+                            "oracle_comparison_count": 0,
+                            "oracle_agreement_count": 0,
+                            "oracle_agreement_rate": None,
+                            "status_label": "not yet measured",
+                        }
+                        if assignment.get("execution_mode") != "hosted_advisory":
+                            return unavailable
+                        configuration_sha256 = assignment.get("configuration_sha256")
+                        latest = (
+                            connection.execute(
+                                text(
+                                    "SELECT judge_calibration_id, judge_calibration_state "
+                                    "FROM agent_executions WHERE organization_id = :org "
+                                    "AND agent_role = 'judge' "
+                                    "AND configuration_set_sha256 = :configuration "
+                                    "AND judge_calibration_id IS NOT NULL "
+                                    "AND judge_calibration_state IS NOT NULL "
+                                    "ORDER BY started_at DESC, id DESC LIMIT 1"
+                                ),
+                                {
+                                    "org": principal.organization_id,
+                                    "configuration": configuration_sha256,
+                                },
+                            )
+                            .mappings()
+                            .one_or_none()
+                        )
+                        if latest is None or latest["judge_calibration_state"] == "unavailable":
+                            return unavailable
+                        observations = (
+                            connection.execute(
+                                text(
+                                    "SELECT count(*) FILTER "
+                                    "(WHERE oracle_agreement IS NOT NULL) "
+                                    "AS oracle_comparison_count, "
+                                    "count(*) FILTER (WHERE oracle_agreement IS TRUE) "
+                                    "AS oracle_agreement_count, "
+                                    "(array_agg(decision_authority "
+                                    "ORDER BY started_at DESC, id DESC) "
+                                    "FILTER (WHERE decision_authority IS NOT NULL))[1] "
+                                    "AS decision_authority "
+                                    "FROM agent_executions WHERE organization_id = :org "
+                                    "AND agent_role = 'judge' "
+                                    "AND configuration_set_sha256 = :configuration "
+                                    "AND judge_calibration_id = :calibration"
+                                ),
+                                {
+                                    "org": principal.organization_id,
+                                    "configuration": configuration_sha256,
+                                    "calibration": latest["judge_calibration_id"],
+                                },
+                            )
+                            .mappings()
+                            .one()
+                        )
+                        comparison_count = int(observations["oracle_comparison_count"] or 0)
+                        agreement_count = int(observations["oracle_agreement_count"] or 0)
+                        authority = (
+                            str(observations["decision_authority"] or "none")
+                            if comparison_count
+                            else "none"
+                        )
+                        return {
+                            "state": latest["judge_calibration_state"],
+                            "calibration_id": latest["judge_calibration_id"],
+                            "decision_authority": authority,
+                            "oracle_comparison_count": comparison_count,
+                            "oracle_agreement_count": agreement_count,
+                            "oracle_agreement_rate": (
+                                agreement_count / comparison_count if comparison_count else None
+                            ),
+                            "status_label": (
+                                "not yet measured"
+                                if comparison_count == 0
+                                else "live, model-decisive after calibration"
+                                if authority == "model"
+                                else "live, verified against oracle"
+                            ),
+                        }
+
                     rows = []
                     for definition in AGENT_DEFINITIONS:
                         definition_record = definition.public_record()
@@ -1173,16 +1855,24 @@ class PostgresApiBackend(ApiBackend):
                             ),
                             None,
                         )
-                        active_assignment = active_hosted_assignments.get(definition.role) or (
-                            assignment_record(active)
-                            if active is not None
-                            else assignment_record(
-                                default_assignment(definition.role).public_record()
-                            )
+                        active_hosted = active_hosted_assignments.get(definition.role)
+                        hosted_activated_after_deterministic = active_hosted is not None and (
+                            active is None or active_hosted["_activation_at"] > active["created_at"]
                         )
-                        staged_assignment = staged_hosted_assignments.get(definition.role)
-                        if staged_assignment is None and staged is not None:
-                            staged_assignment = assignment_record(staged)
+                        active_source = (
+                            active_hosted
+                            if hosted_activated_after_deterministic
+                            else active
+                            if active is not None
+                            else default_assignment(definition.role).public_record()
+                        )
+                        active_assignment = assignment_record(active_source)
+                        staged_source = staged_hosted_assignments.get(definition.role)
+                        if staged_source is None:
+                            staged_source = staged
+                        staged_assignment = (
+                            assignment_record(staged_source) if staged_source is not None else None
+                        )
                         budget_assignment = (
                             active_assignment
                             if active_assignment["execution_mode"] == "hosted_advisory"
@@ -1190,48 +1880,18 @@ class PostgresApiBackend(ApiBackend):
                         )
                         stats = execution_by_role.get(definition.role, {})
                         execution_count = int(stats.get("execution_count", 0))
-                        hosted_execution_count = int(stats.get("hosted_execution_count", 0))
-                        hosted_accounted_count = int(stats.get("hosted_accounted_count", 0))
-                        if execution_count == 0:
-                            accounting_status = "not_applicable"
-                        elif hosted_execution_count == 0 or (
-                            hosted_accounted_count == hosted_execution_count
-                        ):
-                            accounting_status = "measured"
-                        elif hosted_accounted_count == 0 and (
-                            hosted_execution_count == execution_count
-                        ):
-                            accounting_status = (
-                                "partial"
-                                if int(stats.get("physical_call_count", 0)) > 0
-                                else "unavailable"
-                            )
-                        else:
-                            accounting_status = "partial"
-                        oracle_comparison_count = int(stats.get("oracle_comparison_count", 0))
-                        oracle_agreement_count = int(stats.get("oracle_agreement_count", 0))
-                        decision_authority = stats.get("decision_authority") or "none"
-                        calibration_state = stats.get("judge_calibration_state") or "unavailable"
-                        if oracle_comparison_count == 0:
-                            calibration_label = "not yet measured"
-                        elif decision_authority == "model":
-                            calibration_label = "live, model-decisive after calibration"
-                        else:
-                            calibration_label = "live, verified against oracle"
+                        cost_measurement_state = _aggregate_cost_measurement_state(
+                            measured=int(stats.get("measured_cost_count", 0)),
+                            partial=int(stats.get("partial_cost_count", 0)),
+                            not_observed=int(stats.get("not_observed_cost_count", 0)),
+                            invalid=int(stats.get("invalid_cost_count", 0)),
+                        )
+                        accounting_status = _accounting_status(
+                            cost_measurement_state,
+                            applicable=execution_count > 0,
+                        )
                         judge_calibration = (
-                            {
-                                "state": calibration_state,
-                                "calibration_id": stats.get("judge_calibration_id"),
-                                "decision_authority": decision_authority,
-                                "oracle_comparison_count": oracle_comparison_count,
-                                "oracle_agreement_count": oracle_agreement_count,
-                                "oracle_agreement_rate": (
-                                    oracle_agreement_count / oracle_comparison_count
-                                    if oracle_comparison_count
-                                    else None
-                                ),
-                                "status_label": calibration_label,
-                            }
+                            judge_calibration_record(active_assignment)
                             if definition.role == "judge"
                             else None
                         )
@@ -1240,13 +1900,31 @@ class PostgresApiBackend(ApiBackend):
                                 **definition_record,
                                 "active_assignment": active_assignment,
                                 "staged_assignment": staged_assignment,
+                                "latest_acceptance_execution": (
+                                    acceptance_execution_by_role.get(definition.role)
+                                ),
                                 "execution_count": execution_count,
+                                "hosted_execution_count": int(
+                                    stats.get("hosted_execution_count", 0)
+                                ),
                                 "running_count": int(stats.get("running_count", 0)),
                                 "succeeded_count": int(stats.get("succeeded_count", 0)),
                                 "failed_count": int(stats.get("failed_count", 0)),
                                 "skipped_count": int(stats.get("skipped_count", 0)),
-                                "measured_cost": float(stats.get("measured_cost", 0.0)),
+                                "measured_cost": (
+                                    float(stats["measured_cost"])
+                                    if stats.get("measured_cost") is not None
+                                    else None
+                                ),
+                                "cost_measurement_state": (
+                                    cost_measurement_state
+                                    if execution_count > 0
+                                    else "not_applicable"
+                                ),
                                 "accounting_status": accounting_status,
+                                "provider_event_ids": _flatten_provider_event_ids(
+                                    stats.get("provider_event_id_sets")
+                                ),
                                 "currency": "USD",
                                 "input_tokens": stats.get("input_tokens"),
                                 "output_tokens": stats.get("output_tokens"),
@@ -1255,6 +1933,15 @@ class PostgresApiBackend(ApiBackend):
                                     stats.get("token_observation_count", 0)
                                 ),
                                 "physical_call_count": int(stats.get("physical_call_count", 0)),
+                                "physical_call_count_state": (
+                                    "not_applicable"
+                                    if int(stats.get("hosted_execution_count", 0)) == 0
+                                    else (
+                                        "lower_bound"
+                                        if int(stats.get("historical_lineage_count", 0)) > 0
+                                        else "exact"
+                                    )
+                                ),
                                 "provider_budget": budget_record(
                                     role=definition.role,
                                     assignment=budget_assignment,
@@ -1297,19 +1984,75 @@ class PostgresApiBackend(ApiBackend):
                             }
                         )
                 elif resource == "agent_prompt":
-                    try:
-                        prompt = hosted_prompt(identifiers.get("agent_role", ""))
-                    except ValueError:
+                    agent_role = identifiers.get("agent_role", "")
+                    prompt_version = identifiers.get("prompt_version", "")
+                    prompt_sha256 = identifiers.get("prompt_sha256", "")
+                    configuration_sha256 = identifiers.get("configuration_sha256", "")
+                    configuration_row = (
+                        connection.execute(
+                            text(
+                                "SELECT configuration_sha256, payload "
+                                "FROM hosted_configuration_sets "
+                                "WHERE organization_id = :org "
+                                "AND configuration_sha256 = :configuration"
+                            ),
+                            {
+                                "org": principal.organization_id,
+                                "configuration": configuration_sha256,
+                            },
+                        )
+                        .mappings()
+                        .one_or_none()
+                    )
+                    if configuration_row is None:
                         rows = []
                     else:
-                        rows = [
-                            {
-                                "role": prompt.role,
-                                "prompt_version": prompt.version,
-                                "prompt_sha256": prompt.prompt_sha256,
-                                "system_prompt": prompt.system_prompt,
-                            }
-                        ]
+                        try:
+                            configuration = HostedConfigurationSet.from_payload(
+                                dict(configuration_row["payload"])
+                            )
+                        except (TypeError, ValueError):
+                            return ResourceResult.unavailable(
+                                "hosted_configuration_integrity_failed"
+                            )
+                        if (
+                            configuration.configuration_sha256
+                            != configuration_row["configuration_sha256"]
+                        ):
+                            return ResourceResult.unavailable(
+                                "hosted_configuration_integrity_failed"
+                            )
+                        configured_role = next(
+                            (
+                                role
+                                for role in configuration.roles
+                                if role.role == agent_role and role.prompt_sha256 == prompt_sha256
+                            ),
+                            None,
+                        )
+                        try:
+                            prompt = prompt_for_identity(
+                                agent_role,
+                                prompt_version,
+                                prompt_sha256,
+                            )
+                        except PromptRegistryError:
+                            rows = []
+                        else:
+                            if (
+                                configured_role is None
+                                or configured_role.prompt_version != prompt.version
+                            ):
+                                rows = []
+                            else:
+                                rows = [
+                                    {
+                                        "role": prompt.role,
+                                        "prompt_version": prompt.version,
+                                        "prompt_sha256": prompt.sha256,
+                                        "system_prompt": prompt.content,
+                                    }
+                                ]
                 elif resource in {
                     "hosted_configuration_set",
                     "hosted_configuration_preflight",
@@ -1333,7 +2076,14 @@ class PostgresApiBackend(ApiBackend):
                     if row is None:
                         rows = []
                     else:
-                        configuration = HostedConfigurationSet.from_payload(dict(row["payload"]))
+                        try:
+                            configuration = HostedConfigurationSet.from_payload(
+                                dict(row["payload"])
+                            )
+                        except (TypeError, ValueError):
+                            return ResourceResult.unavailable(
+                                "hosted_configuration_integrity_failed"
+                            )
                         if configuration.configuration_sha256 != row["configuration_sha256"]:
                             return ResourceResult.unavailable(
                                 "hosted_configuration_integrity_failed"
@@ -1407,30 +2157,32 @@ class PostgresApiBackend(ApiBackend):
                         "configuration_set_sha256, role_configuration_sha256, "
                         "generation_policy_sha256, input_sha256, output_sha256, input_tokens, "
                         "output_tokens, reasoning_tokens, physical_attempts, measured_cost, "
+                        "cost_measurement_state, provider_event_ids, "
                         "currency, trace_id, langfuse_status, "
                         "langfuse_verified_at, "
                         "detail, judge_calibration_id, judge_calibration_state, "
                         "oracle_agreement, decision_authority, error_code, "
+                        "provider_event_status, "
                         "started_at, finished_at, duration_ms FROM agent_executions "
                         "WHERE organization_id = :org ORDER BY id DESC LIMIT 1000",
                         {"org": principal.organization_id},
                     )
                     for row in rows:
-                        row["measured_cost"] = float(row["measured_cost"] or 0.0)
-                        row["accounting_status"] = (
-                            "measured"
-                            if row["execution_mode"] == "deterministic"
-                            or (
-                                row["input_tokens"] is not None
-                                and row["output_tokens"] is not None
-                                and (
-                                    row["configuration_set_sha256"] is None
-                                    or row["reasoning_tokens"] is not None
-                                )
-                            )
-                            else (
-                                "partial" if row["physical_attempts"] is not None else "unavailable"
-                            )
+                        row["model_substituted"] = row["provider_event_status"] == "model_mismatch"
+                        row["measured_cost"] = (
+                            float(row["measured_cost"])
+                            if row["measured_cost"] is not None
+                            else None
+                        )
+                        row["accounting_status"] = {
+                            "measured": "measured",
+                            "partial": "partial",
+                            "not_observed": "unavailable",
+                            "invalid": "unavailable",
+                        }[row["cost_measurement_state"]]
+                        row["provider_lineage_state"] = _provider_lineage_state(
+                            row["execution_mode"],
+                            row["detail"],
                         )
                         row["duration_ms"] = (
                             float(row["duration_ms"]) if row["duration_ms"] is not None else None
@@ -1897,6 +2649,11 @@ class PostgresApiBackend(ApiBackend):
                     )
                     if any(count != 1 for count in finding_link_counts.values()):
                         return ResourceResult.unavailable("finding_evidence_identifier_ambiguous")
+                    histories = _finding_histories(
+                        connection,
+                        organization_id=principal.organization_id,
+                        finding_ids={str(source["linked_finding_id"]) for source in source_rows},
+                    )
                     rows = []
                     for source in source_rows:
                         try:
@@ -1907,16 +2664,7 @@ class PostgresApiBackend(ApiBackend):
                             _validated_finding_lineage(source)
                         except EvidenceIntegrityError:
                             return ResourceResult.unavailable("finding_evidence_integrity_failed")
-                        history = _rows(
-                            connection,
-                            "SELECT decision, actor_user_id, rationale, created_at "
-                            "FROM finding_decision_events WHERE organization_id = :org "
-                            "AND finding_id = :finding ORDER BY created_at ASC",
-                            {
-                                "org": principal.organization_id,
-                                "finding": source["linked_finding_id"],
-                            },
-                        )
+                        history = histories[str(source["linked_finding_id"])]
                         for event in history:
                             event["rationale"] = str(_redact_evidence_display(event["rationale"]))
                         latest = history[-1]["decision"] if history else None
@@ -2309,11 +3057,14 @@ class PostgresApiBackend(ApiBackend):
                                 "provider": source["provider"],
                                 "agent_role": None,
                                 "record_kind": "campaign",
+                                "execution_mode": None,
                                 # measured_cost is a Numeric(14,6) -> Decimal; the console/pydantic
                                 # contract requires a JSON number, so coerce it to float here rather
                                 # than letting _safe stringify the Decimal.
-                                "measured_cost": float(cost) if cost is not None else 0.0,
+                                "measured_cost": float(cost) if cost is not None else None,
+                                "cost_measurement_state": "measured",
                                 "accounting_status": "measured",
+                                "provider_event_ids": [],
                                 "currency": source["currency"],
                                 "request_count": source["request_count"],
                                 "execution_count": 0,
@@ -2322,13 +3073,14 @@ class PostgresApiBackend(ApiBackend):
                                 "average_cost_per_request": (
                                     float(cost) / source["request_count"]
                                     if cost is not None and source["request_count"]
-                                    else 0.0
+                                    else None
                                 ),
                                 "input_tokens": None,
                                 "output_tokens": None,
                                 "reasoning_tokens": None,
                                 "token_observation_count": 0,
                                 "physical_call_count": 0,
+                                "physical_call_count_state": "not_applicable",
                                 "provider_budget": None,
                                 "p50_duration_ms": None,
                                 "p95_duration_ms": None,
@@ -2360,42 +3112,65 @@ class PostgresApiBackend(ApiBackend):
                         "SELECT e.campaign_run_id, e.agent_role, e.provider, e.model, "
                         "e.execution_mode, "
                         "sum(e.measured_cost) AS measured_cost, e.currency, "
-                        "count(*) AS executions, "
+                        "count(*) FILTER (WHERE e.status <> 'running') AS executions, "
                         "count(DISTINCT e.attempt_id) AS attempt_count, "
                         "sum(e.input_tokens) AS input_tokens, "
                         "sum(e.output_tokens) AS output_tokens, "
                         "sum(e.reasoning_tokens) AS reasoning_tokens, "
                         "coalesce(sum(e.physical_attempts), 0) AS physical_call_count, "
+                        "count(*) FILTER (WHERE e.detail->>'provider_lineage_state' = "
+                        "'historical_not_instrumented') AS historical_lineage_count, "
+                        "count(*) FILTER (WHERE e.cost_measurement_state = 'measured') "
+                        "AS measured_cost_count, "
+                        "count(*) FILTER (WHERE e.cost_measurement_state = 'partial') "
+                        "AS partial_cost_count, "
+                        "count(*) FILTER (WHERE e.cost_measurement_state = 'not_observed') "
+                        "AS not_observed_cost_count, "
+                        "count(*) FILTER (WHERE e.cost_measurement_state = 'invalid') "
+                        "AS invalid_cost_count, "
+                        "array_agg(e.provider_event_ids ORDER BY e.id) "
+                        "AS provider_event_id_sets, "
                         "e.configuration_set_sha256, "
                         "count(*) FILTER (WHERE e.input_tokens IS NOT NULL "
                         "OR e.output_tokens IS NOT NULL) AS token_observation_count, "
-                        "count(*) FILTER (WHERE e.input_tokens IS NOT NULL "
-                        "AND e.output_tokens IS NOT NULL "
-                        "AND (e.execution_mode = 'deterministic' "
-                        "OR e.configuration_set_sha256 IS NULL "
-                        "OR e.reasoning_tokens IS NOT NULL)) AS fully_accounted_count, "
                         "max(m.p50_duration_ms) AS p50_duration_ms, "
                         "max(m.p95_duration_ms) AS p95_duration_ms, "
                         "min(e.started_at) AS started_at, max(e.finished_at) AS ended_at, "
-                        "extract(epoch FROM (max(e.finished_at) - min(e.started_at))) * 1000 "
-                        "AS duration_ms, q.scope_payload->>'execution_profile' "
-                        "AS execution_profile, "
-                        "CASE WHEN jsonb_typeof(q.scope_payload->'caps'->'budget_usd') = 'number' "
+                        "statement_timestamp() AS recorded_at, "
+                        "extract(epoch FROM ("
+                        "max(coalesce(e.finished_at, statement_timestamp())) - min(e.started_at)"
+                        ")) * 1000 "
+                        "AS duration_ms, "
+                        "CASE WHEN r.run_kind = 'agent_acceptance' THEN 'synthetic' "
+                        "ELSE q.scope_payload->>'execution_profile' END "
+                        "AS execution_profile, r.run_kind, "
+                        "run_state.state AS campaign_state, "
+                        "CASE WHEN r.run_kind = 'agent_acceptance' "
+                        "THEN (r.acceptance_limits->>'global_usd_cap')::double precision "
+                        "WHEN jsonb_typeof(q.scope_payload->'caps'->'budget_usd') = 'number' "
                         "THEN (q.scope_payload->'caps'->>'budget_usd')::double precision "
                         "ELSE NULL END AS budget_usd "
                         "FROM agent_executions e JOIN campaign_runs r "
                         "ON r.organization_id = e.organization_id "
                         "AND r.run_id = e.campaign_run_id "
-                        "JOIN campaign_authorization_requests q "
+                        "LEFT JOIN campaign_authorization_requests q "
                         "ON q.organization_id = r.organization_id "
                         "AND q.request_id = r.authorization_request_id "
-                        "JOIN role_metrics m ON m.organization_id = e.organization_id "
+                        "LEFT JOIN role_metrics m ON m.organization_id = e.organization_id "
                         "AND m.campaign_run_id = e.campaign_run_id "
                         "AND m.agent_role = e.agent_role "
-                        "WHERE e.organization_id = :org AND e.status <> 'running' "
+                        "LEFT JOIN LATERAL (SELECT state FROM campaign_run_events event "
+                        "WHERE event.organization_id = e.organization_id "
+                        "AND event.run_id = e.campaign_run_id "
+                        "ORDER BY event.id DESC LIMIT 1) run_state ON true "
+                        "WHERE e.organization_id = :org "
+                        "AND (e.status <> 'running' "
+                        "OR e.configuration_set_sha256 IS NOT NULL) "
                         "GROUP BY e.campaign_run_id, e.agent_role, e.provider, e.model, "
-                        "e.currency, e.execution_mode, e.configuration_set_sha256, q.scope_payload "
-                        "ORDER BY max(e.finished_at) DESC LIMIT 400",
+                        "e.currency, e.execution_mode, e.configuration_set_sha256, "
+                        "q.scope_payload, r.run_kind, r.acceptance_limits, run_state.state "
+                        "ORDER BY max(coalesce(e.finished_at, statement_timestamp())) DESC "
+                        "LIMIT 400",
                         {"org": principal.organization_id},
                     )
                     cost_configuration_rows = _rows(
@@ -2417,33 +3192,47 @@ class PostgresApiBackend(ApiBackend):
                             == configuration_row["configuration_sha256"]
                         ):
                             cost_configurations[configuration.configuration_sha256] = configuration
-                    global_cost_rows = _rows(
+                    hosted_cost_usage_rows = _rows(
                         connection,
-                        "SELECT campaign_run_id, coalesce(sum(measured_cost), 0) "
-                        "AS measured_cost, coalesce(sum(physical_attempts), 0) "
-                        "AS physical_call_count FROM agent_executions "
+                        "SELECT campaign_run_id, agent_role, status, execution_mode, detail, "
+                        "measured_cost, cost_measurement_state, physical_attempts, "
+                        "configuration_set_sha256, "
+                        "generation_policy_sha256, returned_model, upstream_provider, "
+                        "provider_request_id, input_tokens, output_tokens, reasoning_tokens "
+                        "FROM agent_executions "
                         "WHERE organization_id = :org "
-                        "AND configuration_set_sha256 IS NOT NULL "
-                        "GROUP BY campaign_run_id",
+                        "AND configuration_set_sha256 IS NOT NULL",
                         {"org": principal.organization_id},
                     )
-                    global_cost_by_run = {row["campaign_run_id"]: row for row in global_cost_rows}
+                    (
+                        cost_usage_by_run_role,
+                        global_cost_by_run,
+                    ) = _hosted_budget_usage(
+                        hosted_cost_usage_rows,
+                        cost_configurations,
+                    )
                     for source in agent_cost_rows:
-                        cost = float(source["measured_cost"] or 0.0)
-                        execution_count = int(source["executions"])
-                        fully_accounted_count = int(source["fully_accounted_count"])
-                        physical_call_count = int(source["physical_call_count"] or 0)
-                        if (
-                            source["execution_mode"] == "deterministic"
-                            or fully_accounted_count == execution_count
-                        ):
-                            accounting_status = "measured"
-                        elif fully_accounted_count == 0:
-                            accounting_status = (
-                                "partial" if physical_call_count > 0 else "unavailable"
+                        role_usage = source
+                        measured_cost = role_usage["measured_cost"]
+                        cost = float(measured_cost) if measured_cost is not None else None
+                        execution_count = int(role_usage["executions"])
+                        physical_call_count = int(role_usage["physical_call_count"] or 0)
+                        physical_call_count_state = (
+                            "not_applicable"
+                            if source["execution_mode"] == "deterministic"
+                            else (
+                                "lower_bound"
+                                if int(role_usage["historical_lineage_count"] or 0) > 0
+                                else "exact"
                             )
-                        else:
-                            accounting_status = "partial"
+                        )
+                        cost_measurement_state = _aggregate_cost_measurement_state(
+                            measured=int(role_usage["measured_cost_count"]),
+                            partial=int(role_usage["partial_cost_count"]),
+                            not_observed=int(role_usage["not_observed_cost_count"]),
+                            invalid=int(role_usage["invalid_cost_count"]),
+                        )
+                        accounting_status = _accounting_status(cost_measurement_state)
                         accounting_id = hashlib.sha256(
                             (
                                 f"agent-cost:{source['campaign_run_id']}:"
@@ -2455,19 +3244,64 @@ class PostgresApiBackend(ApiBackend):
                         if configuration is None:
                             provider_budget = _unavailable_provider_budget()
                         else:
+                            budget_role_usage = cost_usage_by_run_role.get(
+                                (source["campaign_run_id"], source["agent_role"]),
+                                {},
+                            )
                             global_usage = global_cost_by_run.get(
                                 source["campaign_run_id"],
                                 {},
+                            )
+                            global_cost_measurement_state = _aggregate_cost_measurement_state(
+                                measured=int(global_usage.get("measured_cost_count", 0)),
+                                partial=int(global_usage.get("partial_cost_count", 0)),
+                                not_observed=int(global_usage.get("not_observed_cost_count", 0)),
+                                invalid=int(global_usage.get("invalid_cost_count", 0)),
                             )
                             provider_budget = _provider_budget_projection(
                                 configuration=configuration,
                                 role=source["agent_role"],
                                 campaign_run_id=source["campaign_run_id"],
-                                role_spent=cost,
-                                role_physical_calls=physical_call_count,
+                                campaign_state=source["campaign_state"],
+                                role_spent=float(
+                                    budget_role_usage.get("measured_cost", cost or 0.0)
+                                ),
+                                role_cost_measurement_state=cost_measurement_state,
+                                role_physical_calls=int(
+                                    budget_role_usage.get(
+                                        "physical_calls",
+                                        physical_call_count,
+                                    )
+                                ),
+                                role_unresolved_usd_exposure=budget_role_usage.get(
+                                    "unresolved_usd_exposure",
+                                    0.0,
+                                ),
+                                role_unresolved_physical_calls=budget_role_usage.get(
+                                    "unresolved_physical_calls",
+                                    0,
+                                ),
+                                role_call_count_state=physical_call_count_state,
                                 global_spent=float(global_usage.get("measured_cost", 0.0)),
-                                global_physical_calls=int(
-                                    global_usage.get("physical_call_count", 0)
+                                global_cost_measurement_state=(global_cost_measurement_state),
+                                global_physical_calls=int(global_usage.get("physical_calls", 0)),
+                                global_unresolved_usd_exposure=global_usage.get(
+                                    "unresolved_usd_exposure",
+                                    0.0,
+                                ),
+                                global_unresolved_physical_calls=global_usage.get(
+                                    "unresolved_physical_calls",
+                                    0,
+                                ),
+                                global_call_count_state=(
+                                    "lower_bound"
+                                    if int(global_usage.get("historical_lineage_count", 0)) > 0
+                                    else "exact"
+                                ),
+                                status=(
+                                    "agent_acceptance"
+                                    if source["run_kind"] == "agent_acceptance"
+                                    else None
                                 ),
                             )
                         rows.append(
@@ -2480,31 +3314,52 @@ class PostgresApiBackend(ApiBackend):
                                 ),
                                 "agent_role": source["agent_role"],
                                 "record_kind": "agent",
+                                "execution_mode": source["execution_mode"],
                                 "measured_cost": cost,
+                                "cost_measurement_state": cost_measurement_state,
                                 "accounting_status": accounting_status,
+                                "provider_event_ids": _flatten_provider_event_ids(
+                                    role_usage["provider_event_id_sets"]
+                                ),
                                 "currency": source["currency"],
                                 "request_count": physical_call_count,
                                 "execution_count": execution_count,
-                                "attempt_count": int(source["attempt_count"]),
+                                "attempt_count": int(role_usage["attempt_count"]),
                                 "confirmed_finding_count": 0,
                                 "average_cost_per_request": (
-                                    cost / physical_call_count if physical_call_count else 0.0
+                                    cost / physical_call_count
+                                    if accounting_status == "measured"
+                                    and cost is not None
+                                    and physical_call_count
+                                    and physical_call_count_state == "exact"
+                                    else None
                                 ),
-                                "input_tokens": source["input_tokens"],
-                                "output_tokens": source["output_tokens"],
-                                "reasoning_tokens": source["reasoning_tokens"],
-                                "token_observation_count": int(source["token_observation_count"]),
+                                "input_tokens": role_usage["input_tokens"],
+                                "output_tokens": role_usage["output_tokens"],
+                                "reasoning_tokens": role_usage["reasoning_tokens"],
+                                "token_observation_count": int(
+                                    role_usage["token_observation_count"]
+                                ),
                                 "physical_call_count": physical_call_count,
+                                "physical_call_count_state": physical_call_count_state,
                                 "provider_budget": provider_budget,
-                                "p50_duration_ms": float(source["p50_duration_ms"]),
-                                "p95_duration_ms": float(source["p95_duration_ms"]),
+                                "p50_duration_ms": (
+                                    float(source["p50_duration_ms"])
+                                    if source["p50_duration_ms"] is not None
+                                    else None
+                                ),
+                                "p95_duration_ms": (
+                                    float(source["p95_duration_ms"])
+                                    if source["p95_duration_ms"] is not None
+                                    else None
+                                ),
                                 "budget_usd": None,
                                 "budget_utilization": None,
                                 "duration_ms": float(source["duration_ms"] or 0.0),
                                 "execution_profile": source["execution_profile"],
                                 "started_at": source["started_at"],
                                 "ended_at": source["ended_at"],
-                                "recorded_at": source["ended_at"],
+                                "recorded_at": source["recorded_at"],
                             }
                         )
                 elif resource == "traces":
@@ -2541,7 +3396,10 @@ class PostgresApiBackend(ApiBackend):
                                 "parent_execution_id": None,
                                 "agent_role": None,
                                 "execution_mode": None,
+                                "requested_model": None,
                                 "returned_model": None,
+                                "model_substituted": False,
+                                "provider_event_status": None,
                                 "upstream_provider": None,
                                 "provider_request_id": None,
                                 "configuration_set_sha256": None,
@@ -2558,8 +3416,15 @@ class PostgresApiBackend(ApiBackend):
                                 "p50_duration_ms": None,
                                 "p95_duration_ms": None,
                                 "duration_ms": duration_ms,
-                                "measured_cost": float(source["measured_cost"] or 0.0),
+                                "measured_cost": (
+                                    float(source["measured_cost"])
+                                    if source["measured_cost"] is not None
+                                    else None
+                                ),
+                                "cost_measurement_state": "measured",
                                 "accounting_status": "measured",
+                                "provider_event_ids": [],
+                                "provider_lineage_state": "not_applicable",
                             }
                         )
                     legacy_rows = _rows(
@@ -2593,9 +3458,13 @@ class PostgresApiBackend(ApiBackend):
                                     f"attempt:{source['target_id']}@{source['target_version']}"
                                 ),
                                 "provider": source["target_id"] or "target",
+                                "model": None,
                                 "agent_role": None,
                                 "execution_mode": None,
+                                "requested_model": None,
                                 "returned_model": None,
+                                "model_substituted": False,
+                                "provider_event_status": None,
                                 "upstream_provider": None,
                                 "provider_request_id": None,
                                 "configuration_set_sha256": None,
@@ -2616,8 +3485,11 @@ class PostgresApiBackend(ApiBackend):
                                 ),
                                 "request_bytes": 0,
                                 "response_bytes": None,
-                                "measured_cost": 0.0,
+                                "measured_cost": None,
+                                "cost_measurement_state": "not_observed",
                                 "accounting_status": "unavailable",
+                                "provider_event_ids": [],
+                                "provider_lineage_state": "not_applicable",
                                 "currency": "USD",
                                 "input_tokens": None,
                                 "output_tokens": None,
@@ -2657,9 +3529,13 @@ class PostgresApiBackend(ApiBackend):
                                 "attempt_id": None,
                                 "operation": "campaign.run",
                                 "provider": source["provenance"],
+                                "model": None,
                                 "agent_role": None,
                                 "execution_mode": None,
+                                "requested_model": None,
                                 "returned_model": None,
+                                "model_substituted": False,
+                                "provider_event_status": None,
                                 "upstream_provider": None,
                                 "provider_request_id": None,
                                 "configuration_set_sha256": None,
@@ -2681,8 +3557,15 @@ class PostgresApiBackend(ApiBackend):
                                 ),
                                 "request_bytes": 0,
                                 "response_bytes": None,
-                                "measured_cost": float(source["measured_cost"] or 0.0),
+                                "measured_cost": (
+                                    float(source["measured_cost"])
+                                    if source["measured_cost"] is not None
+                                    else None
+                                ),
+                                "cost_measurement_state": "measured",
                                 "accounting_status": "measured",
+                                "provider_event_ids": [],
+                                "provider_lineage_state": "not_applicable",
                                 "currency": source["currency"],
                                 "input_tokens": None,
                                 "output_tokens": None,
@@ -2726,7 +3609,9 @@ class PostgresApiBackend(ApiBackend):
                         "e.judge_calibration_state, e.oracle_agreement, e.decision_authority, "
                         "e.error_code, e.started_at, e.finished_at, "
                         "e.duration_ms, e.measured_cost, e.currency, e.langfuse_status, "
+                        "e.cost_measurement_state, e.provider_event_ids, e.detail, "
                         "e.langfuse_verified_at, "
+                        "e.provider_event_status, "
                         "m.p50_duration_ms, m.p95_duration_ms "
                         "FROM agent_executions e LEFT JOIN role_metrics m "
                         "ON m.organization_id = e.organization_id "
@@ -2746,10 +3631,15 @@ class PostgresApiBackend(ApiBackend):
                                 "campaign_id": source["campaign_run_id"],
                                 "attempt_id": source["attempt_id"],
                                 "operation": f"agent.{source['agent_role']}",
-                                "provider": f"{source['provider']}/{source['model']}",
+                                "provider": source["provider"],
+                                "model": source["model"],
                                 "agent_role": source["agent_role"],
                                 "execution_mode": source["execution_mode"],
+                                "requested_model": source["model"],
                                 "returned_model": source["returned_model"],
+                                "model_substituted": (
+                                    source["provider_event_status"] == "model_mismatch"
+                                ),
                                 "upstream_provider": source["upstream_provider"],
                                 "provider_request_id": source["provider_request_id"],
                                 "configuration_set_sha256": source["configuration_set_sha256"],
@@ -2771,23 +3661,20 @@ class PostgresApiBackend(ApiBackend):
                                 ),
                                 "request_bytes": 0,
                                 "response_bytes": None,
-                                "measured_cost": float(source["measured_cost"] or 0.0),
-                                "accounting_status": (
-                                    "measured"
-                                    if source["execution_mode"] == "deterministic"
-                                    or (
-                                        source["input_tokens"] is not None
-                                        and source["output_tokens"] is not None
-                                        and (
-                                            source["configuration_set_sha256"] is None
-                                            or source["reasoning_tokens"] is not None
-                                        )
-                                    )
-                                    else (
-                                        "partial"
-                                        if source["physical_attempts"] is not None
-                                        else "unavailable"
-                                    )
+                                "measured_cost": (
+                                    float(source["measured_cost"])
+                                    if source["measured_cost"] is not None
+                                    else None
+                                ),
+                                "cost_measurement_state": source["cost_measurement_state"],
+                                "accounting_status": _accounting_status(
+                                    source["cost_measurement_state"]
+                                ),
+                                "provider_event_ids": source["provider_event_ids"],
+                                "provider_event_status": source["provider_event_status"],
+                                "provider_lineage_state": _provider_lineage_state(
+                                    source["execution_mode"],
+                                    source["detail"],
                                 ),
                                 "currency": source["currency"],
                                 "input_tokens": source["input_tokens"],
@@ -3011,7 +3898,17 @@ class PostgresApiBackend(ApiBackend):
                                 if row["target_id"] == SYNTHETIC_TARGET_ID
                                 else "live",
                                 "maximum_caps": row["safety_caps"],
+                                "hosted_run": self._latest_hosted_run_binding(
+                                    connection,
+                                    organization_id=principal.organization_id,
+                                    target_payload=payload,
+                                ),
                             }
+                elif resource == "target_catalog":
+                    rows = self._target_catalog_projection(
+                        connection,
+                        organization_id=principal.organization_id,
+                    )
                 elif resource == "audit":
                     rows = _rows(
                         connection,
@@ -3026,15 +3923,18 @@ class PostgresApiBackend(ApiBackend):
             return ResourceResult.unavailable("database_projection_unavailable")
 
         if resource in {"campaigns", "campaign", "approvals", "approval"}:
-            for row in rows:
-                row.update(
-                    _scope_projection(
-                        row.pop("scope_payload", None),
-                        target_base_url=row.pop("target_base_url", None),
+            try:
+                for row in rows:
+                    row.update(
+                        _scope_projection(
+                            row.pop("scope_payload", None),
+                            target_base_url=row.pop("target_base_url", None),
+                        )
                     )
-                )
-                if resource in {"approvals", "approval"}:
-                    row["status"] = row.get("decision") or "pending"
+                    if resource in {"approvals", "approval"}:
+                        row["status"] = row.get("decision") or "pending"
+            except EvidenceIntegrityError:
+                return ResourceResult.unavailable("authorization_scope_endpoint_unavailable")
 
         sanitized = _safe(rows)
         if resource in {
@@ -3081,11 +3981,19 @@ class PostgresApiBackend(ApiBackend):
     def command(self, command, principal, payload, *, idempotency_key, identifiers=None):
         identifiers = dict(identifiers or {})
         try:
-            if command in {"create_target", "revise_target"}:
-                # Browser-supplied hosts, adapters, and credential references cannot create
-                # server authority. The immutable store primitive remains available to a later
-                # reviewed server-side catalog/provisioning workflow, but the public command
-                # stays closed until that trusted source exists.
+            if command == "create_target":
+                entry = self._target_catalog.register(
+                    self._store,
+                    principal=principal,
+                    target_id=str(payload["target_id"]),
+                    version=str(payload["version"]),
+                    idempotency_key=idempotency_key,
+                )
+                return CommandResult.completed(
+                    entry.target.version,
+                    resource_id=entry.target.target_id,
+                )
+            if command == "revise_target":
                 return CommandResult.unavailable("trusted_target_authoring_catalog_missing")
             if command == "change_target_lifecycle":
                 target = self._store.transition_target(
@@ -3120,6 +4028,37 @@ class PostgresApiBackend(ApiBackend):
                     )
                     if payload.get("execution_profile") != expected_profile:
                         raise ApiConflict("campaign execution profile differs from trusted target")
+                submitted_hosted_run = payload.get("hosted_run")
+                if submitted_hosted_run is not None:
+                    with self._engine.connect() as connection:
+                        target_payload = connection.execute(
+                            text(
+                                "SELECT payload FROM target_definitions "
+                                "WHERE organization_id = :org AND target_id = :target "
+                                "AND version = :version"
+                            ),
+                            {
+                                "org": principal.organization_id,
+                                "target": str(payload["target_id"]),
+                                "version": str(payload["target_version"]),
+                            },
+                        ).scalar_one_or_none()
+                        expected_hosted_run = (
+                            self._latest_hosted_run_binding(
+                                connection,
+                                organization_id=principal.organization_id,
+                                target_payload=dict(target_payload),
+                            )
+                            if target_payload is not None
+                            else None
+                        )
+                    if (
+                        expected_hosted_run is None
+                        or dict(submitted_hosted_run) != expected_hosted_run
+                    ):
+                        raise ApiConflict(
+                            "hosted campaign binding differs from the server-owned active set"
+                        )
                 caps = SafetyCaps(**dict(payload["caps"]))
                 scope = self._store.build_scope(
                     principal=principal,
@@ -3198,6 +4137,7 @@ class PostgresApiBackend(ApiBackend):
                     finding_id=identifiers.get("finding_id", ""),
                     decision=decision,
                     rationale=str(payload["rationale"]),
+                    reason_code=payload.get("reason_code"),
                     idempotency_key=idempotency_key,
                 )
                 return CommandResult.completed(record.decision_id, resource_id=record.finding_id)
@@ -3239,7 +4179,13 @@ class PostgresApiBackend(ApiBackend):
             raise AuthorizationError() from exc
         except (IdempotencyConflictError, RecordConflictError, RecordNotFoundError) as exc:
             raise ApiConflict("immutable control-plane conflict") from exc
-        except (InvalidControlPlaneInput, ValueError, KeyError, TypeError) as exc:
+        except (
+            InvalidControlPlaneInput,
+            TargetCatalogError,
+            ValueError,
+            KeyError,
+            TypeError,
+        ) as exc:
             raise ApiConflict("invalid control-plane command") from exc
         except ControlPlaneError as exc:
             raise ApiBackendUnavailable("control-plane command unavailable") from exc
@@ -3601,13 +4547,6 @@ def build_postgres_backend(
         return UnavailableApiBackend()
     engine = create_engine(normalize_psycopg_url(database_url), pool_pre_ping=True, future=True)
     corpus = resolve_workload()
-    required_org = os.environ.get("CLERK_REQUIRED_ORG_ID")
-    if required_org:
-        catalog = TrustedTargetCatalog.from_environment(environment)
-        catalog.synchronize(
-            ControlPlaneStore(engine, environment=environment),
-            organization_id=required_org,
-        )
     return PostgresApiBackend(
         engine,
         environment=environment,

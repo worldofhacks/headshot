@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import copy
 import datetime
 import ipaddress
 import os
@@ -41,12 +42,12 @@ from agentforge.agents.judge.calibration_runtime import (
     JudgeCalibrationStatus,
     load_judge_calibration_status,
 )
-from agentforge.agents.judge.envelope import EvidenceEnvelopeBuilder
 from agentforge.agents.judge.hosted import (
     HostedEvaluator,
     JudgeReconciliation,
     reconcile_judge_assessment,
 )
+from agentforge.agents.judge.judge import Judge
 from agentforge.agents.orchestrator import HostedPlanner, Orchestrator, OrchestratorHalt
 from agentforge.agents.red_team import SeedReplayRedTeam
 from agentforge.campaign.authorization import RunAuthorization
@@ -71,6 +72,7 @@ from agentforge.policy.scoped_credentials import (
     CredentialResolutionError,
     SealedEnvironmentCredentialResolver,
 )
+from agentforge.providers.lineage import ProviderLogicalContextV1
 from agentforge.providers.openrouter import HostedUsageLedger, OpenRouterTransport
 from agentforge.readiness import expected_alembic_head
 from agentforge.regression import RegressionAdmissionGate, RegressionLifecycle
@@ -91,6 +93,9 @@ _PAYLOAD_SCHEMA = "campaign.execute"
 _PAYLOAD_VERSION = 1
 _DEFAULT_LEASE = datetime.timedelta(minutes=10)
 _DEFAULT_POLL_SECONDS = 1.0
+_PROVIDER_RECOVERY_INTERVAL_SECONDS = 30.0
+_PROVIDER_RECOVERY_LIMIT = 32
+_PROVIDER_RECOVERY_STALE_AFTER_SECONDS = _DEFAULT_LEASE.total_seconds() + 60.0
 
 
 class DispatchUnavailable(RuntimeError):
@@ -138,6 +143,13 @@ class _HostedInvocationContext:
     ground_truth_verdict: Mapping[str, Any] | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class _HostedJudgeAttemptContext:
+    attempt_id: str
+    expected_safe_behavior: str
+    parent_execution_id: str
+
+
 def _evaluator_calibration_state(status: JudgeCalibrationStatus) -> str:
     """Map the durable five-state status to the evaluator's four authority states."""
 
@@ -156,24 +168,14 @@ def _reconcile_runner_evaluator(
     deterministic_verdict: Mapping[str, Any],
     calibration: JudgeCalibrationStatus,
 ) -> JudgeReconciliation:
-    """Preserve the coordinator's already-written ground-truth verdict and manifest.
+    """Apply the exact externally calibrated authority state at the pre-manifest seam."""
 
-    The live model still runs and its agreement is persisted. Model authority cannot be promoted
-    here until the coordinator owner provides a pre-manifest adjudication seam; otherwise the
-    database outcome could disagree with immutable evidence.
-    """
-
-    reconciliation = reconcile_judge_assessment(
+    return reconcile_judge_assessment(
         assessment=assessment,
         deterministic_verdict=deterministic_verdict,
         calibration_state=_evaluator_calibration_state(calibration),
-        model_authority_allowed=False,
+        model_authority_allowed=calibration.model_authoritative,
     )
-    if reconciliation.model_decisive or dict(reconciliation.effective_verdict) != dict(
-        deterministic_verdict
-    ):
-        raise DispatchUnavailable("hosted_evaluator_pre_manifest_authority_refused")
-    return reconciliation
 
 
 def _sanitize_hosted_transcript(
@@ -266,6 +268,7 @@ class _DurableHostedExecutionLifecycle:
         self._calibration = calibration
         self._context: _HostedInvocationContext | None = None
         self._execution_context: dict[str, _HostedInvocationContext] = {}
+        self._judge_reconciliations: dict[str, JudgeReconciliation] = {}
 
     @contextlib.contextmanager
     def invocation(
@@ -359,6 +362,23 @@ class _DurableHostedExecutionLifecycle:
             raise DispatchUnavailable("hosted_langfuse_observation_unavailable")
         return execution_id
 
+    def provider_context(
+        self,
+        *,
+        execution_id: str,
+        prompt_version: str,
+        prompt_sha256: str,
+    ) -> ProviderLogicalContextV1:
+        """Resolve the exact durable logical identity immediately before provider I/O."""
+
+        if execution_id not in self._execution_context:
+            raise DispatchUnavailable("hosted_execution_context_missing")
+        return self._store.provider_logical_context(
+            execution_id=execution_id,
+            prompt_version=prompt_version,
+            prompt_sha256=prompt_sha256,
+        )
+
     def finish(
         self,
         *,
@@ -369,11 +389,17 @@ class _DurableHostedExecutionLifecycle:
         error_code: str | None,
         failed_physical_attempts: int | None = None,
     ) -> None:
-        context = self._execution_context.pop(execution_id, None)
+        # Read without removing. The store can refuse a terminal write — an out-of-range token
+        # count, an output that trips credential screening, a payload over the size bound — and
+        # the caller's whole recovery strategy is to retry with a smaller record. Dropping the
+        # context here made every one of those retries fail as "context missing" and left the
+        # execution open forever, which is strictly worse than the write it was refusing.
+        context = self._execution_context.get(execution_id)
         if context is None:
             raise DispatchUnavailable("hosted_execution_context_missing")
         oracle_agreement: bool | None = None
         decision_authority: str | None = None
+        reconciliation: JudgeReconciliation | None = None
         detail = dict(context.detail)
         if status == "succeeded" and context.role == "judge":
             if lineage is None or context.ground_truth_verdict is None:
@@ -389,6 +415,7 @@ class _DurableHostedExecutionLifecycle:
                 {
                     "calibration_state": self._calibration.state,
                     "decision_authority": decision_authority,
+                    "decision_authority_basis": reconciliation.decision_authority,
                     "model_state": output_payload.get("state"),
                     "ground_truth_state": context.ground_truth_verdict.get("state"),
                     "oracle_agreement": oracle_agreement,
@@ -404,27 +431,17 @@ class _DurableHostedExecutionLifecycle:
             "error_code": error_code,
             "detail": detail,
         }
-        if lineage is not None:
-            if failed_physical_attempts is not None:
-                raise DispatchUnavailable("hosted_failure_accounting_conflicts_with_lineage")
-            terminal.update(
-                {
-                    "returned_model": lineage.returned_model,
-                    "upstream_provider": lineage.upstream_provider,
-                    "provider_request_id": lineage.provider_request_id,
-                    "input_tokens": lineage.input_tokens,
-                    "output_tokens": lineage.output_tokens,
-                    "reasoning_tokens": lineage.reasoning_tokens,
-                    "measured_cost_usd": lineage.measured_cost_usd,
-                    "configuration_set_sha256": lineage.configuration_sha256,
-                    "role_configuration_sha256": lineage.role_configuration_sha256,
-                    "generation_policy_sha256": lineage.generation_policy_sha256,
-                    "physical_attempts": lineage.physical_attempts,
-                }
-            )
-        elif failed_physical_attempts is not None:
+        if lineage is not None and failed_physical_attempts is not None:
+            raise DispatchUnavailable("hosted_failure_accounting_conflicts_with_lineage")
+        # The append-only provider ledger is authoritative. The role result is still required to
+        # prove semantic success, but its duplicate provider fields are not re-persisted.
+        if lineage is None and failed_physical_attempts is not None:
             terminal["physical_attempts"] = failed_physical_attempts
         self._store.finish_hosted_agent_execution(**terminal)
+        if reconciliation is not None:
+            self._judge_reconciliations[execution_id] = reconciliation
+        # Only now is the execution truly closed, so only now may its context go.
+        self._execution_context.pop(execution_id, None)
         with contextlib.suppress(Exception):
             self._telemetry.finish_agent(
                 execution_id=execution_id,
@@ -435,6 +452,117 @@ class _DurableHostedExecutionLifecycle:
             self._telemetry.flush()
         with contextlib.suppress(Exception):
             self._telemetry.heartbeat()
+
+    def take_judge_reconciliation(self, *, execution_id: str) -> JudgeReconciliation:
+        """Consume the exact authority decision already written with a hosted Judge execution."""
+
+        try:
+            return self._judge_reconciliations.pop(execution_id)
+        except KeyError as exc:
+            raise DispatchUnavailable("hosted_judge_reconciliation_missing") from exc
+
+
+class _PreManifestHostedJudge:
+    """Coordinator-injected Judge that reconciles Gemini before immutable manifests are written."""
+
+    def __init__(
+        self,
+        *,
+        deterministic_judge: Judge,
+        hosted_evaluator: HostedEvaluator,
+        lifecycle: _DurableHostedExecutionLifecycle,
+        calibration: JudgeCalibrationStatus,
+        target_credential_resolver: Callable[[], Secret | None],
+        execution_recorder: Callable[[str, str], None],
+    ) -> None:
+        self._deterministic_judge = deterministic_judge
+        self._hosted_evaluator = hosted_evaluator
+        self._lifecycle = lifecycle
+        self._calibration = calibration
+        self._target_credential_resolver = target_credential_resolver
+        self._execution_recorder = execution_recorder
+        self._attempt_context: _HostedJudgeAttemptContext | None = None
+
+    @contextlib.contextmanager
+    def attempt(
+        self,
+        *,
+        attempt_id: str,
+        expected_safe_behavior: str,
+        parent_execution_id: str,
+    ) -> Iterator[None]:
+        """Bind only the current authorized case context to the coordinator callback."""
+
+        if self._attempt_context is not None:
+            raise DispatchUnavailable("hosted_judge_attempt_context_overlap")
+        if not all(
+            isinstance(value, str) and value
+            for value in (attempt_id, expected_safe_behavior, parent_execution_id)
+        ):
+            raise DispatchUnavailable("hosted_judge_attempt_context_invalid")
+        self._attempt_context = _HostedJudgeAttemptContext(
+            attempt_id=attempt_id,
+            expected_safe_behavior=expected_safe_behavior,
+            parent_execution_id=parent_execution_id,
+        )
+        try:
+            yield
+        finally:
+            self._attempt_context = None
+
+    def evaluate(
+        self,
+        envelope: Mapping[str, Any],
+        *,
+        integrity_ok: bool = True,
+    ) -> dict[str, Any]:
+        """Run code ground truth first, then reconcile an independent hosted assessment."""
+
+        context = self._attempt_context
+        if context is None:
+            raise DispatchUnavailable("hosted_judge_attempt_context_missing")
+        deterministic_verdict = self._deterministic_judge.evaluate(
+            envelope,
+            integrity_ok=integrity_ok,
+        )
+        if deterministic_verdict.get("attempt_id") != context.attempt_id:
+            raise DispatchUnavailable("hosted_judge_attempt_identity_mismatch")
+
+        # An integrity or evidence-contract error is already the decisive fail-closed disposition.
+        # Sending unverified/malformed evidence to a provider would violate the hosted evidence
+        # boundary, so this exceptional path remains deterministic and network-free.
+        if deterministic_verdict.get("state") == "ERROR":
+            return dict(deterministic_verdict)
+
+        provider_envelope = copy.deepcopy(dict(envelope))
+        hostile = provider_envelope.get("hostile")
+        trusted = provider_envelope.get("trusted")
+        if not isinstance(hostile, dict) or not isinstance(trusted, dict):
+            raise DispatchUnavailable("hosted_evaluator_evidence_invalid")
+        hostile["transcript"] = _sanitize_hosted_transcript(
+            hostile.get("transcript"),
+            target_credential=self._target_credential_resolver(),
+        )
+        trusted["expected_safe_behavior"] = context.expected_safe_behavior
+
+        with self._lifecycle.invocation(
+            role="judge",
+            attempt_id=context.attempt_id,
+            detail={"phase": "live_pre_manifest_evaluation"},
+            ground_truth_verdict=deterministic_verdict,
+        ):
+            result = self._hosted_evaluator.evaluate(
+                provider_envelope,
+                integrity_ok=True,
+                sanitized=True,
+                judge_calibration_id=self._calibration.calibration_id,
+                parent_execution_id=context.parent_execution_id,
+            )
+        reconciliation = self._lifecycle.take_judge_reconciliation(
+            execution_id=result.execution_id,
+        )
+        self._execution_recorder(context.attempt_id, result.execution_id)
+        return dict(reconciliation.effective_verdict)
 
 
 def _persisted_identity(job: Any) -> tuple[str, str]:
@@ -712,6 +840,7 @@ class DurableCampaignRunner:
         self._campaign_adapter: Any | None = None
         self._hosted_transport: OpenRouterTransport | None = None
         self._last_hosted_readiness_check = 0.0
+        self._last_provider_recovery_check = 0.0
 
     def _start_agent_execution(self, **values: Any) -> str:
         """Start the durable ledger row, then fail-soft project the same work to Langfuse."""
@@ -789,8 +918,16 @@ class DurableCampaignRunner:
     def heartbeat_runtime(self, *, force_connection_check: bool = False) -> None:
         """Publish worker health plus sealed-binding readiness per exact configuration hash."""
 
-        self.telemetry.heartbeat(force_connection_check=force_connection_check)
+        if not _schema_is_current(self.engine):
+            return
         now = time.monotonic()
+        if (
+            force_connection_check
+            or now - self._last_provider_recovery_check >= _PROVIDER_RECOVERY_INTERVAL_SECONDS
+        ):
+            self._last_provider_recovery_check = now
+            self.recover_interrupted_provider_calls()
+        self.telemetry.heartbeat(force_connection_check=force_connection_check)
         if not force_connection_check and now - self._last_hosted_readiness_check < 30.0:
             return
         self._last_hosted_readiness_check = now
@@ -825,6 +962,38 @@ class DurableCampaignRunner:
                     langfuse_observation_ready=langfuse_ready,
                 )
 
+    def recover_interrupted_provider_calls(
+        self,
+        *,
+        limit: int = _PROVIDER_RECOVERY_LIMIT,
+        stale_after_seconds: float = _PROVIDER_RECOVERY_STALE_AFTER_SECONDS,
+    ) -> int:
+        """Close bounded crash reservations, then explicitly fail their logical executions.
+
+        Physical recovery records facts only. This separate Runner lifecycle step invokes the
+        normal logical terminalizer, so an event can never approve or terminalize role work by
+        itself.
+        """
+
+        recovered = self.store.recover_interrupted_hosted_executions(
+            limit=limit,
+            stale_after_seconds=stale_after_seconds,
+        )
+        for execution_id, reason in recovered:
+            output_payload = {
+                "status": "failed",
+                "reason_code": reason,
+            }
+            telemetry = getattr(self, "telemetry", None)
+            if callable(getattr(telemetry, "finish_agent", None)):
+                with contextlib.suppress(Exception):
+                    telemetry.finish_agent(
+                        execution_id=execution_id,
+                        output_payload=output_payload,
+                        error_code=reason,
+                    )
+        return len(recovered)
+
     def _hosted_usage_ledger(
         self,
         *,
@@ -844,11 +1013,10 @@ class DurableCampaignRunner:
 
         ledger = HostedUsageLedger(configuration)
         with self.engine.connect() as connection:
-            rows = (
+            logical_rows = (
                 connection.execute(
                     text(
-                        "SELECT agent_role, status, physical_attempts, measured_cost, "
-                        "input_tokens, output_tokens, reasoning_tokens "
+                        "SELECT execution_id, agent_role, status, physical_attempts "
                         "FROM agent_executions WHERE organization_id = :organization_id "
                         "AND campaign_run_id = :run_id "
                         "AND configuration_set_sha256 = :configuration "
@@ -864,50 +1032,108 @@ class DurableCampaignRunner:
                 .mappings()
                 .all()
             )
-        rows_by_role: dict[str, list[Mapping[str, Any]]] = {
+            physical_rows = (
+                connection.execute(
+                    text(
+                        "SELECT i.logical_execution_id, i.agent_role, i.invocation_id, "
+                        "e.event_id, e.measured_cost_usd, e.input_tokens, e.output_tokens, "
+                        "e.reasoning_tokens FROM provider_call_invocations i "
+                        "LEFT JOIN provider_call_events e "
+                        "ON e.organization_id = i.organization_id "
+                        "AND e.invocation_id = i.invocation_id "
+                        "WHERE i.organization_id = :organization_id "
+                        "AND i.campaign_run_id = :run_id "
+                        "AND i.configuration_set_sha256 = :configuration "
+                        "ORDER BY i.agent_role, i.logical_execution_id, i.physical_sequence"
+                    ),
+                    {
+                        "organization_id": organization_id,
+                        "run_id": run_id,
+                        "configuration": configuration.configuration_sha256,
+                    },
+                )
+                .mappings()
+                .all()
+            )
+        logical_by_role: dict[str, list[Mapping[str, Any]]] = {
             role.role: [] for role in configuration.roles
         }
-        for row in rows:
-            rows_by_role[str(row["agent_role"])].append(row)
+        physical_by_execution: dict[str, list[Mapping[str, Any]]] = {}
+        for row in logical_rows:
+            logical_by_role[str(row["agent_role"])].append(row)
+        for row in physical_rows:
+            physical_by_execution.setdefault(str(row["logical_execution_id"]), []).append(row)
         bounds_by_role = generation_policy.call_bounds
         for role_configuration in configuration.roles:
             role = role_configuration.role
-            role_rows = rows_by_role[role]
-            observed_rows = [
-                row
-                for row in role_rows
-                if row["status"] != "running"
-                and row["physical_attempts"] is not None
-                and row["input_tokens"] is not None
-                and row["output_tokens"] is not None
-                and row["reasoning_tokens"] is not None
-            ]
-            if observed_rows:
-                ledger.restore(
-                    role,
-                    physical_calls=len(observed_rows),
-                    measured_usd=sum(
-                        (Decimal(str(row["measured_cost"])) for row in observed_rows),
-                        Decimal(0),
-                    ),
-                    input_tokens=sum(int(row["input_tokens"]) for row in observed_rows),
-                    output_tokens=sum(int(row["output_tokens"]) for row in observed_rows),
-                    reasoning_tokens=sum(int(row["reasoning_tokens"]) for row in observed_rows),
+            role_rows = logical_by_role[role]
+            bounds = bounds_by_role[role]
+            prices = role_configuration.prices
+            maximum_cost = (
+                prices.input_usd_per_million_tokens * bounds.input_tokens
+                + prices.output_usd_per_million_tokens * bounds.output_tokens
+                + max(
+                    prices.output_usd_per_million_tokens,
+                    prices.reasoning_usd_per_million_tokens,
                 )
+                * bounds.reasoning_tokens
+            ) / Decimal(1_000_000)
+            restored_calls = 0
+            restored_measured = Decimal(0)
+            restored_unresolved = Decimal(0)
+            restored_tokens = {"input": 0, "output": 0, "reasoning": 0}
+            future_attempts = 0
             maximum_attempts = 1 + min(
                 role_configuration.limits.max_retries,
                 configuration.global_limits.max_retries,
             )
-            unresolved_attempts = 0
-            for row in role_rows:
-                if row["status"] == "running":
-                    unresolved_attempts += maximum_attempts
-                elif row in observed_rows:
-                    unresolved_attempts += max(0, int(row["physical_attempts"]) - 1)
-                else:
-                    unresolved_attempts += int(row["physical_attempts"])
-            bounds = bounds_by_role[role]
-            for _ in range(unresolved_attempts):
+            for logical_row in role_rows:
+                execution_rows = physical_by_execution.get(
+                    str(logical_row["execution_id"]),
+                    [],
+                )
+                durable_attempts = (
+                    int(logical_row["physical_attempts"])
+                    if logical_row["physical_attempts"] is not None
+                    else 0
+                )
+                missing_durable_attempts = max(0, durable_attempts - len(execution_rows))
+                for physical_row in execution_rows:
+                    restored_calls += 1
+                    if physical_row["measured_cost_usd"] is None:
+                        restored_unresolved += maximum_cost
+                    else:
+                        restored_measured += Decimal(str(physical_row["measured_cost_usd"]))
+                    for token_name, bound in (
+                        ("input", bounds.input_tokens),
+                        ("output", bounds.output_tokens),
+                        ("reasoning", bounds.reasoning_tokens),
+                    ):
+                        observed = physical_row[f"{token_name}_tokens"]
+                        restored_tokens[token_name] += (
+                            int(observed) if observed is not None else bound
+                        )
+                if missing_durable_attempts:
+                    restored_calls += missing_durable_attempts
+                    restored_unresolved += maximum_cost * missing_durable_attempts
+                    restored_tokens["input"] += bounds.input_tokens * missing_durable_attempts
+                    restored_tokens["output"] += bounds.output_tokens * missing_durable_attempts
+                    restored_tokens["reasoning"] += (
+                        bounds.reasoning_tokens * missing_durable_attempts
+                    )
+                if logical_row["status"] == "running":
+                    future_attempts += max(0, maximum_attempts - len(execution_rows))
+            if restored_calls:
+                ledger.restore(
+                    role,
+                    physical_calls=restored_calls,
+                    measured_usd=restored_measured,
+                    unresolved_usd=restored_unresolved,
+                    input_tokens=restored_tokens["input"],
+                    output_tokens=restored_tokens["output"],
+                    reasoning_tokens=restored_tokens["reasoning"],
+                )
+            for _ in range(future_attempts):
                 ledger.reserve(
                     role,
                     input_tokens=bounds.input_tokens,
@@ -926,6 +1152,23 @@ class DurableCampaignRunner:
             self.store.assert_job_lease(job)
         except Exception:
             blockers.append("lease_not_owned")
+        try:
+            with self.engine.connect() as connection:
+                prior_hosted_execution = bool(
+                    connection.execute(
+                        text(
+                            "SELECT EXISTS (SELECT 1 FROM agent_executions "
+                            "WHERE campaign_run_id = :run_id "
+                            "AND execution_mode = 'hosted_advisory' "
+                            "AND configuration_set_sha256 IS NOT NULL)"
+                        ),
+                        {"run_id": job.campaign_run_id},
+                    ).scalar_one()
+                )
+            if prior_hosted_execution:
+                blockers.append("prior_hosted_execution_requires_manual_recovery")
+        except Exception:
+            blockers.append("hosted_execution_replay_guard_unavailable")
 
         authorized: Any | None = None
         try:
@@ -1263,6 +1506,7 @@ class DurableCampaignRunner:
                     configuration=prepared.hosted.configuration,
                     generation_policy=prepared.hosted.generation_policy,
                 ),
+                lineage_recorder=self.store,
                 sleeper=self.sleeper,
             )
             hosted_runtime = HostedRoleRuntime(
@@ -1571,6 +1815,23 @@ class DurableCampaignRunner:
         )
         current_red_team_execution: str | None = None
         judge_executions: dict[str, str] = {}
+        pre_manifest_hosted_judge: _PreManifestHostedJudge | None = None
+        if (
+            hosted_evaluator is not None
+            and hosted_lifecycle is not None
+            and prepared.hosted is not None
+        ):
+            pre_manifest_hosted_judge = _PreManifestHostedJudge(
+                deterministic_judge=Judge(),
+                hosted_evaluator=hosted_evaluator,
+                lifecycle=hosted_lifecycle,
+                calibration=prepared.hosted.calibration,
+                target_credential_resolver=lambda: credential_lease.resolve(scope.credential_ref),
+                execution_recorder=lambda attempt_id, execution_id: judge_executions.__setitem__(
+                    attempt_id,
+                    execution_id,
+                ),
+            )
 
         def start_coordinator_agent_execution(**values: Any) -> str:
             execution_id = self._start_agent_execution(
@@ -1625,64 +1886,33 @@ class DurableCampaignRunner:
             manifests=self.manifests,
             clock=self.clock,
             accounting=accounting,
+            judge=pre_manifest_hosted_judge or Judge(),
         )
         while True:
             case, proposal, attempt, current_red_team_execution = work
             dispatch_payload = verified_case_payload(case)
-            outcome = coordinator.run_case(
-                dispatch_payload,
-                attack_attempt=proposal,
-                attempt_id=attempt.attempt_id,
-                red_team_execution_id=current_red_team_execution,
-            )
+            if pre_manifest_hosted_judge is None:
+                outcome = coordinator.run_case(
+                    dispatch_payload,
+                    attack_attempt=proposal,
+                    attempt_id=attempt.attempt_id,
+                    red_team_execution_id=current_red_team_execution,
+                )
+            else:
+                with pre_manifest_hosted_judge.attempt(
+                    attempt_id=attempt.attempt_id,
+                    expected_safe_behavior=str(dispatch_payload["expected_safe_behavior"]),
+                    parent_execution_id=current_red_team_execution,
+                ):
+                    outcome = coordinator.run_case(
+                        dispatch_payload,
+                        attack_attempt=proposal,
+                        attempt_id=attempt.attempt_id,
+                        red_team_execution_id=current_red_team_execution,
+                    )
             if not outcome.integrity_ok:
                 raise CampaignAbort("evidence integrity failed", code="evidence_integrity_failed")
             effective_verdict = outcome.verdict
-            if hosted_evaluator is not None and hosted_lifecycle is not None:
-                response_transcript = outcome.result.fields.get("response_transcript")
-                if not isinstance(response_transcript, str):
-                    raise CampaignAbort(
-                        "persisted evaluator transcript is unavailable",
-                        code="evaluator_evidence_unavailable",
-                    )
-                response_transcript = _sanitize_hosted_transcript(
-                    response_transcript,
-                    target_credential=credential_lease.resolve(scope.credential_ref),
-                )
-                envelope = EvidenceEnvelopeBuilder().build(
-                    campaign_run_id=outcome.result.campaign_run_id,
-                    attempt_id=outcome.result.attempt_id,
-                    transcript=response_transcript,
-                    oracle_results=(outcome.oracle_signal,),
-                    canary_hits=(),
-                    policy_decision="allow",
-                    campaign_id=outcome.result.fields.get("campaign_id"),
-                    expected_safe_behavior=str(dispatch_payload["expected_safe_behavior"]),
-                    ground_truth_ref=case.content_hash,
-                )
-                with hosted_lifecycle.invocation(
-                    role="judge",
-                    attempt_id=attempt.attempt_id,
-                    detail={
-                        "phase": "live_evaluation",
-                        "evidence_content_hash": outcome.result.content_hash,
-                    },
-                    ground_truth_verdict=outcome.verdict,
-                ):
-                    evaluator_result = hosted_evaluator.evaluate(
-                        envelope,
-                        integrity_ok=True,
-                        sanitized=True,
-                        judge_calibration_id=prepared.hosted.calibration.calibration_id,
-                        parent_execution_id=current_red_team_execution,
-                    )
-                judge_executions[attempt.attempt_id] = evaluator_result.execution_id
-                reconciliation = _reconcile_runner_evaluator(
-                    assessment=evaluator_result.assessment,
-                    deterministic_verdict=outcome.verdict,
-                    calibration=prepared.hosted.calibration,
-                )
-                effective_verdict = dict(reconciliation.effective_verdict)
             finding_id = self.store.record_attempt_outcome(
                 run_id=authorized.run.run_id,
                 attempt_id=attempt.attempt_id,
@@ -1894,6 +2124,10 @@ class DurableCampaignRunner:
     def run_once(self, *, worker_id: str) -> bool:
         """Claim at most one job. Returns false only when no eligible work exists."""
 
+        # A newly deployed Runner can intentionally wait behind the Web-owned migration step.
+        # This gate must precede queue.claim so schema skew cannot lease, fail, or mutate work.
+        if not _schema_is_current(self.engine):
+            return False
         job = self.queue.claim(
             LogicalQueue.AGENT_WORK,
             worker_id=worker_id,
@@ -1965,15 +2199,20 @@ def main(argv: list[str] | None = None) -> int:
     except Exception:
         print("runner unavailable: trusted composition failed", file=sys.stderr)
         return 1
-    with contextlib.suppress(Exception):
-        runner.heartbeat_runtime(force_connection_check=True)
     stop = threading.Event()
+    force_runtime_connection_check = True
     for signum in (signal.SIGTERM, signal.SIGINT):
         signal.signal(signum, lambda *_args: stop.set())
     try:
         while not stop.is_set():
+            if not _schema_is_current(runner.engine):
+                if args.once:
+                    break
+                stop.wait(_DEFAULT_POLL_SECONDS)
+                continue
             with contextlib.suppress(Exception):
-                runner.heartbeat_runtime()
+                runner.heartbeat_runtime(force_connection_check=force_runtime_connection_check)
+                force_runtime_connection_check = False
             try:
                 worked = runner.run_once(worker_id=_worker_id())
             except DispatchUnavailable:

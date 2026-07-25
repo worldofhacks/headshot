@@ -17,12 +17,13 @@ from typing import Any, Literal, Protocol
 
 from agentforge.agents.hosted import (
     HostedConfigurationSet,
+    resolve_hosted_prompt,
     validate_hosted_configuration_set,
 )
-from agentforge.agents.hosted_prompts import hosted_prompt
 from agentforge.agents.judge import CalibrationGateClosed, JudgeIdentity
 from agentforge.agents.judge.enablement import require_model_judge_enablement
 from agentforge.agents.runtime import AgentRole
+from agentforge.providers.lineage import ProviderLogicalContextV1
 from agentforge.providers.openrouter import OpenRouterResult
 from agentforge.secrets import looks_like_provider_key
 from agentforge.target.spec import HostedRunBinding
@@ -37,6 +38,7 @@ _VERDICTS = (
 _JUDGE_CRITERIA_VERSION = "independent-judge-assessment-v2"
 _JUDGE_IMPLEMENTATION_VERSION = "hosted-role-runtime-v2"
 _SCHEMA_NAME = re.compile(r"\A[a-z][a-z0-9_]{0,63}\Z")
+_TYPED_REASON = re.compile(r"\A[a-z][a-z0-9_-]{0,63}\Z")
 _RAW_AUTH_MATERIAL = re.compile(
     r"(?i)(?:"
     r"\bsk-(?:or-|ant-|proj-)?[A-Za-z0-9_-]{12,}"
@@ -142,6 +144,14 @@ class HostedExecutionLifecycle(Protocol):
         failed_physical_attempts: int | None = None,
     ) -> None: ...
 
+    def provider_context(
+        self,
+        *,
+        execution_id: str,
+        prompt_version: str,
+        prompt_sha256: str,
+    ) -> ProviderLogicalContextV1: ...
+
 
 @dataclass(frozen=True, slots=True)
 class HostedRoleInvocation:
@@ -219,6 +229,7 @@ class HostedRoleRuntime:
             not callable(getattr(transport, "invoke", None))
             or not callable(getattr(execution_lifecycle, "start", None))
             or not callable(getattr(execution_lifecycle, "finish", None))
+            or not callable(getattr(execution_lifecycle, "provider_context", None))
         ):
             raise HostedCompositionError("hosted runtime dependency is unavailable")
         self._configuration = configuration
@@ -271,11 +282,12 @@ class HostedRoleRuntime:
         if validate_output is not None and not callable(validate_output):
             raise HostedCompositionError("hosted output validator is unavailable")
 
-        prompt = hosted_prompt(role)
-        if configuration.prompt_sha256 != prompt.prompt_sha256:
+        try:
+            prompt = resolve_hosted_prompt(role, configuration.prompt_sha256)
+        except ValueError:
             raise HostedCompositionError(
                 "configured prompt identity differs from the server-owned role prompt"
-            )
+            ) from None
         try:
             canonical_input = json.loads(
                 json.dumps(
@@ -307,10 +319,17 @@ class HostedRoleRuntime:
         result: OpenRouterResult | None = None
         try:
             bounds = self._call_bounds[role]
+            provider_context = self._execution_lifecycle.provider_context(
+                execution_id=execution_id,
+                prompt_version=prompt.version,
+                prompt_sha256=prompt.sha256,
+            )
+            if not isinstance(provider_context, ProviderLogicalContextV1):
+                raise HostedCompositionError("hosted provider lineage context is invalid")
             result = self._transport.invoke(
                 role=role,
                 messages=(
-                    {"role": "system", "content": prompt.system_prompt},
+                    {"role": "system", "content": prompt.content},
                     {
                         "role": "user",
                         "content": json.dumps(
@@ -329,6 +348,7 @@ class HostedRoleRuntime:
                 max_output_tokens=bounds.output_tokens,
                 max_reasoning_tokens=bounds.reasoning_tokens,
                 timeout_seconds=bounds.timeout_seconds,
+                provider_context=provider_context,
             )
             self._validate_result(role=role, result=result, bounds=bounds)
             if validate_output is not None:
@@ -399,6 +419,18 @@ class HostedRoleRuntime:
                 "hosted provider result could not be durably terminally recorded"
             )
             failure.add_note(f"lifecycle failure type: {type(exc).__name__}")
+            # The output is refused, but the execution must not be left open. Generating text that
+            # looks like a credential is the Red Team's actual job, so an honest in-contract
+            # response routinely trips the store's screening — and stranding the row on that would
+            # mean the platform disables itself the first time an attack works.
+            self._record_failure(
+                execution_id=execution_id,
+                cause=failure,
+                lineage=record,
+                # The observation already carries its own attempt count; passing it separately
+                # alongside lineage is a combination the runner refuses outright.
+                physical_attempts=None,
+            )
             raise failure from exc
         return HostedRoleInvocation(
             result=result,
@@ -539,7 +571,10 @@ class HostedRoleRuntime:
         physical_attempts: int | None,
     ) -> None:
         error_code = getattr(cause, "code", "hosted-agent-failed")
-        if not isinstance(error_code, str) or not error_code:
+        # The store accepts only a lowercase typed reason. An exception carrying anything else
+        # would be refused on both attempts identically, so normalize before the first one
+        # rather than spending the single retry on a write that cannot succeed either.
+        if not isinstance(error_code, str) or _TYPED_REASON.fullmatch(error_code) is None:
             error_code = "hosted-agent-failed"
         try:
             terminal: dict[str, Any] = {
@@ -555,11 +590,24 @@ class HostedRoleRuntime:
                 **terminal,
             )
         except Exception as lifecycle_exc:
-            failure = HostedCompositionError(
-                "hosted execution failure could not be terminally recorded"
+            # The store can refuse the observation itself — a token count beyond the column, an
+            # output that trips credential screening, a payload over the size bound. Leaving the
+            # row `running` is the worst outcome available: no terminal record, no audit event,
+            # and nothing can ever close it because the execution context is already gone. So
+            # degrade to the smallest record the store cannot refuse and keep the execution
+            # closed. What is lost is the observation, never the fact that the call ended.
+            if lineage is None:
+                failure = HostedCompositionError(
+                    "hosted execution failure could not be terminally recorded"
+                )
+                failure.add_note(f"lifecycle failure type: {type(lifecycle_exc).__name__}")
+                raise failure from cause
+            self._record_failure(
+                execution_id=execution_id,
+                cause=cause,
+                lineage=None,
+                physical_attempts=physical_attempts,
             )
-            failure.add_note(f"lifecycle failure type: {type(lifecycle_exc).__name__}")
-            raise failure from cause
 
 
 @dataclass(frozen=True, slots=True)

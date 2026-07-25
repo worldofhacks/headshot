@@ -33,6 +33,49 @@ const browserScope = {
   hosted_run: null,
 } as const;
 
+const browserHostedRun = {
+  configuration_set_sha256: "a".repeat(64),
+  generation_policy_sha256: "b".repeat(64),
+  session_generation: "generation-browser-test",
+  provider_model_call_limit: 56,
+  provider_model_spend_limit_usd: "5",
+  provider_max_retries: 1,
+  provider_max_concurrency: 1,
+  provider_timeout_seconds: 180,
+} as const;
+
+const browserCoverage = [
+  {
+    target_version: "browser-target@v1",
+    verified_attempt_count: 9,
+    total_case_count: 9,
+    category_count: 3,
+    execution_profile: "live",
+    evidence_provenance: "live_target",
+    classifications: ["boundary", "invariant", "regression"],
+    owasp_web: ["A01:2021", "A05:2021"],
+    owasp_llm: ["LLM01:2025", "LLM06:2025"],
+    verdict_counts: { NO_EXPLOIT_OBSERVED: 6, EXPLOIT_CONFIRMED: 3 },
+    covered: true,
+    as_of: "2026-07-22T00:24:00Z",
+  },
+] as const;
+
+const browserRegression = [
+  {
+    regression_id: "regression-prompt-injection",
+    version: "v1",
+    status: "NO_EXPLOIT_OBSERVED",
+    recorded_at: "2026-07-22T00:22:00Z",
+  },
+  {
+    regression_id: "regression-data-exfiltration",
+    version: "v1",
+    status: "EXPLOIT_CONFIRMED",
+    recorded_at: "2026-07-22T00:23:00Z",
+  },
+] as const;
+
 const browserBirdseye = {
   campaign: {
     run_id: "browser-campaign-gamma",
@@ -329,6 +372,7 @@ const browserFindings = [
       decision: "confirmed",
       actor_user_id: "user_independent_judge",
       rationale: "Independent replay reproduced the boundary violation.",
+      reason_code: null,
       created_at: "2026-07-22T00:05:10Z",
     }],
   },
@@ -366,6 +410,7 @@ const browserFindings = [
       decision: "resolved",
       actor_user_id: "user_security_reviewer",
       rationale: "Reviewed against the non-sensitive public response contract.",
+      reason_code: null,
       created_at: "2026-07-22T00:12:20Z",
     }],
   },
@@ -515,20 +560,30 @@ const browserUnavailableProviderBudget = {
   status: "unavailable",
   campaign_run_id: null,
   configuration_set_sha256: null,
+  role_cost_measurement_state: null,
   role_usd_cap: null,
   role_usd_spent: 0,
+  role_unresolved_usd_exposure: 0,
   role_usd_remaining: null,
+  role_usd_remaining_upper_bound: null,
   role_usd_overrun: 0,
   role_call_cap: null,
   role_physical_calls: 0,
+  role_unresolved_physical_calls: 0,
+  role_call_count_state: null,
   role_calls_remaining: null,
   role_call_overrun: 0,
+  global_cost_measurement_state: null,
   global_usd_cap: null,
   global_usd_spent: 0,
+  global_unresolved_usd_exposure: 0,
   global_usd_remaining: null,
+  global_usd_remaining_upper_bound: null,
   global_usd_overrun: 0,
   global_call_cap: null,
   global_physical_calls: 0,
+  global_unresolved_physical_calls: 0,
+  global_call_count_state: null,
   global_calls_remaining: null,
   global_call_overrun: 0,
 };
@@ -616,20 +671,27 @@ const browserAgents = [
         configured_by: "user_configuration_admin",
       }
     : null,
+  latest_acceptance_execution: null,
   running_count: agent.role === "orchestrator" ? 1 : 0,
+  hosted_execution_count: agent.role === "red_team" ? 1 : 0,
   succeeded_count:
     agent.execution_count -
     agent.skipped_count -
     (agent.role === "orchestrator" ? 1 : 0),
   failed_count: 0,
   measured_cost: 0,
-  accounting_status: "measured",
+  cost_measurement_state: agent.role === "red_team" ? "partial" : "measured",
+  accounting_status: agent.role === "red_team" ? "partial" : "measured",
+  provider_event_ids: [],
   currency: "USD",
   input_tokens: null,
   output_tokens: null,
   reasoning_tokens: null,
   token_observation_count: 0,
   physical_call_count: 0,
+  physical_call_count_state: agent.role === "red_team"
+    ? "lower_bound"
+    : "not_applicable",
   provider_budget: browserUnavailableProviderBudget,
   judge_calibration: agent.role === "judge"
     ? {
@@ -675,6 +737,7 @@ const browserAgentActivity = [
   provider: index === 1 ? "openrouter" : "headshot",
   model: index === 1 ? "qwen/qwen3.5-397b-a17b" : model,
   returned_model: null,
+  model_substituted: false,
   upstream_provider: null,
   provider_request_id: null,
   execution_mode: index === 1 ? "hosted_advisory" : "deterministic",
@@ -688,13 +751,24 @@ const browserAgentActivity = [
   output_tokens: null,
   reasoning_tokens: null,
   physical_attempts: null,
-  measured_cost: 0,
+  measured_cost: index === 1 ? null : 0,
+  cost_measurement_state: index === 1 ? "not_observed" : "measured",
   accounting_status: index === 1 ? "unavailable" : "measured",
+  provider_event_ids: [],
+  provider_event_status: null,
+  provider_lineage_state: index === 1
+    ? "historical_not_instrumented"
+    : "not_applicable",
   currency: "USD",
   trace_id: String(index + 1).padStart(32, "0"),
   langfuse_status: status === "running" ? "queued" : "exported",
   langfuse_verified_at: status === "running" ? null : "2026-07-22T00:25:10Z",
-  detail: { decision: role === "orchestrator" ? "prioritize" : "completed" },
+  detail: {
+    decision: role === "orchestrator" ? "prioritize" : "completed",
+    ...(index === 1
+      ? { provider_lineage_state: "historical_not_instrumented" }
+      : {}),
+  },
   judge_calibration_id: null,
   judge_calibration_state: null,
   oracle_agreement: null,
@@ -864,9 +938,12 @@ const browserFixture = (): Plugin => ({
               attempt_id: `browser-attempt-${index}`,
               operation: "target.http",
               provider: "openemr",
+              model: null,
               agent_role: null,
               execution_mode: null,
+              requested_model: null,
               returned_model: null,
+              model_substituted: false,
               upstream_provider: null,
               provider_request_id: null,
               configuration_set_sha256: null,
@@ -885,7 +962,11 @@ const browserFixture = (): Plugin => ({
               request_bytes: 320 + index * 17,
               response_bytes: index === 7 ? 64 : 1100 + index * 90,
               measured_cost: 0.01,
+              cost_measurement_state: "measured",
               accounting_status: "measured",
+              provider_event_ids: [],
+              provider_event_status: null,
+              provider_lineage_state: "not_applicable",
               currency: "USD",
               input_tokens: null,
               output_tokens: null,
@@ -914,10 +995,13 @@ const browserFixture = (): Plugin => ({
               campaign_id: execution.campaign_run_id,
               attempt_id: execution.attempt_id,
               operation: `agent.${execution.agent_role}`,
-              provider: `${execution.provider}/${execution.model}`,
+              provider: execution.provider,
+              model: execution.model,
               agent_role: execution.agent_role,
               execution_mode: execution.execution_mode,
+              requested_model: execution.model,
               returned_model: execution.returned_model,
+              model_substituted: execution.model_substituted,
               upstream_provider: execution.upstream_provider,
               provider_request_id: execution.provider_request_id,
               configuration_set_sha256: execution.configuration_set_sha256,
@@ -936,9 +1020,11 @@ const browserFixture = (): Plugin => ({
               request_bytes: 0,
               response_bytes: null,
               measured_cost: execution.measured_cost,
-              accounting_status: execution.execution_mode === "deterministic"
-                ? "measured"
-                : "unavailable",
+              cost_measurement_state: execution.cost_measurement_state,
+              accounting_status: execution.accounting_status,
+              provider_event_ids: execution.provider_event_ids,
+              provider_event_status: execution.provider_event_status,
+              provider_lineage_state: execution.provider_lineage_state,
               currency: execution.currency,
               input_tokens: execution.input_tokens,
               output_tokens: execution.output_tokens,
@@ -976,8 +1062,11 @@ const browserFixture = (): Plugin => ({
               provider: "live_target",
               agent_role: null,
               record_kind: "campaign",
+              execution_mode: null,
               measured_cost: 0.05,
+              cost_measurement_state: "measured",
               accounting_status: "measured",
+              provider_event_ids: [],
               currency: "USD",
               request_count: 5,
               execution_count: 0,
@@ -989,6 +1078,7 @@ const browserFixture = (): Plugin => ({
               reasoning_tokens: null,
               token_observation_count: 0,
               physical_call_count: 0,
+              physical_call_count_state: "not_applicable",
               provider_budget: null,
               p50_duration_ms: null,
               p95_duration_ms: null,
@@ -1006,8 +1096,11 @@ const browserFixture = (): Plugin => ({
               provider: "live_target",
               agent_role: null,
               record_kind: "campaign",
+              execution_mode: null,
               measured_cost: 0.04,
+              cost_measurement_state: "measured",
               accounting_status: "measured",
+              provider_event_ids: [],
               currency: "USD",
               request_count: 4,
               execution_count: 0,
@@ -1019,6 +1112,7 @@ const browserFixture = (): Plugin => ({
               reasoning_tokens: null,
               token_observation_count: 0,
               physical_call_count: 0,
+              physical_call_count_state: "not_applicable",
               provider_budget: null,
               p50_duration_ms: null,
               p95_duration_ms: null,
@@ -1033,22 +1127,30 @@ const browserFixture = (): Plugin => ({
             ...browserAgents.map((agent, index) => ({
               accounting_id: `browser-agent-cost-${agent.role}`,
               campaign_id: "browser-campaign-gamma",
-              provider: `agent:${agent.role}:${agent.active_assignment.provider}/${agent.active_assignment.model}`,
+              provider: agent.role === "red_team"
+                ? "agent:red_team:openrouter/qwen/qwen3.5-397b-a17b"
+                : `agent:${agent.role}:${agent.active_assignment.provider}/${agent.active_assignment.model}`,
               agent_role: agent.role,
               record_kind: "agent",
+              execution_mode: agent.role === "red_team"
+                ? "hosted_advisory"
+                : "deterministic",
               measured_cost: agent.measured_cost,
+              cost_measurement_state: agent.cost_measurement_state,
               accounting_status: agent.accounting_status,
+              provider_event_ids: agent.provider_event_ids,
               currency: agent.currency,
               request_count: 0,
               execution_count: agent.execution_count,
               attempt_count: agent.role === "orchestrator" ? 0 : agent.execution_count,
               confirmed_finding_count: 0,
-              average_cost_per_request: 0,
+              average_cost_per_request: null,
               input_tokens: agent.input_tokens,
               output_tokens: agent.output_tokens,
               reasoning_tokens: agent.reasoning_tokens,
               token_observation_count: agent.token_observation_count,
               physical_call_count: agent.physical_call_count,
+              physical_call_count_state: agent.physical_call_count_state,
               provider_budget: agent.provider_budget,
               p50_duration_ms: agent.p50_duration_ms,
               p95_duration_ms: agent.p95_duration_ms,
@@ -1153,6 +1255,14 @@ const browserFixture = (): Plugin => ({
           : { state: "empty", data: null }));
         return;
       }
+      if (path === "/api/v1/coverage") {
+        response.end(JSON.stringify({ state: "ready", data: browserCoverage }));
+        return;
+      }
+      if (path === "/api/v1/resilience") {
+        response.end(JSON.stringify({ state: "ready", data: browserRegression }));
+        return;
+      }
       if (path === "/api/v1/configuration") {
         response.end(JSON.stringify({
           state: "ready",
@@ -1212,6 +1322,21 @@ const browserFixture = (): Plugin => ({
         }));
         return;
       }
+      if (path === "/api/v1/target-catalog") {
+        response.end(JSON.stringify({
+          state: "ready",
+          data: [{
+            target_id: "browser-target",
+            version: "v1",
+            name: "Browser Test Target",
+            environment: "staging",
+            synthetic_data_only: true,
+            surface_count: 1,
+            registration_state: "registered",
+          }],
+        }));
+        return;
+      }
       if (path === "/api/v1/targets") {
         response.end(JSON.stringify({
           state: "ready",
@@ -1257,6 +1382,7 @@ const browserFixture = (): Plugin => ({
               tool_sources: [],
               execution_profile: "live",
               maximum_caps: browserScope.caps,
+              hosted_run: browserHostedRun,
             },
             created_at: "2026-07-22T00:00:00Z",
           }],

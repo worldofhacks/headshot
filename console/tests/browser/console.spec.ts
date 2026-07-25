@@ -14,17 +14,33 @@ test("direct routes and browser history restore authoritative screens", async ({
   await expect(page).toHaveURL(/\/reports\/browser-report-prompt-injection$/);
   await expect(page.getByRole("heading", { name: "Reports", exact: true, level: 1 })).toBeVisible();
 
+  await page.goto("/coverage");
+  await expect(page.getByRole("heading", {
+    name: "Coverage & Regression",
+    exact: true,
+    level: 1,
+  })).toBeVisible();
+  await expect(page.getByRole("button", {
+    name: "Coverage & Regression",
+    exact: true,
+  })).toHaveAttribute("aria-current", "page");
+  await expect(page.getByText("Verified attempts", { exact: true }).first()).toBeVisible();
+  await expect(page.getByText("Regression checks", { exact: true }).first()).toBeVisible();
+
   await page.goto("/findings/server-record");
   await expect(page.getByRole("heading", { name: "Findings", exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Risk distribution", exact: true })).toBeVisible();
 
   await page.goto("/agents");
   await expect(page.getByRole("heading", { name: "Agent operations", exact: true })).toBeVisible();
-  await expect(page.getByText("Configured model", { exact: true })).toBeVisible();
-  await expect(page.getByText("Configured provider", { exact: true })).toBeVisible();
-  await expect(page.getByText("Provider-served model", { exact: true })).toBeVisible();
-  await expect(page.getByText("unavailable — not durably recorded", { exact: true }).first()).toBeVisible();
+  await expect(page.getByText("Active configured model", { exact: true })).toBeVisible();
+  await expect(page.getByText("Active configured provider", { exact: true })).toBeVisible();
+  await expect(page.getByText("Active assignment served model", { exact: true })).toBeVisible();
+  await expect(page.getByText("unavailable — no campaign execution recorded", { exact: true }).first()).toBeVisible();
   await expect(page.getByLabel("Execution mode")).toBeEnabled();
+  await expect(page.getByRole("button", {
+    name: "Open four-role authorization",
+  })).toBeEnabled();
   await expect(page.getByRole("button", {
     name: "Activate deterministic role engine",
   })).toBeDisabled();
@@ -55,7 +71,7 @@ test("390px navigation exposes every screen without application overflow", async
   await page.getByText("Browser Test Target", { exact: true }).click();
   await expect(page.getByRole("button", { name: "Disable surface" })).toBeEnabled();
   await expect(page.getByRole("button", {
-    name: "Create target from trusted catalog",
+    name: "Register exact catalog target",
   })).toBeDisabled();
   await expect(page.getByLabel("Budget USD")).toHaveValue("1");
   await expect(page.getByLabel("Maximum attempts")).toHaveValue("9");

@@ -8,9 +8,15 @@ cannot be satisfied; they never manufacture placeholder rows.
 from __future__ import annotations
 
 import datetime
+import re
 from typing import Any, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
+
+from agentforge.control_plane.finding_decisions import (
+    FindingDecisionReasonCode,
+    validate_finding_decision_reason_code,
+)
 
 _LANGFUSE_DELIVERY_STATES = (
     "not_attempted",
@@ -32,6 +38,16 @@ def _validate_token_observation(
         raise ValueError(f"{label} token totals require an observation")
     if observation_count > 0 and input_tokens is None and output_tokens is None:
         raise ValueError(f"{label} token observation requires a reported total")
+
+
+def _validate_provider_event_ids(values: list[str], *, label: str) -> None:
+    if len(values) != len(set(values)) or any(
+        not isinstance(value, str)
+        or len(value) != 64
+        or any(character not in "0123456789abcdef" for character in value)
+        for value in values
+    ):
+        raise ValueError(f"{label} provider event identities are invalid")
 
 
 class _ReadModel(BaseModel):
@@ -183,6 +199,7 @@ class CampaignTemplateReadModel(_ReadModel):
     tool_sources: tuple[str, ...]
     execution_profile: Literal["synthetic", "live"]
     maximum_caps: SafetyCapsReadModel
+    hosted_run: HostedRunBindingReadModel | None
 
 
 class TargetReadModel(_ReadModel):
@@ -204,6 +221,18 @@ class TargetReadModel(_ReadModel):
     created_at: datetime.datetime
 
 
+class TargetCatalogEntryReadModel(_ReadModel):
+    """Safe selectable identity for one immutable server-owned catalog bundle."""
+
+    target_id: str
+    version: str
+    name: str
+    environment: Literal["local", "staging", "production"]
+    synthetic_data_only: Literal[True]
+    surface_count: int = Field(gt=0)
+    registration_state: Literal["available", "registered", "conflict"]
+
+
 class AuditReadModel(_ReadModel):
     cursor: int = Field(ge=1)
     event_type: str
@@ -218,7 +247,19 @@ class FindingHistoryReadModel(_ReadModel):
     decision: str
     actor_user_id: str
     rationale: str
+    reason_code: FindingDecisionReasonCode | None = None
     created_at: datetime.datetime
+
+    @model_validator(mode="after")
+    def validate_decision_reason_code_pair(self) -> Self:
+        # Migration 0005 allowed null, so historical rows remain readable. Any typed
+        # code must obey the same closed decision pairing as a new command.
+        if self.reason_code is not None:
+            validate_finding_decision_reason_code(
+                decision=self.decision,
+                reason_code=self.reason_code,
+            )
+        return self
 
 
 class FindingReadModel(_ReadModel):
@@ -397,9 +438,12 @@ class TraceReadModel(_ReadModel):
     attempt_id: str | None
     operation: str
     provider: str
+    model: str | None = None
     agent_role: Literal["orchestrator", "red_team", "judge", "documentation"] | None = None
     execution_mode: Literal["deterministic", "hosted_advisory"] | None = None
+    requested_model: str | None = None
     returned_model: str | None = None
+    model_substituted: bool
     upstream_provider: str | None = None
     provider_request_id: str | None = None
     configuration_set_sha256: str | None = None
@@ -417,8 +461,30 @@ class TraceReadModel(_ReadModel):
     duration_ms: float | None = Field(default=None, ge=0)
     request_bytes: int = Field(ge=0)
     response_bytes: int | None = Field(default=None, ge=0)
-    measured_cost: float = Field(ge=0)
+    measured_cost: float | None = Field(default=None, ge=0)
+    cost_measurement_state: Literal["measured", "partial", "not_observed", "invalid"]
     accounting_status: Literal["measured", "partial", "unavailable"]
+    provider_event_ids: list[str]
+    provider_event_status: (
+        Literal[
+            "succeeded",
+            "timeout",
+            "retryable_failure",
+            "terminal_failure",
+            "model_mismatch",
+            "identity_invalid",
+            "route_unauthorized",
+            "invalid_usage",
+            "invalid_output",
+            "outcome_unknown",
+        ]
+        | None
+    ) = None
+    provider_lineage_state: Literal[
+        "not_applicable",
+        "canonical_physical",
+        "historical_not_instrumented",
+    ]
     currency: str
     input_tokens: int | None = Field(default=None, ge=0)
     output_tokens: int | None = Field(default=None, ge=0)
@@ -449,15 +515,53 @@ class TraceReadModel(_ReadModel):
 
     @model_validator(mode="after")
     def validate_accounting_status(self) -> Self:
-        if self.accounting_status == "unavailable" and (
-            self.measured_cost != 0
-            or self.input_tokens is not None
-            or self.output_tokens is not None
-            or self.reasoning_tokens is not None
+        expected_accounting_status = {
+            "measured": "measured",
+            "partial": "partial",
+            "not_observed": "unavailable",
+            "invalid": "unavailable",
+        }[self.cost_measurement_state]
+        if self.accounting_status != expected_accounting_status:
+            raise ValueError("trace accounting contradicts its persisted cost state")
+        _validate_provider_event_ids(self.provider_event_ids, label="trace")
+        if (self.provider_event_status is None) != (not self.provider_event_ids):
+            raise ValueError("trace provider event status must identify the latest durable event")
+        if self.agent_role is None:
+            if self.provider_lineage_state != "not_applicable":
+                raise ValueError("non-agent traces cannot claim provider lineage instrumentation")
+        elif self.execution_mode == "deterministic":
+            if self.provider_lineage_state != "not_applicable":
+                raise ValueError("deterministic traces cannot claim provider lineage")
+        elif (
+            self.execution_mode != "hosted_advisory"
+            or self.provider_lineage_state == "not_applicable"
         ):
-            raise ValueError("unavailable trace accounting cannot contain measured values")
+            raise ValueError("hosted traces require an explicit provider lineage state")
+        if self.provider_lineage_state == "historical_not_instrumented":
+            if (
+                self.status == "running"
+                or self.provider_event_ids
+                or self.cost_measurement_state == "measured"
+            ):
+                raise ValueError("historical trace lineage must be terminal and eventless")
+        elif self.agent_role is not None:
+            observed_event_count = len(self.provider_event_ids)
+            if observed_event_count > (self.physical_attempts or 0) or (
+                self.status != "running"
+                and self.physical_attempts is not None
+                and observed_event_count != self.physical_attempts
+            ):
+                raise ValueError("trace provider event identities contradict its physical attempts")
+        if self.accounting_status in {"measured", "partial"} and self.measured_cost is None:
+            raise ValueError("observed trace accounting requires known measured cost")
+        if self.accounting_status == "unavailable" and self.measured_cost is not None:
+            raise ValueError("unavailable trace cost cannot claim measured spend")
         if self.accounting_status == "partial" and (
-            self.agent_role is None or self.physical_attempts is None
+            self.agent_role is None
+            or (
+                self.physical_attempts is None
+                and self.provider_lineage_state != "historical_not_instrumented"
+            )
         ):
             raise ValueError("partial trace accounting requires an observed agent provider call")
         provider_identity = (
@@ -465,6 +569,19 @@ class TraceReadModel(_ReadModel):
             self.upstream_provider,
             self.provider_request_id,
         )
+        if self.agent_role is None:
+            if self.requested_model is not None or self.model_substituted:
+                raise ValueError("non-agent traces cannot claim provider model identity")
+        elif self.requested_model is None:
+            raise ValueError("agent traces require their requested model identity")
+        elif self.model_substituted != (self.provider_event_status == "model_mismatch"):
+            raise ValueError("trace model substitution flag contradicts provider identity")
+        if self.model_substituted and (
+            self.returned_model is None
+            or self.returned_model == self.requested_model
+            or self.returned_model.startswith("unsafe-provider-text-")
+        ):
+            raise ValueError("trace model substitution requires a safe alternate model")
         if any(value is None for value in provider_identity) != all(
             value is None for value in provider_identity
         ):
@@ -472,6 +589,7 @@ class TraceReadModel(_ReadModel):
         if self.agent_role is None and any(
             value is not None
             for value in (
+                self.model,
                 *provider_identity,
                 self.configuration_set_sha256,
                 self.role_configuration_sha256,
@@ -482,9 +600,12 @@ class TraceReadModel(_ReadModel):
                 self.judge_calibration_state,
                 self.oracle_agreement,
                 self.decision_authority,
+                *self.provider_event_ids,
             )
         ):
             raise ValueError("non-agent traces cannot contain hosted agent lineage")
+        if self.agent_role is not None and self.model is None:
+            raise ValueError("agent traces require the requested model")
         if self.decision_authority == "model" and self.judge_calibration_state != "enabled":
             raise ValueError("model authority requires an enabled Judge calibration")
         if (self.langfuse_status == "exported") != (self.langfuse_verified_at is not None):
@@ -510,42 +631,77 @@ class TraceReadModel(_ReadModel):
 
 
 class AgentBudgetReadModel(_ReadModel):
-    """One role's campaign-scoped subcap plus the shared provider kill switch."""
+    """One role's run-scoped subcap plus the shared provider kill switch."""
 
-    status: Literal["staged_pending_authorization", "active", "unavailable"]
+    status: Literal[
+        "staged_pending_authorization",
+        "active",
+        "historical",
+        "agent_acceptance",
+        "unavailable",
+    ]
     campaign_run_id: str | None = None
     configuration_set_sha256: str | None = None
+    role_cost_measurement_state: (
+        Literal["measured", "partial", "not_observed", "invalid"] | None
+    ) = None
     role_usd_cap: float | None = Field(default=None, ge=0)
     role_usd_spent: float = Field(ge=0)
+    role_unresolved_usd_exposure: float = Field(ge=0)
     role_usd_remaining: float | None = Field(default=None, ge=0)
+    role_usd_remaining_upper_bound: float | None = Field(default=None, ge=0)
     role_usd_overrun: float = Field(ge=0)
     role_call_cap: int | None = Field(default=None, ge=1)
     role_physical_calls: int = Field(ge=0)
+    role_unresolved_physical_calls: int = Field(ge=0)
+    role_call_count_state: Literal["exact", "lower_bound"] | None = None
     role_calls_remaining: int | None = Field(default=None, ge=0)
     role_call_overrun: int = Field(ge=0)
+    global_cost_measurement_state: (
+        Literal["measured", "partial", "not_observed", "invalid"] | None
+    ) = None
     global_usd_cap: float | None = Field(default=None, ge=0)
     global_usd_spent: float = Field(ge=0)
+    global_unresolved_usd_exposure: float = Field(ge=0)
     global_usd_remaining: float | None = Field(default=None, ge=0)
+    global_usd_remaining_upper_bound: float | None = Field(default=None, ge=0)
     global_usd_overrun: float = Field(ge=0)
     global_call_cap: int | None = Field(default=None, ge=1)
     global_physical_calls: int = Field(ge=0)
+    global_unresolved_physical_calls: int = Field(ge=0)
+    global_call_count_state: Literal["exact", "lower_bound"] | None = None
     global_calls_remaining: int | None = Field(default=None, ge=0)
     global_call_overrun: int = Field(ge=0)
 
     @model_validator(mode="after")
     def validate_budget_reconciliation(self) -> Self:
-        cap_values = (
+        required_cap_values = (
             self.role_usd_cap,
             self.role_usd_remaining,
+            self.role_usd_remaining_upper_bound,
             self.role_call_cap,
             self.role_calls_remaining,
             self.global_usd_cap,
             self.global_usd_remaining,
+            self.global_usd_remaining_upper_bound,
             self.global_call_cap,
             self.global_calls_remaining,
         )
         if self.status == "unavailable":
-            if any(value is not None for value in cap_values):
+            if any(
+                value is not None
+                for value in (
+                    *required_cap_values,
+                    self.role_usd_remaining,
+                    self.global_usd_remaining,
+                    self.role_call_count_state,
+                    self.role_calls_remaining,
+                    self.global_call_count_state,
+                    self.global_calls_remaining,
+                    self.role_cost_measurement_state,
+                    self.global_cost_measurement_state,
+                )
+            ):
                 raise ValueError("unavailable hosted budget cannot contain inferred caps")
             if self.configuration_set_sha256 is not None or self.campaign_run_id is not None:
                 raise ValueError("unavailable hosted budget cannot identify a configuration")
@@ -553,59 +709,120 @@ class AgentBudgetReadModel(_ReadModel):
                 value != 0
                 for value in (
                     self.role_usd_spent,
+                    self.role_unresolved_usd_exposure,
                     self.role_usd_overrun,
                     self.role_physical_calls,
+                    self.role_unresolved_physical_calls,
                     self.role_call_overrun,
                     self.global_usd_spent,
+                    self.global_unresolved_usd_exposure,
                     self.global_usd_overrun,
                     self.global_physical_calls,
+                    self.global_unresolved_physical_calls,
                     self.global_call_overrun,
                 )
             ):
                 raise ValueError("unavailable hosted budget cannot claim provider usage")
             return self
-        if any(value is None for value in cap_values):
+        if (
+            any(value is None for value in required_cap_values)
+            or self.role_call_count_state is None
+            or self.global_call_count_state is None
+            or self.role_cost_measurement_state is None
+            or self.global_cost_measurement_state is None
+        ):
             raise ValueError("hosted budget requires complete role and global cap reconciliation")
         if self.configuration_set_sha256 is None:
             raise ValueError("hosted budget requires its configuration-set identity")
-        if self.status == "active" and self.campaign_run_id is None:
-            raise ValueError("active hosted budget requires its campaign identity")
+        if (
+            self.status in {"active", "historical", "agent_acceptance"}
+            and self.campaign_run_id is None
+        ):
+            raise ValueError("run-scoped hosted budget requires its run identity")
+        if self.status == "agent_acceptance" and not self.campaign_run_id.startswith("AR-"):
+            raise ValueError("agent acceptance budget requires its acceptance run identity")
         if self.status == "staged_pending_authorization" and self.campaign_run_id is not None:
             raise ValueError("staged hosted budget cannot claim campaign activity")
         assert self.role_usd_cap is not None
         assert self.role_usd_remaining is not None
+        assert self.role_usd_remaining_upper_bound is not None
         assert self.role_call_cap is not None
         assert self.role_calls_remaining is not None
         assert self.global_usd_cap is not None
         assert self.global_usd_remaining is not None
+        assert self.global_usd_remaining_upper_bound is not None
         assert self.global_call_cap is not None
         assert self.global_calls_remaining is not None
+        expected_role_upper_bound = max(0.0, self.role_usd_cap - self.role_usd_spent)
+        expected_global_upper_bound = max(
+            0.0,
+            self.global_usd_cap - self.global_usd_spent,
+        )
         if (
             abs(
-                (self.role_usd_spent + self.role_usd_remaining)
+                (self.role_usd_spent + self.role_unresolved_usd_exposure + self.role_usd_remaining)
                 - (self.role_usd_cap + self.role_usd_overrun)
             )
             > 0.000001
         ):
             raise ValueError("role provider spend does not reconcile to its subcap")
         if (
-            self.role_physical_calls + self.role_calls_remaining
+            self.role_physical_calls
+            + self.role_unresolved_physical_calls
+            + self.role_calls_remaining
             != self.role_call_cap + self.role_call_overrun
         ):
             raise ValueError("role provider calls do not reconcile to their subcap")
         if (
             abs(
-                (self.global_usd_spent + self.global_usd_remaining)
+                (
+                    self.global_usd_spent
+                    + self.global_unresolved_usd_exposure
+                    + self.global_usd_remaining
+                )
                 - (self.global_usd_cap + self.global_usd_overrun)
             )
             > 0.000001
         ):
             raise ValueError("global provider spend does not reconcile to its kill switch")
         if (
-            self.global_physical_calls + self.global_calls_remaining
+            self.global_physical_calls
+            + self.global_unresolved_physical_calls
+            + self.global_calls_remaining
             != self.global_call_cap + self.global_call_overrun
         ):
             raise ValueError("global provider calls do not reconcile to their kill switch")
+        if (
+            abs(self.role_usd_remaining_upper_bound - expected_role_upper_bound) > 0.000001
+            or abs(self.global_usd_remaining_upper_bound - expected_global_upper_bound) > 0.000001
+        ):
+            raise ValueError("known provider spend does not reconcile to its upper bound")
+        if (
+            abs(self.role_usd_overrun - max(0.0, self.role_usd_spent - self.role_usd_cap))
+            > 0.000001
+            or abs(self.global_usd_overrun - max(0.0, self.global_usd_spent - self.global_usd_cap))
+            > 0.000001
+        ):
+            raise ValueError("known provider overrun does not reconcile to known spend")
+        if self.status != "active" and (
+            (
+                self.role_cost_measurement_state == "measured"
+                and self.role_unresolved_usd_exposure > 0
+            )
+            or (
+                self.global_cost_measurement_state == "measured"
+                and self.global_unresolved_usd_exposure > 0
+            )
+            or (self.role_call_count_state == "exact" and self.role_unresolved_physical_calls > 0)
+            or (
+                self.global_call_count_state == "exact"
+                and self.global_unresolved_physical_calls > 0
+            )
+        ):
+            raise ValueError(
+                "only an active hosted budget can combine exact observed usage "
+                "with unresolved future-call reservations"
+            )
         return self
 
 
@@ -615,19 +832,25 @@ class CostReadModel(_ReadModel):
     provider: str
     agent_role: Literal["orchestrator", "red_team", "judge", "documentation"] | None = None
     record_kind: Literal["campaign", "agent"]
-    measured_cost: float = Field(ge=0)
+    execution_mode: Literal["deterministic", "hosted_advisory"] | None = None
+    measured_cost: float | None = Field(default=None, ge=0)
+    cost_measurement_state: Literal[
+        "not_applicable", "measured", "partial", "not_observed", "invalid"
+    ]
     accounting_status: Literal["not_applicable", "measured", "partial", "unavailable"]
+    provider_event_ids: list[str]
     currency: str
     request_count: int = Field(ge=0)
     execution_count: int = Field(ge=0)
     attempt_count: int = Field(ge=0)
     confirmed_finding_count: int = Field(ge=0)
-    average_cost_per_request: float = Field(ge=0)
+    average_cost_per_request: float | None = Field(default=None, ge=0)
     input_tokens: int | None = Field(default=None, ge=0)
     output_tokens: int | None = Field(default=None, ge=0)
     reasoning_tokens: int | None = Field(default=None, ge=0)
     token_observation_count: int = Field(ge=0)
     physical_call_count: int = Field(ge=0)
+    physical_call_count_state: Literal["not_applicable", "exact", "lower_bound"]
     provider_budget: AgentBudgetReadModel | None = None
     p50_duration_ms: float | None = Field(default=None, ge=0)
     p95_duration_ms: float | None = Field(default=None, ge=0)
@@ -636,11 +859,21 @@ class CostReadModel(_ReadModel):
     duration_ms: float = Field(ge=0)
     execution_profile: Literal["synthetic", "live"]
     started_at: datetime.datetime
-    ended_at: datetime.datetime
+    ended_at: datetime.datetime | None = None
     recorded_at: datetime.datetime
 
     @model_validator(mode="after")
     def validate_observed_accounting(self) -> Self:
+        expected_accounting_status = {
+            "not_applicable": "not_applicable",
+            "measured": "measured",
+            "partial": "partial",
+            "not_observed": "unavailable",
+            "invalid": "unavailable",
+        }[self.cost_measurement_state]
+        if self.accounting_status != expected_accounting_status:
+            raise ValueError("cost accounting contradicts its persisted cost state")
+        _validate_provider_event_ids(self.provider_event_ids, label="cost")
         _validate_token_observation(
             input_tokens=self.input_tokens,
             output_tokens=self.output_tokens,
@@ -649,19 +882,45 @@ class CostReadModel(_ReadModel):
         )
         if (self.record_kind == "agent") != (self.agent_role is not None):
             raise ValueError("agent cost records require exactly one agent role")
+        if (self.record_kind == "agent") != (self.execution_mode is not None):
+            raise ValueError("agent cost records require exactly one execution mode")
+        if self.record_kind == "campaign":
+            if self.physical_call_count_state != "not_applicable" or self.physical_call_count != 0:
+                raise ValueError("campaign cost cannot claim provider-call completeness")
+        elif self.request_count != self.physical_call_count:
+            raise ValueError("agent cost requires coherent provider-call completeness")
+        elif self.execution_mode == "deterministic":
+            if self.physical_call_count_state != "not_applicable" or self.physical_call_count != 0:
+                raise ValueError("deterministic agent cost cannot claim provider calls")
+        elif self.physical_call_count_state == "not_applicable":
+            raise ValueError("hosted agent cost requires provider-call completeness")
         if self.accounting_status in {"partial", "unavailable"} and self.record_kind != "agent":
             raise ValueError("partial accounting states apply only to agent cost records")
-        if self.accounting_status == "unavailable" and (
-            self.measured_cost != 0
-            or self.token_observation_count != 0
-            or self.reasoning_tokens is not None
-            or self.physical_call_count != 0
+        if self.accounting_status in {"measured", "partial"} and self.measured_cost is None:
+            raise ValueError("observed cost accounting requires known measured cost")
+        if self.accounting_status in {"not_applicable", "unavailable"} and (
+            self.measured_cost is not None
         ):
-            raise ValueError("unavailable agent accounting cannot contain measured values")
+            raise ValueError("unobserved cost accounting cannot claim measured cost")
+        if self.average_cost_per_request is not None and (
+            self.accounting_status != "measured"
+            or self.request_count == 0
+            or (self.record_kind == "agent" and self.physical_call_count_state != "exact")
+        ):
+            raise ValueError("average request cost requires complete measured call accounting")
+        if (
+            self.accounting_status == "measured"
+            and self.request_count > 0
+            and (self.record_kind == "campaign" or self.physical_call_count_state == "exact")
+            and self.average_cost_per_request is None
+        ):
+            raise ValueError("complete measured calls require their average cost")
         if (self.record_kind == "agent") != (self.provider_budget is not None):
             raise ValueError("only agent cost records carry a role provider budget")
         if self.record_kind == "campaign" and (
-            self.reasoning_tokens is not None or self.physical_call_count != 0
+            self.reasoning_tokens is not None
+            or self.physical_call_count != 0
+            or self.provider_event_ids
         ):
             raise ValueError("target campaign cost records cannot contain provider call accounting")
         role_latencies = (self.p50_duration_ms, self.p95_duration_ms)
@@ -672,6 +931,8 @@ class CostReadModel(_ReadModel):
                 raise ValueError("agent cost latency percentiles require a completed execution")
             if self.execution_count > 0 and any(value is None for value in role_latencies):
                 raise ValueError("completed agent cost records require role latency percentiles")
+            if (self.execution_count == 0) != (self.ended_at is None):
+                raise ValueError("agent cost terminal timestamp requires a completed execution")
         if (
             self.p50_duration_ms is not None
             and self.p95_duration_ms is not None
@@ -733,6 +994,45 @@ class AgentAssignmentReadModel(_ReadModel):
         if (self.resolved_model is None) != (self.upstream_provider is None):
             raise ValueError(
                 "provider-served model and upstream provider must be recorded together"
+            )
+        return self
+
+
+class AgentAcceptanceExecutionReadModel(_ReadModel):
+    """Latest provider evidence from the target-free agent acceptance authority."""
+
+    scope: Literal["agent_acceptance"]
+    agent_role: Literal["orchestrator", "red_team", "judge", "documentation"]
+    acceptance_run_id: str = Field(pattern=r"^AR-")
+    acceptance_attempt_id: str = Field(pattern=r"^[0-9a-f]{64}$")
+    execution_id: str
+    parent_execution_id: str | None = None
+    configuration_set_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    returned_model: str
+    upstream_provider: str
+    trace_id: str
+    measured_cost: float = Field(ge=0)
+    cost_measurement_state: Literal["measured"]
+    provider_event_ids: list[str]
+    currency: Literal["USD"]
+    input_tokens: int = Field(ge=0)
+    output_tokens: int = Field(ge=0)
+    reasoning_tokens: int = Field(ge=0)
+    langfuse_status: Literal["queued", "exported"]
+    langfuse_verified_at: datetime.datetime | None = None
+    finished_at: datetime.datetime
+
+    @model_validator(mode="after")
+    def validate_provider_and_remote_observation(self) -> Self:
+        if not self.provider_event_ids or any(
+            re.fullmatch(r"[0-9a-f]{64}", event_id) is None for event_id in self.provider_event_ids
+        ):
+            raise ValueError("acceptance evidence requires canonical provider event identities")
+        if len(set(self.provider_event_ids)) != len(self.provider_event_ids):
+            raise ValueError("acceptance provider event identities must be unique")
+        if (self.langfuse_status == "exported") != (self.langfuse_verified_at is not None):
+            raise ValueError(
+                "exported acceptance evidence requires exact Langfuse query-back proof"
             )
         return self
 
@@ -800,19 +1100,26 @@ class AgentReadModel(_ReadModel):
     output_contract: str
     active_assignment: AgentAssignmentReadModel
     staged_assignment: AgentAssignmentReadModel | None = None
+    latest_acceptance_execution: AgentAcceptanceExecutionReadModel | None = None
     execution_count: int = Field(ge=0)
+    hosted_execution_count: int = Field(ge=0)
     running_count: int = Field(ge=0)
     succeeded_count: int = Field(ge=0)
     failed_count: int = Field(ge=0)
     skipped_count: int = Field(ge=0)
-    measured_cost: float = Field(ge=0)
+    measured_cost: float | None = Field(default=None, ge=0)
+    cost_measurement_state: Literal[
+        "not_applicable", "measured", "partial", "not_observed", "invalid"
+    ]
     accounting_status: Literal["not_applicable", "measured", "partial", "unavailable"]
+    provider_event_ids: list[str]
     currency: str
     input_tokens: int | None = Field(default=None, ge=0)
     output_tokens: int | None = Field(default=None, ge=0)
     reasoning_tokens: int | None = Field(default=None, ge=0)
     token_observation_count: int = Field(ge=0)
     physical_call_count: int = Field(ge=0)
+    physical_call_count_state: Literal["not_applicable", "exact", "lower_bound"]
     provider_budget: AgentBudgetReadModel
     judge_calibration: JudgeCalibrationSummaryReadModel | None = None
     average_duration_ms: float | None = Field(default=None, ge=0)
@@ -854,15 +1161,31 @@ class AgentReadModel(_ReadModel):
         )
         if self.token_observation_count > self.execution_count:
             raise ValueError("agent token observations cannot exceed executions")
+        if self.hosted_execution_count > self.execution_count:
+            raise ValueError("hosted agent executions cannot exceed all executions")
         if (self.execution_count == 0) != (self.accounting_status == "not_applicable"):
             raise ValueError("agent accounting applicability must match execution_count")
-        if self.accounting_status == "unavailable" and (
-            self.measured_cost != 0
-            or self.token_observation_count != 0
-            or self.reasoning_tokens is not None
-            or self.physical_call_count != 0
+        if self.hosted_execution_count == 0:
+            if self.physical_call_count_state != "not_applicable" or self.physical_call_count != 0:
+                raise ValueError("agent without hosted execution cannot claim provider calls")
+        elif self.physical_call_count_state == "not_applicable":
+            raise ValueError("hosted agent execution requires provider-call completeness")
+        expected_accounting_status = {
+            "not_applicable": "not_applicable",
+            "measured": "measured",
+            "partial": "partial",
+            "not_observed": "unavailable",
+            "invalid": "unavailable",
+        }[self.cost_measurement_state]
+        if self.accounting_status != expected_accounting_status:
+            raise ValueError("agent accounting contradicts its persisted cost state")
+        _validate_provider_event_ids(self.provider_event_ids, label="agent")
+        if self.accounting_status in {"measured", "partial"} and self.measured_cost is None:
+            raise ValueError("observed agent accounting requires known measured cost")
+        if self.accounting_status in {"not_applicable", "unavailable"} and (
+            self.measured_cost is not None
         ):
-            raise ValueError("unavailable agent accounting cannot contain measured values")
+            raise ValueError("unobserved agent accounting cannot claim measured cost")
         if (self.role == "judge") != (self.judge_calibration is not None):
             raise ValueError("only the Judge carries evaluator calibration status")
         completed_count = status_total - self.running_count
@@ -895,6 +1218,7 @@ class AgentActivityReadModel(_ReadModel):
     provider: str
     model: str
     returned_model: str | None = None
+    model_substituted: bool
     upstream_provider: str | None = None
     provider_request_id: str | None = None
     execution_mode: Literal["deterministic", "hosted_advisory"]
@@ -908,8 +1232,35 @@ class AgentActivityReadModel(_ReadModel):
     output_tokens: int | None = Field(default=None, ge=0)
     reasoning_tokens: int | None = Field(default=None, ge=0)
     physical_attempts: int | None = Field(default=None, ge=1)
-    measured_cost: float = Field(ge=0)
+    measured_cost: float | None = Field(default=None, ge=0)
+    cost_measurement_state: Literal[
+        "measured",
+        "partial",
+        "not_observed",
+        "invalid",
+    ]
     accounting_status: Literal["measured", "partial", "unavailable"]
+    provider_event_ids: list[str]
+    provider_event_status: (
+        Literal[
+            "succeeded",
+            "timeout",
+            "retryable_failure",
+            "terminal_failure",
+            "model_mismatch",
+            "identity_invalid",
+            "route_unauthorized",
+            "invalid_usage",
+            "invalid_output",
+            "outcome_unknown",
+        ]
+        | None
+    ) = None
+    provider_lineage_state: Literal[
+        "not_applicable",
+        "canonical_physical",
+        "historical_not_instrumented",
+    ]
     currency: str
     trace_id: str
     langfuse_status: Literal["not_attempted", "disabled", "queued", "exported", "error"]
@@ -938,29 +1289,71 @@ class AgentActivityReadModel(_ReadModel):
             and self.output_tokens is not None
             and (self.configuration_set_sha256 is None or self.reasoning_tokens is not None)
         )
-        expected_accounting_status = (
-            "measured"
-            if self.execution_mode == "deterministic" or provider_accounting_complete
-            else "partial"
-            if self.physical_attempts is not None
-            else "unavailable"
-        )
+        expected_accounting_status = {
+            "measured": "measured",
+            "partial": "partial",
+            "not_observed": "unavailable",
+            "invalid": "unavailable",
+        }[self.cost_measurement_state]
         if self.accounting_status != expected_accounting_status:
             raise ValueError("agent activity accounting status contradicts its execution record")
-        if self.accounting_status == "unavailable" and (
-            self.measured_cost != 0
-            or (self.input_tokens or 0) != 0
-            or (self.output_tokens or 0) != 0
-            or (self.reasoning_tokens or 0) != 0
+        _validate_provider_event_ids(
+            self.provider_event_ids,
+            label="agent activity",
+        )
+        if (self.provider_event_status is None) != (not self.provider_event_ids):
+            raise ValueError(
+                "agent activity provider event status must identify the latest durable event"
+            )
+        durable_lineage_state = self.detail.get("provider_lineage_state")
+        if self.execution_mode == "deterministic":
+            if self.provider_lineage_state != "not_applicable" or durable_lineage_state is not None:
+                raise ValueError("deterministic activity cannot claim provider lineage")
+        elif (
+            self.provider_lineage_state not in {"canonical_physical", "historical_not_instrumented"}
+            or durable_lineage_state != self.provider_lineage_state
         ):
-            raise ValueError("unavailable agent activity accounting cannot contain measured values")
-        if self.accounting_status == "partial" and self.physical_attempts is None:
+            raise ValueError("hosted activity provider lineage state is not durable")
+        if self.provider_lineage_state == "historical_not_instrumented":
+            if (
+                self.status == "running"
+                or self.provider_event_ids
+                or self.cost_measurement_state == "measured"
+            ):
+                raise ValueError("historical activity lineage must be terminal and eventless")
+        else:
+            observed_event_count = len(self.provider_event_ids)
+            if observed_event_count > (self.physical_attempts or 0) or (
+                self.status != "running"
+                and self.physical_attempts is not None
+                and observed_event_count != self.physical_attempts
+            ):
+                raise ValueError(
+                    "agent activity provider event identities contradict its physical attempts"
+                )
+        if self.accounting_status in {"measured", "partial"} and self.measured_cost is None:
+            raise ValueError("observed agent activity accounting requires known measured cost")
+        if self.accounting_status == "unavailable" and self.measured_cost is not None:
+            raise ValueError("unavailable agent activity cost cannot claim measured spend")
+        if (
+            self.accounting_status == "partial"
+            and self.physical_attempts is None
+            and self.provider_lineage_state != "historical_not_instrumented"
+        ):
             raise ValueError("partial agent activity requires an observed provider call")
         provider_identity = (
             self.returned_model,
             self.upstream_provider,
             self.provider_request_id,
         )
+        if self.model_substituted != (self.provider_event_status == "model_mismatch"):
+            raise ValueError("agent activity substitution flag contradicts provider identity")
+        if self.model_substituted and (
+            self.returned_model is None
+            or self.returned_model == self.model
+            or self.returned_model.startswith("unsafe-provider-text-")
+        ):
+            raise ValueError("agent activity substitution requires a safe alternate model")
         if any(value is None for value in provider_identity) != all(
             value is None for value in provider_identity
         ):
@@ -1303,6 +1696,7 @@ _LIST_ADAPTERS = {
     "attempts": TypeAdapter(list[AttemptReadModel]),
     "approvals": TypeAdapter(list[ApprovalReadModel]),
     "targets": TypeAdapter(list[TargetReadModel]),
+    "target_catalog": TypeAdapter(list[TargetCatalogEntryReadModel]),
     "audit": TypeAdapter(list[AuditReadModel]),
     "findings": TypeAdapter(list[FindingReadModel]),
     "reports": TypeAdapter(list[ReportReadModel]),
@@ -1341,6 +1735,7 @@ def validate_ready_data(resource: str, data: Any) -> Any:
 __all__ = [
     "ApprovalReadModel",
     "ApprovalDetailReadModel",
+    "AgentAcceptanceExecutionReadModel",
     "AgentActivityReadModel",
     "AgentAssignmentReadModel",
     "AgentBudgetReadModel",
@@ -1373,6 +1768,7 @@ __all__ = [
     "ReportReadModel",
     "ResilienceReadModel",
     "SurfaceReadModel",
+    "TargetCatalogEntryReadModel",
     "TargetReadModel",
     "ToolScopeReadModel",
     "TraceReadModel",

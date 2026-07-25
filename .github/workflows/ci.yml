@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main, "swarm/**", "run/**", "codex/**"]
+    branches: [main, "swarm/**", "run/**", "codex/**", "redteam/**"]
   pull_request:
     branches: [main]
 

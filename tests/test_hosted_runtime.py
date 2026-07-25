@@ -18,7 +18,6 @@ from agentforge.agents.hosted import (
     HostedRoleConfiguration,
     TokenPrices,
 )
-from agentforge.agents.hosted_prompts import hosted_prompt
 from agentforge.agents.hosted_runtime import (
     HostedCallBounds,
     HostedCompositionError,
@@ -26,10 +25,13 @@ from agentforge.agents.hosted_runtime import (
     hosted_judge_identity,
 )
 from agentforge.agents.judge import CalibrationGate
+from agentforge.agents.prompts import load_prompt_registry
+from agentforge.providers.lineage import ProviderLogicalContextV1
 from agentforge.providers.openrouter import OpenRouterResult
 from agentforge.target.spec import HostedRunBinding
 
 _GROUND_TRUTH = Path(__file__).resolve().parents[1] / "evals" / "ground-truth"
+_PROMPTS = {record.role: record for record in load_prompt_registry()}
 
 
 def _digest(value: str) -> str:
@@ -57,7 +59,7 @@ def _configuration() -> HostedConfigurationSet:
                 model_id=model,
                 upstream_provider=provider,
                 credential_reference=f"secretref://production/openrouter/{role}/generation-1",
-                prompt_sha256=hosted_prompt(role).prompt_sha256,
+                prompt_sha256=_PROMPTS[role].sha256,
                 policy_sha256=_digest(f"{role}:policy"),
                 prices=TokenPrices(Decimal("1"), Decimal("2"), Decimal("3")),
                 limits=HostedLimits(
@@ -134,6 +136,26 @@ class _FakeExecutionLifecycle:
         if values["status"] == "succeeded":
             self.recorded.append(values["lineage"])
 
+    def provider_context(self, **values: Any) -> ProviderLogicalContextV1:
+        start = next(
+            item for item in self.starts if f"execution-{item['role']}" == values["execution_id"]
+        )
+        return ProviderLogicalContextV1(
+            organization_id="org-hosted-runtime",
+            campaign_run_id="run-hosted-runtime",
+            campaign_attempt_id=None,
+            logical_execution_id=values["execution_id"],
+            parent_execution_id=start["parent_execution_id"],
+            agent_role=start["role"],
+            requested_model=start["model"],
+            configured_upstream=start["upstream_provider"],
+            prompt_version=values["prompt_version"],
+            prompt_sha256=values["prompt_sha256"],
+            configuration_set_sha256=start["configuration_sha256"],
+            role_configuration_sha256=start["role_configuration_sha256"],
+            generation_policy_sha256=start["generation_policy_sha256"],
+        )
+
 
 def _outputs(*, judge_state: str = "NO_EXPLOIT_OBSERVED") -> dict[str, dict[str, Any]]:
     return {
@@ -202,6 +224,7 @@ def _runtime(
     target: Any,
     recorded: list[Any],
     deterministic_verdict: dict[str, Any] | None = None,
+    lifecycle: _FakeExecutionLifecycle | None = None,
 ) -> tuple[HostedFourRoleRuntime, _FakeTransport]:
     configuration = _configuration()
     transport = _FakeTransport(configuration, outputs)
@@ -224,7 +247,7 @@ def _runtime(
         deterministic_judge=lambda _attempt, _evidence: (
             deterministic_verdict or {"state": "NO_EXPLOIT_OBSERVED"}
         ),
-        execution_lifecycle=_FakeExecutionLifecycle(recorded),
+        execution_lifecycle=lifecycle or _FakeExecutionLifecycle(recorded),
         judge_calibration=_enabled_judge_calibration(),
     )
     return runtime, transport
@@ -404,15 +427,15 @@ def test_runtime_sends_the_exact_registry_prompt_as_the_system_message() -> None
     assert transport.calls == ["orchestrator", "red_team", "judge", "documentation"]
     for invocation in transport.invocations:
         role = invocation["role"]
-        prompt = hosted_prompt(role)
+        prompt = _PROMPTS[role]
         messages = invocation["messages"]
         assert messages[0] == {
             "role": "system",
-            "content": prompt.system_prompt,
+            "content": prompt.content,
         }
         assert messages[1]["role"] == "user"
         configured = next(item for item in transport.configuration.roles if item.role == role)
-        assert configured.prompt_sha256 == prompt.prompt_sha256
+        assert configured.prompt_sha256 == prompt.sha256
 
 
 def test_deterministic_error_remains_error_and_skips_documentation() -> None:
@@ -443,3 +466,86 @@ def test_case_identity_drift_is_refused_before_policy_gateway_dispatch() -> None
     with pytest.raises(HostedCompositionError, match="authorized case"):
         runtime.run_attempt(authorized_case={"case_id": "case-1"})
     assert target_calls == []
+
+
+class _RefusingLifecycle(_FakeExecutionLifecycle):
+    """A lifecycle that refuses exactly what the real store refuses."""
+
+    def __init__(self, recorded: list[Any] | None = None, *, refuse_lineage: bool = False) -> None:
+        super().__init__(recorded)
+        self._refuse_lineage = refuse_lineage
+        self.attempts: list[dict[str, Any]] = []
+
+    def finish(self, **values: Any) -> None:
+        self.attempts.append(dict(values))
+        if values["status"] == "succeeded":
+            raise RuntimeError("hosted agent output contains credential material")
+        if self._refuse_lineage and values.get("lineage") is not None:
+            raise RuntimeError("hosted token accounting is out of range")
+        super().finish(**values)
+
+
+def test_a_refused_success_still_closes_the_execution() -> None:
+    """Producing text that looks like a credential is the Red Team's job, not a reason to dangle.
+
+    The store screens agent output for credential material and refuses it. If that refusal simply
+    propagated, an honest in-contract Red Team response would leave its row 'running' forever with
+    no terminal record and no audit event — the platform disabling itself the first time an attack
+    works.
+    """
+
+    recorded: list[Any] = []
+    lifecycle = _RefusingLifecycle(recorded)
+    runtime, _transport = _runtime(
+        outputs=_outputs(),
+        target=lambda _attempt: {"status_code": 200},
+        recorded=recorded,
+        lifecycle=lifecycle,
+    )
+
+    with pytest.raises(HostedCompositionError):
+        runtime.run_attempt(authorized_case={"case_id": "case-1"})
+
+    # Nothing was accepted as a success, but the execution IS closed.
+    assert recorded == []
+    closed = [item for item in lifecycle.finishes if item["status"] == "failed"]
+    assert closed, "a refused success must still terminalize the execution"
+    # And the observation that was refused is still offered on the closing record.
+    assert closed[0]["lineage"] is not None
+    assert closed[0]["lineage"].returned_model == "anthropic/claude-opus-4.8"
+
+
+def test_a_terminalization_the_store_refuses_degrades_instead_of_dangling() -> None:
+    """When even the observation is unstorable, close the row with the smallest record that fits.
+
+    A provider token count beyond the column's range makes the rich terminal write fail. Losing
+    the observation is acceptable; leaving the execution open is not, because the runner has
+    already dropped its context and nothing can ever close it.
+    """
+
+    recorded: list[Any] = []
+    lifecycle = _RefusingLifecycle(recorded, refuse_lineage=True)
+    runtime, _transport = _runtime(
+        outputs=_outputs(),
+        target=lambda _attempt: {"status_code": 200},
+        recorded=recorded,
+        lifecycle=lifecycle,
+    )
+
+    with pytest.raises(HostedCompositionError):
+        runtime.run_attempt(authorized_case={"case_id": "case-1"})
+
+    # It tried with the observation, was refused, and fell back to a record that fits.
+    with_lineage = [
+        item
+        for item in lifecycle.attempts
+        if item["status"] == "failed" and item.get("lineage") is not None
+    ]
+    without_lineage = [
+        item
+        for item in lifecycle.attempts
+        if item["status"] == "failed" and item.get("lineage") is None
+    ]
+    assert with_lineage, "the observation must be offered before it is given up"
+    assert without_lineage, "a refused observation must not leave the execution open"
+    assert without_lineage[0]["error_code"]

@@ -718,6 +718,7 @@ def build_birdseye_snapshot(
     latest_agent_executions = _rows(
         connection,
         "SELECT DISTINCT ON (agent_role) agent_role, status, provider, model, execution_mode, "
+        "returned_model, upstream_provider, provider_request_id, "
         "attempt_id, started_at, finished_at, duration_ms, error_code, langfuse_status "
         "FROM agent_executions WHERE organization_id = :org "
         "AND (CAST(:run_id AS varchar) IS NULL OR campaign_run_id = :run_id) "
@@ -737,8 +738,9 @@ def build_birdseye_snapshot(
         "count(*) FILTER (WHERE execution_mode = 'hosted_advisory') "
         "AS hosted_execution_count, "
         "count(*) FILTER (WHERE execution_mode = 'hosted_advisory' "
-        "AND input_tokens IS NOT NULL AND output_tokens IS NOT NULL) "
-        "AS hosted_accounted_count, "
+        "AND cost_measurement_state = 'measured') AS hosted_measured_count, "
+        "count(*) FILTER (WHERE execution_mode = 'hosted_advisory' "
+        "AND cost_measurement_state = 'partial') AS hosted_partial_count, "
         "percentile_cont(0.5) WITHIN GROUP (ORDER BY duration_ms) "
         "FILTER (WHERE duration_ms IS NOT NULL) AS p50_ms, "
         "percentile_cont(0.95) WITHIN GROUP (ORDER BY duration_ms) "
@@ -799,14 +801,34 @@ def build_birdseye_snapshot(
             assignment = configuration
         execution = execution_by_role.get(definition.role)
         metrics = agent_metrics_by_role.get(definition.role, {})
+        observed_provider = (
+            execution.get("upstream_provider")
+            if execution is not None and execution.get("returned_model") is not None
+            else None
+        )
+        observed_model = (
+            execution.get("returned_model")
+            if execution is not None and execution.get("upstream_provider") is not None
+            else None
+        )
+        displayed_provider = observed_provider or assignment["provider"]
+        displayed_model = observed_model or assignment["model"]
+        displayed_mode = (
+            execution["execution_mode"]
+            if observed_model is not None and execution is not None
+            else assignment["execution_mode"]
+        )
         execution_count = int(metrics.get("execution_count", 0))
         hosted_execution_count = int(metrics.get("hosted_execution_count", 0))
-        hosted_accounted_count = int(metrics.get("hosted_accounted_count", 0))
+        hosted_measured_count = int(metrics.get("hosted_measured_count", 0))
+        hosted_partial_count = int(metrics.get("hosted_partial_count", 0))
         if execution_count == 0:
             accounting_status = "not_applicable"
-        elif hosted_execution_count == 0 or hosted_accounted_count == hosted_execution_count:
+        elif hosted_execution_count == 0 or hosted_measured_count == hosted_execution_count:
             accounting_status = "measured"
-        elif hosted_accounted_count == 0 and hosted_execution_count == execution_count:
+        elif hosted_partial_count > 0:
+            accounting_status = "partial"
+        elif hosted_measured_count == 0 and hosted_execution_count == execution_count:
             accounting_status = "unavailable"
         else:
             accounting_status = "partial"
@@ -818,10 +840,7 @@ def build_birdseye_snapshot(
                 "availability": _agent_availability(
                     execution.get("status") if execution is not None else None
                 ),
-                "detail": (
-                    f"{assignment['provider']}/{assignment['model']} · "
-                    f"{assignment['execution_mode']}"
-                ),
+                "detail": (f"{displayed_provider}/{displayed_model} · {displayed_mode}"),
                 "heartbeat_at": (
                     execution.get("finished_at") or execution.get("started_at")
                     if execution is not None

@@ -12,7 +12,7 @@ from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, Header, Request
 from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from agentforge.api.backend import ApiBackend, ApiBackendUnavailable, ApiConflict
 from agentforge.api.schemas import CommandResult, EventBatch, ResourceResult
@@ -32,6 +32,10 @@ from agentforge.auth.permissions import (
     TARGETS_MANAGE,
 )
 from agentforge.auth.principal import Principal
+from agentforge.control_plane.finding_decisions import (
+    FindingDecisionReasonCode,
+    validate_finding_decision_reason_code,
+)
 
 router = APIRouter(prefix="/api/v1")
 
@@ -109,6 +113,15 @@ class AbortInput(_StrictModel):
 class FindingDecisionInput(_StrictModel):
     decision: Literal["approved", "rejected"]
     rationale: str = Field(min_length=1, max_length=2000)
+    reason_code: FindingDecisionReasonCode
+
+    @model_validator(mode="after")
+    def validate_reason_code_matches_decision(self) -> FindingDecisionInput:
+        validate_finding_decision_reason_code(
+            decision=self.decision,
+            reason_code=self.reason_code,
+        )
+        return self
 
 
 class FindingResolveInput(_StrictModel):
@@ -122,21 +135,11 @@ class OwaspInput(_StrictModel):
     name: str = Field(min_length=1, max_length=160)
 
 
-class TargetInput(_StrictModel):
+class TargetCatalogSelectionInput(_StrictModel):
+    """An exact server-owned catalog identity; no dispatch authority crosses the browser."""
+
     target_id: str = Field(min_length=1, max_length=64)
-    name: str = Field(min_length=1, max_length=512)
     version: str = Field(min_length=1, max_length=32)
-    adapter_kind: Literal["fake", "openemr"]
-    environment: Literal["local", "staging", "production"]
-    base_url: str = Field(min_length=1, max_length=2048)
-    allowlisted_hosts: tuple[str, ...] = Field(min_length=1, max_length=32)
-    auth_mode: Literal["none", "bearer", "session", "oauth"]
-    credential_ref: str | None = Field(default=None, max_length=512)
-    synthetic_data_only: Literal[True]
-    synthetic_data_attestation_ref: str = Field(min_length=1, max_length=512)
-    canary_refs: tuple[str, ...] = Field(default=(), max_length=32)
-    oracle_refs: tuple[str, ...] = Field(default=(), max_length=32)
-    safety_caps: CapsInput
 
 
 class TargetLifecycleInput(_StrictModel):
@@ -407,6 +410,11 @@ def targets(request: Request, principal: ConsolePrincipal) -> JSONResponse:
     return _read(request, "targets", principal)
 
 
+@router.get("/target-catalog")
+def target_catalog(request: Request, principal: TargetPrincipal) -> JSONResponse:
+    return _read(request, "target_catalog", principal)
+
+
 @router.get("/targets/{target_id}")
 def target(request: Request, target_id: str, principal: ConsolePrincipal) -> JSONResponse:
     return _read(request, "target", principal, {"target_id": target_id})
@@ -455,9 +463,26 @@ def agents(request: Request, principal: ConsolePrincipal) -> JSONResponse:
     return _read(request, "agents", principal)
 
 
-@router.get("/agents/{agent_role}/prompt")
-def agent_prompt(request: Request, agent_role: str, principal: ConfigPrincipal) -> JSONResponse:
-    return _read(request, "agent_prompt", principal, {"agent_role": agent_role})
+@router.get("/agent-prompts/{agent_role}/{prompt_version}/{prompt_sha256}")
+def agent_prompt(
+    request: Request,
+    agent_role: str,
+    prompt_version: str,
+    prompt_sha256: str,
+    configuration_set_sha256: str,
+    principal: ConfigPrincipal,
+) -> JSONResponse:
+    return _read(
+        request,
+        "agent_prompt",
+        principal,
+        {
+            "agent_role": agent_role,
+            "prompt_version": prompt_version,
+            "prompt_sha256": prompt_sha256,
+            "configuration_sha256": configuration_set_sha256,
+        },
+    )
 
 
 @router.get("/agent-activity")
@@ -575,7 +600,7 @@ def resolve_finding(
 @router.post("/targets")
 def create_target(
     request: Request,
-    body: TargetInput,
+    body: TargetCatalogSelectionInput,
     principal: TargetPrincipal,
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
 ) -> JSONResponse:
@@ -586,7 +611,7 @@ def create_target(
 def revise_target(
     request: Request,
     target_id: str,
-    body: TargetInput,
+    body: TargetCatalogSelectionInput,
     principal: TargetPrincipal,
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
 ) -> JSONResponse:

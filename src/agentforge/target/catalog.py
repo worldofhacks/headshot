@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import os
@@ -169,7 +170,7 @@ class CatalogEntry:
             or surface.target_version != self.target.version
             for surface in self.surfaces
         ):
-            raise TargetCatalogError("catalog surface does not bind the exact target version")
+            raise TargetCatalogError("catalog surface differs from its immutable target version")
 
         policy_presence = tuple(surface.surface_policy is not None for surface in self.surfaces)
         target_major = int(self.target.version.split(".", maxsplit=1)[0])
@@ -349,6 +350,64 @@ class TrustedTargetCatalog:
                 "approved surface is absent or ambiguous in the server catalog"
             )
         return matches[0], surfaces[0]
+
+    def resolve_target(self, *, target_id: str, version: str) -> CatalogEntry:
+        """Resolve one exact server-owned target version without accepting browser authority."""
+
+        matches = [
+            entry
+            for entry in self.entries
+            if entry.target.target_id == target_id and entry.target.version == version
+        ]
+        if len(matches) != 1:
+            raise TargetCatalogError(
+                "approved target version is absent or ambiguous in the server catalog"
+            )
+        return matches[0]
+
+    def register(
+        self,
+        store: ControlPlaneStore,
+        *,
+        principal: Principal,
+        target_id: str,
+        version: str,
+        idempotency_key: str,
+    ) -> CatalogEntry:
+        """Register an exact catalog bundle through immutable store primitives.
+
+        Each stage derives its key solely from the caller's idempotency key. Reusing the
+        caller key with a different catalog selection therefore conflicts before a second
+        target can be written. A retry after a partially completed bundle resumes the same
+        target, surfaces, and lifecycle transitions.
+        """
+
+        entry = self.resolve_target(target_id=target_id, version=version)
+        key_digest = hashlib.sha256(idempotency_key.encode("utf-8")).hexdigest()
+        key_prefix = f"catalog-{key_digest}"
+        store.register_target(
+            principal=principal,
+            target=entry.target,
+            idempotency_key=f"{key_prefix}-target",
+        )
+        for surface in entry.surfaces:
+            surface_identity = hashlib.sha256(
+                f"{surface.surface_id}@{surface.version}".encode()
+            ).hexdigest()[:16]
+            store.register_surface(
+                principal=principal,
+                surface=surface,
+                idempotency_key=f"{key_prefix}-surface-{surface_identity}",
+            )
+        for lifecycle in (TargetLifecycle.VALIDATING, TargetLifecycle.READY):
+            store.transition_target(
+                principal=principal,
+                target_id=entry.target.target_id,
+                version=entry.target.version,
+                lifecycle=lifecycle,
+                idempotency_key=f"{key_prefix}-lifecycle-{lifecycle.value}",
+            )
+        return entry
 
     def synchronize(self, store: ControlPlaneStore, *, organization_id: str) -> None:
         principal = Principal(

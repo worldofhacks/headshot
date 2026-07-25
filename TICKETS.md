@@ -4,6 +4,83 @@
 Four slots total means coordinator + at most three workers. No deadline compresses RED → test review
 → freeze → GREEN → coordinator gate rerun → code review → security review.
 
+## Status reconciliation (2026-07-25, base `107c11c`)
+
+> This section states the ticket plan's real status. It does not alter the plan, the waves, the
+> dependency graph, or any locked decision below.
+
+**The plan has not started.** All **46** tickets defined here (`tickets/T-F00.md` … `T-F15.md`; wave
+table below) carry `status: backlog` and `attempts: 0` in their own frontmatter at this base. No T-F
+commit exists (`git log --grep="T-F"` returns nothing at `107c11c`); 2 of 32 declared ticket test files
+exist and both pre-date the plan, added by non-ticket commits; 70 of 175 declared `file_scopes` exist,
+mostly pre-existing files a ticket would *edit* rather than create.
+
+| Ticket state | Count |
+|---|---:|
+| Defined | **46** |
+| Landed with evidence | **0** |
+| Blocked as a recorded disposition | 0 |
+| Deferred / out of scope | 0 |
+| Not started | **46** |
+
+The seven `[open-question]` human gates under *Human gates* below are the real blockers and remain
+open. They are not ticket dispositions; no ticket has been formally marked blocked.
+
+**The stale pin in the header above.** `23490ea` **is** an ancestor of this base, but it is 70 commits
+behind it, so the "1001 Python passed / 3 skipped, 75 console, 4 browser, dual CI green" figures do not
+describe this tree. `tests/` now defines **1,284** test functions, so the Python count cannot be
+current. GitHub CI is the sole current gate and GitLab is a passive mirror, so the old dual-CI
+criterion is itself superseded. The same stale pin appears in `.tdd-swarm/gates.md`. Treat those
+numbers as a historical measurement, not a gate.
+
+**On the "24/39/2/7" scorecard.** That tally **does not exist at this base.** It exists only at
+`refs/heads/codex/final-integration-release:docs/requirements/REQUIREMENTS_MATRIX.md`, on a branch that
+is neither an ancestor nor a descendant of `107c11c`. Reconciling against it would import another
+branch's numbers and contradict this base's own ledger. Two further reasons not to use it:
+
+1. **It is a requirements tally, not a ticket tally** — `complete / partial / missing / blocked` over
+   72 requirements. There is no 46-ticket status scorecard anywhere in the repository, and the table
+   above is the first one.
+2. **This base's own tally is different.** `docs/requirements/REQUIREMENTS_MATRIX.md` reads
+   **25 complete / 34 partial / 6 missing / 7 blocked = 72**, and its CSV independently tallies to
+   exactly that:
+
+| Scope | Complete | Partial | Missing | Blocked | Total |
+|---|---:|---:|---:|---:|---:|
+| Canonical PRD | 17 | 13 | 4 | 3 | 37 |
+| Optional engineering deliverables | 7 | 9 | 1 | 1 | 18 |
+| User deployment constraints | 1 | 5 | 0 | 1 | 7 |
+| Implementation-lead acceptance | 0 | 7 | 1 | 2 | 10 |
+| **All requirements** | **25** | **34** | **6** | **7** | **72** |
+
+Relative to this base, the other branch shows 4 fewer `missing` (6 → 2) and 5 more `partial`
+(34 → 39). That direction is consistent with either real work or a reclassification of `missing` rows
+as `partial`; the per-row evidence on that branch was **not** verified in this pass, so which it is
+remains open. **Whoever integrates that branch owns saying which.**
+
+[open-question] Does `codex/final-integration-release`'s 24/39/2/7 reflect landed work or
+reclassification? Until answered, `25/34/6/7` is the number this base states.
+
+**The matrix itself is stale in both directions.** It records `Audited parent commit: 215584f4`, which
+is 72 commits behind this base and predates migrations `0017`–`0021`, the four hosted role models, and
+every live-target artifact. Rows now wrong in the *pessimistic* direction include PRD-22 and PRD-32
+(evidence path `docs/vulnerabilities (absent)` and "No genuine report files exist" — six report files
+are present) and PRD-07/PRD-18. Rows wrong in the *optimistic* direction include USR-02, marked
+`complete` while its own remaining-work column names an unperformed verification and
+`docs/security/AUTHENTICATION.md` at `107c11c` stated the Clerk integration was not deployed. Staging
+now proves only the shell and missing-token boundary; the real-user acceptance named by the row remains
+unperformed. **Do not flip any row from this document** — the matrix needs its own dated re-audit
+against `107c11c`.
+
+Capability status, as opposed to requirement status, lives in
+[`docs/security/RED_TEAMING_COVERAGE_REVIEW_2026-07-25.md`](docs/security/RED_TEAMING_COVERAGE_REVIEW_2026-07-25.md).
+The `[locked-decision]` at the end of this file — "Fewer than three genuine independently reproduced
+findings leaves PRD-32 incomplete" — still controls. **Post-PR #48 reconciliation:** six draft reports
+exist, and 004–006 now embed runnable offline re-derivations over the retained captures. Those checks
+are real evidence, but no report is published and there is no independent reviewer attestation, run
+manifest, or separately retained reproduction artifact (`docs/evidence/reproductions/` still does not
+exist). The embedded derivations therefore do not close PRD-32.
+
 ## Waves
 
 | wave | tickets | concurrency/collision note |
@@ -115,7 +192,8 @@ tests, source channel, bounded history, event/evidence, delivery, Runner, rotati
 ### P1 — human/external evidence likely blocking noon
 
 T-F03b, T-F04b, T-F04e, actual T-F05l/T-F05i observations, activation receipt, T-F05b, T-F06b,
-T-F07b, T-F10b reproduction/publication, and T-F10a deploy/dual-CI.
+T-F07b, T-F10b reproduction/publication, and T-F10a production deploy/GitHub-green exact GitLab
+mirror.
 
 ### P2 — downstream packaging after immutable P0/P1 artifacts
 

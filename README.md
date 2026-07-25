@@ -5,22 +5,51 @@ red-teaming AI applications. Its first target is the externally deployed OpenEMR
 Co-Pilot. The target is reached over an authorized live URL; its code does not live in this
 repository.
 
-> **Delivery status — 2026-07-23:** the Clerk-backed React console, protected FastAPI `/api/v1`,
+> **Delivery status — 2026-07-25:** the Clerk-backed React console, protected FastAPI `/api/v1`,
 > organization-scoped PostgreSQL control plane, private Runner, live target adapter, and Langfuse
-> telemetry projection have a provisioned Railway baseline. The current release adds the private
-> regression planner and migrations through `0016`; its exact deployment evidence is recorded
-> separately after promotion. Live campaigns remain bounded by persisted exact-scope authorization,
-> synthetic-only evidence, rate/budget/timeout caps, and abort controls.
+> telemetry projection are implemented; the sole packaged Alembic head is
+> `0021_four_role_agent_acceptance`. Candidate `2069036e` is deployed to **staging** Runner-first
+> across Runner, Web, and Scheduler, with the database at `0021`. The public Web health/readiness,
+> unauthenticated protection boundary, and console/sign-in shell were smoke-tested. No staging
+> campaign or provider/target call ran, and no signed-in Clerk user, organization, permission, or MFA
+> flow was audited. **Production remains unverified.** An earlier authorized, synthetic-only campaign
+> ran against the live Co-Pilot target by a direct script; every verdict it produced is
+> `INDETERMINATE` and **no exploit has ever been confirmed** — see
+> [Red-teaming coverage review (2026-07-25)](docs/security/RED_TEAMING_COVERAGE_REVIEW_2026-07-25.md).
+> Live campaigns remain bounded by persisted exact-scope authorization, synthetic-only evidence,
+> rate/budget/timeout caps, and abort controls.
 
-| Endpoint | Status |
-|---|---|
-| Staging platform URL | `https://web-staging-8e30.up.railway.app` |
-| Production platform URL | `https://web-production-44528.up.railway.app` |
-| Authorized live target URL | `https://agent-production-9f62.up.railway.app` |
+| Endpoint | URL | Verification status |
+|---|---|---|
+| Staging platform | `https://web-staging-8e30.up.railway.app` | **Infrastructure smoke verified** — `/health` 200, `/ready` 200, protected unauthenticated request 401, console/sign-in shell 200; no signed-in audit or campaign |
+| Production platform | `https://web-production-44528.up.railway.app` | **Unverified** — promotion evidence not recorded (`docs/deployment/RAILWAY.md`) |
+| Authorized live target | `https://agent-production-9f62.up.railway.app` | **Reached** — owner-authorized; live HTTP evidence in `evals/results/` and `docs/evidence/zap/` |
+
+The two platform rows are recorded here because a deployed URL is submitted with every checkpoint.
+Staging records only the completed infrastructure smoke; it is not evidence of a signed-in Clerk
+flow, a governed campaign, live model calls, or target calls. Production is listed as an expected
+origin, not as a deployment claim. See the dated evidence record and remaining promotion gates in
+[`docs/deployment/RAILWAY.md`](docs/deployment/RAILWAY.md).
 
 The requirements source of truth is [Week_3_AgentForge.pdf](Week_3_AgentForge.pdf). See
 [PLAN.md](PLAN.md), [ARCHITECTURE.md](ARCHITECTURE.md), and
 [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) for sequencing and acceptance criteria.
+
+### Canonical source of truth
+
+Three documents govern; everything else derives from them. When a document disagrees with one of
+these, the canonical document wins — and when one of these disagrees with the code, the code wins and
+the drift is recorded rather than papered over.
+
+| Document | Governs |
+|---|---|
+| [ARCHITECTURE.md](ARCHITECTURE.md) | The binding architecture: agent roster, trust boundaries, contracts, cost model shape, deployment, AI-use disclosure |
+| [docs/planning/DECISIONS.md](docs/planning/DECISIONS.md) | The numbered decision log, D1–D26, with each decision's rationale, fallback, and invalidation condition |
+| [docs/cost/COST_ANALYSIS.md](docs/cost/COST_ANALYSIS.md) | The cost model: three independent cost families on different scaling functions, scaled in complete test runs at 100 / 1K / 10K / 100K |
+
+Current honest status of the red-team capability itself lives in
+[docs/security/RED_TEAMING_COVERAGE_REVIEW_2026-07-25.md](docs/security/RED_TEAMING_COVERAGE_REVIEW_2026-07-25.md),
+which supersedes the 2026-07-24 review.
 
 ## Safety invariants
 
@@ -37,9 +66,9 @@ The requirements source of truth is [Week_3_AgentForge.pdf](Week_3_AgentForge.pd
 
 ## Locked Railway topology
 
-The full platform is hosted on Railway in separate staging and production environments. Web, Runner,
-and PostgreSQL are provisioned in both environments. Scheduler is part of this release and must be
-verified as a private service during promotion.
+The full platform topology is deployed and smoke-tested in Railway staging. The current release still
+requires production promotion. Web, Runner, Scheduler, and PostgreSQL are separate services in each
+environment; only Web may receive public ingress.
 
 | Railway component | Network boundary | Responsibility |
 |---|---|---|
@@ -54,8 +83,8 @@ Railway's private network. See [Railway deployment](docs/deployment/RAILWAY.md).
 
 ## Clerk prerequisites
 
-Provisioning is a manual integration step. Staging and production must use isolated Clerk
-configuration, including different exact Organization IDs and authorized origins.
+Provisioning and real-user verification are manual integration steps. Staging and production must use
+isolated Clerk configuration, including different exact Organization IDs and authorized origins.
 
 1. Enable **Restricted** sign-up mode and use invitations for enrollment.
 2. Enable Organizations, create the single required **Headshot** Organization, disable Personal
@@ -176,8 +205,10 @@ agent, runner, scheduler, model-provider, or target credentials.
 
 ## Current local availability
 
-Revisions through `0016` add authoritative results, exact two-role authorization, regression replay
-planning, and four-agent runtime observability to the exact-scope control plane. A trusted server
+Revisions through `0021` add authoritative results, exact two-role authorization, regression replay
+planning, and four-agent runtime observability to the exact-scope control plane; `0017`–`0021` add
+hosted agent-execution lineage, provider-call lineage, recordable provider identity, agent-acceptance
+authority, and the four-role agent acceptance surface. A trusted server
 catalog prepares immutable campaign scopes; a private durable Runner claims the PostgreSQL queue,
 revalidates authorization immediately before every dispatch, resolves scoped credentials only at that
 boundary, and persists evidence before atomic job completion. The private Scheduler creates one
@@ -194,23 +225,51 @@ generation, target version, exact authorization scope, and distinct-person appro
 The deterministic synthetic profile runs the real nine-case corpus through the queue, Runner,
 coordinator, recorder, independent Judge, findings, API, Coverage, and event repositories without a
 target/model socket. Local integration evidence proves all attempts and hash-verified Coverage;
-this is not a deployed or live-target claim. A live run remains blocked until the exact deployed target,
-ownership authorization, synthetic fixture/canary, surface, credential reference, caps, nonce, and a
-distinct Clerk Approver are persisted and every network-free preflight gate passes. Scheduling, traces,
+this is not a deployed or live-target claim. Scheduling, traces,
 immutable configuration snapshots, component heartbeats, resilience history, and live-probe
 authorization are projected only from durable records; unavailable observations remain explicitly
 unavailable rather than being replaced by dummy data.
 
+A live run **through the platform's production authorization path** — campaign-authorization request,
+a decision by a distinct authenticated Clerk Approver, `POST /campaigns`, the PostgreSQL queue, and
+the private durable Runner — remains blocked until the exact deployed target, ownership authorization,
+synthetic fixture/canary, surface, credential reference, caps, nonce, and that distinct Approver are
+persisted and every network-free preflight gate passes. Live *probing* of the authorized target has
+happened by other means and its artifacts are checked in under `evals/results/`; those runs were
+launched by direct scripts that now fail closed, and their recorded two-person provenance is one human
+plus one AI agent identified by free text, not two distinct authenticated principals. Read them as
+evidence about the target, never as evidence that the governed loop has executed.
+
 ## Further documentation
 
-- [M1d integration handoff](docs/planning/M1D_INTEGRATION_HANDOFF.md)
-- [Security-tool integration plan](docs/planning/SECURITY_TOOL_INTEGRATION_PLAN.md)
-- [Security-tool ATO evidence](docs/evidence/ato/SECURITY_TOOL_EVIDENCE.md)
-- [Identity and access ADR](docs/adrs/0002-identity-and-access.md)
-- [Authentication security contract](docs/security/AUTHENTICATION.md)
-- [Railway deployment runbook](docs/deployment/RAILWAY.md)
-- [Measured-cost and nonlinear scale model](docs/cost/COST_ANALYSIS.md)
-- [Clinical Co-Pilot target/session readiness](docs/target/READINESS.md)
+**Canonical** (see *Canonical source of truth* above)
+
+- [Binding architecture](ARCHITECTURE.md)
+- [Decision log D1–D26](docs/planning/DECISIONS.md)
+- [Cost model — three independent families, scaled in test runs](docs/cost/COST_ANALYSIS.md) — projections are
+  explicitly unmeasured; no dollar figure in this repository comes from a measured run
+
+**Current honest status**
+
+- [Red-teaming coverage review — 2026-07-25](docs/security/RED_TEAMING_COVERAGE_REVIEW_2026-07-25.md)
+  (supersedes [2026-07-24](docs/security/RED_TEAMING_COVERAGE_REVIEW_2026-07-24.md))
+- [Vulnerability report index](docs/vulnerabilities/README.md) — six DRAFT reports; 004–006 contain
+  embedded offline re-derivations over retained captures, but none is published and no independent
+  attestation or separately recorded reproduction artifact exists; PRD-32 remains incomplete
+- [Ticket and requirement reconciliation](TICKETS.md)
+- [Requirements matrix](docs/requirements/REQUIREMENTS_MATRIX.md) ·
+  [canonical CSV ledger](docs/requirements/REQUIREMENTS_MATRIX.csv)
+
+**Reference**
+
 - [Threat model](THREAT_MODEL.md)
 - [User workflows](USERS.md)
-- [User-locked requirements matrix](docs/requirements/REQUIREMENTS_MATRIX.csv)
+- [Identity and access ADR](docs/adrs/0002-identity-and-access.md)
+- [Build-vs-configure ADR](docs/adrs/0001-build-vs-configure.md)
+- [Authentication security contract](docs/security/AUTHENTICATION.md)
+- [Railway deployment runbook](docs/deployment/RAILWAY.md)
+- [Clinical Co-Pilot target/session readiness](docs/target/READINESS.md)
+- [Hosted role model resolution](docs/agents/RED_TEAM_MODEL_RESOLUTION.md)
+- [Security-tool ATO evidence](docs/evidence/ato/SECURITY_TOOL_EVIDENCE.md)
+- [Security-tool integration plan](docs/planning/SECURITY_TOOL_INTEGRATION_PLAN.md)
+- [M1d integration handoff](docs/planning/M1D_INTEGRATION_HANDOFF.md)

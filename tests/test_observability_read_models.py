@@ -3,13 +3,18 @@
 from __future__ import annotations
 
 import datetime
+import json
+from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
 
+from agentforge.api.postgres import _budget_run_for_role
 from agentforge.api.read_models import (
+    AgentAcceptanceExecutionReadModel,
     AgentActivityReadModel,
     AgentAssignmentReadModel,
+    AgentBudgetReadModel,
     AgentReadModel,
     BirdseyeNodeReadModel,
     CostReadModel,
@@ -17,6 +22,9 @@ from agentforge.api.read_models import (
 )
 
 _NOW = datetime.datetime(2026, 7, 24, tzinfo=datetime.UTC)
+_ACTIVE_RUNNING_BUDGET_FIXTURE = (
+    Path(__file__).parent / "fixtures" / "read_models" / "active_running_agent_budget.json"
+)
 
 
 def _unavailable_provider_budget() -> dict[str, object]:
@@ -24,23 +32,242 @@ def _unavailable_provider_budget() -> dict[str, object]:
         "status": "unavailable",
         "campaign_run_id": None,
         "configuration_set_sha256": None,
+        "role_cost_measurement_state": None,
         "role_usd_cap": None,
         "role_usd_spent": 0,
+        "role_unresolved_usd_exposure": 0,
         "role_usd_remaining": None,
+        "role_usd_remaining_upper_bound": None,
         "role_usd_overrun": 0,
         "role_call_cap": None,
         "role_physical_calls": 0,
+        "role_unresolved_physical_calls": 0,
+        "role_call_count_state": None,
         "role_calls_remaining": None,
         "role_call_overrun": 0,
+        "global_cost_measurement_state": None,
         "global_usd_cap": None,
         "global_usd_spent": 0,
+        "global_unresolved_usd_exposure": 0,
         "global_usd_remaining": None,
+        "global_usd_remaining_upper_bound": None,
         "global_usd_overrun": 0,
         "global_call_cap": None,
         "global_physical_calls": 0,
+        "global_unresolved_physical_calls": 0,
+        "global_call_count_state": None,
         "global_calls_remaining": None,
         "global_call_overrun": 0,
     }
+
+
+def _partial_provider_budget() -> dict[str, object]:
+    return {
+        "status": "active",
+        "campaign_run_id": "campaign-1",
+        "configuration_set_sha256": "f" * 64,
+        "role_cost_measurement_state": "not_observed",
+        "role_usd_cap": 1,
+        "role_usd_spent": 0,
+        "role_unresolved_usd_exposure": 1,
+        "role_usd_remaining": 0,
+        "role_usd_remaining_upper_bound": 1,
+        "role_usd_overrun": 0,
+        "role_call_cap": 2,
+        "role_physical_calls": 1,
+        "role_unresolved_physical_calls": 0,
+        "role_call_count_state": "exact",
+        "role_calls_remaining": 1,
+        "role_call_overrun": 0,
+        "global_cost_measurement_state": "partial",
+        "global_usd_cap": 5,
+        "global_usd_spent": 0.25,
+        "global_unresolved_usd_exposure": 0.5,
+        "global_usd_remaining": 4.25,
+        "global_usd_remaining_upper_bound": 4.75,
+        "global_usd_overrun": 0,
+        "global_call_cap": 8,
+        "global_physical_calls": 2,
+        "global_unresolved_physical_calls": 0,
+        "global_call_count_state": "exact",
+        "global_calls_remaining": 6,
+        "global_call_overrun": 0,
+    }
+
+
+def test_incomplete_provider_spend_separates_conservative_headroom_from_upper_bound() -> None:
+    budget = AgentBudgetReadModel(**_partial_provider_budget())
+    assert budget.role_usd_remaining == 0
+    assert budget.role_usd_remaining_upper_bound == 1
+    assert budget.global_usd_remaining == 4.25
+    assert budget.global_usd_remaining_upper_bound == 4.75
+
+    with pytest.raises(ValidationError, match="does not reconcile"):
+        AgentBudgetReadModel(
+            **{
+                **_partial_provider_budget(),
+                "role_usd_remaining": 0.5,
+            }
+        )
+
+
+def test_active_running_budget_serializes_future_reservations_for_console_contract() -> None:
+    payload = json.loads(_ACTIVE_RUNNING_BUDGET_FIXTURE.read_text())
+    budget = AgentBudgetReadModel.model_validate(payload)
+
+    assert json.loads(budget.model_dump_json()) == payload
+    assert budget.role_cost_measurement_state == "measured"
+    assert budget.role_unresolved_usd_exposure > 0
+    assert budget.role_call_count_state == "exact"
+    assert budget.role_unresolved_physical_calls > 0
+
+    non_active_cost_reservation = {
+        **payload,
+        "status": "historical",
+        "role_unresolved_physical_calls": 0,
+        "role_calls_remaining": 17,
+        "global_unresolved_physical_calls": 0,
+        "global_calls_remaining": 54,
+    }
+    non_active_call_reservation = {
+        **payload,
+        "status": "historical",
+        "role_unresolved_usd_exposure": 0,
+        "role_usd_remaining": 2.4,
+        "global_unresolved_usd_exposure": 0,
+        "global_usd_remaining": 4.9,
+    }
+    for impossible_terminal_budget in (
+        non_active_cost_reservation,
+        non_active_call_reservation,
+    ):
+        with pytest.raises(
+            ValidationError,
+            match="only an active hosted budget",
+        ):
+            AgentBudgetReadModel.model_validate(impossible_terminal_budget)
+
+
+def _acceptance_provider_budget() -> dict[str, object]:
+    return {
+        **_unavailable_provider_budget(),
+        "status": "agent_acceptance",
+        "campaign_run_id": "AR-live-acceptance",
+        "configuration_set_sha256": "a" * 64,
+        "role_cost_measurement_state": "measured",
+        "role_usd_cap": 1.5,
+        "role_usd_spent": 0.03,
+        "role_usd_remaining": 1.47,
+        "role_usd_remaining_upper_bound": 1.47,
+        "role_call_cap": 1,
+        "role_physical_calls": 1,
+        "role_call_count_state": "exact",
+        "role_calls_remaining": 0,
+        "global_cost_measurement_state": "measured",
+        "global_usd_cap": 10,
+        "global_usd_spent": 0.03,
+        "global_usd_remaining": 9.97,
+        "global_usd_remaining_upper_bound": 9.97,
+        "global_call_cap": 4,
+        "global_physical_calls": 1,
+        "global_call_count_state": "exact",
+        "global_calls_remaining": 3,
+    }
+
+
+def test_agent_acceptance_budget_requires_run_identity_and_preserves_caps() -> None:
+    payload = _acceptance_provider_budget()
+    budget = AgentBudgetReadModel(**payload)
+    assert budget.status == "agent_acceptance"
+    assert budget.campaign_run_id == "AR-live-acceptance"
+
+    with pytest.raises(ValidationError, match="requires its run identity"):
+        AgentBudgetReadModel(**{**payload, "campaign_run_id": None})
+    with pytest.raises(ValidationError, match="acceptance run identity"):
+        AgentBudgetReadModel(**{**payload, "campaign_run_id": "campaign-1"})
+
+
+def test_agent_acceptance_budget_projects_only_roles_in_its_versioned_authority() -> None:
+    legacy_acceptance_run = {
+        "run_id": "AR-live-acceptance",
+        "budget_status": "agent_acceptance",
+        "acceptance_allowed_roles": ["orchestrator", "judge", "documentation"],
+    }
+    four_role_acceptance_run = {
+        **legacy_acceptance_run,
+        "acceptance_allowed_roles": [
+            "orchestrator",
+            "red_team",
+            "judge",
+            "documentation",
+        ],
+    }
+
+    assert _budget_run_for_role(legacy_acceptance_run, role="orchestrator") == (
+        legacy_acceptance_run
+    )
+    assert _budget_run_for_role(legacy_acceptance_run, role="red_team") is None
+    assert _budget_run_for_role(four_role_acceptance_run, role="red_team") == (
+        four_role_acceptance_run
+    )
+    assert (
+        _budget_run_for_role(
+            {"run_id": "AR-malformed", "budget_status": "agent_acceptance"},
+            role="orchestrator",
+        )
+        is None
+    )
+
+
+def test_agent_acceptance_execution_requires_canonical_measured_remote_lineage() -> None:
+    payload = {
+        "scope": "agent_acceptance",
+        "agent_role": "orchestrator",
+        "acceptance_run_id": "AR-live-acceptance",
+        "acceptance_attempt_id": "c" * 64,
+        "execution_id": "acceptance-execution-1",
+        "parent_execution_id": None,
+        "configuration_set_sha256": "a" * 64,
+        "returned_model": "anthropic/claude-opus-4.8",
+        "upstream_provider": "Anthropic",
+        "trace_id": "b" * 32,
+        "measured_cost": 0.03,
+        "cost_measurement_state": "measured",
+        "provider_event_ids": ["d" * 64],
+        "currency": "USD",
+        "input_tokens": 100,
+        "output_tokens": 20,
+        "reasoning_tokens": 10,
+        "langfuse_status": "exported",
+        "langfuse_verified_at": _NOW,
+        "finished_at": _NOW,
+    }
+    evidence = AgentAcceptanceExecutionReadModel(**payload)
+    assert evidence.scope == "agent_acceptance"
+    assert evidence.returned_model == "anthropic/claude-opus-4.8"
+    red_team_evidence = AgentAcceptanceExecutionReadModel(
+        **{
+            **payload,
+            "agent_role": "red_team",
+            "parent_execution_id": "acceptance-execution-planner",
+            "returned_model": "qwen/qwen3.5-397b-a17b",
+            "upstream_provider": "Together",
+        }
+    )
+    assert red_team_evidence.agent_role == "red_team"
+
+    for malformed in (
+        {**payload, "agent_role": "unreviewed_generator"},
+        {**payload, "acceptance_run_id": "campaign-1"},
+        {**payload, "acceptance_attempt_id": "not-an-attempt"},
+        {**payload, "cost_measurement_state": "partial"},
+        {**payload, "provider_event_ids": []},
+        {**payload, "provider_event_ids": ["e" * 32]},
+        {**payload, "langfuse_verified_at": None},
+        {**payload, "measured_cost": -0.01},
+    ):
+        with pytest.raises(ValidationError):
+            AgentAcceptanceExecutionReadModel(**malformed)
 
 
 def test_agent_summary_requires_latency_and_delivery_for_completed_work() -> None:
@@ -64,18 +291,22 @@ def test_agent_summary_requires_latency_and_delivery_for_completed_work() -> Non
                 "configuration_sha256": "a" * 64,
             },
             execution_count=1,
+            hosted_execution_count=0,
             running_count=0,
             succeeded_count=1,
             failed_count=0,
             skipped_count=0,
             measured_cost=0,
+            cost_measurement_state="measured",
             accounting_status="measured",
+            provider_event_ids=[],
             currency="USD",
             input_tokens=None,
             output_tokens=None,
             reasoning_tokens=None,
             token_observation_count=0,
             physical_call_count=0,
+            physical_call_count_state="not_applicable",
             provider_budget=_unavailable_provider_budget(),
             judge_calibration={
                 "state": "unavailable",
@@ -132,8 +363,11 @@ def test_cost_token_totals_require_an_observation() -> None:
             provider="live-target",
             agent_role=None,
             record_kind="campaign",
+            execution_mode=None,
             measured_cost=0,
+            cost_measurement_state="measured",
             accounting_status="measured",
+            provider_event_ids=[],
             currency="USD",
             request_count=1,
             execution_count=0,
@@ -145,6 +379,7 @@ def test_cost_token_totals_require_an_observation() -> None:
             reasoning_tokens=None,
             token_observation_count=0,
             physical_call_count=0,
+            physical_call_count_state="not_applicable",
             provider_budget=None,
             duration_ms=10,
             execution_profile="live",
@@ -161,26 +396,30 @@ def _agent_cost_record(**overrides: object) -> dict[str, object]:
         "provider": "agent:red_team:headshot/full-scan-corpus-v1",
         "agent_role": "red_team",
         "record_kind": "agent",
-        "measured_cost": 0,
+        "execution_mode": "deterministic",
+        "measured_cost": None,
+        "cost_measurement_state": "not_applicable",
         "accounting_status": "not_applicable",
+        "provider_event_ids": [],
         "currency": "USD",
         "request_count": 0,
         "execution_count": 0,
         "attempt_count": 0,
         "confirmed_finding_count": 0,
-        "average_cost_per_request": 0,
+        "average_cost_per_request": None,
         "input_tokens": None,
         "output_tokens": None,
         "reasoning_tokens": None,
         "token_observation_count": 0,
         "physical_call_count": 0,
+        "physical_call_count_state": "not_applicable",
         "provider_budget": _unavailable_provider_budget(),
         "p50_duration_ms": None,
         "p95_duration_ms": None,
         "duration_ms": 0,
         "execution_profile": "live",
         "started_at": _NOW,
-        "ended_at": _NOW,
+        "ended_at": None,
         "recorded_at": _NOW,
     }
     record.update(overrides)
@@ -192,19 +431,51 @@ def test_agent_cost_latency_is_null_only_without_completed_executions() -> None:
 
     completed = _agent_cost_record(
         execution_count=1,
+        measured_cost=0,
+        cost_measurement_state="measured",
         accounting_status="measured",
         p50_duration_ms=10,
         p95_duration_ms=20,
+        ended_at=_NOW,
     )
     assert CostReadModel(**completed).p95_duration_ms == 20
 
     for malformed in (
-        _agent_cost_record(execution_count=1, accounting_status="measured"),
+        _agent_cost_record(
+            execution_count=1,
+            measured_cost=0,
+            cost_measurement_state="measured",
+            accounting_status="measured",
+        ),
         _agent_cost_record(p50_duration_ms=10, p95_duration_ms=20),
         {**completed, "p50_duration_ms": 30},
     ):
         with pytest.raises(ValidationError):
             CostReadModel(**malformed)
+
+
+def test_unavailable_agent_cost_preserves_known_physical_call_lineage() -> None:
+    record = CostReadModel(
+        **_agent_cost_record(
+            execution_count=1,
+            execution_mode="hosted_advisory",
+            request_count=1,
+            physical_call_count=1,
+            physical_call_count_state="exact",
+            measured_cost=None,
+            cost_measurement_state="not_observed",
+            accounting_status="unavailable",
+            provider_event_ids=["a" * 64],
+            provider_budget=_partial_provider_budget(),
+            p50_duration_ms=10,
+            p95_duration_ms=10,
+            ended_at=_NOW,
+        )
+    )
+    assert record.measured_cost is None
+    assert record.average_cost_per_request is None
+    assert record.physical_call_count == 1
+    assert record.provider_event_ids == ["a" * 64]
 
 
 def _agent_trace_record(**overrides: object) -> dict[str, object]:
@@ -216,9 +487,13 @@ def _agent_trace_record(**overrides: object) -> dict[str, object]:
         "campaign_id": "campaign-1",
         "attempt_id": None,
         "operation": "agent.red_team",
-        "provider": "headshot/full-scan-corpus-v1",
+        "provider": "headshot",
+        "model": "full-scan-corpus-v1",
         "agent_role": "red_team",
         "execution_mode": "deterministic",
+        "requested_model": "full-scan-corpus-v1",
+        "returned_model": None,
+        "model_substituted": False,
         "method": None,
         "destination_host": None,
         "relative_path": None,
@@ -231,7 +506,11 @@ def _agent_trace_record(**overrides: object) -> dict[str, object]:
         "request_bytes": 0,
         "response_bytes": None,
         "measured_cost": 0,
+        "cost_measurement_state": "measured",
         "accounting_status": "measured",
+        "provider_event_ids": [],
+        "provider_event_status": None,
+        "provider_lineage_state": "not_applicable",
         "currency": "USD",
         "input_tokens": None,
         "output_tokens": None,
@@ -272,6 +551,36 @@ def test_agent_trace_latency_requires_authoritative_paired_percentiles() -> None
             TraceReadModel(**malformed)
 
 
+def test_agent_trace_event_cardinality_allows_only_a_running_reservation_gap() -> None:
+    running = _agent_trace_record(
+        provider="openrouter",
+        execution_mode="hosted_advisory",
+        configuration_set_sha256="c" * 64,
+        role_configuration_sha256="d" * 64,
+        generation_policy_sha256="e" * 64,
+        physical_attempts=2,
+        measured_cost=None,
+        cost_measurement_state="not_observed",
+        accounting_status="unavailable",
+        provider_event_ids=["f" * 64],
+        provider_event_status="retryable_failure",
+        provider_lineage_state="canonical_physical",
+    )
+    assert TraceReadModel(**running).physical_attempts == 2
+
+    with pytest.raises(ValidationError):
+        TraceReadModel(
+            **{
+                **running,
+                "status": "failed",
+                "finished_at": _NOW,
+                "duration_ms": 10,
+                "p50_duration_ms": 10,
+                "p95_duration_ms": 10,
+            }
+        )
+
+
 def test_terminal_agent_activity_requires_terminal_measurements() -> None:
     with pytest.raises(ValidationError):
         AgentActivityReadModel(
@@ -281,12 +590,17 @@ def test_terminal_agent_activity_requires_terminal_measurements() -> None:
             status="succeeded",
             provider="headshot",
             model="full-scan-corpus-v1",
+            model_substituted=False,
             execution_mode="deterministic",
             configuration_version=1,
             input_sha256="a" * 64,
             output_sha256=None,
             measured_cost=0,
+            cost_measurement_state="measured",
             accounting_status="measured",
+            provider_event_ids=[],
+            provider_event_status=None,
+            provider_lineage_state="not_applicable",
             currency="USD",
             trace_id="b" * 32,
             langfuse_status="exported",
@@ -297,19 +611,7 @@ def test_terminal_agent_activity_requires_terminal_measurements() -> None:
         )
 
 
-@pytest.mark.parametrize(
-    ("measured_cost", "input_tokens", "output_tokens"),
-    (
-        (0.01, None, None),
-        (0, 1, None),
-        (0, None, 1),
-    ),
-)
-def test_unavailable_agent_activity_rejects_nonzero_accounting(
-    measured_cost: float,
-    input_tokens: int | None,
-    output_tokens: int | None,
-) -> None:
+def test_unavailable_agent_activity_rejects_claimed_measured_cost() -> None:
     with pytest.raises(ValidationError):
         AgentActivityReadModel(
             execution_id="execution-hosted-1",
@@ -318,19 +620,85 @@ def test_unavailable_agent_activity_rejects_nonzero_accounting(
             status="running",
             provider="openrouter",
             model="provider/model",
+            model_substituted=False,
             execution_mode="hosted_advisory",
             configuration_version=1,
             input_sha256="a" * 64,
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
-            measured_cost=measured_cost,
+            measured_cost=0.01,
+            cost_measurement_state="not_observed",
             accounting_status="unavailable",
+            provider_event_ids=[],
+            provider_event_status=None,
+            provider_lineage_state="canonical_physical",
             currency="USD",
             trace_id="b" * 32,
             langfuse_status="queued",
-            detail={},
+            detail={"provider_lineage_state": "canonical_physical"},
             started_at=_NOW,
         )
+
+
+def test_invalid_cost_activity_preserves_independently_valid_token_facts() -> None:
+    activity = AgentActivityReadModel(
+        execution_id="execution-hosted-partial-usage",
+        campaign_run_id="campaign-1",
+        agent_role="red_team",
+        status="running",
+        provider="openrouter",
+        model="provider/model",
+        model_substituted=False,
+        execution_mode="hosted_advisory",
+        configuration_version=1,
+        input_sha256="a" * 64,
+        input_tokens=1,
+        output_tokens=None,
+        reasoning_tokens=2,
+        measured_cost=None,
+        cost_measurement_state="invalid",
+        accounting_status="unavailable",
+        provider_event_ids=[],
+        provider_event_status=None,
+        provider_lineage_state="canonical_physical",
+        currency="USD",
+        trace_id="b" * 32,
+        langfuse_status="queued",
+        detail={"provider_lineage_state": "canonical_physical"},
+        started_at=_NOW,
+    )
+    assert activity.input_tokens == 1
+    assert activity.reasoning_tokens == 2
+
+
+def test_unavailable_agent_activity_preserves_provider_event_identity() -> None:
+    activity = AgentActivityReadModel(
+        execution_id="execution-hosted-unknown",
+        campaign_run_id="campaign-1",
+        agent_role="documentation",
+        status="running",
+        provider="openrouter",
+        model="openai/gpt-5.4",
+        model_substituted=False,
+        execution_mode="hosted_advisory",
+        configuration_version=1,
+        configuration_set_sha256="a" * 64,
+        role_configuration_sha256="b" * 64,
+        generation_policy_sha256="c" * 64,
+        input_sha256="d" * 64,
+        physical_attempts=1,
+        measured_cost=None,
+        cost_measurement_state="not_observed",
+        accounting_status="unavailable",
+        provider_event_ids=["e" * 64],
+        provider_event_status="retryable_failure",
+        provider_lineage_state="canonical_physical",
+        currency="USD",
+        trace_id="f" * 32,
+        langfuse_status="queued",
+        detail={"provider_lineage_state": "canonical_physical"},
+        started_at=_NOW,
+    )
+    assert activity.physical_attempts == 1
+    assert activity.provider_event_ids == ["e" * 64]
 
 
 def test_executed_birdseye_agent_requires_cost_and_delivery_state() -> None:

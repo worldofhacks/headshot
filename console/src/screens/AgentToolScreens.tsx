@@ -17,6 +17,7 @@ import {
   Panel,
   percent,
   ScreenHeading,
+  servedModel,
   shortId,
   TagMatrix,
   time,
@@ -28,6 +29,7 @@ import {
   LIVE_RESOURCE_POLL_INTERVAL_MS,
   useResource,
 } from "../hooks/useResource";
+import { navigateTo } from "../router";
 import {
   PERMISSIONS,
   type AgentActivityReadModel,
@@ -37,6 +39,41 @@ import {
 } from "../types";
 
 type AgentRole = AgentReadModel["role"];
+
+type PromptAssignmentIdentity = Pick<
+  AgentReadModel["active_assignment"],
+  "prompt_version" | "prompt_sha256" | "configuration_sha256"
+>;
+
+export interface AgentPromptSelection {
+  source: "active" | "staged";
+  version: string;
+  sha256: string;
+  configurationSha256: string;
+}
+
+export const selectAgentPromptIdentity = (
+  agent: {
+    active_assignment: PromptAssignmentIdentity;
+    staged_assignment: PromptAssignmentIdentity | null;
+  } | null,
+): AgentPromptSelection | null => {
+  const candidates = [
+    ["active", agent?.active_assignment],
+    ["staged", agent?.staged_assignment],
+  ] as const;
+  for (const [source, assignment] of candidates) {
+    if (assignment?.prompt_version && assignment.prompt_sha256) {
+      return {
+        source,
+        version: assignment.prompt_version,
+        sha256: assignment.prompt_sha256,
+        configurationSha256: assignment.configuration_sha256,
+      };
+    }
+  }
+  return null;
+};
 
 const roleDisplayOrder: AgentRole[] = ["orchestrator", "red_team", "judge", "documentation"];
 
@@ -75,31 +112,102 @@ const langfuseDeliveryState = (activity: AgentActivityReadModel) => {
 };
 
 const accountingValue = (agent: AgentReadModel) => {
-  if (agent.accounting_status === "unavailable") return "unavailable";
+  if (
+    agent.accounting_status === "unavailable"
+    || agent.accounting_status === "not_applicable"
+    || agent.measured_cost === null
+  ) return agent.accounting_status.replaceAll("_", " ");
   if (agent.accounting_status === "partial") return `${money(agent.measured_cost)} known · partial`;
   return money(agent.measured_cost);
 };
 
-const activityAccountingValue = (activity: AgentActivityReadModel) =>
-  activity.accounting_status === "unavailable"
-    ? "unavailable"
-    : money(activity.measured_cost);
+const activityAccountingValue = (activity: AgentActivityReadModel) => {
+  if (activity.accounting_status === "unavailable" || activity.measured_cost === null) {
+    return "unavailable";
+  }
+  if (activity.accounting_status === "partial") {
+    return `${money(activity.measured_cost)} known · partial`;
+  }
+  return money(activity.measured_cost);
+};
+
+const activityProviderLineageValue = (activity: AgentActivityReadModel) => {
+  if (activity.provider_lineage_state === "historical_not_instrumented") {
+    return "Historical—not instrumented";
+  }
+  if (activity.provider_lineage_state === "canonical_physical") {
+    return `${count(activity.provider_event_ids.length)} canonical event(s)`;
+  }
+  return "Not applicable";
+};
+
+const budgetRemainingValue = (
+  remaining: number | null,
+  upperBound: number | null,
+  cap: number | null,
+) => {
+  if (cap === null || upperBound === null) return "unavailable";
+  if (remaining === null) {
+    return `Conservative headroom unavailable / ${money(cap)} · ≤ ${money(upperBound)} known-spend bound`;
+  }
+  return `${money(remaining)} conservative / ${money(cap)} · ≤ ${money(upperBound)} known-spend bound`;
+};
+
+const callRemainingValue = (
+  state: "exact" | "lower_bound" | null,
+  remaining: number | null,
+  knownCalls: number,
+  cap: number | null,
+) => {
+  if (state === null || cap === null) return "unavailable";
+  const conservative = remaining === null
+    ? `Conservative headroom unavailable / ${count(cap)}`
+    : `${count(remaining)} conservative / ${count(cap)}`;
+  if (state === "lower_bound") {
+    return `${conservative} · ${knownCalls === 0
+      ? "historical count incomplete"
+      : `≥${count(knownCalls)} observed`}`;
+  }
+  return `${conservative} · exact observed count`;
+};
+
+const physicalCallValue = (agent: AgentReadModel) => {
+  if (agent.physical_call_count_state === "not_applicable") return "Not applicable";
+  if (agent.physical_call_count_state === "lower_bound") {
+    return agent.physical_call_count === 0
+      ? "Unavailable—historical count incomplete"
+      : `≥${count(agent.physical_call_count)} known`;
+  }
+  return count(agent.physical_call_count);
+};
 
 function AgentPromptPanel({
   client,
   role,
+  version,
+  sha256,
+  configurationSha256,
+  source,
 }: {
   client: ApiClient;
   role: AgentRole;
+  version: string;
+  sha256: string;
+  configurationSha256: string;
+  source: AgentPromptSelection["source"];
 }) {
   const prompt = useResource<AgentPromptReadModel>(
     client,
-    RESOURCE_PATHS.agentPrompt(role),
+    RESOURCE_PATHS.agentPrompt(role, version, sha256, configurationSha256),
     decodeAgentPrompt,
   );
 
   return (
-    <Panel title="System prompt" meta="CONFIG_MANAGE only" eyebrow="SERVER-OWNED PROMPT">
+    <Panel
+      title={`${source === "active" ? "Active" : "Staged"} system prompt`}
+      meta={source === "active" ? "ACTIVE CONFIGURATION" : "PENDING AUTHORIZATION"}
+      eyebrow="SERVER-OWNED PROMPT · CONFIG_MANAGE ONLY"
+    >
       <ResourceView
         result={prompt.result}
         emptyLabel="No server-owned prompt is registered for this role."
@@ -146,6 +254,7 @@ export function AgentsScreen({
   const [model, setModel] = useState(deterministicModels.orchestrator[0]);
   const [rationale, setRationale] = useState("");
   const selectedAssignment = selected?.active_assignment;
+  const promptIdentity = selectAgentPromptIdentity(selected);
 
   useEffect(() => {
     if (!selectedAssignment) return;
@@ -165,7 +274,7 @@ export function AgentsScreen({
   const totals = useMemo(() => ({
     executions: records.reduce((sum, agent) => sum + agent.execution_count, 0),
     running: records.reduce((sum, agent) => sum + agent.running_count, 0),
-    cost: records.reduce((sum, agent) => sum + agent.measured_cost, 0),
+    cost: records.reduce((sum, agent) => sum + (agent.measured_cost ?? 0), 0),
     observedTokens: records.reduce(
       (sum, agent) =>
         sum
@@ -175,6 +284,17 @@ export function AgentsScreen({
       0,
     ),
     physicalCalls: records.reduce((sum, agent) => sum + agent.physical_call_count, 0),
+    unresolvedUsdExposure: records.reduce(
+      (sum, agent) => sum + agent.provider_budget.role_unresolved_usd_exposure,
+      0,
+    ),
+    unresolvedPhysicalCalls: records.reduce(
+      (sum, agent) => sum + agent.provider_budget.role_unresolved_physical_calls,
+      0,
+    ),
+    incompleteCallCounts: records.filter(
+      (agent) => agent.physical_call_count_state === "lower_bound",
+    ).length,
     tokenObservations: records.reduce((sum, agent) => sum + agent.token_observation_count, 0),
     incompleteAccounting: records.filter(
       (agent) => ["partial", "unavailable"].includes(agent.accounting_status),
@@ -182,6 +302,11 @@ export function AgentsScreen({
   }), [records]);
   const selectedActivity = activities.filter((row) => row.agent_role === selectedRole);
   const canConfigure = principal.organization_permissions.includes(PERMISSIONS.configManage);
+  const hostedSetAvailable = records.some(
+    (agent) =>
+      agent.staged_assignment !== null
+      || agent.active_assignment.execution_mode === "hosted_advisory",
+  );
   const normalizedRationale = rationale.trim();
   const deterministicActivationReady =
     canConfigure
@@ -219,13 +344,17 @@ export function AgentsScreen({
               value: totals.incompleteAccounting > 0 ? `${money(totals.cost)} known` : money(totals.cost),
               note: totals.incompleteAccounting > 0
                 ? `${totals.incompleteAccounting} role(s) have incomplete provider accounting`
-                : `${totals.physicalCalls} provider call(s) with complete accounting`,
+                : totals.unresolvedUsdExposure > 0 || totals.unresolvedPhysicalCalls > 0
+                  ? `${money(totals.unresolvedUsdExposure)} and ${count(totals.unresolvedPhysicalCalls)} call(s) unresolved`
+                : totals.incompleteCallCounts > 0
+                  ? `${totals.physicalCalls} provider call(s) known · historical count incomplete`
+                  : `${totals.physicalCalls} provider call(s) with complete accounting`,
             },
             {
               label: "Token observations",
               value: count(totals.observedTokens),
               note: totals.tokenObservations > 0
-                ? `${totals.tokenObservations} hosted observations · ${totals.physicalCalls} provider calls`
+                ? `${totals.tokenObservations} hosted observations · ${totals.physicalCalls} provider calls${totals.incompleteCallCounts > 0 ? " known (lower bound)" : ""}`
                 : "No hosted provider token observations yet",
             },
           ]} />
@@ -257,7 +386,11 @@ export function AgentsScreen({
                         <strong>{agent.display_name}</strong>
                         <small className="mono">{state}</small>
                       </span>
-                      <span>{agent.active_assignment.model} · configured</span>
+                      <span>
+                        {agent.latest_acceptance_execution
+                          ? `${agent.latest_acceptance_execution.returned_model} · acceptance exercised`
+                          : `${agent.active_assignment.model} · configured`}
+                      </span>
                       <small>{count(agent.execution_count)} executions · {agent.trust_level}</small>
                     </button>
                   </div>
@@ -289,16 +422,16 @@ export function AgentsScreen({
                 { label: "Output contract", values: [selected.output_contract] },
               ]} />
               <dl className="agent-ledger-summary">
-                <div><dt>Configured model</dt><dd className="mono">{selected.active_assignment.model}</dd></div>
-                <div><dt>Configured provider</dt><dd className="mono">{selected.active_assignment.provider}</dd></div>
-                <div><dt>Provider-served model</dt><dd className="mono">{selected.active_assignment.resolved_model ?? "unavailable — not durably recorded"}</dd></div>
-                <div><dt>Provider-served upstream</dt><dd className="mono">{selected.active_assignment.upstream_provider ?? "unavailable — not durably recorded"}</dd></div>
+                <div><dt>Active configured model</dt><dd className="mono">{selected.active_assignment.model}</dd></div>
+                <div><dt>Active configured provider</dt><dd className="mono">{selected.active_assignment.provider}</dd></div>
+                <div><dt>Active assignment served model</dt><dd className="mono">{selected.active_assignment.resolved_model ?? "unavailable — no campaign execution recorded"}</dd></div>
+                <div><dt>Active assignment served upstream</dt><dd className="mono">{selected.active_assignment.upstream_provider ?? "unavailable — no campaign execution recorded"}</dd></div>
                 <div><dt>Prompt version</dt><dd className="mono">{selected.active_assignment.prompt_version ?? "not applicable"}</dd></div>
                 <div><dt>Prompt SHA-256</dt><dd className="mono">{selected.active_assignment.prompt_sha256 ?? "not applicable"}</dd></div>
                 <div><dt>Role-history p50 / p95 latency</dt><dd className="mono">{selected.p50_duration_ms === null || selected.p95_duration_ms === null ? "not yet executed" : `${selected.p50_duration_ms.toFixed(1)} / ${selected.p95_duration_ms.toFixed(1)} ms`}</dd></div>
                 <div><dt>Role-history cost</dt><dd className="mono">{accountingValue(selected)}</dd></div>
                 <div><dt>Input / output / reasoning tokens</dt><dd className="mono">{selected.token_observation_count > 0 ? `${count(selected.input_tokens ?? 0)} / ${count(selected.output_tokens ?? 0)} / ${count(selected.reasoning_tokens ?? 0)} · ${selected.token_observation_count} observation(s)` : "not reported"}</dd></div>
-                <div><dt>Provider calls</dt><dd className="mono">{count(selected.physical_call_count)}</dd></div>
+                <div><dt>Provider calls</dt><dd className="mono">{physicalCallValue(selected)}</dd></div>
                 <div><dt>Langfuse delivery</dt><dd className="mono">{langfuseDelivery(selected)}</dd></div>
                 <div><dt>Last Langfuse query-back</dt><dd className="mono">{selected.last_langfuse_verified_at ? time(selected.last_langfuse_verified_at) : "not yet observed remotely"}</dd></div>
                 <div><dt>Last activity</dt><dd className="mono">{selected.last_activity_at ? time(selected.last_activity_at) : "not yet executed"}</dd></div>
@@ -313,13 +446,44 @@ export function AgentsScreen({
                 ) : (
                   <dl className="agent-ledger-summary">
                     <div><dt>Budget state</dt><dd className="mono">{selected.provider_budget.status.replaceAll("_", " ")}</dd></div>
-                    <div><dt>Role USD remaining</dt><dd className="mono">{money(selected.provider_budget.role_usd_remaining ?? 0)} / {money(selected.provider_budget.role_usd_cap ?? 0)}</dd></div>
-                    <div><dt>Role calls remaining</dt><dd className="mono">{count(selected.provider_budget.role_calls_remaining ?? 0)} / {count(selected.provider_budget.role_call_cap ?? 0)}</dd></div>
-                    <div><dt>Global USD remaining</dt><dd className="mono">{money(selected.provider_budget.global_usd_remaining ?? 0)} / {money(selected.provider_budget.global_usd_cap ?? 0)}</dd></div>
-                    <div><dt>Global calls remaining</dt><dd className="mono">{count(selected.provider_budget.global_calls_remaining ?? 0)} / {count(selected.provider_budget.global_call_cap ?? 0)}</dd></div>
+                    <div><dt>Role known spend</dt><dd className="mono">{money(selected.provider_budget.role_usd_spent)}</dd></div>
+                    <div><dt>Role unresolved USD exposure</dt><dd className="mono">{money(selected.provider_budget.role_unresolved_usd_exposure)}</dd></div>
+                    <div><dt>Role USD remaining</dt><dd className="mono">{budgetRemainingValue(selected.provider_budget.role_usd_remaining, selected.provider_budget.role_usd_remaining_upper_bound, selected.provider_budget.role_usd_cap)}</dd></div>
+                    <div><dt>Role unresolved provider calls</dt><dd className="mono">{count(selected.provider_budget.role_unresolved_physical_calls)}</dd></div>
+                    <div><dt>Role calls remaining</dt><dd className="mono">{callRemainingValue(selected.provider_budget.role_call_count_state, selected.provider_budget.role_calls_remaining, selected.provider_budget.role_physical_calls, selected.provider_budget.role_call_cap)}</dd></div>
+                    <div><dt>Global known spend</dt><dd className="mono">{money(selected.provider_budget.global_usd_spent)}</dd></div>
+                    <div><dt>Global unresolved USD exposure</dt><dd className="mono">{money(selected.provider_budget.global_unresolved_usd_exposure)}</dd></div>
+                    <div><dt>Global USD remaining</dt><dd className="mono">{budgetRemainingValue(selected.provider_budget.global_usd_remaining, selected.provider_budget.global_usd_remaining_upper_bound, selected.provider_budget.global_usd_cap)}</dd></div>
+                    <div><dt>Global unresolved provider calls</dt><dd className="mono">{count(selected.provider_budget.global_unresolved_physical_calls)}</dd></div>
+                    <div><dt>Global calls remaining</dt><dd className="mono">{callRemainingValue(selected.provider_budget.global_call_count_state, selected.provider_budget.global_calls_remaining, selected.provider_budget.global_physical_calls, selected.provider_budget.global_call_cap)}</dd></div>
                   </dl>
                 )}
               </div>
+              {selected.latest_acceptance_execution && (
+                <div className="evidence-stack">
+                  <p className="field-label">Latest target-free agent acceptance</p>
+                  <StateNotice
+                    state={selected.latest_acceptance_execution.langfuse_status === "exported"
+                      ? "ready"
+                      : "degraded"}
+                    detail="Live provider evidence from the bounded agent-only acceptance authority. It does not activate this assignment for campaign execution."
+                  />
+                  <dl className="agent-ledger-summary">
+                    <div><dt>Acceptance-served model</dt><dd className="mono">{selected.latest_acceptance_execution.returned_model}</dd></div>
+                    <div><dt>Acceptance-served upstream</dt><dd className="mono">{selected.latest_acceptance_execution.upstream_provider}</dd></div>
+                    <div><dt>Acceptance run</dt><dd className="mono">{selected.latest_acceptance_execution.acceptance_run_id}</dd></div>
+                    <div><dt>Acceptance attempt</dt><dd className="mono">{selected.latest_acceptance_execution.acceptance_attempt_id}</dd></div>
+                    <div><dt>Execution</dt><dd className="mono">{selected.latest_acceptance_execution.execution_id}</dd></div>
+                    <div><dt>Parent execution</dt><dd className="mono">{selected.latest_acceptance_execution.parent_execution_id ?? "root planner call"}</dd></div>
+                    <div><dt>Langfuse trace</dt><dd className="mono">{selected.latest_acceptance_execution.trace_id}</dd></div>
+                    <div><dt>Langfuse query-back</dt><dd className="mono">{selected.latest_acceptance_execution.langfuse_verified_at ? `observed · ${time(selected.latest_acceptance_execution.langfuse_verified_at)}` : "awaiting remote verification"}</dd></div>
+                    <div><dt>Measured provider cost</dt><dd className="mono">{money(selected.latest_acceptance_execution.measured_cost)}</dd></div>
+                    <div><dt>Canonical provider events</dt><dd className="mono">{count(selected.latest_acceptance_execution.provider_event_ids.length)}</dd></div>
+                    <div><dt>Input / output / reasoning tokens</dt><dd className="mono">{count(selected.latest_acceptance_execution.input_tokens)} / {count(selected.latest_acceptance_execution.output_tokens)} / {count(selected.latest_acceptance_execution.reasoning_tokens)}</dd></div>
+                    <div><dt>Completed</dt><dd className="mono">{time(selected.latest_acceptance_execution.finished_at)}</dd></div>
+                  </dl>
+                </div>
+              )}
               {selected.judge_calibration && (
                 <div className="evidence-stack">
                   <p className="field-label">Evaluator calibration and authority</p>
@@ -447,17 +611,44 @@ export function AgentsScreen({
                 agents.refresh();
               }}
             />
+            <button
+              type="button"
+              className="button button-primary"
+              disabled={!hostedSetAvailable}
+              title={hostedSetAvailable
+                ? undefined
+                : "A server-owned atomic four-role set must be staged first"}
+              onClick={() => navigateTo({ screen: "targets", entityId: null })}
+            >
+              Open four-role authorization
+            </button>
           </div>
           <p className="data-note">
             This per-role control can only restore a reviewed, server-owned deterministic engine.
-            Hosted assignments remain an immutable four-role configuration set and become active
-            only through an exact human-authorized campaign binding; this control cannot create
-            partial hosted authority.
+            A staged hosted set becomes active only through the exact target/corpus authorization
+            on Targets and a distinct human approval. The browser cannot select role models,
+            provider credentials, or partial hosted authority.
           </p>
         </Panel>
       </div>
 
-      {canConfigure && <AgentPromptPanel client={client} role={selectedRole} />}
+      {canConfigure && promptIdentity ? (
+        <AgentPromptPanel
+          client={client}
+          role={selectedRole}
+          version={promptIdentity.version}
+          sha256={promptIdentity.sha256}
+          configurationSha256={promptIdentity.configurationSha256}
+          source={promptIdentity.source}
+        />
+      ) : canConfigure ? (
+        <Panel title="System prompt" meta="CONFIG_MANAGE only" eyebrow="SERVER-OWNED PROMPT">
+          <StateNotice
+            state="unavailable"
+            detail="No exact configuration-bound prompt identity is active or staged for this role."
+          />
+        </Panel>
+      ) : null}
 
       <Panel
         title={`${selected?.display_name ?? selectedRole} activity`}
@@ -468,7 +659,7 @@ export function AgentsScreen({
           <Timeline rows={selectedActivity.slice(0, 30).map((row) => ({
             id: row.execution_id,
             title: `${row.agent_role.replace("_", " ")} · ${row.status}`,
-            detail: `${shortId(row.campaign_run_id)} · ${row.returned_model ?? row.model} · ${row.duration_ms === null ? "running" : `${row.duration_ms.toFixed(1)} ms`} · ${activityAccountingValue(row)} · ${langfuseDeliveryState(row)}${row.agent_role === "judge" ? ` · calibration ${row.judge_calibration_state ?? "unavailable"} · ${row.decision_authority ?? "no"} authority` : ""}`,
+            detail: `${shortId(row.campaign_run_id)} · ${servedModel(row)} · ${row.duration_ms === null ? "running" : `${row.duration_ms.toFixed(1)} ms`} · ${activityAccountingValue(row)} · ${langfuseDeliveryState(row)}${row.agent_role === "judge" ? ` · calibration ${row.judge_calibration_state ?? "unavailable"} · ${row.decision_authority ?? "no"} authority` : ""}`,
             at: row.started_at,
             tone: statusTone(row.status),
           }))} />
@@ -486,6 +677,8 @@ export function AgentsScreen({
               data={data.map((row) => ({
                 ...row,
                 measured_cost_display: activityAccountingValue(row),
+                served_model_display: servedModel(row),
+                provider_lineage_display: activityProviderLineageValue(row),
                 langfuse_status: langfuseDeliveryState(row),
               }))}
               identityKeys={["execution_id"]}
@@ -497,13 +690,15 @@ export function AgentsScreen({
                 { key: "attempt_id", label: "Attempt", mono: true },
                 { key: "parent_execution_id", label: "Parent", mono: true },
                 { key: "model", label: "Engine", mono: true },
-                { key: "returned_model", label: "Served model", mono: true },
+                { key: "served_model_display", label: "Requested → served", mono: true },
+                { key: "provider_event_status", label: "Provider event", mono: true },
                 { key: "upstream_provider", label: "Upstream", mono: true },
                 { key: "duration_ms", label: "Latency ms", mono: true },
                 { key: "input_tokens", label: "Input tokens", mono: true },
                 { key: "output_tokens", label: "Output tokens", mono: true },
                 { key: "reasoning_tokens", label: "Reasoning tokens", mono: true },
                 { key: "physical_attempts", label: "Provider calls", mono: true },
+                { key: "provider_lineage_display", label: "Provider lineage" },
                 { key: "accounting_status", label: "Accounting" },
                 { key: "measured_cost_display", label: "Cost USD", mono: true },
                 { key: "trace_id", label: "Trace", mono: true },

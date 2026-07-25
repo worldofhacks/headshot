@@ -254,7 +254,9 @@ class _LangfuseBridge:
         input_tokens: int | None,
         output_tokens: int | None,
         reasoning_tokens: int | None,
-        measured_cost: float,
+        measured_cost: float | None,
+        cost_measurement_state: str,
+        provider_event_ids: list[str],
         returned_model: str | None,
     ) -> None:
         if state is None:
@@ -283,15 +285,23 @@ class _LangfuseBridge:
         final_cost_source = (
             "deterministic_zero"
             if cost_source == "deterministic_zero"
-            else ("provider_measured" if measured_cost > 0 or usage_details else "unavailable")
+            else {
+                "measured": "provider_measured",
+                "partial": "provider_partial_known",
+                "not_observed": "unavailable",
+                "invalid": "invalid",
+            }[cost_measurement_state]
         )
-        generation_values["metadata"] = {
+        authoritative_metadata = {
             **metadata,
             "cost.source": final_cost_source,
+            "cost.measurement_state": cost_measurement_state,
+            "agent.provider_event_ids": provider_event_ids,
         }
+        generation_values["metadata"] = authoritative_metadata
         # A deterministic execution has a real, observed cost of zero. For a hosted execution,
         # only attach cost when provider usage/cost accounting was actually returned.
-        if final_cost_source != "unavailable":
+        if cost_measurement_state in {"measured", "partial"} and measured_cost is not None:
             generation_values["cost_details"] = {"total": measured_cost}
         if returned_model is not None:
             generation_values["model"] = returned_model
@@ -302,7 +312,7 @@ class _LangfuseBridge:
             generation_ended = True
             agent.update(
                 output=output,
-                metadata=metadata,
+                metadata=authoritative_metadata,
                 level="ERROR" if error_code else "DEFAULT",
                 status_message=error_code or status,
             ).end()
@@ -642,13 +652,16 @@ class OutboundHttpTelemetry:
                 row = (
                     connection.execute(
                         text(
-                            "SELECT execution_id, organization_id, campaign_run_id, attempt_id, "
-                            "parent_execution_id, agent_role, provider, model, execution_mode, "
-                            "configuration_version, trace_id, input_sha256, "
-                            "configuration_set_sha256, role_configuration_sha256, "
-                            "generation_policy_sha256, judge_calibration_id, "
-                            "judge_calibration_state "
-                            "FROM agent_executions WHERE execution_id = :execution_id"
+                            "SELECT e.execution_id, e.organization_id, e.campaign_run_id, "
+                            "e.attempt_id, e.parent_execution_id, e.agent_role, e.provider, "
+                            "e.model, e.execution_mode, e.configuration_version, e.trace_id, "
+                            "e.input_sha256, e.configuration_set_sha256, "
+                            "e.role_configuration_sha256, e.generation_policy_sha256, "
+                            "e.judge_calibration_id, e.judge_calibration_state, r.run_kind "
+                            "FROM agent_executions e JOIN campaign_runs r "
+                            "ON r.organization_id = e.organization_id "
+                            "AND r.run_id = e.campaign_run_id "
+                            "WHERE e.execution_id = :execution_id"
                         ),
                         {"execution_id": execution_id},
                     )
@@ -656,6 +669,21 @@ class OutboundHttpTelemetry:
                     .one()
                 )
                 configured = self.langfuse.configured()
+                parent_execution_id = (
+                    str(row["parent_execution_id"])
+                    if row["parent_execution_id"] is not None
+                    else None
+                )
+                parent_observation_id = (
+                    self._agent_observation_ids.get(parent_execution_id)
+                    if parent_execution_id is not None
+                    and self._agent_campaign_ids.get(parent_execution_id)
+                    == str(row["campaign_run_id"])
+                    else None
+                )
+                parent_projection_missing = (
+                    configured and parent_execution_id is not None and parent_observation_id is None
+                )
                 connection.execute(
                     text(
                         "UPDATE agent_executions SET langfuse_status = :status "
@@ -663,11 +691,22 @@ class OutboundHttpTelemetry:
                     ),
                     {
                         "execution_id": execution_id,
-                        "status": "queued" if configured else "disabled",
+                        "status": (
+                            "error"
+                            if parent_projection_missing
+                            else ("queued" if configured else "disabled")
+                        ),
                     },
                 )
         except Exception:
             _logger.warning("agent telemetry start persistence failed")
+            return False
+
+        if parent_projection_missing:
+            # A durable parent link must not become an unrelated Langfuse root. Hosted callers
+            # treat ``False`` as a pre-provider gate; deterministic callers remain fail-soft while
+            # the durable row exposes the projection error for reconciliation.
+            _logger.warning("agent telemetry parent observation is unavailable")
             return False
 
         metadata = _sanitize(
@@ -675,6 +714,10 @@ class OutboundHttpTelemetry:
                 "deployment.environment": self.environment,
                 "organization_id": str(row["organization_id"]),
                 "campaign_run_id": str(row["campaign_run_id"]),
+                "run.kind": str(row["run_kind"]),
+                "agent.acceptance_run_id": (
+                    str(row["campaign_run_id"]) if row["run_kind"] == "agent_acceptance" else None
+                ),
                 "attempt_id": (str(row["attempt_id"]) if row["attempt_id"] is not None else None),
                 "parent_execution_id": (
                     str(row["parent_execution_id"])
@@ -718,11 +761,6 @@ class OutboundHttpTelemetry:
         langfuse_state = None
         if configured:
             try:
-                parent_execution_id = (
-                    str(row["parent_execution_id"])
-                    if row["parent_execution_id"] is not None
-                    else None
-                )
                 langfuse_state = self.langfuse.start_agent(
                     trace_id=str(row["trace_id"]),
                     role=str(row["agent_role"]),
@@ -732,11 +770,7 @@ class OutboundHttpTelemetry:
                     version=str(row["configuration_version"]),
                     input_payload={"sha256": str(row["input_sha256"])},
                     metadata=metadata,
-                    parent_observation_id=(
-                        self._agent_observation_ids.get(parent_execution_id)
-                        if parent_execution_id is not None
-                        else None
-                    ),
+                    parent_observation_id=parent_observation_id,
                 )
             except Exception:
                 _logger.warning("Langfuse agent observation start failed")
@@ -830,7 +864,8 @@ class OutboundHttpTelemetry:
                             "SELECT status, duration_ms, input_tokens, output_tokens, "
                             "reasoning_tokens, measured_cost, currency, output_sha256, "
                             "returned_model, upstream_provider, provider_request_id, "
-                            "physical_attempts, oracle_agreement, decision_authority "
+                            "physical_attempts, cost_measurement_state, provider_event_ids, "
+                            "oracle_agreement, decision_authority "
                             "FROM agent_executions WHERE execution_id = :execution_id"
                         ),
                         {"execution_id": execution_id},
@@ -844,6 +879,16 @@ class OutboundHttpTelemetry:
         if str(row["status"]) == "running" or row["output_sha256"] is None:
             _logger.warning("agent telemetry completion row is not terminal")
             return False
+        execution_mode = handle.metadata.get("agent.execution_mode")
+        cost_source = (
+            "deterministic_zero"
+            if execution_mode == "deterministic"
+            else (
+                "provider_measured"
+                if row["cost_measurement_state"] == "measured"
+                else "unavailable"
+            )
+        )
         metadata = {
             **handle.metadata,
             "agent.execution_id": execution_id,
@@ -853,7 +898,9 @@ class OutboundHttpTelemetry:
                 float(row["duration_ms"]) if row["duration_ms"] is not None else None
             ),
             "agent.output_sha256": str(row["output_sha256"]),
-            "cost.usd": float(row["measured_cost"] or 0.0),
+            "cost.usd": (float(row["measured_cost"]) if row["measured_cost"] is not None else None),
+            "cost.measurement_state": str(row["cost_measurement_state"]),
+            "agent.provider_event_ids": list(row["provider_event_ids"]),
             "currency": str(row["currency"]),
             "agent.returned_model": (
                 str(row["returned_model"]) if row["returned_model"] is not None else None
@@ -865,6 +912,7 @@ class OutboundHttpTelemetry:
                 str(row["provider_request_id"]) if row["provider_request_id"] is not None else None
             ),
             "agent.physical_attempts": row["physical_attempts"],
+            "cost.source": cost_source,
             "judge.oracle_agreement": row["oracle_agreement"],
             "judge.decision_authority": row["decision_authority"],
             "error_code": pending.error_code,
@@ -879,7 +927,11 @@ class OutboundHttpTelemetry:
                 input_tokens=row["input_tokens"],
                 output_tokens=row["output_tokens"],
                 reasoning_tokens=row["reasoning_tokens"],
-                measured_cost=float(row["measured_cost"] or 0.0),
+                measured_cost=(
+                    float(row["measured_cost"]) if row["measured_cost"] is not None else None
+                ),
+                cost_measurement_state=str(row["cost_measurement_state"]),
+                provider_event_ids=list(row["provider_event_ids"]),
                 returned_model=(
                     str(row["returned_model"]) if row["returned_model"] is not None else None
                 ),

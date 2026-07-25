@@ -280,11 +280,12 @@ def _seed_verification_rows(
                 "INSERT INTO agent_executions "
                 "(execution_id, organization_id, campaign_run_id, attempt_id, agent_role, "
                 "status, provider, model, execution_mode, configuration_version, "
-                "input_sha256, output_sha256, measured_cost, trace_id, error_code, "
+                "input_sha256, output_sha256, measured_cost, cost_measurement_state, "
+                "trace_id, error_code, "
                 "finished_at, duration_ms, langfuse_status) VALUES "
                 "(:execution_id, :org, :run_id, 'attempt-verification', 'orchestrator', "
                 "'succeeded', 'headshot', 'orchestrator-engine-v1', 'deterministic', 1, "
-                ":input_sha256, :output_sha256, 0, :trace_id, NULL, "
+                ":input_sha256, :output_sha256, 0, 'measured', :trace_id, NULL, "
                 "clock_timestamp(), 1, 'queued')"
             ),
             {

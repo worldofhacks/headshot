@@ -84,10 +84,13 @@ def test_meaningful_api_is_default_deny(monkeypatch, auth_environ) -> None:
         "/api/v1/approvals/request-1",
         "/api/v1/reports",
         "/api/v1/reports/report-1",
+        "/api/v1/coverage",
+        "/api/v1/resilience",
+        "/api/v1/target-catalog",
         "/api/v1/targets",
         "/api/v1/configuration",
         "/api/v1/components",
-        "/api/v1/agents/judge/prompt",
+        "/api/v1/agent-prompts/judge/1/" + "0" * 64 + "?configuration_set_sha256=" + "1" * 64,
         "/api/v1/birdseye",
         "/api/v1/events",
     ):
@@ -150,6 +153,18 @@ def test_wrong_org_and_missing_permission_are_forbidden(
     )
     assert (
         client.get(
+            "/api/v1/coverage", headers={"Authorization": f"Bearer {no_findings}"}
+        ).status_code
+        == 403
+    )
+    assert (
+        client.get(
+            "/api/v1/resilience", headers={"Authorization": f"Bearer {no_findings}"}
+        ).status_code
+        == 403
+    )
+    assert (
+        client.get(
             "/api/v1/reports", headers={"Authorization": f"Bearer {no_findings}"}
         ).status_code
         == 403
@@ -163,11 +178,66 @@ def test_wrong_org_and_missing_permission_are_forbidden(
     )
     assert (
         client.get(
-            "/api/v1/agents/judge/prompt",
+            "/api/v1/agent-prompts/judge/1/" + "0" * 64 + "?configuration_set_sha256=" + "1" * 64,
             headers={"Authorization": f"Bearer {no_findings}"},
         ).status_code
         == 403
     )
+    assert (
+        client.get(
+            "/api/v1/target-catalog",
+            headers={"Authorization": f"Bearer {no_findings}"},
+        ).status_code
+        == 403
+    )
+
+
+def test_target_registration_accepts_only_an_exact_catalog_identity(
+    monkeypatch, auth_environ, token_factory
+) -> None:
+    _install_auth(monkeypatch, auth_environ)
+    backend = StubBackend()
+    token = token_factory(permissions=("org:targets:manage",))
+    client = TestClient(_app(backend))
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Idempotency-Key": "catalog-selection-123456",
+    }
+
+    accepted = client.post(
+        "/api/v1/targets",
+        json={"target_id": "reviewed-target", "version": "1.2.3"},
+        headers=headers,
+    )
+    rejected = client.post(
+        "/api/v1/targets",
+        json={
+            "target_id": "reviewed-target",
+            "version": "1.2.3",
+            "base_url": "https://browser-authority.invalid",
+        },
+        headers=headers,
+    )
+    rejected_revision = client.post(
+        "/api/v1/targets/reviewed-target/versions",
+        json={
+            "target_id": "reviewed-target",
+            "version": "1.2.4",
+            "credential_ref": "secretref://browser-supplied/authority",
+        },
+        headers=headers,
+    )
+
+    assert accepted.status_code == 202
+    assert rejected.status_code == 422
+    assert rejected_revision.status_code == 422
+    assert backend.commands == [
+        (
+            "create_target",
+            "catalog-selection-123456",
+            {"target_id": "reviewed-target", "version": "1.2.3"},
+        )
+    ]
 
 
 def test_command_ignores_forged_identity_and_requires_idempotency(

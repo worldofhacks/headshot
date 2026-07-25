@@ -8,12 +8,10 @@ A ``RedTeamProvider`` generates variant AttackAttempts. Two families:
   * FakeProvider / CassetteProvider — DETERMINISTIC, OFFLINE, zero network. A recorded cassette
     replays fixture responses; a REFUSAL / EMPTY generation is retried or switched to another
     cassette/strategy — never a silent stall. Used by the offline slice AND by every test here.
-  * HostedProvider — the OpenRouter/Together boundary. Guarded by a provider/model VALIDATION
-    preflight: the provider must be supported, ``HEADSHOT_RED_TEAM_MODEL`` must be non-empty, and
-    a credential reference must be present. If the model is UNSET the hosted path typed-FAILS
-    preflight while fake/cassette/seed stay fully usable. Even a passing preflight still requires
-    EXPLICIT authorization to run — it never auto-fires. Its SDK import is LAZY and it is NEVER
-    invoked in a test: we patch the network/SDK to RAISE and assert it is never reached.
+  * HostedProvider — the retired standalone OpenRouter/Together generator compatibility shell.
+    Provider/model validation and explicit-authorization denial remain fail-closed. Even with valid
+    configuration and authorization it raises ProviderPreflightError before any client, SDK, or
+    network boundary; the canonical traced qwen component is tested separately.
 
 Every test pins an edge/error. Until ``agentforge.agents.red_team.providers`` exists, every
 import below fails and this module RED-collects for the right reason.
@@ -262,11 +260,9 @@ def test_no_socket_opened_across_provider_paths(monkeypatch: pytest.MonkeyPatch)
     assert preflight_hosted_provider(config).ok is True
 
 
-def test_hosted_provider_never_imports_a_provider_sdk_at_module_load() -> None:
-    """The provider SDK import must be LAZY — inside the hosted call path only. Importing the
-    providers module (already done at collection) must NOT have imported an OpenRouter/Together/
-    OpenAI SDK. If none is installed, the property holds trivially; if one is, it must be absent
-    from ``sys.modules`` purely from importing the RT providers."""
+def test_retired_hosted_provider_imports_no_provider_sdk() -> None:
+    """The retired compatibility module has no SDK construction path. Importing it must not pull
+    an OpenRouter, Together, or OpenAI SDK into ``sys.modules``."""
     import sys
 
     import agentforge.agents.red_team.providers as providers_module  # noqa: F401
@@ -274,28 +270,39 @@ def test_hosted_provider_never_imports_a_provider_sdk_at_module_load() -> None:
     # The RT provider module import alone must not have pulled in a hosted SDK.
     for sdk in ("openai", "together", "openrouter"):
         assert sdk not in sys.modules, (
-            f"{sdk!r} was imported at RT-providers module load — the SDK import must be lazy, "
-            "inside the hosted call path, never at package import (and never in a test)"
+            f"{sdk!r} was imported by the retired RT-provider compatibility module"
         )
 
 
-def test_hosted_sdk_call_boundary_raises_if_ever_reached(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Belt-and-suspenders: patch the hosted provider's lazy SDK-client factory to RAISE, then
-    prove the authorization/preflight gates fire FIRST so the factory is never called."""
+def test_retired_hosted_generator_fails_preflight_before_client_or_network(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A valid, explicitly authorized legacy request still fails with the typed retirement
+    preflight before client construction, SDK use, or socket I/O."""
     config = HostedProviderConfig(
         provider="openrouter",
-        model="qwen/qwen-2.5-72b-instruct",
+        model="deepseek/deepseek-chat-v3-0324",
         credential_ref="env:OPENROUTER_API_KEY",
     )
-    provider = HostedProvider(config=config)  # unauthorized
+    provider = HostedProvider(config=config, authorized=True)
+    boundaries = {"client": 0, "socket": 0}
 
-    # If the hosted provider exposes a lazy client factory, break it so any real call explodes.
-    if hasattr(provider, "_build_client"):
+    def client_boom(*_args, **_kwargs):
+        boundaries["client"] += 1
+        raise AssertionError("retired hosted provider constructed a client")
 
-        def boom(*_args, **_kwargs):
-            raise AssertionError("hosted provider constructed an SDK client (would hit network)")
+    def socket_boom(*_args, **_kwargs):
+        boundaries["socket"] += 1
+        raise AssertionError("retired hosted provider opened a socket")
 
-        monkeypatch.setattr(provider, "_build_client", boom)
+    # Inject a client boundary even though production no longer defines one. If generate() ever
+    # regresses to discovering/calling it, this focused test fails before any real SDK is involved.
+    monkeypatch.setattr(provider, "_build_client", client_boom, raising=False)
+    monkeypatch.setattr(socket, "socket", socket_boom)
 
-    with pytest.raises(ProviderAuthorizationError):
+    with pytest.raises(
+        ProviderPreflightError, match="standalone HostedProvider generator is retired"
+    ):
         provider.generate(_seed_attempt(), count=1, category="prompt_injection")
+
+    assert boundaries == {"client": 0, "socket": 0}

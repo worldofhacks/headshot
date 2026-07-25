@@ -10,7 +10,10 @@ from typing import Any
 from fastapi.testclient import TestClient
 from sqlalchemy import Engine, text
 
-from agentforge.agents.hosted_prompts import hosted_prompt
+from agentforge.agents.hosted import HostedConfigurationSet
+from agentforge.agents.hosted_policy import DEFAULT_HOSTED_GENERATION_POLICY
+from agentforge.agents.prompts import load_prompt_registry
+from agentforge.agents.runtime import default_assignment
 from agentforge.api.postgres import PostgresApiBackend, _redact_evidence_display, _safe
 from agentforge.auth.config import ClerkAuthConfig
 from agentforge.auth.dependencies import get_clerk_auth_config, require_authenticated
@@ -28,6 +31,7 @@ ORIGIN = "https://staging.headshot.example"
 ORG_ID = "org_M1dApiFixture"
 LAUNCHER_ID = "user_M1dApiLauncher"
 APPROVER_ID = "user_M1dApiApprover"
+_PROMPTS = {record.role: record for record in load_prompt_registry()}
 
 
 def _headers(key: str) -> dict[str, str]:
@@ -150,7 +154,7 @@ def _hosted_configuration_payload() -> dict[str, Any]:
                 "credential_reference": (
                     f"secretref://staging/openrouter/{role}/generation-20260724"
                 ),
-                "prompt_sha256": hosted_prompt(role).prompt_sha256,
+                "prompt_sha256": _PROMPTS[role].sha256,
                 "policy_sha256": hashlib.sha256(f"{role}:policy".encode()).hexdigest(),
                 "prices": {
                     "input_usd_per_million_tokens": "1",
@@ -354,6 +358,7 @@ def test_agent_models_and_tool_scope_are_real_configurable_projections(
     principal = _principal(
         LAUNCHER_ID,
         "org:console:read",
+        "org:campaign:launch",
         "org:targets:manage",
         "org:config:manage",
     )
@@ -435,20 +440,107 @@ def test_agent_models_and_tool_scope_are_real_configurable_projections(
     assert staged_red_team["model"] == "qwen/qwen3.5-397b-a17b"
     assert staged_red_team["resolved_model"] is None
     assert staged_red_team["upstream_provider"] is None
-    assert staged_red_team["prompt_sha256"] == hosted_prompt("red_team").prompt_sha256
-    assert staged_red_team["prompt_version"] == hosted_prompt("red_team").version
+    red_team_prompt = _PROMPTS["red_team"]
+    assert staged_red_team["prompt_sha256"] == red_team_prompt.sha256
+    assert staged_red_team["prompt_version"] == red_team_prompt.version
     assert staged_red_team["configuration_sha256"] == configuration_sha256
     assert "system_prompt" not in staged_agents_response.text
 
-    prompt = client.get("/api/v1/agents/red_team/prompt")
+    targets_response = client.get("/api/v1/targets")
+    assert targets_response.status_code == 200
+    campaign_template = targets_response.json()["data"][0]["campaign_template"]
+    hosted_run = campaign_template["hosted_run"]
+    assert hosted_run == {
+        "configuration_set_sha256": configuration_sha256,
+        "generation_policy_sha256": DEFAULT_HOSTED_GENERATION_POLICY.policy_sha256,
+        "session_generation": "copilot-api",
+        "provider_model_call_limit": 56,
+        "provider_model_spend_limit_usd": "5",
+        "provider_max_retries": 1,
+        "provider_max_concurrency": 1,
+        "provider_timeout_seconds": 180.0,
+    }
+    assert "secretref://" not in targets_response.text
+    assert "credential_reference" not in targets_response.text
+    assert "claude-opus" not in targets_response.text
+
+    request_payload = {
+        "target_id": campaign_template["target_id"],
+        "target_version": campaign_template["target_version"],
+        "surface_id": campaign_template["surface_id"],
+        "surface_version": campaign_template["surface_version"],
+        "corpus_id": campaign_template["corpus_id"],
+        "corpus_hash": campaign_template["corpus_hash"],
+        "execution_profile": campaign_template["execution_profile"],
+        "caps": {
+            "budget_usd": 1.0,
+            "max_attempts_per_run": 1,
+            "target_requests_per_second": 0.5,
+            "run_timeout_seconds": 60.0,
+        },
+        "run_nonce": "hosted-template-nonce-0001",
+        "hosted_run": hosted_run,
+        "expires_in_seconds": 600,
+    }
+    substituted = client.post(
+        "/api/v1/campaign-authorization-requests",
+        json={
+            **request_payload,
+            "hosted_run": {
+                **hosted_run,
+                "generation_policy_sha256": "a" * 64,
+            },
+        },
+        headers=_headers("hosted-template-substitution-0001"),
+    )
+    assert substituted.status_code == 409
+    authorized = client.post(
+        "/api/v1/campaign-authorization-requests",
+        json=request_payload,
+        headers=_headers("hosted-template-authorization-0001"),
+    )
+    assert authorized.status_code == 200, authorized.text
+
+    prompt = client.get(
+        f"/api/v1/agent-prompts/red_team/{red_team_prompt.version}/{red_team_prompt.sha256}"
+        f"?configuration_set_sha256={configuration_sha256}"
+    )
     assert prompt.status_code == 200
     assert prompt.json()["state"] == "ready"
     assert prompt.json()["data"] == {
         "role": "red_team",
-        "prompt_version": hosted_prompt("red_team").version,
-        "prompt_sha256": hosted_prompt("red_team").prompt_sha256,
-        "system_prompt": hosted_prompt("red_team").system_prompt,
+        "prompt_version": red_team_prompt.version,
+        "prompt_sha256": red_team_prompt.sha256,
+        "system_prompt": red_team_prompt.content,
     }
+    assert client.get("/api/v1/agents/red_team/prompt").status_code == 404
+    judge_prompt = _PROMPTS["judge"]
+    mismatched_prompt = client.get(
+        f"/api/v1/agent-prompts/red_team/{judge_prompt.version}/{judge_prompt.sha256}"
+        f"?configuration_set_sha256={configuration_sha256}"
+    )
+    assert mismatched_prompt.status_code == 200
+    assert mismatched_prompt.json()["state"] == "empty"
+    assert "system_prompt" not in mismatched_prompt.text
+    other_organization = Principal(
+        user_id="user_OtherOrgConfigReader",
+        session_id="sess_OtherOrgConfigReader",
+        organization_id="org_OtherPromptTenant",
+        organization_role="org:operator",
+        organization_permissions=frozenset({"org:console:read", "org:config:manage"}),
+    )
+    cross_organization_prompt = backend.read(
+        "agent_prompt",
+        other_organization,
+        identifiers={
+            "agent_role": "red_team",
+            "prompt_version": red_team_prompt.version,
+            "prompt_sha256": red_team_prompt.sha256,
+            "configuration_sha256": configuration_sha256,
+        },
+    )
+    assert cross_organization_prompt.state == "empty"
+    assert cross_organization_prompt.data == []
     preflight = client.get(f"/api/v1/hosted-configuration-sets/{configuration_sha256}/preflight")
     assert preflight.status_code == 200
     assert preflight.json()["state"] == "degraded"
@@ -468,6 +560,439 @@ def test_agent_models_and_tool_scope_are_real_configurable_projections(
     )
     assert rejected.status_code == 503
     assert rejected.json()["reason_code"] == "atomic_hosted_configuration_set_required"
+
+    corrupted_configuration_sha256 = "e" * 64
+    with migrated_db.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO hosted_configuration_sets "
+                "(organization_id, configuration_sha256, schema_version, release_sha256, "
+                "payload, rationale, actor_user_id, actor_session_id) VALUES "
+                "(:org, :configuration, '1', :release, '{}'::jsonb, "
+                "'test-owned corrupt fixture', :user, :session)"
+            ),
+            {
+                "org": ORG_ID,
+                "configuration": corrupted_configuration_sha256,
+                "release": "d" * 64,
+                "user": LAUNCHER_ID,
+                "session": "sess_M1dApiLauncher",
+            },
+        )
+    corrupted_prompt = client.get(
+        f"/api/v1/agent-prompts/red_team/{red_team_prompt.version}/{red_team_prompt.sha256}"
+        f"?configuration_set_sha256={corrupted_configuration_sha256}"
+    )
+    assert corrupted_prompt.status_code == 200
+    assert corrupted_prompt.json()["state"] == "unavailable"
+    assert corrupted_prompt.json()["reason_code"] == "hosted_configuration_integrity_failed"
+    assert "system_prompt" not in corrupted_prompt.text
+
+
+def test_agent_activation_calibration_and_budget_follow_latest_authority(
+    migrated_db: Engine,
+) -> None:
+    """Historical hosted work cannot override a later deterministic restore."""
+
+    _clean(migrated_db)
+    organization_id = "org_M1dAgentAuthority"
+    configuration = HostedConfigurationSet.from_payload(_hosted_configuration_payload())
+    configuration_sha256 = configuration.configuration_sha256
+    judge_configuration = next(role for role in configuration.roles if role.role == "judge")
+    generation_policy_sha256 = DEFAULT_HOSTED_GENERATION_POLICY.policy_sha256
+    historical_calibration_id = f"JC-{'1' * 64}"
+    current_calibration_id = f"JC-{'2' * 64}"
+    deterministic = default_assignment("judge")
+    first_run = "run-hosted-authority-history"
+    first_request = "request-hosted-authority-history"
+    first_scope_hash = "1" * 64
+    with migrated_db.begin() as connection:
+        connection.execute(text("SET LOCAL session_replication_role = replica"))
+        connection.execute(
+            text(
+                "INSERT INTO hosted_configuration_sets "
+                "(organization_id, configuration_sha256, schema_version, release_sha256, "
+                "payload, rationale, actor_user_id, actor_session_id, created_at) VALUES "
+                "(:org, :configuration, '1', :release, CAST(:payload AS jsonb), "
+                "'Reviewed four-role hosted configuration.', :actor, :session, :created_at)"
+            ),
+            {
+                "org": organization_id,
+                "configuration": configuration_sha256,
+                "release": "a" * 64,
+                "payload": json.dumps(_hosted_configuration_payload()),
+                "actor": LAUNCHER_ID,
+                "session": "sess_M1dApiLauncher",
+                "created_at": datetime.datetime(2026, 7, 24, 9, tzinfo=datetime.UTC),
+            },
+        )
+        connection.execute(
+            text(
+                "INSERT INTO campaign_authorization_requests "
+                "(request_id, organization_id, scope_hash, scope_payload, launcher_user_id, "
+                "launcher_session_id, expires_at, created_at) VALUES "
+                "(:request, :org, :scope_hash, CAST(:scope AS jsonb), :actor, :session, "
+                ":expires_at, :created_at)"
+            ),
+            {
+                "request": first_request,
+                "org": organization_id,
+                "scope_hash": first_scope_hash,
+                "scope": json.dumps(
+                    {
+                        "execution_profile": "live",
+                        "hosted_run": {
+                            "configuration_set_sha256": configuration_sha256,
+                            "generation_policy_sha256": generation_policy_sha256,
+                        },
+                    }
+                ),
+                "actor": LAUNCHER_ID,
+                "session": "sess_M1dApiLauncher",
+                "expires_at": datetime.datetime(2026, 7, 25, tzinfo=datetime.UTC),
+                "created_at": datetime.datetime(2026, 7, 24, 9, 30, tzinfo=datetime.UTC),
+            },
+        )
+        connection.execute(
+            text(
+                "INSERT INTO campaign_runs "
+                "(run_id, organization_id, authorization_request_id, scope_hash, "
+                "launcher_user_id, launcher_session_id, created_at) VALUES "
+                "(:run, :org, :request, :scope_hash, :actor, :session, :created_at)"
+            ),
+            {
+                "run": first_run,
+                "org": organization_id,
+                "request": first_request,
+                "scope_hash": first_scope_hash,
+                "actor": LAUNCHER_ID,
+                "session": "sess_M1dApiLauncher",
+                "created_at": datetime.datetime(2026, 7, 24, 10, tzinfo=datetime.UTC),
+            },
+        )
+        connection.execute(
+            text(
+                "INSERT INTO campaign_run_events "
+                "(organization_id, run_id, state, created_at) "
+                "VALUES (:org, :run, 'complete', :created_at)"
+            ),
+            {
+                "org": organization_id,
+                "run": first_run,
+                "created_at": datetime.datetime(2026, 7, 24, 10, 30, tzinfo=datetime.UTC),
+            },
+        )
+        connection.execute(
+            text(
+                "INSERT INTO agent_executions "
+                "(execution_id, organization_id, campaign_run_id, agent_role, status, provider, "
+                "model, execution_mode, configuration_version, input_sha256, output_sha256, "
+                "returned_model, upstream_provider, provider_request_id, input_tokens, "
+                "output_tokens, reasoning_tokens, measured_cost, cost_measurement_state, "
+                "trace_id, "
+                "configuration_set_sha256, role_configuration_sha256, "
+                "generation_policy_sha256, physical_attempts, judge_calibration_id, "
+                "judge_calibration_state, oracle_agreement, decision_authority, "
+                "langfuse_status, detail, started_at, finished_at, duration_ms) VALUES "
+                "('judge-history', :org, :run, 'judge', 'succeeded', 'openrouter', :model, "
+                "'hosted_advisory', 1, :input_hash, :output_hash, :model, "
+                "'Google AI Studio', 'provider-request-history', 100, 20, 5, 0.2, "
+                "'partial', :trace, :configuration, :role_configuration, :generation_policy, 1, "
+                ":calibration, 'enabled', true, 'model', 'disabled', "
+                '\'{"provider_lineage_state":"historical_not_instrumented"}\'::jsonb, '
+                ":started_at, :finished_at, 1000)"
+            ),
+            {
+                "org": organization_id,
+                "run": first_run,
+                "model": judge_configuration.model_id,
+                "input_hash": "2" * 64,
+                "output_hash": "3" * 64,
+                "trace": "4" * 32,
+                "configuration": configuration_sha256,
+                "role_configuration": judge_configuration.configuration_sha256,
+                "generation_policy": generation_policy_sha256,
+                "calibration": historical_calibration_id,
+                "started_at": datetime.datetime(2026, 7, 24, 10, 5, tzinfo=datetime.UTC),
+                "finished_at": datetime.datetime(2026, 7, 24, 10, 5, 1, tzinfo=datetime.UTC),
+            },
+        )
+        connection.execute(
+            text(
+                "INSERT INTO agent_configuration_versions "
+                "(organization_id, agent_role, version, provider, model, execution_mode, "
+                "activation_state, configuration_sha256, rationale, actor_user_id, "
+                "actor_session_id, created_at) VALUES "
+                "(:org, 'judge', 1, :provider, :model, 'deterministic', 'active', "
+                ":configuration, 'Restore deterministic authority.', :actor, :session, "
+                ":created_at)"
+            ),
+            {
+                "org": organization_id,
+                "provider": deterministic.provider,
+                "model": deterministic.model,
+                "configuration": deterministic.configuration_sha256,
+                "actor": LAUNCHER_ID,
+                "session": "sess_M1dApiLauncher",
+                "created_at": datetime.datetime(2026, 7, 24, 11, tzinfo=datetime.UTC),
+            },
+        )
+
+    client = TestClient(_app_for(migrated_db, _reader(organization_id)))
+    restored_judge = next(
+        row for row in client.get("/api/v1/agents").json()["data"] if row["role"] == "judge"
+    )
+    assert restored_judge["active_assignment"]["execution_mode"] == "deterministic"
+    assert restored_judge["active_assignment"]["model"] == "oracle-precedence-v1"
+    assert restored_judge["judge_calibration"] == {
+        "state": "unavailable",
+        "calibration_id": None,
+        "decision_authority": "none",
+        "oracle_comparison_count": 0,
+        "oracle_agreement_count": 0,
+        "oracle_agreement_rate": None,
+        "status_label": "not yet measured",
+    }
+
+    current_run = "run-hosted-authority-current"
+    current_request = "request-hosted-authority-current"
+    current_scope_hash = "5" * 64
+    current_invocation_ids = ("b" * 64, "c" * 64)
+    current_event_ids = ("d" * 64, "e" * 64)
+    with migrated_db.begin() as connection:
+        connection.execute(text("SET LOCAL session_replication_role = replica"))
+        connection.execute(
+            text(
+                "INSERT INTO campaign_authorization_requests "
+                "(request_id, organization_id, scope_hash, scope_payload, launcher_user_id, "
+                "launcher_session_id, expires_at, created_at) VALUES "
+                "(:request, :org, :scope_hash, CAST(:scope AS jsonb), :actor, :session, "
+                ":expires_at, :created_at)"
+            ),
+            {
+                "request": current_request,
+                "org": organization_id,
+                "scope_hash": current_scope_hash,
+                "scope": json.dumps(
+                    {
+                        "execution_profile": "live",
+                        "hosted_run": {
+                            "configuration_set_sha256": configuration_sha256,
+                            "generation_policy_sha256": generation_policy_sha256,
+                        },
+                    }
+                ),
+                "actor": LAUNCHER_ID,
+                "session": "sess_M1dApiLauncher",
+                "expires_at": datetime.datetime(2026, 7, 25, tzinfo=datetime.UTC),
+                "created_at": datetime.datetime(2026, 7, 24, 11, 30, tzinfo=datetime.UTC),
+            },
+        )
+        connection.execute(
+            text(
+                "INSERT INTO campaign_runs "
+                "(run_id, organization_id, authorization_request_id, scope_hash, "
+                "launcher_user_id, launcher_session_id, created_at) VALUES "
+                "(:run, :org, :request, :scope_hash, :actor, :session, :created_at)"
+            ),
+            {
+                "run": current_run,
+                "org": organization_id,
+                "request": current_request,
+                "scope_hash": current_scope_hash,
+                "actor": LAUNCHER_ID,
+                "session": "sess_M1dApiLauncher",
+                "created_at": datetime.datetime(2026, 7, 24, 12, tzinfo=datetime.UTC),
+            },
+        )
+        connection.execute(
+            text(
+                "INSERT INTO campaign_run_events "
+                "(organization_id, run_id, state, created_at) "
+                "VALUES (:org, :run, 'running', :created_at)"
+            ),
+            {
+                "org": organization_id,
+                "run": current_run,
+                "created_at": datetime.datetime(2026, 7, 24, 12, 1, tzinfo=datetime.UTC),
+            },
+        )
+        connection.execute(
+            text(
+                "INSERT INTO agent_executions "
+                "(execution_id, organization_id, campaign_run_id, agent_role, status, provider, "
+                "model, execution_mode, configuration_version, input_sha256, output_sha256, "
+                "returned_model, upstream_provider, provider_request_id, input_tokens, "
+                "output_tokens, reasoning_tokens, measured_cost, cost_measurement_state, "
+                "provider_event_ids, provider_event_status, trace_id, "
+                "configuration_set_sha256, role_configuration_sha256, "
+                "generation_policy_sha256, physical_attempts, judge_calibration_id, "
+                "judge_calibration_state, oracle_agreement, decision_authority, "
+                "langfuse_status, detail, started_at, finished_at, duration_ms) VALUES "
+                "('judge-current-measured', :org, :run, 'judge', 'succeeded', 'openrouter', "
+                ":model, 'hosted_advisory', 1, :input_hash, :output_hash, :model, "
+                "'Google AI Studio', 'provider-request-current', 100, 20, 5, 0.1, "
+                "'measured', CAST(:event_ids AS jsonb), 'succeeded', :trace, "
+                ":configuration, :role_configuration, :generation_policy, 2, "
+                ":calibration, 'failed', false, 'oracle', 'disabled', "
+                '\'{"provider_lineage_state":"canonical_physical"}\'::jsonb, '
+                ":started_at, :finished_at, 1000), "
+                "('judge-current-running', :org, :run, 'judge', 'running', 'openrouter', "
+                ":model, 'hosted_advisory', 1, :running_input_hash, NULL, NULL, NULL, NULL, "
+                "NULL, NULL, NULL, NULL, 'not_observed', '[]'::jsonb, NULL, :running_trace, "
+                ":configuration, :role_configuration, :generation_policy, NULL, :calibration, "
+                "'failed', NULL, NULL, 'queued', "
+                '\'{"provider_lineage_state":"canonical_physical"}\'::jsonb, '
+                ":running_started_at, NULL, NULL)"
+            ),
+            {
+                "org": organization_id,
+                "run": current_run,
+                "model": judge_configuration.model_id,
+                "input_hash": "6" * 64,
+                "output_hash": "7" * 64,
+                "event_ids": json.dumps(list(current_event_ids)),
+                "trace": "8" * 32,
+                "running_input_hash": "9" * 64,
+                "running_trace": "a" * 32,
+                "configuration": configuration_sha256,
+                "role_configuration": judge_configuration.configuration_sha256,
+                "generation_policy": generation_policy_sha256,
+                "calibration": current_calibration_id,
+                "started_at": datetime.datetime(2026, 7, 24, 12, 5, tzinfo=datetime.UTC),
+                "finished_at": datetime.datetime(2026, 7, 24, 12, 5, 1, tzinfo=datetime.UTC),
+                "running_started_at": datetime.datetime(
+                    2026,
+                    7,
+                    24,
+                    12,
+                    6,
+                    tzinfo=datetime.UTC,
+                ),
+            },
+        )
+        connection.execute(
+            text(
+                "INSERT INTO provider_call_invocations "
+                "(invocation_id, organization_id, campaign_run_id, campaign_attempt_id, "
+                "logical_execution_id, parent_execution_id, agent_role, physical_sequence, "
+                "idempotency_key, requested_model, configured_upstream, prompt_version, "
+                "prompt_sha256, configuration_set_sha256, role_configuration_sha256, "
+                "generation_policy_sha256, started_at) VALUES "
+                "(:invocation_one, :org, :run, NULL, 'judge-current-measured', NULL, "
+                "'judge', 1, :idempotency_one, :model, 'google-vertex', :prompt_version, "
+                ":prompt_sha256, :configuration, :role_configuration, :generation_policy, "
+                ":started_at), "
+                "(:invocation_two, :org, :run, NULL, 'judge-current-measured', NULL, "
+                "'judge', 2, :idempotency_two, :model, 'google-vertex', :prompt_version, "
+                ":prompt_sha256, :configuration, :role_configuration, :generation_policy, "
+                ":retry_started_at)"
+            ),
+            {
+                "invocation_one": current_invocation_ids[0],
+                "invocation_two": current_invocation_ids[1],
+                "idempotency_one": f"provider-call:{current_invocation_ids[0]}",
+                "idempotency_two": f"provider-call:{current_invocation_ids[1]}",
+                "org": organization_id,
+                "run": current_run,
+                "model": judge_configuration.model_id,
+                "prompt_version": _PROMPTS["judge"].version,
+                "prompt_sha256": _PROMPTS["judge"].sha256,
+                "configuration": configuration_sha256,
+                "role_configuration": judge_configuration.configuration_sha256,
+                "generation_policy": generation_policy_sha256,
+                "started_at": datetime.datetime(2026, 7, 24, 12, 4, 59, tzinfo=datetime.UTC),
+                "retry_started_at": datetime.datetime(
+                    2026,
+                    7,
+                    24,
+                    12,
+                    4,
+                    59,
+                    500000,
+                    tzinfo=datetime.UTC,
+                ),
+            },
+        )
+        connection.execute(
+            text(
+                "INSERT INTO provider_call_events "
+                "(event_id, invocation_id, organization_id, campaign_run_id, "
+                "campaign_attempt_id, logical_execution_id, agent_role, physical_sequence, "
+                "status, returned_model, upstream_provider, provider_request_id, "
+                "input_tokens, output_tokens, reasoning_tokens, cost_measurement_state, "
+                "measured_cost_usd, error_code, finished_at, duration_ms) VALUES "
+                "(:event_one, :invocation_one, :org, :run, NULL, "
+                "'judge-current-measured', 'judge', 1, 'retryable_failure', :model, "
+                "'Google AI Studio', 'provider-request-current-retry', 40, 5, 2, "
+                "'measured', 0.04, 'provider_retryable', :retry_finished_at, 400), "
+                "(:event_two, :invocation_two, :org, :run, NULL, "
+                "'judge-current-measured', 'judge', 2, 'succeeded', :model, "
+                "'Google AI Studio', 'provider-request-current', 60, 15, 3, "
+                "'measured', 0.06, NULL, :finished_at, 500)"
+            ),
+            {
+                "event_one": current_event_ids[0],
+                "event_two": current_event_ids[1],
+                "invocation_one": current_invocation_ids[0],
+                "invocation_two": current_invocation_ids[1],
+                "org": organization_id,
+                "run": current_run,
+                "model": judge_configuration.model_id,
+                "retry_finished_at": datetime.datetime(
+                    2026,
+                    7,
+                    24,
+                    12,
+                    4,
+                    59,
+                    400000,
+                    tzinfo=datetime.UTC,
+                ),
+                "finished_at": datetime.datetime(2026, 7, 24, 12, 5, tzinfo=datetime.UTC),
+            },
+        )
+
+    agents = client.get("/api/v1/agents").json()
+    assert agents["state"] == "ready", agents
+    judge = next(row for row in agents["data"] if row["role"] == "judge")
+    assert judge["active_assignment"]["execution_mode"] == "hosted_advisory"
+    assert judge["active_assignment"]["configuration_sha256"] == configuration_sha256
+    assert judge["active_assignment"]["resolved_model"] == judge_configuration.model_id
+    assert judge["active_assignment"]["upstream_provider"] == "Google AI Studio"
+    assert judge["judge_calibration"] == {
+        "state": "failed",
+        "calibration_id": current_calibration_id,
+        "decision_authority": "oracle",
+        "oracle_comparison_count": 1,
+        "oracle_agreement_count": 0,
+        "oracle_agreement_rate": 0.0,
+        "status_label": "live, verified against oracle",
+    }
+
+    budget = judge["provider_budget"]
+    assert budget["status"] == "active"
+    assert budget["role_physical_calls"] == 2
+    assert budget["role_unresolved_physical_calls"] == 2
+    assert budget["role_calls_remaining"] == 15
+    assert abs(budget["role_unresolved_usd_exposure"] - 0.257344) < 1e-9
+    assert abs(budget["role_usd_remaining"] - 2.142656) < 1e-9
+    assert budget["global_physical_calls"] == 2
+    assert budget["global_unresolved_physical_calls"] == 2
+    assert budget["global_calls_remaining"] == 52
+    assert abs(budget["global_unresolved_usd_exposure"] - 0.257344) < 1e-9
+    assert abs(budget["global_usd_remaining"] - 4.642656) < 1e-9
+
+    costs = client.get("/api/v1/costs").json()
+    assert costs["state"] == "ready", costs
+    judge_costs = {
+        row["campaign_id"]: row
+        for row in costs["data"]
+        if row["record_kind"] == "agent" and row["agent_role"] == "judge"
+    }
+    assert judge_costs[first_run]["provider_budget"]["status"] == "historical"
+    assert judge_costs[current_run]["provider_budget"]["status"] == "active"
+    assert judge_costs[current_run]["provider_budget"]["role_unresolved_physical_calls"] == 2
 
 
 def test_tooling_does_not_count_scheduled_attempt_without_authoritative_result(
@@ -920,13 +1445,13 @@ def test_hosted_authorization_is_bound_but_launch_stays_unavailable_until_compos
             },
             "hosted_run": {
                 "configuration_set_sha256": configuration_sha256,
-                "generation_policy_sha256": "d" * 64,
-                "session_generation": "generation-20260724",
+                "generation_policy_sha256": DEFAULT_HOSTED_GENERATION_POLICY.policy_sha256,
+                "session_generation": "copilot-api",
                 "provider_model_call_limit": 56,
                 "provider_model_spend_limit_usd": "5",
                 "provider_max_retries": 1,
                 "provider_max_concurrency": 1,
-                "provider_timeout_seconds": 30.0,
+                "provider_timeout_seconds": 180.0,
             },
             "expires_in_seconds": 600,
         },
@@ -941,13 +1466,13 @@ def test_hosted_authorization_is_bound_but_launch_stays_unavailable_until_compos
     )
     assert approval_scope["hosted_run"] == {
         "configuration_set_sha256": configuration_sha256,
-        "generation_policy_sha256": "d" * 64,
-        "session_generation": "generation-20260724",
+        "generation_policy_sha256": DEFAULT_HOSTED_GENERATION_POLICY.policy_sha256,
+        "session_generation": "copilot-api",
         "provider_model_call_limit": 56,
         "provider_model_spend_limit_usd": "5",
         "provider_max_retries": 1,
         "provider_max_concurrency": 1,
-        "provider_timeout_seconds": 30.0,
+        "provider_timeout_seconds": 180.0,
     }
     assert "credential_ref" not in json.dumps(approval_scope)
     preflight = client.get(f"/api/v1/campaign-authorization-requests/{request_id}/preflight")
@@ -1167,17 +1692,59 @@ def test_target_projection_is_org_scoped_and_never_returns_credential_reference(
     assert "secretref://" not in response.text
 
 
-def test_browser_target_and_surface_authoring_remain_unavailable_without_trusted_catalog(
+def test_browser_registers_only_an_exact_server_owned_catalog_bundle(
     migrated_db: Engine,
 ) -> None:
     _clean(migrated_db)
     manager = _principal(LAUNCHER_ID, "org:console:read", "org:targets:manage")
     client = TestClient(_app(migrated_db, manager))
 
-    target = client.post(
+    catalog = client.get("/api/v1/target-catalog")
+    assert catalog.status_code == 200
+    assert catalog.json()["state"] == "ready"
+    assert catalog.json()["data"] == [
+        {
+            "target_id": "synthetic-copilot",
+            "version": "1.1.0",
+            "name": "Deterministic offline Clinical Co-Pilot rehearsal",
+            "environment": "staging",
+            "synthetic_data_only": True,
+            "surface_count": 1,
+            "registration_state": "available",
+        }
+    ]
+    for forbidden in (
+        "synthetic.invalid",
+        "openemr",
+        "authorization://",
+        "oracle://",
+        "secretref://",
+        "base_url",
+        "allowlisted_hosts",
+        "adapter_kind",
+        "credential_ref",
+    ):
+        assert forbidden not in catalog.text
+
+    browser_authority = client.post(
         "/api/v1/targets",
         json=_target_payload(),
         headers=_headers("browser-target-authoring-0001"),
+    )
+    target = client.post(
+        "/api/v1/targets",
+        json={"target_id": "synthetic-copilot", "version": "1.1.0"},
+        headers=_headers("catalog-target-registration-0001"),
+    )
+    repeated = client.post(
+        "/api/v1/targets",
+        json={"target_id": "synthetic-copilot", "version": "1.1.0"},
+        headers=_headers("catalog-target-registration-0001"),
+    )
+    duplicate_selection = client.post(
+        "/api/v1/targets",
+        json={"target_id": "synthetic-copilot", "version": "1.1.0"},
+        headers=_headers("catalog-target-registration-0002"),
     )
     surface = client.post(
         "/api/v1/targets/copilot-api/surfaces",
@@ -1185,15 +1752,38 @@ def test_browser_target_and_surface_authoring_remain_unavailable_without_trusted
         headers=_headers("browser-surface-authoring-0001"),
     )
 
-    assert target.status_code == 503
-    assert target.json()["reason_code"] == "trusted_target_authoring_catalog_missing"
+    assert browser_authority.status_code == 422
+    assert target.status_code == 200
+    assert target.json() == {
+        "status": "completed",
+        "acknowledgement_id": "1.1.0",
+        "resource_id": "synthetic-copilot",
+    }
+    assert repeated.json() == target.json()
+    assert duplicate_selection.status_code == 409
     assert surface.status_code == 503
     assert surface.json()["reason_code"] == "trusted_surface_authoring_catalog_missing"
+    registered = client.get("/api/v1/target-catalog")
+    assert registered.json()["data"][0]["registration_state"] == "registered"
     with migrated_db.connect() as connection:
-        assert connection.execute(text("SELECT count(*) FROM target_definitions")).scalar_one() == 0
+        assert connection.execute(text("SELECT count(*) FROM target_definitions")).scalar_one() == 1
         assert (
             connection.execute(text("SELECT count(*) FROM attack_surface_definitions")).scalar_one()
-            == 0
+            == 1
+        )
+        assert (
+            connection.execute(
+                text("SELECT to_lifecycle FROM target_lifecycle_events ORDER BY id DESC LIMIT 1")
+            ).scalar_one()
+            == "ready"
+        )
+        assert (
+            connection.execute(
+                text(
+                    "SELECT actor_user_id FROM audit_events WHERE event_type = 'target.registered'"
+                )
+            ).scalar_one()
+            == LAUNCHER_ID
         )
 
 
@@ -1397,6 +1987,7 @@ def test_attempt_evidence_identifier_ambiguity_fails_closed(migrated_db: Engine)
 def test_authoritative_coverage_is_empty_without_verified_persisted_evidence(
     migrated_db: Engine,
 ) -> None:
+    _clean(migrated_db)
     viewer = _principal(
         LAUNCHER_ID,
         "org:console:read",
@@ -1407,6 +1998,145 @@ def test_authoritative_coverage_is_empty_without_verified_persisted_evidence(
 
     assert response.status_code == 200
     assert response.json() == {"state": "empty", "data": []}
+
+
+def test_coverage_and_resilience_project_one_authoritative_regression(
+    migrated_db: Engine,
+) -> None:
+    """The merged console surface keeps distinct evidence and regression projections."""
+
+    _clean(migrated_db)
+    viewer = _principal(
+        LAUNCHER_ID,
+        "org:console:read",
+        "org:findings:read",
+        "org:campaign:launch",
+        "org:targets:manage",
+    )
+    _seed_ready_target(migrated_db, viewer)
+    run, _, scope = _seed_scheduled_tool_attempt(migrated_db, viewer)
+    regression = ControlPlaneStore(
+        migrated_db,
+        environment="staging",
+    ).ensure_campaign_attempt(
+        run_id=run.run_id,
+        ordinal=1,
+        case_id="regression-prompt-injection-0001",
+        case_content_hash="e" * 64,
+        category="prompt_injection",
+        severity="high",
+        attack_class="regression",
+        owasp_mappings=[
+            {
+                "framework": "OWASP LLM",
+                "version": "2025",
+                "id": "LLM01",
+                "name": "Prompt Injection",
+            }
+        ],
+        fixture_provenance={
+            "classification": "synthetic",
+            "fixture_id": "coverage-regression-api-fixture",
+            "fixture_version": "1.0.0",
+            "source": "hand_authored",
+            "contains_real_phi": False,
+        },
+    )
+    client = TestClient(_app(migrated_db, viewer))
+
+    pending_coverage = client.get("/api/v1/coverage")
+    pending_regressions = client.get("/api/v1/resilience")
+
+    assert pending_coverage.status_code == 200
+    assert pending_coverage.json() == {"state": "empty", "data": []}
+    assert pending_regressions.status_code == 200
+    pending_body = pending_regressions.json()
+    assert pending_body["state"] == "ready"
+    assert len(pending_body["data"]) == 1
+    pending_row = pending_body["data"][0]
+    assert set(pending_row) == {"regression_id", "version", "status", "recorded_at"}
+    assert pending_row["regression_id"] == regression.attempt_id
+    assert pending_row["version"] == "copilot-api@1.0.0"
+    assert pending_row["status"] == "pending"
+    assert pending_row["recorded_at"]
+
+    executed_at = "2026-07-24T12:00:00+00:00"
+    with migrated_db.begin() as connection:
+        ExecutionRecorder().record(
+            {
+                "schema_version": "1",
+                "campaign_run_id": run.run_id,
+                "attempt_id": regression.attempt_id,
+                "campaign_id": run.run_id,
+                "target_id": scope.target_id,
+                "target_version": scope.target_version,
+                "attack_attempt": {
+                    "schema_version": "1",
+                    "case_ref": "regression-prompt-injection-0001",
+                    "input_sequence": ["Replay the approved synthetic regression fixture."],
+                    "category": "prompt_injection",
+                },
+                "request_transcript": {
+                    "turns": ["Replay the approved synthetic regression fixture."]
+                },
+                "response_transcript": "Synthetic regression response.",
+                "policy_decision_id": "regression-policy-decision-0001",
+                "executed_at": executed_at,
+                "trace_id": None,
+                "correlation_id": run.run_id,
+                "recorder_identity": "recorder@1",
+                "recorder_version": "1",
+                "organization_id": ORG_ID,
+                "surface_id": scope.surface_id,
+                "surface_version": scope.surface_version,
+                "authorization_scope_hash": run.scope_hash,
+                "execution_profile": "live",
+                "evidence_provenance": "live_target",
+            },
+            connection,
+        )
+        connection.execute(
+            text(
+                "INSERT INTO verdict "
+                "(state, confidence, campaign_run_id, attempt_id, organization_id, "
+                "reason_codes) VALUES "
+                "('NO_EXPLOIT_OBSERVED', 1.0, :run, :attempt, :org, "
+                "'[\"regression_passed\"]'::jsonb)"
+            ),
+            {
+                "org": ORG_ID,
+                "run": run.run_id,
+                "attempt": regression.attempt_id,
+            },
+        )
+
+    coverage = client.get("/api/v1/coverage")
+    regressions = client.get("/api/v1/resilience")
+
+    assert coverage.status_code == 200
+    coverage_body = coverage.json()
+    assert coverage_body["state"] == "ready"
+    assert coverage_body["data"] == [
+        {
+            "target_version": "copilot-api@1.0.0",
+            "verified_attempt_count": 1,
+            "total_case_count": 1,
+            "category_count": 1,
+            "execution_profile": "live",
+            "evidence_provenance": "live_target",
+            "classifications": ["regression"],
+            "owasp_web": [],
+            "owasp_llm": ["LLM01"],
+            "verdict_counts": {"NO_EXPLOIT_OBSERVED": 1},
+            "covered": False,
+            "as_of": coverage_body["data"][0]["as_of"],
+        }
+    ]
+    assert regressions.status_code == 200
+    regression_body = regressions.json()
+    assert regression_body["state"] == "ready"
+    assert regression_body["data"][0]["regression_id"] == regression.attempt_id
+    assert regression_body["data"][0]["status"] == "NO_EXPLOIT_OBSERVED"
 
 
 # --- Cost & trace read-model projections (M1d live-console pages) ----------------------------
@@ -1544,12 +2274,14 @@ def _seed_agent_observations(engine: Engine, org_id: str, run_id: str) -> None:
                     "(execution_id, organization_id, campaign_run_id, attempt_id, "
                     "parent_execution_id, agent_role, status, provider, model, execution_mode, "
                     "configuration_version, input_sha256, output_sha256, input_tokens, "
-                    "output_tokens, measured_cost, trace_id, langfuse_status, "
+                    "output_tokens, measured_cost, cost_measurement_state, "
+                    "trace_id, langfuse_status, "
                     "langfuse_verified_at, detail, "
                     "started_at, finished_at, duration_ms) VALUES "
                     "(:execution, :org, :run, :attempt, :parent, :role, 'succeeded', "
                     "'headshot', :model, 'deterministic', 1, :input_hash, :output_hash, "
-                    ":input_tokens, :output_tokens, :cost, :trace, :langfuse_status, "
+                    ":input_tokens, :output_tokens, :cost, 'measured', "
+                    ":trace, :langfuse_status, "
                     "CASE WHEN :langfuse_verified "
                     "THEN TIMESTAMPTZ '2026-07-21 10:00:02+00' ELSE NULL END, "
                     "'{}'::jsonb, TIMESTAMPTZ '2026-07-21 10:00:00+00' + "
@@ -1622,6 +2354,8 @@ def test_agent_observability_reconciles_agents_costs_and_traces(
     agent_traces = [row for row in traces["data"] if row["agent_role"] is not None]
     assert len(agent_traces) == 4
     red_team_trace = next(row for row in agent_traces if row["agent_role"] == "red_team")
+    assert red_team_trace["provider"] == "headshot"
+    assert red_team_trace["model"] == "red_team-engine-v1"
     assert red_team_trace["parent_execution_id"] == "agent-observation-orchestrator"
     assert red_team_trace["duration_ms"] == 50.0
     assert red_team_trace["measured_cost"] == 0.02
@@ -1644,11 +2378,12 @@ def test_agent_role_percentiles_use_full_tenant_campaign_ledger_before_trace_lim
                 "INSERT INTO agent_executions "
                 "(execution_id, organization_id, campaign_run_id, agent_role, status, "
                 "provider, model, execution_mode, configuration_version, input_sha256, "
-                "output_sha256, measured_cost, trace_id, detail, started_at, finished_at, "
-                "duration_ms) "
+                "output_sha256, measured_cost, cost_measurement_state, trace_id, detail, "
+                "started_at, finished_at, duration_ms) "
                 "SELECT 'role-latency-' || series::text, :org, :run, 'red_team', "
                 "'succeeded', 'headshot', 'full-scan-corpus-v1', 'deterministic', 1, "
-                "repeat('a', 64), repeat('b', 64), 0, repeat('c', 32), '{}'::jsonb, "
+                "repeat('a', 64), repeat('b', 64), 0, 'measured', repeat('c', 32), "
+                "'{}'::jsonb, "
                 "TIMESTAMPTZ '2026-07-21 10:00:00+00' + series * INTERVAL '1 second', "
                 "TIMESTAMPTZ '2026-07-21 10:00:01+00' + series * INTERVAL '1 second', "
                 "CASE WHEN series <= 100 THEN 10000 ELSE 10 END "
@@ -1694,7 +2429,10 @@ def test_agent_activity_exposes_row_level_hosted_accounting_status(
                     "input_tokens": 120,
                     "output_tokens": 30,
                     "physical_attempts": None,
+                    "provider_event_ids": [],
+                    "provider_event_status": None,
                     "cost": 0.012,
+                    "cost_state": "measured",
                 },
                 {
                     "execution": "hosted-agent-unaccounted",
@@ -1703,7 +2441,10 @@ def test_agent_activity_exposes_row_level_hosted_accounting_status(
                     "input_tokens": None,
                     "output_tokens": None,
                     "physical_attempts": None,
-                    "cost": 0,
+                    "provider_event_ids": [],
+                    "provider_event_status": None,
+                    "cost": None,
+                    "cost_state": "not_observed",
                 },
                 {
                     "execution": "hosted-agent-partial",
@@ -1712,7 +2453,10 @@ def test_agent_activity_exposes_row_level_hosted_accounting_status(
                     "input_tokens": None,
                     "output_tokens": None,
                     "physical_attempts": 2,
+                    "provider_event_ids": ["e" * 64, "f" * 64],
+                    "provider_event_status": "retryable_failure",
                     "cost": 0,
+                    "cost_state": "partial",
                 },
             ),
             start=1,
@@ -1723,17 +2467,22 @@ def test_agent_activity_exposes_row_level_hosted_accounting_status(
                     "(execution_id, organization_id, campaign_run_id, agent_role, status, "
                     "provider, model, execution_mode, configuration_version, input_sha256, "
                     "output_sha256, input_tokens, output_tokens, physical_attempts, "
-                    "measured_cost, trace_id, detail, "
+                    "provider_event_ids, provider_event_status, measured_cost, "
+                    "cost_measurement_state, "
+                    "trace_id, detail, "
                     "started_at, finished_at, duration_ms) VALUES "
                     "(:execution, :org, :run, :role, :status, 'openrouter', "
                     "'provider/model', 'hosted_advisory', 1, :input_hash, :output_hash, "
-                    ":input_tokens, :output_tokens, :physical_attempts, :cost, :trace, "
-                    "'{}'::jsonb, "
+                    ":input_tokens, :output_tokens, :physical_attempts, "
+                    "CAST(:provider_event_ids AS JSONB), :provider_event_status, "
+                    ":cost, :cost_state, :trace, "
+                    '\'{"provider_lineage_state":"canonical_physical"}\'::jsonb, '
                     "TIMESTAMPTZ '2026-07-21 10:00:00+00' + :index * INTERVAL '1 second', "
                     "TIMESTAMPTZ '2026-07-21 10:00:01+00' + :index * INTERVAL '1 second', 25)"
                 ),
                 {
                     **accounting,
+                    "provider_event_ids": json.dumps(accounting["provider_event_ids"]),
                     "org": org_id,
                     "run": run_id,
                     "input_hash": f"{index:x}" * 64,
@@ -1751,27 +2500,47 @@ def test_agent_activity_exposes_row_level_hosted_accounting_status(
     assert activity_by_id["hosted-agent-accounted"]["accounting_status"] == "measured"
     assert activity_by_id["hosted-agent-accounted"]["measured_cost"] == 0.012
     assert activity_by_id["hosted-agent-unaccounted"]["accounting_status"] == "unavailable"
-    assert activity_by_id["hosted-agent-unaccounted"]["measured_cost"] == 0
+    assert activity_by_id["hosted-agent-unaccounted"]["measured_cost"] is None
     assert activity_by_id["hosted-agent-partial"]["accounting_status"] == "partial"
     assert activity_by_id["hosted-agent-partial"]["physical_attempts"] == 2
 
     agents = {row["role"]: row for row in client.get("/api/v1/agents").json()["data"]}
     assert agents["orchestrator"]["accounting_status"] == "partial"
     assert agents["orchestrator"]["physical_call_count"] == 2
+    assert agents["documentation"]["accounting_status"] == "unavailable"
+    assert agents["documentation"]["measured_cost"] is None
     agent_cost = next(
         row
         for row in client.get("/api/v1/costs").json()["data"]
         if row["record_kind"] == "agent" and row["agent_role"] == "orchestrator"
     )
     assert agent_cost["accounting_status"] == "partial"
+    assert agent_cost["measured_cost"] == 0
     assert agent_cost["physical_call_count"] == 2
+    assert agent_cost["average_cost_per_request"] is None
+    unavailable_cost = next(
+        row
+        for row in client.get("/api/v1/costs").json()["data"]
+        if row["record_kind"] == "agent" and row["agent_role"] == "documentation"
+    )
+    assert unavailable_cost["accounting_status"] == "unavailable"
+    assert unavailable_cost["measured_cost"] is None
+    assert unavailable_cost["average_cost_per_request"] is None
     agent_trace = next(
         row
         for row in client.get("/api/v1/traces").json()["data"]
         if row["execution_id"] == "hosted-agent-partial"
     )
     assert agent_trace["accounting_status"] == "partial"
+    assert agent_trace["measured_cost"] == 0
     assert agent_trace["physical_attempts"] == 2
+    unavailable_trace = next(
+        row
+        for row in client.get("/api/v1/traces").json()["data"]
+        if row["execution_id"] == "hosted-agent-unaccounted"
+    )
+    assert unavailable_trace["accounting_status"] == "unavailable"
+    assert unavailable_trace["measured_cost"] is None
 
 
 def test_costs_projection_is_empty_for_org_without_persisted_summaries(
@@ -1802,8 +2571,11 @@ def test_costs_projection_is_ready_from_persisted_run_summary(migrated_db: Engin
         "provider",
         "agent_role",
         "record_kind",
+        "execution_mode",
         "measured_cost",
+        "cost_measurement_state",
         "accounting_status",
+        "provider_event_ids",
         "currency",
         "request_count",
         "execution_count",
@@ -1815,6 +2587,7 @@ def test_costs_projection_is_ready_from_persisted_run_summary(migrated_db: Engin
         "reasoning_tokens",
         "token_observation_count",
         "physical_call_count",
+        "physical_call_count_state",
         "provider_budget",
         "p50_duration_ms",
         "p95_duration_ms",
@@ -1834,7 +2607,9 @@ def test_costs_projection_is_ready_from_persisted_run_summary(migrated_db: Engin
     # Numeric(14,6) must be projected as a JSON number, never a stringified Decimal.
     assert isinstance(row["measured_cost"], (int, float))
     assert row["measured_cost"] == 1.234567
+    assert row["cost_measurement_state"] == "measured"
     assert row["accounting_status"] == "measured"
+    assert row["provider_event_ids"] == []
     assert row["p50_duration_ms"] is None
     assert row["p95_duration_ms"] is None
     assert row["currency"] == "USD"
@@ -1887,9 +2662,12 @@ def test_traces_projection_is_ready_from_persisted_attempt_and_verdict(
         "attempt_id",
         "operation",
         "provider",
+        "model",
         "agent_role",
         "execution_mode",
+        "requested_model",
         "returned_model",
+        "model_substituted",
         "upstream_provider",
         "provider_request_id",
         "configuration_set_sha256",
@@ -1908,7 +2686,11 @@ def test_traces_projection_is_ready_from_persisted_attempt_and_verdict(
         "request_bytes",
         "response_bytes",
         "measured_cost",
+        "cost_measurement_state",
         "accounting_status",
+        "provider_event_ids",
+        "provider_event_status",
+        "provider_lineage_state",
         "currency",
         "input_tokens",
         "output_tokens",
@@ -1930,9 +2712,14 @@ def test_traces_projection_is_ready_from_persisted_attempt_and_verdict(
     }
     assert row["trace_id"] == "trace-projection-0001"
     assert row["operation"] == "attempt:copilot-api@1.0.0"
+    assert row["model"] is None
     assert row["agent_role"] is None
     assert row["execution_mode"] is None
     assert row["status"] == "NO_EXPLOIT_OBSERVED"
+    assert row["cost_measurement_state"] == "not_observed"
+    assert row["provider_event_ids"] == []
+    assert row["provider_lineage_state"] == "not_applicable"
+    assert row["measured_cost"] is None
     # verdict.created_at (10:00:02.500) - attempt_result.executed_at (10:00:00) == 2500 ms.
     assert row["duration_ms"] == 2500.0
     assert row["accounting_status"] == "unavailable"

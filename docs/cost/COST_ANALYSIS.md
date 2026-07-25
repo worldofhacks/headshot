@@ -8,18 +8,79 @@ This document implements the method locked by
 test-runs**. A test-run is a bounded campaign execution, not an individual test case, model call, or
 attempt. The number of attempts and agent calls inside a run must be measured rather than assumed.
 
-At the 2026-07-23 release-candidate audit, the repository contains offline deterministic evidence and
-a provisioned Railway baseline but no authorized live result, provider billing export, token trace,
-local-capacity benchmark, deployed-platform invoice, or utilization measurement. Consequently:
+**Evidence boundary re-stated 2026-07-25 at base `107c11c`** (the previous boundary was dated
+2026-07-23 and two halves of it have since become false):
+
+- **A live target *was* called.** Authorized synthetic-only runs against
+  `https://agent-production-9f62.up.railway.app` are committed under `evals/results/` — four result
+  groups, 39 adversarial verdict records. The earlier "no hosted model or live target was called"
+  boundary no longer holds for the target half.
+- **No hosted model has been called in a campaign.** No `provider_request_id`, `returned_model`, or
+  `measured_cost` value appears anywhere in `docs/evidence/**` or `evals/results/**`. The one place a
+  hosted role model is composed at all is a deliberately target-free acceptance harness
+  (`src/agentforge/agent_acceptance.py`) whose output is recorded
+  `quarantined_not_dispatched` with `target_call_limit: 0`.
+- **The Railway staging baseline is now deployed, but not cost-measured.** Candidate `2069036e` was
+  deployed Runner-first to the staging Web, Runner, Scheduler, and PostgreSQL topology; schema `0021`,
+  `/health`, `/ready`, unauthenticated denial, and the console shell were verified. No campaign,
+  provider call, or target call ran during that smoke, production remains unverified, and no signed-in
+  Clerk acceptance was performed. No hosting, storage, egress invoice, billing export, or utilization
+  record has been supplied for this release, so the platform-operations family remains unmeasured.
+
+Still absent, and still the reason every number below is a symbol: any provider billing export, token
+trace, local-capacity benchmark, deployed-platform invoice, or utilization measurement. Consequently:
 
 - present MVP dollar spend is **TBD — unmeasured**;
 - every tier total below is **projected, unmeasured**;
 - symbols are required inputs, not disguised estimates; and
 - test fixtures such as fake accounting values are not cost measurements.
 
-The integration evidence states that no hosted model or live target was called. That establishes an
-execution boundary, not a monetary total: developer tooling, hardware, labor, CI, and hosting invoices
-have not been supplied.
+A live-target execution boundary is not a monetary total. Developer tooling, hardware, labor, CI, and
+hosting invoices have not been supplied, and **not one dollar figure in this repository comes from a
+measured run.**
+
+Two measurement-integrity defects that any future cost figure must route around:
+
+1. **`measured_cost` for target requests is a configured constant, not a measurement.** The outbound
+   telemetry layer defaults a per-request cost and multiplies it by request count. Any dollar figure
+   derived from it describes an accounting cap, not spend. It was never exported to evidence in any
+   case — the committed attempt manifests have no cost field at all.
+2. **`target_version` is the adapter name, not a target build version**
+   (`src/agentforge/policy/gateway.py:626`), so any per-version cost or regression comparison is keyed
+   on a constant.
+
+## Configured spend envelope (not a measurement)
+
+These are the **committed ceilings** the code enforces. They bound spend; they do not report it. They
+are recorded here because several documents priced roles that are not the configured ones — see
+[`DECISIONS.md` D8 revision 2026-07-25](../planning/DECISIONS.md).
+
+Hosted role set, frozen in code and rejected on deviation
+(`src/agentforge/agents/hosted.py:31-38`, enforcement at `:352-353`):
+
+| Role | Model ID (frozen) | Role spend ceiling (`hosted.py:39-45`) |
+|---|---|---|
+| `orchestrator` | `anthropic/claude-opus-4.8` | $1.50 |
+| `red_team` | `qwen/qwen3.5-397b-a17b` | $1.00 |
+| `judge` | `google/gemini-2.5-pro` | $4.00 |
+| `documentation` | `openai/gpt-5.4` | $1.00 |
+
+Envelope, same file: provider `openrouter` (`:26`), `HOSTED_MAX_PHYSICAL_CALLS = 56` (`:27`),
+`HOSTED_MAX_MEASURED_USD = $10` (`:28`), `HOSTED_MAX_LOGICAL_RETRIES = 1` (`:29`),
+`HOSTED_MAX_CONCURRENCY = 1` (`:30`). The four role ceilings sum to $7.50, inside the $10 envelope.
+
+Campaign-side caps, committed at `docs/evidence/authorization-requests/caps.json` and mirrored in the
+three target-catalog files: `budget_usd 1.00`, `max_attempts_per_run 40`, `logical_case_limit 40`,
+`physical_request_limit 60`, `target_requests_per_second 0.5`, `run_timeout_seconds 1800`,
+`target_retries_per_turn 1`.
+
+**Per-model prices are not in this repository.** Runtime prices come from an operator-staged hosted
+configuration set held in Postgres; `hosted.py` carries model IDs and ceilings but no prices. The only
+committed per-model price literal is the `red_team` qwen entry in
+[`docs/agents/RED_TEAM_MODEL_RESOLUTION.md`](../agents/RED_TEAM_MODEL_RESOLUTION.md) — a dated document
+assertion, not a verified rate snapshot, and it covers one of four roles. Any tier projection must
+therefore begin by capturing a dated rate snapshot for all four configured models; do not reuse a rate
+quoted for a model this platform does not run.
 
 ## D17 method
 
