@@ -67,6 +67,7 @@ class CampaignCredentialLease:
         "_expires_at",
         "_expected_sha256",
         "_now",
+        "_required_until",
         "_released",
         "_resolver",
         "_secret",
@@ -80,12 +81,20 @@ class CampaignCredentialLease:
         resolver: Callable[[str | None], Secret | None],
         metadata: SessionLeaseMetadata | None,
         now: Callable[[], datetime],
+        required_until: datetime | None,
     ) -> None:
         self._credential_ref = credential_ref
         self._resolver = resolver
         self._expires_at = metadata.expires_at if metadata is not None else None
         self._expected_sha256 = metadata.value_sha256 if metadata is not None else None
         self._now = now
+        if required_until is not None and (
+            not isinstance(required_until, datetime) or required_until.tzinfo is None
+        ):
+            raise CredentialResolutionError("campaign session deadline is invalid")
+        self._required_until = (
+            required_until.astimezone(UTC) if required_until is not None else None
+        )
         self._secret: Secret | None = None
         self._resolution_count = 0
         self._released = False
@@ -93,6 +102,12 @@ class CampaignCredentialLease:
     @property
     def resolution_count(self) -> int:
         return self._resolution_count
+
+    @property
+    def required_until(self) -> datetime | None:
+        """The exact run-deadline anchor used when this campaign lease was admitted."""
+
+        return self._required_until
 
     def resolve(self, reference: str | None) -> Secret | None:
         if self._released:
@@ -114,6 +129,34 @@ class CampaignCredentialLease:
             self._secret = secret
             self._resolution_count = 1
         return self._secret
+
+    def require_valid_through(
+        self,
+        reference: str | None,
+        *,
+        required_until: datetime,
+    ) -> None:
+        """Refuse work whose complete timeout window outlives this pinned session.
+
+        This metadata-only check deliberately does not resolve the raw credential.  The Runner uses
+        it immediately before an external call, then resolves the same pinned generation at the
+        existing dispatch boundary.  A session expiring exactly at ``required_until`` is not long
+        enough: the remote response and local timeout race would otherwise cross authorization.
+        """
+
+        if self._released:
+            raise CredentialResolutionError("campaign credential lease was released")
+        if reference != self._credential_ref:
+            raise CredentialResolutionError("campaign credential reference changed")
+        if not isinstance(required_until, datetime) or required_until.tzinfo is None:
+            raise CredentialResolutionError("campaign session deadline is invalid")
+        required = required_until.astimezone(UTC)
+        if required <= self._utc_now():
+            raise CredentialResolutionError("campaign session deadline is invalid")
+        if self._expires_at is not None and self._expires_at <= required:
+            raise CredentialLeaseExpiredError(
+                "delegated target session cannot cover the external call timeout"
+            )
 
     def release(self) -> None:
         self._secret = None
@@ -279,6 +322,7 @@ class SealedEnvironmentCredentialResolver:
             resolver=self.resolve,
             metadata=metadata,
             now=now or (lambda: datetime.now(UTC)),
+            required_until=required_until,
         )
 
 

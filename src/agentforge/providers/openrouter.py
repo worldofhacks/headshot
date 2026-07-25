@@ -81,6 +81,32 @@ class HostedBudgetExceeded(HostedProviderError):
     code = "hosted-budget-exceeded"
 
 
+class HostedExternalIoRefused(HostedProviderError):
+    """Runner authority disappeared before a physical provider send."""
+
+    def __init__(
+        self,
+        *,
+        reason_code: str,
+        physical_attempts: int,
+    ) -> None:
+        if (
+            not isinstance(reason_code, str)
+            or not reason_code
+            or len(reason_code) > 64
+            or any(
+                character not in "abcdefghijklmnopqrstuvwxyz0123456789-_"
+                for character in reason_code
+            )
+        ):
+            reason_code = "hosted-external-io-refused"
+        self.code = reason_code
+        super().__init__(
+            "hosted provider send lost its live Runner authority",
+            physical_attempts=physical_attempts,
+        )
+
+
 @dataclass(frozen=True, slots=True)
 class HostedLedgerSnapshot:
     physical_calls: int
@@ -400,6 +426,7 @@ class OpenRouterTransport:
         ledger: HostedUsageLedger | None = None,
         lineage_recorder: ProviderLineageRecorder | None = None,
         attempt_observer: ProviderAttemptObserver | None = None,
+        pre_physical_send_gate: Callable[..., None] | None = None,
         sleeper: Callable[[float], None] = time.sleep,
         monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
@@ -424,6 +451,9 @@ class OpenRouterTransport:
         if attempt_observer is not None and lineage_recorder is None:
             raise TypeError("provider attempt observer requires durable lineage")
         self._attempt_observer = attempt_observer
+        if pre_physical_send_gate is not None and not callable(pre_physical_send_gate):
+            raise TypeError("provider physical-send gate is invalid")
+        self._pre_physical_send_gate = pre_physical_send_gate
         self._observed_invocation_ids: set[str] = set()
         self._sleeper = sleeper
         self._monotonic = monotonic
@@ -507,6 +537,21 @@ class OpenRouterTransport:
                         "provider pacing failed before another physical send",
                         physical_attempts=physical_attempts,
                     ) from exc
+                if self._pre_physical_send_gate is not None:
+                    try:
+                        self._pre_physical_send_gate(
+                            role=role,
+                            timeout_seconds=timeout_seconds,
+                        )
+                    except Exception as exc:
+                        raise HostedExternalIoRefused(
+                            reason_code=getattr(
+                                exc,
+                                "code",
+                                "hosted-external-io-refused",
+                            ),
+                            physical_attempts=physical_attempts,
+                        ) from exc
                 invocation: ProviderInvocationContextV1 | None = None
                 try:
                     credential = self._credential_resolver(configuration.credential_reference)
@@ -1190,6 +1235,7 @@ class _RetryableResponse(Exception):
 
 __all__ = [
     "HostedBudgetExceeded",
+    "HostedExternalIoRefused",
     "HostedLedgerSnapshot",
     "HostedProviderError",
     "HostedProviderResponseError",

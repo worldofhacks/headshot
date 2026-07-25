@@ -25,6 +25,7 @@ from agentforge.providers.lineage import (
 )
 from agentforge.providers.openrouter import (
     HostedBudgetExceeded,
+    HostedExternalIoRefused,
     HostedProviderError,
     HostedProviderResponseError,
     HostedUsageLedger,
@@ -392,6 +393,62 @@ def test_transport_rejects_encoded_input_above_authorized_bound_before_any_side_
     assert observer.started == observer.finished == []
 
 
+def test_physical_send_gate_runs_after_pacing_before_credentials_lineage_or_http() -> None:
+    configuration = _configuration()
+    recorder = _ProviderRecorder()
+    order: list[str] = []
+
+    class SyntheticLeaseLoss(RuntimeError):
+        code = "runner-lease-lost"
+
+    def monotonic() -> float:
+        order.append("pace")
+        return 0.0
+
+    def gate(*, role: str, timeout_seconds: float) -> None:
+        assert role == "judge"
+        assert timeout_seconds == 5
+        order.append("gate")
+        raise SyntheticLeaseLoss("bounded test refusal")
+
+    def credential(_reference: str) -> Secret:
+        order.append("credential")
+        return Secret("test-provider-value")
+
+    def send(_request: httpx.Request) -> httpx.Response:
+        order.append("http")
+        return _success()
+
+    transport = OpenRouterTransport(
+        configuration=configuration,
+        credential_resolver=credential,
+        client=httpx.Client(transport=httpx.MockTransport(send)),
+        lineage_recorder=recorder,
+        pre_physical_send_gate=gate,
+        monotonic=monotonic,
+    )
+
+    with pytest.raises(HostedExternalIoRefused) as caught:
+        transport.invoke(
+            role="judge",
+            messages=_messages(),
+            output_schema={"type": "object"},
+            schema_name="judge_verdict",
+            generation_policy_sha256=_digest("generation-policy"),
+            input_tokens_upper_bound=_TEST_INPUT_TOKEN_BOUND,
+            max_output_tokens=50,
+            max_reasoning_tokens=20,
+            timeout_seconds=5,
+            provider_context=_provider_context(configuration),
+        )
+
+    assert caught.value.code == "runner-lease-lost"
+    assert caught.value.physical_attempts == 0
+    assert order == ["pace", "gate"]
+    assert recorder.invocations == recorder.events == []
+    assert transport.ledger.snapshot.physical_calls == 0
+
+
 def test_ledger_rejects_unrepresentable_reservation_as_typed_provider_error() -> None:
     configuration = _configuration()
     hostile_price = Decimal("0." + ("1" * 300))
@@ -593,11 +650,15 @@ def test_transport_permits_only_one_retry_and_counts_both_physical_calls() -> No
     )
     client = httpx.Client(transport=httpx.MockTransport(lambda _request: next(responses)))
     sleeps: list[float] = []
+    gates: list[tuple[str, float]] = []
     monotonic_values = iter((0.0, 0.0, 2.0))
     transport = OpenRouterTransport(
         configuration=_configuration(),
         credential_resolver=lambda _reference: Secret("test-provider-value"),
         client=client,
+        pre_physical_send_gate=lambda **values: gates.append(
+            (str(values["role"]), float(values["timeout_seconds"]))
+        ),
         sleeper=sleeps.append,
         monotonic=lambda: next(monotonic_values),
     )
@@ -618,6 +679,7 @@ def test_transport_permits_only_one_retry_and_counts_both_physical_calls() -> No
     assert transport.ledger.snapshot.physical_calls == 2
     assert transport.ledger.snapshot.unresolved_exposure_usd > 0
     assert sleeps == [2.0]
+    assert gates == [("judge", 5.0), ("judge", 5.0)]
 
 
 def test_transport_records_each_actual_send_and_retry_as_physical_facts() -> None:

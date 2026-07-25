@@ -43,6 +43,7 @@ def test_one_campaign_pins_one_secret_even_if_process_environment_changes() -> N
         require_session_metadata=True,
     )
 
+    assert lease.required_until == datetime.datetime(2026, 7, 22, 20, 30, tzinfo=datetime.UTC)
     first = lease.resolve(SESSION_REF)
     environment["OPENEMR_SMART_SESSION"] = ROTATED_VALUE
     second = lease.resolve(SESSION_REF)
@@ -163,7 +164,37 @@ def test_non_session_credentials_remain_backward_compatible_without_lease_metada
     )
     lease = resolver.lease(reference, require_session_metadata=False)
 
+    lease.require_valid_through(
+        reference,
+        required_until=datetime.datetime.now(datetime.UTC) + datetime.timedelta(hours=1),
+    )
     assert lease.resolve(reference).reveal() == "synthetic-bearer-value"
+
+
+def test_per_call_session_window_refuses_expiry_equality_without_resolving_secret() -> None:
+    now = datetime.datetime(2026, 7, 22, 20, 0, tzinfo=datetime.UTC)
+    resolver = SealedEnvironmentCredentialResolver(
+        {SESSION_REF: "OPENEMR_SMART_SESSION"},
+        environment={"OPENEMR_SMART_SESSION": SESSION_VALUE},
+        session_metadata={SESSION_REF: _metadata()},
+    )
+    lease = resolver.lease(
+        SESSION_REF,
+        required_until=now + datetime.timedelta(minutes=30),
+        now=lambda: now,
+        require_session_metadata=True,
+    )
+
+    lease.require_valid_through(
+        SESSION_REF,
+        required_until=_metadata().expires_at - datetime.timedelta(microseconds=1),
+    )
+    with pytest.raises(CredentialLeaseExpiredError, match="external call timeout"):
+        lease.require_valid_through(
+            SESSION_REF,
+            required_until=_metadata().expires_at,
+        )
+    assert lease.resolution_count == 0
 
 
 def test_runner_environment_loads_session_value_and_lifecycle_metadata_separately(

@@ -7,6 +7,7 @@ import contextlib
 import copy
 import datetime
 import ipaddress
+import math
 import os
 import signal
 import socket
@@ -111,6 +112,139 @@ _PROVIDER_RECOVERY_STALE_AFTER_SECONDS = _DEFAULT_LEASE.total_seconds() + 60.0
 
 class DispatchUnavailable(RuntimeError):
     """Persisted work cannot pass every current dispatch gate."""
+
+
+_EXTERNAL_IO_FAILURE_CODES = frozenset(
+    {
+        "authorization-deadline-insufficient",
+        "credential-session-deadline-insufficient",
+        "external-io-timeout-invalid",
+        "persisted-authorization-changed",
+        "persisted-authorization-unavailable",
+        "runner-lease-lost",
+        "run-deadline-insufficient",
+    }
+)
+
+
+class ExternalIoAdmissionError(RuntimeError):
+    """A typed, content-free refusal immediately before live external I/O."""
+
+    def __init__(self, code: str) -> None:
+        if code not in _EXTERNAL_IO_FAILURE_CODES:
+            raise ValueError("external I/O admission reason is invalid")
+        self.code = code
+        super().__init__(code)
+
+
+@dataclass(slots=True)
+class _RunnerExternalIoGuard:
+    """Re-prove lease, grant, deadline, and delegated-session authority per physical send."""
+
+    queue: Any
+    store: Any
+    job: JobRecord
+    authorized: Any
+    scope: Any
+    credential_lease: CampaignCredentialLease
+    clock: Any
+    run_deadline: float
+    authorization_deadline: float
+
+    def admit(
+        self,
+        *,
+        timeout_seconds: float,
+        attempt_id: str | None = None,
+    ) -> None:
+        if (
+            isinstance(timeout_seconds, bool)
+            or not isinstance(timeout_seconds, (int, float))
+            or not math.isfinite(float(timeout_seconds))
+            or float(timeout_seconds) <= 0
+        ):
+            raise ExternalIoAdmissionError("external-io-timeout-invalid")
+        timeout = float(timeout_seconds)
+        extension = datetime.timedelta(seconds=max(_DEFAULT_LEASE.total_seconds(), timeout + 1.0))
+        # The heartbeat is a compare-and-swap against the exact worker/token and refuses an
+        # already-expired claim. Extending past the exact call timeout prevents a normal
+        # in-flight response wait from aging out the claim.
+        try:
+            self.queue.heartbeat(self.job, extension=extension)
+        except Exception as exc:
+            raise ExternalIoAdmissionError("runner-lease-lost") from exc
+        try:
+            current = (
+                self.store.resolve_dispatch(self.job.campaign_run_id, attempt_id)
+                if attempt_id is not None
+                else self.store.load_run_for_execution(self.job.campaign_run_id)
+            )
+        except Exception as exc:
+            raise ExternalIoAdmissionError("persisted-authorization-unavailable") from exc
+        # Keep the final database operation before admission an ownership assertion. A failed
+        # heartbeat or assertion is terminal; it never falls through to a network call.
+        try:
+            self.store.assert_job_lease(self.job)
+        except Exception as exc:
+            raise ExternalIoAdmissionError("runner-lease-lost") from exc
+
+        if (
+            current.run.scope_hash != self.authorized.run.scope_hash
+            or current.scope.canonical_bytes() != self.scope.canonical_bytes()
+            or current.approval.decision_id != self.authorized.approval.decision_id
+            or current.expires_at != self.authorized.expires_at
+        ):
+            raise ExternalIoAdmissionError("persisted-authorization-changed")
+
+        try:
+            now = float(self.clock.now())
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ExternalIoAdmissionError("external-io-timeout-invalid") from exc
+        if not math.isfinite(now):
+            raise ExternalIoAdmissionError("external-io-timeout-invalid")
+        required_until = now + timeout
+        if not math.isfinite(required_until):
+            raise ExternalIoAdmissionError("external-io-timeout-invalid")
+        # Equality is refused. A response timeout racing the exact boundary is not proof that the
+        # complete physical call remained inside authority.
+        if required_until >= self.run_deadline:
+            raise ExternalIoAdmissionError("run-deadline-insufficient")
+        if required_until >= self.authorization_deadline:
+            raise ExternalIoAdmissionError("authorization-deadline-insufficient")
+        try:
+            self.credential_lease.require_valid_through(
+                self.scope.credential_ref,
+                required_until=datetime.datetime.fromtimestamp(
+                    required_until,
+                    datetime.UTC,
+                ),
+            )
+        except CredentialLeaseExpiredError as exc:
+            raise ExternalIoAdmissionError("credential-session-deadline-insufficient") from exc
+        except CredentialResolutionError as exc:
+            raise ExternalIoAdmissionError("persisted-authorization-unavailable") from exc
+
+
+def _external_io_failure_code(error: BaseException) -> str | None:
+    """Find the bounded admission reason through higher-level campaign wrappers."""
+
+    pending: list[BaseException] = [error]
+    seen: set[int] = set()
+    while pending and len(seen) < 16:
+        current = pending.pop()
+        if id(current) in seen:
+            continue
+        seen.add(id(current))
+        code = getattr(current, "code", None)
+        if code in _EXTERNAL_IO_FAILURE_CODES:
+            return str(code)
+        cause = getattr(current, "__cause__", None)
+        context = getattr(current, "__context__", None)
+        if isinstance(cause, BaseException):
+            pending.append(cause)
+        if isinstance(context, BaseException):
+            pending.append(context)
+    return None
 
 
 @dataclass(frozen=True, slots=True)
@@ -966,7 +1100,10 @@ def _campaign_session_required_until(authorized: Any, *, now: float) -> datetime
 
     Both the human authorization and delegated session must extend *past* the complete
     authorization-bound run timeout. The Runner never starts a campaign whose approval can expire
-    while the campaign is still permitted to run.
+    while the campaign is still permitted to run. This exact ``started_at + run_timeout`` value is
+    retained on the credential lease and becomes the runtime deadline anchor. The session need not
+    cover an unused tail of a longer approval grant; no external call is admitted after this run
+    deadline, and every call must also finish strictly before the independent grant expiry.
     """
 
     expires_at = getattr(authorized, "expires_at", None)
@@ -1627,6 +1764,36 @@ class DurableCampaignRunner:
         authorized = prepared.authorized
         scope = authorized.scope
         self.store.append_campaign_state(run_id=job.campaign_run_id, state="running")
+        try:
+            run_timeout_seconds = float(scope.caps.run_timeout_seconds)
+            authorization_deadline = float(authorized.expires_at.timestamp())
+            lease_run_deadline = credential_lease.required_until
+            if lease_run_deadline is None:
+                raise ValueError("campaign credential lease has no run deadline")
+            run_deadline = float(lease_run_deadline.timestamp())
+            campaign_started_at = run_deadline - run_timeout_seconds
+        except (AttributeError, TypeError, ValueError, OverflowError) as exc:
+            raise DispatchUnavailable("campaign_external_io_window_invalid") from exc
+        if (
+            not math.isfinite(campaign_started_at)
+            or not math.isfinite(run_timeout_seconds)
+            or run_timeout_seconds <= 0
+            or not math.isfinite(run_deadline)
+            or not math.isfinite(authorization_deadline)
+            or authorization_deadline <= run_deadline
+        ):
+            raise DispatchUnavailable("campaign_external_io_window_invalid")
+        external_io_guard = _RunnerExternalIoGuard(
+            queue=self.queue,
+            store=self.store,
+            job=job,
+            authorized=authorized,
+            scope=scope,
+            credential_lease=credential_lease,
+            clock=self.clock,
+            run_deadline=run_deadline,
+            authorization_deadline=authorization_deadline,
+        )
 
         hosted_lifecycle: _DurableHostedExecutionLifecycle | None = None
         hosted_planner: HostedPlanner | None = None
@@ -1648,6 +1815,12 @@ class DurableCampaignRunner:
                     )
                 return credential
 
+            def admit_hosted_external_io(*, role: str, timeout_seconds: float) -> None:
+                bounds = prepared.hosted.generation_policy.call_bounds.get(role)
+                if bounds is None or float(bounds.timeout_seconds) != float(timeout_seconds):
+                    raise ExternalIoAdmissionError("external-io-timeout-invalid")
+                external_io_guard.admit(timeout_seconds=timeout_seconds)
+
             self._hosted_transport = OpenRouterTransport(
                 configuration=prepared.hosted.configuration,
                 credential_resolver=resolve_hosted_credential,
@@ -1659,6 +1832,7 @@ class DurableCampaignRunner:
                 ),
                 lineage_recorder=self.store,
                 attempt_observer=self.telemetry,
+                pre_physical_send_gate=admit_hosted_external_io,
                 sleeper=self.sleeper,
             )
             hosted_runtime = HostedRoleRuntime(
@@ -1989,22 +2163,17 @@ class DurableCampaignRunner:
                     # slightly tightens) the cap instead of allowing a valid throttled run to
                     # abort nondeterministically after the sleep.
                     self.sleeper(wait + 0.000001)
-            self.queue.heartbeat(job, extension=_DEFAULT_LEASE)
-            self.store.assert_job_lease(job)
             attempt_id = (
                 coordinates.attempt_id
                 if isinstance(coordinates, WorkUnitCoordinates)
                 else coordinates
             )
-            current = self.store.resolve_dispatch(job.campaign_run_id, attempt_id)
-            if (
-                current.run.scope_hash != authorized.run.scope_hash
-                or current.scope.canonical_bytes() != scope.canonical_bytes()
-                or current.approval.decision_id != authorized.approval.decision_id
-            ):
-                raise CampaignAbort("persisted authorization changed", code="authorization_changed")
-            # Re-check the pinned session deadline before every physical turn/retry.  Once resolved,
-            # this returns the same in-memory Secret and cannot rotate identity mid-campaign.
+            external_io_guard.admit(
+                timeout_seconds=prepared.entry.transport_policy.request_timeout_seconds,
+                attempt_id=attempt_id,
+            )
+            # Resolve only after the complete per-call timeout has been admitted. Once resolved this
+            # returns the same in-memory Secret and cannot rotate identity mid-campaign.
             credential_lease.resolve(scope.credential_ref)
 
         def reserve_work_unit(coordinates: WorkUnitCoordinates) -> None:
@@ -2362,12 +2531,18 @@ class DurableCampaignRunner:
         try:
             self.execute_claimed(job)
         except Exception as exc:
-            code = "campaign_execution_failed"
-            if isinstance(exc, DispatchUnavailable):
+            external_io_code = _external_io_failure_code(exc)
+            code = external_io_code or "campaign_execution_failed"
+            if external_io_code is not None:
+                state = "aborted"
+            elif isinstance(exc, DispatchUnavailable):
                 code = "preflight_blocked"
+                state = "aborted"
             elif isinstance(exc, CampaignAbort):
                 code = "campaign_aborted"
-            state = "aborted" if code != "campaign_execution_failed" else "failed"
+                state = "aborted"
+            else:
+                state = "failed"
             with contextlib.suppress(Exception):
                 self.store.append_campaign_state(
                     run_id=job.campaign_run_id,
