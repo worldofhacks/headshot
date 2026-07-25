@@ -224,6 +224,7 @@ def _runtime(
     target: Any,
     recorded: list[Any],
     deterministic_verdict: dict[str, Any] | None = None,
+    lifecycle: _FakeExecutionLifecycle | None = None,
 ) -> tuple[HostedFourRoleRuntime, _FakeTransport]:
     configuration = _configuration()
     transport = _FakeTransport(configuration, outputs)
@@ -246,7 +247,7 @@ def _runtime(
         deterministic_judge=lambda _attempt, _evidence: (
             deterministic_verdict or {"state": "NO_EXPLOIT_OBSERVED"}
         ),
-        execution_lifecycle=_FakeExecutionLifecycle(recorded),
+        execution_lifecycle=lifecycle or _FakeExecutionLifecycle(recorded),
         judge_calibration=_enabled_judge_calibration(),
     )
     return runtime, transport
@@ -465,3 +466,86 @@ def test_case_identity_drift_is_refused_before_policy_gateway_dispatch() -> None
     with pytest.raises(HostedCompositionError, match="authorized case"):
         runtime.run_attempt(authorized_case={"case_id": "case-1"})
     assert target_calls == []
+
+
+class _RefusingLifecycle(_FakeExecutionLifecycle):
+    """A lifecycle that refuses exactly what the real store refuses."""
+
+    def __init__(self, recorded: list[Any] | None = None, *, refuse_lineage: bool = False) -> None:
+        super().__init__(recorded)
+        self._refuse_lineage = refuse_lineage
+        self.attempts: list[dict[str, Any]] = []
+
+    def finish(self, **values: Any) -> None:
+        self.attempts.append(dict(values))
+        if values["status"] == "succeeded":
+            raise RuntimeError("hosted agent output contains credential material")
+        if self._refuse_lineage and values.get("lineage") is not None:
+            raise RuntimeError("hosted token accounting is out of range")
+        super().finish(**values)
+
+
+def test_a_refused_success_still_closes_the_execution() -> None:
+    """Producing text that looks like a credential is the Red Team's job, not a reason to dangle.
+
+    The store screens agent output for credential material and refuses it. If that refusal simply
+    propagated, an honest in-contract Red Team response would leave its row 'running' forever with
+    no terminal record and no audit event — the platform disabling itself the first time an attack
+    works.
+    """
+
+    recorded: list[Any] = []
+    lifecycle = _RefusingLifecycle(recorded)
+    runtime, _transport = _runtime(
+        outputs=_outputs(),
+        target=lambda _attempt: {"status_code": 200},
+        recorded=recorded,
+        lifecycle=lifecycle,
+    )
+
+    with pytest.raises(HostedCompositionError):
+        runtime.run_attempt(authorized_case={"case_id": "case-1"})
+
+    # Nothing was accepted as a success, but the execution IS closed.
+    assert recorded == []
+    closed = [item for item in lifecycle.finishes if item["status"] == "failed"]
+    assert closed, "a refused success must still terminalize the execution"
+    # And the observation that was refused is still offered on the closing record.
+    assert closed[0]["lineage"] is not None
+    assert closed[0]["lineage"].returned_model == "anthropic/claude-opus-4.8"
+
+
+def test_a_terminalization_the_store_refuses_degrades_instead_of_dangling() -> None:
+    """When even the observation is unstorable, close the row with the smallest record that fits.
+
+    A provider token count beyond the column's range makes the rich terminal write fail. Losing
+    the observation is acceptable; leaving the execution open is not, because the runner has
+    already dropped its context and nothing can ever close it.
+    """
+
+    recorded: list[Any] = []
+    lifecycle = _RefusingLifecycle(recorded, refuse_lineage=True)
+    runtime, _transport = _runtime(
+        outputs=_outputs(),
+        target=lambda _attempt: {"status_code": 200},
+        recorded=recorded,
+        lifecycle=lifecycle,
+    )
+
+    with pytest.raises(HostedCompositionError):
+        runtime.run_attempt(authorized_case={"case_id": "case-1"})
+
+    # It tried with the observation, was refused, and fell back to a record that fits.
+    with_lineage = [
+        item
+        for item in lifecycle.attempts
+        if item["status"] == "failed" and item.get("lineage") is not None
+    ]
+    without_lineage = [
+        item
+        for item in lifecycle.attempts
+        if item["status"] == "failed" and item.get("lineage") is None
+    ]
+    assert with_lineage, "the observation must be offered before it is given up"
+    assert without_lineage, "a refused observation must not leave the execution open"
+    assert without_lineage[0]["error_code"]
