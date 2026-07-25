@@ -36,7 +36,7 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 from agentforge.config import Settings
-from agentforge.policy.allowlist import Allowlist, OffAllowlistDenied
+from agentforge.policy.allowlist import Allowlist, AllowlistEntry, OffAllowlistDenied
 from agentforge.policy.recorder import ExecutionRecorder
 from agentforge.secrets import Secret
 from agentforge.target.base import (
@@ -194,7 +194,7 @@ class PolicyGateway:
         # (1) Allowlist gate — deny + audit off-allowlist, with ZERO dispatch. The gateway's
         # own audit_log mirrors the allowlist's decision so a denial is attributable here too.
         try:
-            self.allowlist.resolve(target_id)
+            entry = self.allowlist.resolve(target_id)
         except OffAllowlistDenied:
             self.audit_log.append(
                 {"decision": "denied", "target_id": target_id, "trigger": trigger}
@@ -202,9 +202,10 @@ class PolicyGateway:
             raise
         self.audit_log.append({"decision": "allowed", "target_id": target_id, "trigger": trigger})
 
-        # (2) Synthetic-data / O1 — a live target (URL) is forbidden outside production; a
-        # non-prod box can never resolve a live credential.
-        self._enforce_synthetic_data(target_id)
+        # (2) Synthetic-data / O1 — a live target (URL) is admitted only in production or when the
+        # allowlist entry carries a verified synthetic-data attestation. The entry resolved above is
+        # reused so the decision reads off the same admitted binding (and is not re-audited).
+        self._enforce_synthetic_data(target_id, entry)
 
         # (3) Caps — a breach of ANY is a HARD ABORT before dispatch, trigger-independent.
         self._enforce_caps(policy, now)
@@ -282,17 +283,39 @@ class PolicyGateway:
 
     # ------------------------------------------------------------------ gate steps
 
-    def _enforce_synthetic_data(self, target_id: str) -> None:
-        """Refuse a live target/credential outside production (synthetic-data policy)."""
+    def _enforce_synthetic_data(self, target_id: str, entry: AllowlistEntry) -> None:
+        """Refuse a live target/credential unless its data is attested synthetic.
+
+        The rule this enforces is a SYNTHETIC-DATA policy, not an environment policy: never point
+        the platform at a target holding real data. Environment was only ever a proxy for that —
+        the assumption being that production is where the attested-synthetic target lives.
+
+        That proxy was too coarse. It refused an attested-synthetic target purely for being reached
+        from a non-production deployment, while permitting ANY live target in production, attested
+        or not. Both halves were wrong.
+
+        So the gate is narrowed to the fact it actually cares about: outside production a live
+        target is admitted only when its catalog spec carries a verified synthetic-data attestation
+        (``synthetic_data_only is True`` AND a non-empty ``synthetic_data_attestation_ref``, both
+        validated by ``TargetSpec`` and re-checked by the runner's ``synthetic_data_attestation_
+        missing`` preflight blocker). Anything not attested is refused exactly as before.
+
+        ``AllowlistEntry.synthetic_attested`` defaults to ``False``, so every construction path that
+        has not established the attestation keeps the strict behaviour. Admitting a live target is
+        opt-in and evidence-backed, never assumed.
+        """
         if self.settings.environment == "production":
             return
-        if target_id.startswith(_LIVE_SCHEMES):
-            raise AbortError(
-                f"synthetic-data policy: a live target {target_id!r} is refused in "
-                f"environment {self.settings.environment!r} (only production may reach a live "
-                "target)",
-                code="abort",
-            )
+        if not target_id.startswith(_LIVE_SCHEMES):
+            return
+        if entry.synthetic_attested:
+            return
+        raise AbortError(
+            f"synthetic-data policy: a live target {target_id!r} is refused in "
+            f"environment {self.settings.environment!r} — it carries no verified synthetic-data "
+            "attestation (only production, or an attested-synthetic target, may be reached)",
+            code="abort",
+        )
 
     def _enforce_caps(self, policy: RunPolicy, now: float) -> None:
         """Enforce budget/attempt/rate/timeout caps. A breach HARD ABORTS before any dispatch.
