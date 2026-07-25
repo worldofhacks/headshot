@@ -712,6 +712,7 @@ const browserAgentActivity = [
   provider: index === 1 ? "openrouter" : "headshot",
   model: index === 1 ? "qwen/qwen3.5-397b-a17b" : model,
   returned_model: null,
+  model_substituted: false,
   upstream_provider: null,
   provider_request_id: null,
   execution_mode: index === 1 ? "hosted_advisory" : "deterministic",
