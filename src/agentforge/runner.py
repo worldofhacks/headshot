@@ -49,7 +49,7 @@ from agentforge.agents.judge.hosted import (
 )
 from agentforge.agents.judge.judge import Judge
 from agentforge.agents.orchestrator import HostedPlanner, Orchestrator, OrchestratorHalt
-from agentforge.agents.red_team import SeedReplayRedTeam
+from agentforge.agents.red_team import HostedReplaySelector, SeedReplayRedTeam
 from agentforge.campaign.authorization import RunAuthorization
 from agentforge.campaign.binding import TargetBinding
 from agentforge.campaign.coordinator import CampaignAbort, RunConfig, SecureCampaignCoordinator
@@ -106,10 +106,6 @@ _DEFAULT_POLL_SECONDS = 1.0
 _PROVIDER_RECOVERY_INTERVAL_SECONDS = 30.0
 _PROVIDER_RECOVERY_LIMIT = 32
 _PROVIDER_RECOVERY_STALE_AFTER_SECONDS = _DEFAULT_LEASE.total_seconds() + 60.0
-# Keep reviewed-replay narrative generation inside a small release-owned bound. Further confirmed
-# findings are still documented by the deterministic Documentation agent, so the campaign never
-# exceeds the exact hosted authority reserved at preflight.
-_REVIEWED_REPLAY_HOSTED_REPORT_LIMIT = 3
 
 
 class DispatchUnavailable(RuntimeError):
@@ -219,21 +215,15 @@ def _require_hosted_workload_capacity(
     configuration: HostedConfigurationSet,
     generation_policy: HostedGenerationPolicy,
     case_count: int,
-    reviewed_replay: bool = False,
 ) -> None:
     """Refuse a workload whose cumulative call or token authority is insufficient."""
 
-    required_calls = generation_policy.required_logical_calls(
-        case_count=case_count,
-        confirmed_finding_limit=(
-            min(case_count, _REVIEWED_REPLAY_HOSTED_REPORT_LIMIT) if reviewed_replay else None
-        ),
-        reviewed_replay=reviewed_replay,
-    )
+    required_calls = generation_policy.required_logical_calls(case_count=case_count)
     roles = {role.role: role for role in configuration.roles}
 
     global_required = {"input": 0, "output": 0, "reasoning": 0}
     global_required_calls = 0
+    global_required_usd = Decimal(0)
     for role, required in required_calls.items():
         role_configuration = roles.get(role)
         bounds = generation_policy.call_bounds[role]
@@ -249,6 +239,17 @@ def _require_hosted_workload_capacity(
             "output": bounds.output_tokens * required_physical_calls,
             "reasoning": bounds.reasoning_tokens * required_physical_calls,
         }
+        prices = role_configuration.prices
+        per_call_usd = (
+            prices.input_usd_per_million_tokens * bounds.input_tokens
+            + prices.output_usd_per_million_tokens * bounds.output_tokens
+            + max(
+                prices.output_usd_per_million_tokens,
+                prices.reasoning_usd_per_million_tokens,
+            )
+            * bounds.reasoning_tokens
+        ) / Decimal(1_000_000)
+        required_usd = per_call_usd * required_physical_calls
         limits = role_configuration.limits
         if (
             limits.max_calls < required_physical_calls
@@ -257,13 +258,18 @@ def _require_hosted_workload_capacity(
             or cumulative["reasoning"] > limits.max_reasoning_tokens
         ):
             raise DispatchUnavailable("hosted_role_cap_incompatible")
+        if required_usd > limits.max_usd:
+            raise DispatchUnavailable("hosted_role_spend_cap_incompatible")
         global_required_calls += required_physical_calls
+        global_required_usd += required_usd
         for token_kind, token_count in cumulative.items():
             global_required[token_kind] += token_count
 
     global_limits = configuration.global_limits
     if global_limits.max_calls < global_required_calls:
         raise DispatchUnavailable("hosted_global_call_cap_incompatible")
+    if global_required_usd > global_limits.max_usd:
+        raise DispatchUnavailable("hosted_global_spend_cap_incompatible")
     if (
         global_required["input"] > global_limits.max_input_tokens
         or global_required["output"] > global_limits.max_output_tokens
@@ -1231,6 +1237,8 @@ class DurableCampaignRunner:
             run_corpus.categories
         ):
             blockers.append("corpus_not_complete")
+        if run_corpus.corpus_id in LIVE_100_BATCH_IDS and self.environment != "staging":
+            blockers.append("live_100_batches_staging_only")
 
         entry: CatalogEntry | None = None
         surface: AttackSurfaceDefinition | None = None
@@ -1371,7 +1379,6 @@ class DurableCampaignRunner:
                     configuration=configuration,
                     generation_policy=generation_policy,
                     case_count=len(run_corpus.cases),
-                    reviewed_replay=run_corpus.corpus_id in _EXACT_MANIFEST_WORKLOAD_IDS,
                 )
                 for role_configuration in configuration.roles:
                     bounds = generation_policy.call_bounds[role_configuration.role]
@@ -1395,6 +1402,8 @@ class DurableCampaignRunner:
                 blockers.append(str(exc))
             except Exception:
                 blockers.append("hosted_runtime_authority_invalid")
+        elif run_corpus.corpus_id in _EXACT_MANIFEST_WORKLOAD_IDS:
+            blockers.append("four_role_hosted_runtime_required")
 
         report = PreflightReport(tuple(dict.fromkeys(blockers)))
         prepared = (
@@ -1526,9 +1535,9 @@ class DurableCampaignRunner:
 
         hosted_lifecycle: _DurableHostedExecutionLifecycle | None = None
         hosted_planner: HostedPlanner | None = None
+        hosted_red_team: HostedReplaySelector | None = None
         hosted_evaluator: HostedEvaluator | None = None
         hosted_report_writer: HostedReportWriter | None = None
-        hosted_documentation_calls = 0
         if prepared.hosted is not None:
             hosted_lifecycle = _DurableHostedExecutionLifecycle(
                 store=self.store,
@@ -1568,6 +1577,7 @@ class DurableCampaignRunner:
                 runtime=hosted_runtime,
                 safety_governor=self.orchestrator,
             )
+            hosted_red_team = HostedReplaySelector(runtime=hosted_runtime)
             hosted_evaluator = HostedEvaluator(runtime=hosted_runtime)
             hosted_report_writer = HostedReportWriter(
                 runtime=hosted_runtime,
@@ -1598,14 +1608,7 @@ class DurableCampaignRunner:
             orchestrator_execution: str
             orchestrator_failure_code = "orchestrator_execution_failed"
             orchestrator_failure_output: dict[str, Any] = {"cycle": orchestration_cycle}
-            use_hosted_planner = (
-                hosted_planner is not None
-                and hosted_lifecycle is not None
-                and (
-                    prepared.corpus.corpus_id not in _EXACT_MANIFEST_WORKLOAD_IDS
-                    or orchestration_cycle == 0
-                )
-            )
+            use_hosted_planner = hosted_planner is not None and hosted_lifecycle is not None
             try:
                 try:
                     if not use_hosted_planner:
@@ -1719,25 +1722,48 @@ class DurableCampaignRunner:
                     )
                 raise
 
-            red_team_execution = self._start_agent_execution(
-                run_id=authorized.run.run_id,
-                agent_role="red_team",
-                input_payload={
-                    "cycle": orchestration_cycle,
-                    "directive_category": directive["category"],
-                    "authorized_remaining_case_count": len(remaining),
-                    "corpus_sha256": scope.corpus_hash,
-                },
-                parent_execution_id=orchestrator_execution,
-                detail={"phase": "authorized_case_selection"},
-            )
+            use_hosted_red_team = hosted_red_team is not None and hosted_lifecycle is not None
+            red_team_execution: str
             red_team_failure_code = "red_team_execution_failed"
             try:
                 try:
-                    proposals = self.red_team.propose(
-                        cases=[verified_case_payload(case) for case in remaining],
-                        directive=directive,
-                    )
+                    if use_hosted_red_team:
+                        selection_cases = (
+                            [verified_case_payload(remaining[0])]
+                            if prepared.corpus.corpus_id in _EXACT_MANIFEST_WORKLOAD_IDS
+                            else [verified_case_payload(case) for case in remaining]
+                        )
+                        with hosted_lifecycle.invocation(
+                            role="red_team",
+                            detail={
+                                "phase": "authorized_case_selection",
+                                "cycle": orchestration_cycle,
+                            },
+                        ):
+                            selection = hosted_red_team.select(
+                                cases=selection_cases,
+                                directive=directive,
+                                parent_execution_id=orchestrator_execution,
+                            )
+                        red_team_execution = selection.execution_id
+                        proposals = [dict(selection.proposal)]
+                    else:
+                        red_team_execution = self._start_agent_execution(
+                            run_id=authorized.run.run_id,
+                            agent_role="red_team",
+                            input_payload={
+                                "cycle": orchestration_cycle,
+                                "directive_category": directive["category"],
+                                "authorized_remaining_case_count": len(remaining),
+                                "corpus_sha256": scope.corpus_hash,
+                            },
+                            parent_execution_id=orchestrator_execution,
+                            detail={"phase": "authorized_case_selection"},
+                        )
+                        proposals = self.red_team.propose(
+                            cases=[verified_case_payload(case) for case in remaining],
+                            directive=directive,
+                        )
                     case, proposal = _select_authorized_proposal(
                         remaining,
                         proposals,
@@ -1769,27 +1795,29 @@ class DurableCampaignRunner:
                     run_id=authorized.run.run_id,
                     attempt_id=attempt.attempt_id,
                 )
-                self._finish_agent_execution(
-                    execution_id=red_team_execution,
-                    status="succeeded",
-                    output_payload={
-                        "cycle": orchestration_cycle,
-                        "case_ref": payload["case_id"],
-                        "category": payload["category"],
-                        "source_tool": case.source_tool or "headshot-authored",
-                        "proposal_count_considered": len(proposals),
-                    },
-                    detail={"phase": "authorized_case_selection"},
-                )
+                if not use_hosted_red_team:
+                    self._finish_agent_execution(
+                        execution_id=red_team_execution,
+                        status="succeeded",
+                        output_payload={
+                            "cycle": orchestration_cycle,
+                            "case_ref": payload["case_id"],
+                            "category": payload["category"],
+                            "source_tool": case.source_tool or "headshot-authored",
+                            "proposal_count_considered": len(proposals),
+                        },
+                        detail={"phase": "authorized_case_selection"},
+                    )
             except Exception as exc:
-                self._fail_agent_execution_preserving_error(
-                    primary_error=exc,
-                    execution_id=red_team_execution,
-                    status="failed",
-                    output_payload={"cycle": orchestration_cycle},
-                    error_code=red_team_failure_code,
-                    detail={"phase": "authorized_case_selection"},
-                )
+                if not use_hosted_red_team and "red_team_execution" in locals():
+                    self._fail_agent_execution_preserving_error(
+                        primary_error=exc,
+                        execution_id=red_team_execution,
+                        status="failed",
+                        output_payload={"cycle": orchestration_cycle},
+                        error_code=red_team_failure_code,
+                        detail={"phase": "authorized_case_selection"},
+                    )
                 raise
             orchestration_cycle += 1
             next_ordinal += 1
@@ -1988,12 +2016,7 @@ class DurableCampaignRunner:
                     ),
                 )
                 use_hosted_report_writer = (
-                    hosted_report_writer is not None
-                    and hosted_lifecycle is not None
-                    and (
-                        prepared.corpus.corpus_id not in _EXACT_MANIFEST_WORKLOAD_IDS
-                        or hosted_documentation_calls < _REVIEWED_REPLAY_HOSTED_REPORT_LIMIT
-                    )
+                    hosted_report_writer is not None and hosted_lifecycle is not None
                 )
                 documentation_execution: str | None = None
                 if not use_hosted_report_writer:
@@ -2020,7 +2043,6 @@ class DurableCampaignRunner:
                             report_input=report_input,
                         )
                     else:
-                        hosted_documentation_calls += 1
                         with hosted_lifecycle.invocation(
                             role="documentation",
                             attempt_id=attempt.attempt_id,

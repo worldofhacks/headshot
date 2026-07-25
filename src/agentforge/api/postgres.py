@@ -17,6 +17,7 @@ from urllib.parse import urlsplit
 from sqlalchemy import Engine, create_engine, text
 
 from agentforge.agents.hosted import (
+    HOSTED_MAX_PHYSICAL_CALLS,
     HostedConfigurationSet,
     preflight_hosted_configuration_set,
     resolve_hosted_prompt,
@@ -3964,7 +3965,8 @@ class PostgresApiBackend(ApiBackend):
                                 }
                             ]
                             if (
-                                row["target_id"] == SYNTHETIC_TARGET_ID
+                                self._environment != "staging"
+                                or row["target_id"] == SYNTHETIC_TARGET_ID
                                 or int(row["safety_caps"]["max_attempts_per_run"]) < 34
                             ):
                                 row["campaign_suite_templates"] = []
@@ -4084,6 +4086,8 @@ class PostgresApiBackend(ApiBackend):
                 requested_corpus_id = payload.get("corpus_id")
                 trusted_corpus = self._corpus
                 if requested_corpus_id in LIVE_100_BATCH_IDS:
+                    if self._environment != "staging":
+                        raise ApiConflict("live-100 batch authorization is staging-only")
                     try:
                         trusted_corpus = resolve_workload(
                             str(requested_corpus_id),
@@ -4244,6 +4248,11 @@ class PostgresApiBackend(ApiBackend):
                 )
             if command == "stage_hosted_configuration_set":
                 configuration = HostedConfigurationSet.from_payload(dict(payload["configuration"]))
+                if (
+                    self._environment != "staging"
+                    and configuration.global_limits.max_calls > HOSTED_MAX_PHYSICAL_CALLS
+                ):
+                    raise ApiConflict("expanded hosted call envelope is staging-only")
                 configuration_sha256 = self._store.stage_hosted_configuration_set(
                     principal=principal,
                     configuration=configuration,

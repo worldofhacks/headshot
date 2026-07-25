@@ -222,7 +222,9 @@ def test_prices_and_limits_require_decimal_units_and_closed_bounds() -> None:
     with pytest.raises(ValueError, match="concurrency"):
         replace(_limits("judge"), max_concurrency=2)
     with pytest.raises(ValueError, match="closed platform maximum"):
-        replace(_limits("judge"), max_calls=57)
+        replace(_limits("judge"), max_calls=137)
+    with pytest.raises(ValueError, match="closed role ceiling"):
+        replace(_role("judge"), limits=replace(_limits("judge"), max_calls=57))
     with pytest.raises(ValueError, match="between zero and 1"):
         replace(_limits("judge"), max_retries=2)
     with pytest.raises(ValueError, match="closed platform maximum"):
@@ -234,10 +236,10 @@ def test_prices_and_limits_require_decimal_units_and_closed_bounds() -> None:
 @pytest.mark.parametrize(
     ("role", "invalid_cap"),
     (
-        ("orchestrator", Decimal("1.51")),
+        ("orchestrator", Decimal("4.01")),
         ("red_team", Decimal("1.01")),
-        ("judge", Decimal("4.01")),
-        ("documentation", Decimal("1.01")),
+        ("judge", Decimal("5.01")),
+        ("documentation", Decimal("2.01")),
     ),
 )
 def test_role_cash_caps_cannot_exceed_governance_ceilings(

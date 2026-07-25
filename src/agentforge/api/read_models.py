@@ -13,6 +13,7 @@ from typing import Any, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 
+from agentforge.agents.hosted import HOSTED_MAX_GLOBAL_PHYSICAL_CALLS
 from agentforge.control_plane.finding_decisions import (
     FindingDecisionReasonCode,
     validate_finding_decision_reason_code,
@@ -75,7 +76,7 @@ class HostedRunBindingReadModel(_ReadModel):
     configuration_set_sha256: str
     generation_policy_sha256: str
     session_generation: str
-    provider_model_call_limit: int = Field(gt=0, le=56)
+    provider_model_call_limit: int = Field(gt=0, le=HOSTED_MAX_GLOBAL_PHYSICAL_CALLS)
     provider_model_spend_limit_usd: str
     provider_max_retries: int = Field(ge=0, le=1)
     provider_max_concurrency: Literal[1]

@@ -45,26 +45,24 @@ def test_policy_reserves_one_planner_generator_and_evaluator_call_per_case() -> 
 
 @pytest.mark.parametrize(
     ("case_count", "expected_total"),
-    ((34, 38), (33, 37)),
+    ((34, 136), (33, 132)),
 )
-def test_reviewed_replay_reservation_matches_bounded_runtime(
+def test_four_hosted_roles_reserve_every_reviewed_case(
     case_count: int,
     expected_total: int,
 ) -> None:
     required = DEFAULT_HOSTED_GENERATION_POLICY.required_logical_calls(
         case_count=case_count,
-        confirmed_finding_limit=3,
-        reviewed_replay=True,
     )
 
     assert required == {
-        "orchestrator": 1,
-        "red_team": 0,
+        "orchestrator": case_count,
+        "red_team": case_count,
         "judge": case_count,
-        "documentation": 3,
+        "documentation": case_count,
     }
     assert sum(required.values()) == expected_total
-    assert expected_total <= 56
+    assert expected_total > 56
 
 
 @pytest.mark.parametrize("identity", ["f" * 64, "not-a-digest", ""])

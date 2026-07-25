@@ -24,7 +24,10 @@ from agentforge.secrets import looks_like_provider_key
 
 HOSTED_CONFIGURATION_SCHEMA_VERSION = "1"
 HOSTED_PROVIDER = "openrouter"
+# Per-role calls remain bounded at 56. The shared envelope is larger because all four independent
+# roles execute within one reviewed batch.
 HOSTED_MAX_PHYSICAL_CALLS = 56
+HOSTED_MAX_GLOBAL_PHYSICAL_CALLS = 136
 HOSTED_MAX_MEASURED_USD = Decimal("10")
 HOSTED_MAX_LOGICAL_RETRIES = 1
 HOSTED_MAX_CONCURRENCY = 1
@@ -38,10 +41,10 @@ HOSTED_ROLE_MODELS: Mapping[AgentRole, str] = MappingProxyType(
 )
 HOSTED_ROLE_MAX_MEASURED_USD: Mapping[AgentRole, Decimal] = MappingProxyType(
     {
-        "orchestrator": Decimal("1.50"),
+        "orchestrator": Decimal("4"),
         "red_team": Decimal("1"),
-        "judge": Decimal("4"),
-        "documentation": Decimal("1"),
+        "judge": Decimal("5"),
+        "documentation": Decimal("2"),
     }
 )
 
@@ -53,7 +56,7 @@ _REFERENCE_SEGMENT = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9._~-]{0,127}\Z")
 _ALIAS_MODEL_NAMES = frozenset({"auto", "default", "latest"})
 _RAW_PROVIDER_KEY = re.compile(r"(?:\A|[^A-Za-z0-9])sk-(?:(?:ant|or|proj)-)?[A-Za-z0-9_-]{16,}")
 
-_MAX_CALLS = HOSTED_MAX_PHYSICAL_CALLS
+_MAX_CALLS = HOSTED_MAX_GLOBAL_PHYSICAL_CALLS
 _MAX_TOKENS = 10_000_000_000
 _MAX_USD = HOSTED_MAX_MEASURED_USD
 _MAX_PRICE_PER_MILLION = Decimal("1000000")
@@ -359,6 +362,10 @@ class HostedRoleConfiguration:
             raise TypeError("hosted prices must use TokenPrices")
         if not isinstance(self.limits, HostedLimits):
             raise TypeError("hosted role limits must use HostedLimits")
+        if self.limits.max_calls > HOSTED_MAX_PHYSICAL_CALLS:
+            raise ValueError(
+                f"{self.role} call cap exceeds the closed role ceiling {HOSTED_MAX_PHYSICAL_CALLS}"
+            )
         role_usd_ceiling = HOSTED_ROLE_MAX_MEASURED_USD[self.role]
         if self.limits.max_usd > role_usd_ceiling:
             raise ValueError(
@@ -582,6 +589,7 @@ def preflight_hosted_configuration_set(
 __all__ = [
     "HOSTED_CONFIGURATION_SCHEMA_VERSION",
     "HOSTED_MAX_CONCURRENCY",
+    "HOSTED_MAX_GLOBAL_PHYSICAL_CALLS",
     "HOSTED_MAX_LOGICAL_RETRIES",
     "HOSTED_MAX_MEASURED_USD",
     "HOSTED_MAX_PHYSICAL_CALLS",
