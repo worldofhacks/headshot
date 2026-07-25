@@ -23,8 +23,10 @@ Stop if any prerequisite is missing:
    generate, expand, or substitute a corpus for the demo. Candidate source admits the exact
    400-call four-role envelope only with **zero provider retries** and refuses the 800-call
    retry-expanded shape. This source is not deployed and no final 100-case configuration exists.
-   Do not launch until the exact role/global token, USD, rate, timeout, and call ceilings are staged,
-   catalog-preflighted, and bound into a fresh authorization.
+   The default Red-Team input policy is also below current canonical encoded requests and now
+   correctly refuses before any provider side effect. Do not launch until the frozen request shapes
+   produce a new policy hash and the exact role/global token, USD, rate, timeout, and call ceilings
+   are staged, catalog-preflighted, and bound into a fresh authorization.
 3. Stage the exact configuration and verify its immutable identities:
 
    | Role | Requested model | Exact upstream route |

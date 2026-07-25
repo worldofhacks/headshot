@@ -16,7 +16,9 @@ Candidate source now admits the exact 400-call four-role envelope for 100 cases 
 retries and refuses the 800-call retry-expanded shape. That is source/test evidence only: it is not
 deployed, and no exact frozen-corpus configuration or authorization exists. The final role/global
 token, USD, rate, timeout, and call ceilings must be staged, preflighted, and included in the new
-authorization; do not weaken or bypass preflight.
+authorization. Candidate source also refuses an encoded provider input above its policy identity;
+the default Red-Team policy is too small for current canonical requests, so the frozen requests must
+produce a new policy hash. Do not weaken or bypass either preflight.
 
 ## 1. Identity permits a request; exact policy authorizes traffic
 

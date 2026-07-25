@@ -72,7 +72,11 @@ four exact endpoint tags on 2026-07-24. It is a credential-free, read-only rate 
 snapshot, not an inference call, deployment assertion, campaign authorization, provider invoice,
 or substitute for provider-returned route identity. Its observed exact-route prices support a
 dated token-bound sensitivity only; final campaign cost still requires persisted physical-attempt
-usage and billing reconciliation.
+usage and billing reconciliation. Applying the artifact's configured price ceilings to the current
+generation-policy bounds reserves `$1.16736`, `$0.34816`, `$3.024`, and `$0.98304` for one
+Orchestrator, Red Team, Judge, and Documentation attempt respectively. Reserving 100 attempts of
+every role totals `$552.256`, far above the current `$10` global kill switch. This is a capacity
+finding, not predicted or incurred spend.
 
 ## Langfuse Cloud
 

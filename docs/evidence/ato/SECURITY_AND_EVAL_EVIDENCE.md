@@ -136,7 +136,9 @@ authoritative GitHub CI on the final SHA.
 - a security-owner frozen 100-case corpus hash, final authorized campaign ID, and evidence ID;
 - an exact staged 100-case hosted configuration and authorization: candidate source accepts the
   400-call zero-provider-retry shape and refuses its 800-call retry expansion, but its final
-  token/USD/rate/timeout ceilings are not deployed or live-verified;
+  token/USD/rate/timeout ceilings are not deployed or live-verified; the
+  [capacity preflight](../provider/HOSTED_100_CAPACITY_PREFLIGHT_2026-07-24.md) records the
+  additional default Red-Team input-policy refusal;
 - an exact-runtime-identity model-Judge enablement (the model remains advisory without it);
 - complete ordered deployed agent execution rows;
 - Langfuse expected, observed, missing, extra, token, cost, and error totals;

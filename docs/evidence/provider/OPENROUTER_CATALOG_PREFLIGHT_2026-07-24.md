@@ -8,7 +8,9 @@ input was a non-secret schema-v2 `HostedConfigurationSet` assembled from the int
 tags, role-specific completion-token parameters, price ceilings, and then-current closed limits. It
 was not read from Railway and does not prove that the configuration is deployed. The artifact
 predates the candidate's later 400-call source ceiling and is not a preflight of a final 100-case
-configuration.
+configuration. It also predates the exact-input refusal in `8c21d2d`; the default Red-Team
+generation-policy input bound is now known to be below current canonical encoded requests. See the
+[100-case capacity preflight](HOSTED_100_CAPACITY_PREFLIGHT_2026-07-24.md).
 
 ## Observation identity
 

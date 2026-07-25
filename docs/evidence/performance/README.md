@@ -19,3 +19,6 @@ Candidate source admits exactly 400 logical/physical provider calls for the zero
 an authorization. The exact frozen-corpus token, USD, rate, timeout, and call ceilings still require
 a staged configuration, catalog preflight, and new approval before a live performance run; bypassing
 preflight would invalidate the evidence.
+
+The source/configuration blockers and arithmetic are retained in the
+[100-case capacity preflight](../provider/HOSTED_100_CAPACITY_PREFLIGHT_2026-07-24.md).

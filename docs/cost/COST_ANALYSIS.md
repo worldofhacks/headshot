@@ -23,6 +23,7 @@ Primary evidence:
 - [cost-input evidence](../evidence/cost/COST_INPUTS_2026-07-24.md);
 - [pre-run Railway metrics](../evidence/performance/PRE_RUN_RAILWAY_METRICS_2026-07-24.md);
 - [pre-run PostgreSQL/storage baseline](../evidence/performance/PRE_RUN_STORAGE_BASELINE_2026-07-24.md);
+- [100-case capacity preflight](../evidence/provider/HOSTED_100_CAPACITY_PREFLIGHT_2026-07-24.md);
 - [Langfuse predeployment baseline](../evidence/langfuse/PREDEPLOYMENT_BASELINE_2026-07-24.md); and
 - the security owner's measured Judge-calibration bundle at commit
   `8ce852be79212d184d49c9f84c593c9495629332`, which remains
@@ -80,6 +81,12 @@ missing frozen 100-case campaign. Its recorded Judge route identity and Red-Team
 differ from the release candidate's exact `google-vertex/global` and `atlas-cloud/fp8` routes.
 The calibration is valid evidence of development spend, but it cannot prove current-route cost,
 runtime enablement, or live performance.
+
+The current generation-policy shape is also not executable as a 100-case configuration. Its
+Red-Team input authority is 4,096 tokens, while the transport's side-effect-free conservative bound
+is 5,336–9,802 across the current canonical 9/14-case requests. Candidate source correctly refuses
+rather than silently widening that bound. The final 100-case policy, hash, token totals, and dollar
+capacity therefore remain dependent on the security owner's exact frozen request shapes.
 
 ## Actual runtime call model
 
@@ -144,19 +151,24 @@ endpoint rates to the policy's per-call input, visible-output, and reasoning bou
 dated **rate sensitivities**, not provider-reported usage, an invoice, deployment evidence, or
 campaign authorization.
 
-| Role | Input/output/reasoning token bound | Maximum first-attempt cost at observed exact-route rates |
-|---|---:|---:|
-| Orchestrator | 65,536 / 2,048 / 8,192 | $0.64204800 |
-| Red Team | 4,096 / 2,048 / 1,024 | $0.01300480 |
-| Judge | 100,000 / 2,048 / 8,192 | $0.22740000 |
-| Documentation | 16,384 / 4,096 / 4,096 | $0.18022400 |
+| Role | Input/output/reasoning token bound | Maximum first-attempt cost at observed exact-route rates | Reservation at artifact-configured price ceilings |
+|---|---:|---:|---:|
+| Orchestrator | 65,536 / 2,048 / 8,192 | $0.64204800 | $1.16736000 |
+| Red Team | 4,096 / 2,048 / 1,024 | $0.01300480 | $0.34816000 |
+| Judge | 100,000 / 2,048 / 8,192 | $0.22740000 | $3.02400000 |
+| Documentation | 16,384 / 4,096 / 4,096 | $0.18022400 | $0.98304000 |
 
 At those dated public rates, three unconditional roles total `$0.88245280` per run. Documentation
 on every run raises that to `$1.06267680`; retrying every call would raise the respective
 sensitivity figures to `$1.76490560` and `$2.12535360`. The preflight separately verifies the
-looser configured price ceilings and role caps used for authorization. Those reservations are
-safety controls and must not be presented as expected spend. Real requests are billed from
-provider-reported physical-attempt usage and reconciled after the run.
+looser configured price ceilings and role caps used for authorization. At those configured
+ceilings, the three unconditional per-call reservations total `$4.53952000`, or `$5.52256000`
+when Documentation is included. Repeating those reservations across 100 calls per role produces
+`$453.95200000` without Documentation and `$552.25600000` with Documentation. Those figures exceed
+the present `$10` global kill switch and the role caps; they prove that the refreshed route artifact
+is not a completion-capable 100-case configuration. Reservations are safety controls, not expected
+spend or billing. Real requests are billed from provider-reported physical-attempt usage and
+reconciled after the run.
 
 ## Interim numeric scale sensitivity
 
@@ -165,7 +177,7 @@ column is a token-ceiling control envelope; and the Langfuse column is a plan se
 them would mix an observed mean with mutually exclusive ceilings, so none is labeled a production
 total.
 
-| Completed test runs | Logical model calls | Physical provider calls | Judge-only proxy, p10 / mean / p90 (USD) | Provider token-ceiling scenario, no-doc/no-retry → all-doc/all-retry (USD) | Langfuse units | Published-plan sensitivity |
+| Completed test runs | Logical model calls | Physical provider calls | Judge-only proxy, p10 / mean / p90 (USD) | Observed-route rate × token-bound scenario, no-doc/no-retry → all-doc/all-retry (USD) | Langfuse units | Published-plan sensitivity |
 |---:|---:|---:|---:|---:|---:|---|
 | 100 | 300–400 | 300–800 | 0.8995 / 1.4041 / 1.9348 | 88.25–212.54 | 901–1,700 | Hobby `$0` if the actual plan is confirmed |
 | 1,000 | 3,000–4,000 | 3,000–8,000 | 8.9950 / 14.0414 / 19.3475 | 882.45–2,125.35 | 9,001–17,000 | Hobby `$0` if the actual plan is confirmed |

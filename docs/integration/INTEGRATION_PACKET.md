@@ -176,7 +176,11 @@ representative 100-case result has been integrated, and no candidate campaign ha
 query-reconciled. Candidate source now admits exactly 400 hosted calls for the zero-provider-retry
 100-case shape and refuses its 800-call retry expansion. The final role/global token, USD, rate,
 timeout, and call ceilings still require the exact frozen corpus, a staged configuration, catalog
-preflight, deployment, and new authorization. Final cost inputs, demo URL, social-post URL,
+preflight, deployment, and new authorization. The
+[capacity audit](../evidence/provider/HOSTED_100_CAPACITY_PREFLIGHT_2026-07-24.md) also shows that
+the default Red-Team input policy is below every current canonical encoded request, so the exact
+frozen shapes must produce a new policy hash rather than relying on transport widening. Final cost
+inputs, demo URL, social-post URL,
 production deploy grant, and confirmed database rollback binding are also unavailable.
 
 The required proof remains one newly authorized campaign on the exact staging release and the
