@@ -80,23 +80,34 @@ it would be an unauthorised re-attack outside the `authorized-live-campaign` gat
 import json
 from collections import Counter
 
-recs = [r for f in ("week1-bruno.json", "week2-bruno.json")
-          for r in json.load(open(f))[0]["results"]]
+recs = [
+    r for f in ("week1-bruno.json", "week2-bruno.json") for r in json.load(open(f))[0]["results"]
+]
 
-print("RECORDS:", len(recs))                                           # 15
-print("STATUSES:", Counter(r["response"]["status"] for r in recs))     # {200: 15}
+print("RECORDS:", len(recs))  # 15
+print("STATUSES:", Counter(r["response"]["status"] for r in recs))  # {200: 15}
 
 hdrsets = [{k.lower() for k in r["response"]["headers"]} for r in recs]
-print("HEADER UNION:", sorted(set().union(*hdrsets)))                  # 12 names
+print("HEADER UNION:", sorted(set().union(*hdrsets)))  # 12 names
 
-SEC = ["strict-transport-security", "content-security-policy", "x-content-type-options",
-       "x-frame-options", "referrer-policy", "permissions-policy",
-       "cross-origin-opener-policy", "cross-origin-embedder-policy",
-       "cross-origin-resource-policy", "x-permitted-cross-domain-policies",
-       "x-xss-protection", "content-disposition", "set-cookie",
-       "access-control-allow-origin"]
+SEC = [
+    "strict-transport-security",
+    "content-security-policy",
+    "x-content-type-options",
+    "x-frame-options",
+    "referrer-policy",
+    "permissions-policy",
+    "cross-origin-opener-policy",
+    "cross-origin-embedder-policy",
+    "cross-origin-resource-policy",
+    "x-permitted-cross-domain-policies",
+    "x-xss-protection",
+    "content-disposition",
+    "set-cookie",
+    "access-control-allow-origin",
+]
 for s in SEC:
-    print(f"{s:38} {sum(s in h for h in hdrsets)}/{len(recs)}")        # every one -> 0/15
+    print(f"{s:38} {sum(s in h for h in hdrsets)}/{len(recs)}")  # every one -> 0/15
 
 # Request/response URL equality — consistent with no client-followed redirect being collapsed.
 print("url stable:", sum(r["request"]["url"] == r["response"]["url"] for r in recs))  # 15
