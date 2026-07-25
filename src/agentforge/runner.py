@@ -1233,28 +1233,36 @@ class DurableCampaignRunner:
                 blockers.append("synthetic_data_attestation_missing")
             if not target.canary_refs:
                 blockers.append("deterministic_canary_missing")
-            if scope.method not in entry.transport_policy.allowed_methods:
-                blockers.append("method_not_allowed")
-            if not _literal_destination_allowed(scope, entry):
-                blockers.append("private_destination_refused")
-            try:
-                scope_profile = _scope_payload_profile(
-                    relative_path=scope.relative_path,
-                    method=scope.method,
-                    auth_mode=scope.auth_mode,
-                )
-            except DispatchUnavailable:
-                blockers.append("payload_profile_scope_invalid")
+            transport_policy = entry.transport_policy
+            if transport_policy is None:
+                # T-F16a makes the v2 policy authoritative but does not include T-F16b's physical
+                # operation gateway. A staged v2 entry must fail closed until that separately
+                # reviewed bridge consumes the exact surface-policy operation template.
+                blockers.append("surface_policy_dispatch_not_integrated")
             else:
-                if scope_profile not in entry.transport_policy.payload_profiles:
-                    blockers.append("payload_profile_scope_mismatch")
-                if scope_profile == "copilot_document_upload" and (
-                    not entry.transport_policy.write_upload_allowed
-                    or not entry.transport_policy.allowed_write_resource_refs
-                ):
-                    # A write/upload surface may dispatch only under an explicit write policy with a
-                    # closed set of synthetic write-resource references; otherwise fail closed.
-                    blockers.append("write_upload_policy_missing")
+                if scope.method not in transport_policy.allowed_methods:
+                    blockers.append("method_not_allowed")
+                if not _literal_destination_allowed(scope, entry):
+                    blockers.append("private_destination_refused")
+                try:
+                    scope_profile = _scope_payload_profile(
+                        relative_path=scope.relative_path,
+                        method=scope.method,
+                        auth_mode=scope.auth_mode,
+                    )
+                except DispatchUnavailable:
+                    blockers.append("payload_profile_scope_invalid")
+                else:
+                    if scope_profile not in transport_policy.payload_profiles:
+                        blockers.append("payload_profile_scope_mismatch")
+                    if scope_profile == "copilot_document_upload" and (
+                        not transport_policy.write_upload_allowed
+                        or not transport_policy.allowed_write_resource_refs
+                    ):
+                        # A write/upload surface may dispatch only under an explicit write policy
+                        # with a closed set of synthetic write-resource references; otherwise fail
+                        # closed.
+                        blockers.append("write_upload_policy_missing")
             if scope.execution_profile is ExecutionProfile.SYNTHETIC:
                 if self.environment == "production" or scope.target_id != SYNTHETIC_TARGET_ID:
                     blockers.append("synthetic_profile_refused")
@@ -1364,6 +1372,8 @@ class DurableCampaignRunner:
                 base_url=target.base_url,
             )
         policy = prepared.entry.transport_policy
+        if policy is None:
+            raise DispatchUnavailable("surface_policy_dispatch_not_integrated")
         # The Clinical Co-Pilot's reviewed Bruno contract is exactly POST /chat with a
         # patient-pinned SMART session carried as ``session_id`` in the JSON body. The catalog
         # selects the profile, but it must equal the profile derived from fields already bound in

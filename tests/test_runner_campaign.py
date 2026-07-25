@@ -47,8 +47,20 @@ from agentforge.runner import (
 )
 from agentforge.secrets import Secret
 from agentforge.storage.queue import JobRecord, LogicalQueue, PostgresJobQueue
-from agentforge.target.catalog import TrustedTargetCatalog
-from agentforge.target.spec import AuthMode, ExecutionProfile, SafetyCaps
+from agentforge.target.catalog import CatalogEntry, TrustedTargetCatalog
+from agentforge.target.spec import (
+    AttackSurfaceDefinition,
+    AuthMode,
+    ExecutionProfile,
+    OwaspMapping,
+    RiskLevel,
+    SafetyCaps,
+    SurfaceKind,
+    SurfaceOperationTemplate,
+    SurfacePolicy,
+    TargetDefinition,
+    TargetEnvironment,
+)
 
 ORG_ID = "org_RunnerFixture"
 _LEASE = datetime.timedelta(minutes=10)
@@ -498,6 +510,194 @@ def test_live_runner_refuses_catalog_profile_that_differs_from_approved_scope() 
 
     with pytest.raises(DispatchUnavailable, match="payload_profile_scope_mismatch"):
         runner._adapter(_live_chat_prepared(payload_profile="openemr_turns"))
+
+
+def test_live_runner_refuses_v2_policy_until_physical_operation_gateway_is_integrated() -> None:
+    runner = object.__new__(DurableCampaignRunner)
+    prepared = _live_chat_prepared()
+    prepared.entry.transport_policy = None
+
+    with pytest.raises(DispatchUnavailable, match="surface_policy_dispatch_not_integrated"):
+        runner._adapter(prepared)
+
+
+def test_live_runner_preflight_refuses_v2_policy_before_side_effects(
+    migrated_db: Engine,
+    tmp_path,
+) -> None:
+    _clean(migrated_db)
+    launcher = _principal("user_RunnerV2Launcher", CAMPAIGN_LAUNCH)
+    approver = _principal("user_RunnerV2Approver", CAMPAIGN_AUTHORIZE)
+    corpus = load_mvp_corpus()
+    started = datetime.datetime.now(datetime.UTC)
+    credential_ref = "secretref://production/clinical-copilot-week2/session/generation-v2-preflight"
+    caps = SafetyCaps(
+        budget_usd=1.0,
+        max_attempts_per_run=len(corpus.cases),
+        target_requests_per_second=100.0,
+        run_timeout_seconds=300.0,
+        logical_case_limit=14,
+        physical_request_limit=51,
+        target_retries_per_turn=2,
+    )
+    target = TargetDefinition(
+        target_id="clinical-copilot-week2-v2-preflight",
+        name="Clinical Co-Pilot v2 preflight refusal",
+        version="2.0.0",
+        adapter_kind="openemr",
+        environment=TargetEnvironment.PRODUCTION,
+        base_url="https://copilot.example.test",
+        allowlisted_hosts=("copilot.example.test",),
+        auth_mode=AuthMode.SESSION,
+        credential_ref=credential_ref,
+        synthetic_data_only=True,
+        synthetic_data_attestation_ref="attestation://agentforge/synthetic-v2-preflight",
+        canary_refs=("oracle://agentforge/SYNTH_CANARY_PATIENT_BETA_8C1E",),
+        oracle_refs=("oracle://agentforge/v2-preflight-refusal",),
+        safety_caps=caps,
+    )
+    operation = SurfaceOperationTemplate(
+        operation_class="chat",
+        method="POST",
+        relative_path="chat",
+        request_content_type="application/json",
+        response_content_types=("application/json",),
+        credential_placement="json",
+        credential_field_name="session_id",
+        retry_count=0,
+        maximum_logical_operations=1,
+    )
+    policy = SurfacePolicy(
+        schema="agentforge.target-surface-policy",
+        schema_version=2,
+        adapter_profile="copilot_chat",
+        auth_mode=AuthMode.SESSION,
+        credential_ref=credential_ref,
+        explicit_no_auth=False,
+        redirect_policy="deny",
+        response_size_limit_bytes=262_144,
+        request_timeout_seconds=30.0,
+        tls_required=True,
+        operation_templates=(operation,),
+        maximum_logical_operations=1,
+        physical_request_limit=1,
+        fixture_descriptors=(),
+    )
+    surface = AttackSurfaceDefinition(
+        surface_id="clinical-copilot-week2-chat-v2-preflight",
+        version="2.0.0",
+        target_id=target.target_id,
+        target_version=target.version,
+        kind=SurfaceKind.CHAT,
+        protocol="https",
+        method="POST",
+        relative_path="chat",
+        trust_boundary="live-target",
+        authentication_required=True,
+        risk=RiskLevel.HIGH,
+        owasp_mappings=(
+            OwaspMapping(
+                framework="OWASP Web",
+                version="2021",
+                identifier="A01",
+                name="Broken Access Control",
+            ),
+        ),
+        oracle_refs=("oracle://agentforge/v2-preflight-refusal",),
+        enabled=True,
+        surface_policy=policy,
+        surface_policy_sha256=policy.policy_hash(),
+    )
+    entry = CatalogEntry(
+        target=target,
+        surfaces=(surface,),
+        transport_policy=None,
+        ownership_authorization_ref="authorization://agentforge/v2-preflight-owner",
+    )
+    catalog = TrustedTargetCatalog((entry,))
+    store = ControlPlaneStore(migrated_db, environment="production")
+    catalog.synchronize(store, organization_id=ORG_ID)
+    scope = store.build_scope(
+        principal=launcher,
+        target_id=target.target_id,
+        target_version=target.version,
+        surface_id=surface.surface_id,
+        surface_version=surface.version,
+        corpus_id=corpus.corpus_id,
+        corpus_hash=corpus.content_hash,
+        caps=caps,
+        run_nonce="runner-v2-preflight-nonce-0001",
+        execution_profile=ExecutionProfile.LIVE,
+    )
+    request = store.request_campaign_authorization(
+        principal=launcher,
+        scope=scope,
+        expires_at=started + datetime.timedelta(hours=1),
+        idempotency_key="runner-v2-preflight-request-0001",
+    )
+    store.decide_campaign_authorization(
+        principal=approver,
+        request_id=request.request_id,
+        decision="approved",
+        idempotency_key="runner-v2-preflight-approve-0001",
+    )
+    store.launch_campaign(
+        principal=launcher,
+        request_id=request.request_id,
+        idempotency_key="runner-v2-preflight-launch-0001",
+    )
+    session_value = "synthetic-v2-preflight-session"
+    credentials = SealedEnvironmentCredentialResolver(
+        {credential_ref: "RUNNER_V2_PREFLIGHT_SESSION"},
+        environment={"RUNNER_V2_PREFLIGHT_SESSION": session_value},
+        session_metadata={
+            credential_ref: SessionLeaseMetadata(
+                generation=credential_ref.rsplit("/", 1)[-1],
+                expires_at=started + datetime.timedelta(hours=2),
+                value_sha256=hashlib.sha256(session_value.encode()).hexdigest(),
+                expiry_source="operator_conservative_lease",
+            )
+        },
+    )
+    runner = DurableCampaignRunner(
+        engine=migrated_db,
+        environment="production",
+        corpus=corpus,
+        catalog=catalog,
+        credentials=credentials,
+        clock=SimpleNamespace(now=started.timestamp),
+        manifest_root=tmp_path,
+    )
+    job = _claim_enqueued_job(runner, worker_id="runner-v2-preflight-test")
+
+    side_effect_calls: list[str] = []
+
+    def forbidden(label: str):
+        def invoke(*_args: object, **_kwargs: object) -> object:
+            side_effect_calls.append(label)
+            raise AssertionError(f"preflight reached forbidden {label} side effect")
+
+        return invoke
+
+    runner.credentials = SimpleNamespace(  # type: ignore[assignment]
+        has=credentials.has,
+        session_ready=credentials.session_ready,
+        lease=forbidden("credential_lease"),
+    )
+    runner._execute_prepared = forbidden("execute_prepared")  # type: ignore[method-assign]
+    runner._adapter = forbidden("adapter")  # type: ignore[method-assign]
+
+    report, prepared = runner.preflight(job)
+
+    assert report.blockers == ("surface_policy_dispatch_not_integrated",)
+    assert prepared is None
+    assert side_effect_calls == []
+    with pytest.raises(
+        DispatchUnavailable,
+        match=r"^preflight_blocked:surface_policy_dispatch_not_integrated$",
+    ):
+        runner.execute_claimed(job)
+    assert side_effect_calls == []
 
 
 def test_synthetic_catalog_versions_the_fourteen_case_safety_contract() -> None:

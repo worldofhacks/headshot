@@ -39,6 +39,28 @@ _KNOWN_PAYLOAD_PROFILES = frozenset(
         "copilot_document_read",
     }
 )
+_V2_PROFILE_OPERATION_CLASSES = {
+    "copilot_chat": frozenset({"chat"}),
+    "copilot_public_get": frozenset({"ui_shell"}),
+    "copilot_evidence_search": frozenset({"evidence_search"}),
+    "copilot_document_workflow": frozenset(
+        {
+            "upload",
+            "duplicate_check",
+            "status_poll",
+            "report",
+            "preview",
+            "readback",
+        }
+    ),
+}
+_V2_DOCUMENT_WORKFLOW_OPERATION_SETS = frozenset(
+    {
+        frozenset({"upload", "status_poll", "report", "preview", "readback"}),
+        frozenset({"upload", "duplicate_check"}),
+    }
+)
+_APPROVED_V2_TARGET_VERSIONS = frozenset({"2.0.0", "2.1.0"})
 
 
 class TargetCatalogError(RuntimeError):
@@ -110,9 +132,12 @@ class TransportPolicy:
             raise TargetCatalogError("private-destination policy is invalid")
         if self.payload_profile not in _KNOWN_PAYLOAD_PROFILES:
             raise TargetCatalogError("transport payload profile is invalid")
-        profiles = (
-            tuple(self.payload_profiles) if self.payload_profiles else (self.payload_profile,)
-        )
+        declared_profiles = tuple(self.payload_profiles)
+        if declared_profiles and declared_profiles != (self.payload_profile,):
+            raise TargetCatalogError(
+                "target-wide payload profile sets are ambiguous; use per-surface policy"
+            )
+        profiles = declared_profiles or (self.payload_profile,)
         if any(profile not in _KNOWN_PAYLOAD_PROFILES for profile in profiles):
             raise TargetCatalogError("transport payload profile set is invalid")
         if len(set(profiles)) != len(profiles):
@@ -124,24 +149,101 @@ class TransportPolicy:
 class CatalogEntry:
     target: TargetDefinition
     surfaces: tuple[AttackSurfaceDefinition, ...]
-    transport_policy: TransportPolicy
+    transport_policy: TransportPolicy | None
     ownership_authorization_ref: str
 
     def __post_init__(self) -> None:
-        if not self.ownership_authorization_ref.startswith("authorization://"):
+        if not isinstance(
+            self.ownership_authorization_ref, str
+        ) or not self.ownership_authorization_ref.startswith("authorization://"):
             raise TargetCatalogError("target ownership/testing authorization is not recorded")
-        if not self.surfaces:
-            raise TargetCatalogError("trusted target catalog entry requires an exact surface")
-        if len({(surface.surface_id, surface.version) for surface in self.surfaces}) != len(
-            self.surfaces
-        ):
-            raise TargetCatalogError("trusted target catalog entry contains a duplicate surface")
+        if not isinstance(self.target, TargetDefinition):
+            raise TargetCatalogError("catalog target must be a validated target definition")
+        if not isinstance(self.surfaces, tuple) or not self.surfaces:
+            raise TargetCatalogError("catalog entry requires exact surface definitions")
+        if any(not isinstance(surface, AttackSurfaceDefinition) for surface in self.surfaces):
+            raise TargetCatalogError("catalog surfaces must be validated definitions")
+        surface_ids = tuple(surface.surface_id for surface in self.surfaces)
+        if len(set(surface_ids)) != len(surface_ids):
+            raise TargetCatalogError("catalog entry contains a duplicate surface")
         if any(
             surface.target_id != self.target.target_id
             or surface.target_version != self.target.version
             for surface in self.surfaces
         ):
             raise TargetCatalogError("catalog surface differs from its immutable target version")
+
+        policy_presence = tuple(surface.surface_policy is not None for surface in self.surfaces)
+        target_major = int(self.target.version.split(".", maxsplit=1)[0])
+        if all(policy_presence):
+            if self.transport_policy is not None:
+                raise TargetCatalogError(
+                    "v2 per-surface policy cannot carry target-wide transport policy"
+                )
+            if target_major < 2:
+                raise TargetCatalogError(
+                    "per-surface policy requires a v2 target and approval hash"
+                )
+            if self.target.version not in _APPROVED_V2_TARGET_VERSIONS:
+                raise TargetCatalogError(
+                    "per-surface policy target version is not an exact approved activation"
+                )
+            if any(surface.version != self.target.version for surface in self.surfaces):
+                raise TargetCatalogError(
+                    "per-surface policy version must match its exact target activation"
+                )
+            fixture_refs: list[str] = []
+            for surface in self.surfaces:
+                assert surface.surface_policy is not None
+                allowed_operations = _V2_PROFILE_OPERATION_CLASSES.get(
+                    surface.surface_policy.adapter_profile
+                )
+                operation_classes = frozenset(
+                    operation.operation_class
+                    for operation in surface.surface_policy.operation_templates
+                )
+                if allowed_operations is None:
+                    raise TargetCatalogError("surface policy adapter profile is not supported")
+                if surface.surface_policy.adapter_profile == "copilot_document_workflow":
+                    if (
+                        not operation_classes.issubset(allowed_operations)
+                        or operation_classes not in _V2_DOCUMENT_WORKFLOW_OPERATION_SETS
+                    ):
+                        raise TargetCatalogError(
+                            "document surface requires one complete canonical workflow"
+                        )
+                elif operation_classes != allowed_operations:
+                    raise TargetCatalogError("surface operations do not match its adapter profile")
+                fixture_refs.extend(
+                    descriptor.opaque_ref
+                    for descriptor in surface.surface_policy.fixture_descriptors
+                )
+                if (
+                    self.target.version == "2.0.0"
+                    and surface.surface_policy.adapter_profile == "copilot_document_workflow"
+                    and surface.enabled
+                ):
+                    raise TargetCatalogError("v2.0.0 document surfaces must remain disabled")
+            if len(set(fixture_refs)) != len(fixture_refs):
+                raise TargetCatalogError(
+                    "fixture opaque refs must be unique across catalog surfaces"
+                )
+            return
+
+        if any(policy_presence):
+            raise TargetCatalogError(
+                "mixed legacy and per-surface policy shapes are not authorized"
+            )
+        if self.transport_policy is None:
+            raise TargetCatalogError("legacy catalog entry requires one transport policy")
+        if target_major >= 2:
+            raise TargetCatalogError(
+                "v2 targets require canonical per-surface policy, not target-wide policy"
+            )
+        if sum(surface.enabled for surface in self.surfaces) > 1:
+            raise TargetCatalogError(
+                "legacy target-wide policy permits only one enabled single-profile surface"
+            )
         surface_methods = {surface.method for surface in self.surfaces}
         if not surface_methods.issubset(set(self.transport_policy.allowed_methods)):
             raise TargetCatalogError("surface method is outside the transport policy")
@@ -153,6 +255,17 @@ class TrustedTargetCatalog:
     def __init__(self, entries: tuple[CatalogEntry, ...]):
         if len({entry.target.target_id for entry in entries}) != len(entries):
             raise TargetCatalogError("trusted target catalog contains a duplicate target")
+        fixture_refs = [
+            descriptor.opaque_ref
+            for entry in entries
+            for surface in entry.surfaces
+            if surface.surface_policy is not None
+            for descriptor in surface.surface_policy.fixture_descriptors
+        ]
+        if len(set(fixture_refs)) != len(fixture_refs):
+            raise TargetCatalogError(
+                "trusted target catalog contains a duplicate fixture opaque ref"
+            )
         self.entries = entries
 
     @classmethod
@@ -174,40 +287,64 @@ class TrustedTargetCatalog:
             if not isinstance(configured, list):
                 raise TargetCatalogError("live target catalog must be a list")
             for item in configured:
-                if not isinstance(item, dict) or set(item) != {
+                common_keys = {
                     "target",
                     "surfaces",
-                    "transport_policy",
                     "ownership_authorization_ref",
+                }
+                if not isinstance(item, dict) or frozenset(item) not in {
+                    frozenset(common_keys),
+                    frozenset(common_keys | {"transport_policy"}),
                 }:
                     raise TargetCatalogError("live target catalog entry is invalid")
-                target = target_from_payload(dict(item["target"]))
-                if target.environment is not selected or target.adapter_kind != "openemr":
-                    raise TargetCatalogError("live target catalog environment or adapter differs")
-                surfaces = tuple(surface_from_payload(dict(value)) for value in item["surfaces"])
-                if not surfaces:
-                    raise TargetCatalogError("live target catalog requires an exact surface")
-                policy_payload = item["transport_policy"]
-                if not isinstance(policy_payload, dict):
-                    raise TargetCatalogError("live target transport policy is invalid")
-                policy_values = dict(policy_payload)
-                policy_values["allowed_methods"] = tuple(policy_values["allowed_methods"])
-                policy_values["allowed_write_resource_refs"] = tuple(
-                    policy_values["allowed_write_resource_refs"]
-                )
-                policy_values["allowed_content_types"] = tuple(
-                    policy_values["allowed_content_types"]
-                )
-                if "payload_profiles" in policy_values:
-                    policy_values["payload_profiles"] = tuple(policy_values["payload_profiles"])
-                entries.append(
-                    CatalogEntry(
-                        target=target,
-                        surfaces=surfaces,
-                        transport_policy=TransportPolicy(**policy_values),
-                        ownership_authorization_ref=str(item["ownership_authorization_ref"]),
+                try:
+                    target_payload = item["target"]
+                    surface_payloads = item["surfaces"]
+                    if not isinstance(target_payload, dict) or not isinstance(
+                        surface_payloads, list
+                    ):
+                        raise TargetCatalogError("live target catalog definitions are invalid")
+                    target = target_from_payload(dict(target_payload))
+                    if target.environment is not selected or target.adapter_kind != "openemr":
+                        raise TargetCatalogError(
+                            "live target catalog environment or adapter differs"
+                        )
+                    surfaces = tuple(
+                        surface_from_payload(dict(value)) for value in surface_payloads
                     )
-                )
+                    if not surfaces:
+                        raise TargetCatalogError("live target catalog requires an exact surface")
+
+                    transport_policy: TransportPolicy | None = None
+                    if "transport_policy" in item:
+                        policy_payload = item["transport_policy"]
+                        if not isinstance(policy_payload, dict):
+                            raise TargetCatalogError("live target transport policy is invalid")
+                        if "payload_profiles" in policy_payload:
+                            raise TargetCatalogError(
+                                "target-wide payload_profiles are ambiguous; use per-surface policy"
+                            )
+                        policy_values = dict(policy_payload)
+                        policy_values["allowed_methods"] = tuple(policy_values["allowed_methods"])
+                        policy_values["allowed_write_resource_refs"] = tuple(
+                            policy_values["allowed_write_resource_refs"]
+                        )
+                        policy_values["allowed_content_types"] = tuple(
+                            policy_values["allowed_content_types"]
+                        )
+                        transport_policy = TransportPolicy(**policy_values)
+                    entries.append(
+                        CatalogEntry(
+                            target=target,
+                            surfaces=surfaces,
+                            transport_policy=transport_policy,
+                            ownership_authorization_ref=str(item["ownership_authorization_ref"]),
+                        )
+                    )
+                except TargetCatalogError:
+                    raise
+                except (KeyError, TypeError, ValueError) as exc:
+                    raise TargetCatalogError("live target catalog entry is invalid") from exc
         return cls(tuple(entries))
 
     def resolve(
