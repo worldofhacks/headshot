@@ -27,13 +27,20 @@ in for "this target's data is safe to attack."
 
 The proxy is wrong in **both** directions, and we hit both:
 
-1. **It refuses a safe target.** The authorized Clinical Co-Pilot is genuinely synthetic — its catalog
-   spec carries `synthetic_data_only: true` and
-   `synthetic_data_attestation_ref: attestation://agentforge/synthetic-clinical-context-v1`, and it is
-   seeded with synthetic Synthea patients. Reaching it from a deployment labelled `staging` aborted
-   the dispatch, even though nothing unsafe was being attempted. Every Railway production service
-   currently runs `AGENTFORGE_ENVIRONMENT=staging`, so in practice **no live campaign could dispatch
-   at all**.
+1. **It refuses a safe target — but only for a URL-shaped target id.** The gate raises solely when
+   `target_id.startswith(("http://", "https://"))`. The runner binds `scope.target_id`, which is a
+   *catalog id* (`clinical-copilot-week2`), so for every catalog-resolved target the gate never fired
+   at all.
+
+   > **Correction (2026-07-25, same day).** This ADR and the commit that introduced it originally
+   > claimed that because every Railway service runs `AGENTFORGE_ENVIRONMENT=staging`, "no live
+   > campaign could dispatch at all". **That was wrong.** The gate is unreachable for catalog-id
+   > targets, so it was never the thing blocking a campaign. The real blockers are elsewhere — the
+   > deployed catalog omits two targets, and its `safety_caps` lack the
+   > `logical_case_limit`/`physical_request_limit`/`target_retries_per_turn` the live-100 exact-cap
+   > contract requires. The narrowing below is still correct and still worth having (defect 2 is
+   > real, and the gate had no test coverage), but it did **not** unblock anything, and it should not
+   > be cited as having done so.
 2. **It admits an unsafe target.** In production the gate returns early and performs *no* attestation
    check. A live target with real data would have been dispatched to without objection — the precise
    thing O1 exists to prevent.
@@ -65,8 +72,9 @@ no target that was previously admitted becomes refused.
 
 ## Consequences
 
-- A campaign can run against the attested-synthetic Co-Pilot from the staging deployment, with no
-  production flip, no Clerk production instance, and no split-brain across services.
+- The gate now expresses a synthetic-data rule rather than an environment rule, and would admit an
+  attested-synthetic target reached by URL from staging. **It does not by itself make any campaign
+  runnable** — see the correction above; for catalog-id targets the gate was already a no-op.
 - The control is now *stronger* in intent: it asserts something about the target's data rather than
   about which box the request came from.
 - **Known gap, deliberately not closed here:** production still returns early without checking
