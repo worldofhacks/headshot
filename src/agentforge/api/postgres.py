@@ -57,6 +57,11 @@ from agentforge.control_plane.serialization import (
 )
 from agentforge.correlation import campaign_trace_id
 from agentforge.migration_config import normalize_psycopg_url
+from agentforge.platform_limits import (
+    CampaignWindowPolicyError,
+    campaign_authorization_expiry_seconds,
+    campaign_window_template,
+)
 from agentforge.policy.recorder import (
     PERSISTED_EVIDENCE_COLUMNS,
     EvidenceIntegrityError,
@@ -3672,6 +3677,12 @@ class PostgresApiBackend(ApiBackend):
                                 if row["target_id"] == SYNTHETIC_TARGET_ID
                                 else "live",
                                 "maximum_caps": row["safety_caps"],
+                                "campaign_window": campaign_window_template(
+                                    environment=self._environment,
+                                    target_max_run_timeout_seconds=float(
+                                        row["safety_caps"]["run_timeout_seconds"]
+                                    ),
+                                ),
                                 "workload_caps": workload_caps,
                                 "target_policy": target_policy,
                                 "hosted_run": self._latest_hosted_run_binding(
@@ -3790,6 +3801,14 @@ class PostgresApiBackend(ApiBackend):
                 )
                 return CommandResult.completed(surface.version, resource_id=surface.surface_id)
             if command == "request_campaign_authorization":
+                caps = SafetyCaps(**dict(payload["caps"]))
+                derived_expiry_seconds = campaign_authorization_expiry_seconds(
+                    caps.run_timeout_seconds,
+                    profile=str(payload.get("window_profile", "standard")),
+                    environment=self._environment,
+                    operation="campaign",
+                    submitted_expiry_seconds=payload.get("expires_in_seconds"),
+                )
                 if self._corpus is not None:
                     if (
                         payload.get("corpus_id") != self._corpus.corpus_id
@@ -3832,7 +3851,6 @@ class PostgresApiBackend(ApiBackend):
                         raise ApiConflict(
                             "hosted campaign binding differs from the server-owned active set"
                         )
-                caps = SafetyCaps(**dict(payload["caps"]))
                 scope = self._store.build_scope(
                     principal=principal,
                     target_id=str(payload["target_id"]),
@@ -3852,9 +3870,7 @@ class PostgresApiBackend(ApiBackend):
                 )
                 with self._engine.connect() as connection:
                     database_now = connection.execute(text("SELECT clock_timestamp()")).scalar_one()
-                expiry = database_now + datetime.timedelta(
-                    seconds=int(payload["expires_in_seconds"])
-                )
+                expiry = database_now + datetime.timedelta(seconds=derived_expiry_seconds)
                 record = self._store.request_campaign_authorization(
                     principal=principal,
                     scope=scope,
@@ -3948,6 +3964,8 @@ class PostgresApiBackend(ApiBackend):
             if command in {"validate_configuration", "publish_configuration"}:
                 return CommandResult.unavailable("configuration_snapshot_repository_missing")
             return CommandResult.unavailable("command_not_implemented")
+        except CampaignWindowPolicyError as exc:
+            raise ApiConflict("campaign authorization window conflicts with server policy") from exc
         except AuthorizationDeniedError as exc:
             raise AuthorizationError() from exc
         except (IdempotencyConflictError, RecordConflictError, RecordNotFoundError) as exc:

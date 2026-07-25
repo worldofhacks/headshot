@@ -86,6 +86,15 @@ const hostedRun = {
   provider_timeout_seconds: 180,
 } as const;
 
+const authorizationWindow = {
+  default_profile: "standard",
+  default_run_timeout_seconds: 60,
+  execution_margin_seconds: 300,
+  standard_max_grant_seconds: 3_600,
+  staging_extended_max_run_timeout_seconds: null,
+  staging_extended_max_grant_seconds: null,
+} as const;
+
 const approval = {
   target_id: "target-1",
   target_version: "1.0.0",
@@ -544,8 +553,15 @@ describe("target console operability", () => {
         PERMISSIONS.campaignLaunch,
       ],
     };
-    const campaignTarget = {
+    const wideTarget = {
       ...target(true),
+      safety_caps: {
+        ...target(true).safety_caps,
+        run_timeout_seconds: 14_400,
+      },
+    };
+    const campaignTarget = {
+      ...wideTarget,
       campaign_template: {
         target_id: "target-1",
         target_version: "1.0.0",
@@ -557,10 +573,16 @@ describe("target console operability", () => {
         tool_sources: [],
         execution_profile: "live" as const,
         maximum_caps: {
-          ...target(true).safety_caps,
+          ...wideTarget.safety_caps,
           logical_case_limit: 2,
           physical_request_limit: 6,
           target_retries_per_turn: 1,
+        },
+        campaign_window: {
+          ...authorizationWindow,
+          default_run_timeout_seconds: 1_800,
+          staging_extended_max_run_timeout_seconds: 14_400,
+          staging_extended_max_grant_seconds: 14_701,
         },
         workload_caps: {
           logical_case_limit: 2,
@@ -602,6 +624,13 @@ describe("target console operability", () => {
     const authorize = screen.getByRole("button", {
       name: "Request exact campaign authorization",
     });
+    const timeout = screen.getByLabelText("Run timeout seconds");
+    const windowProfile = screen.getByLabelText("Authorization window profile");
+    expect((timeout as HTMLInputElement).value).toBe("1800");
+    expect((windowProfile as HTMLSelectElement).value).toBe("standard");
+    fireEvent.change(timeout, { target: { value: "14400" } });
+    expect((authorize as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.change(windowProfile, { target: { value: "staging_extended" } });
     expect((authorize as HTMLButtonElement).disabled).toBe(false);
     fireEvent.click(authorize);
 
@@ -616,12 +645,13 @@ describe("target console operability", () => {
         budget_usd: 1,
         max_attempts_per_run: 2,
         target_requests_per_second: 0.5,
-        run_timeout_seconds: 60,
+        run_timeout_seconds: 14_400,
         logical_case_limit: 2,
         physical_request_limit: 3,
         target_retries_per_turn: 0,
       },
-      expires_in_seconds: 361,
+      window_profile: "staging_extended",
+      expires_in_seconds: 14_701,
     }));
     expect(JSON.stringify(payload)).not.toContain("credential_reference");
     expect(JSON.stringify(payload)).not.toContain("model_id");
@@ -648,6 +678,7 @@ describe("target console operability", () => {
         tool_sources: [],
         execution_profile: "live" as const,
         maximum_caps: target(true).safety_caps,
+        campaign_window: authorizationWindow,
         workload_caps: null,
         target_policy: {
           exact_host: "target.invalid",

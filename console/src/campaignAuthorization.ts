@@ -1,6 +1,8 @@
 import type { JsonRecord } from "./api/contracts";
 import type {
+  CampaignAuthorizationWindowReadModel,
   CampaignTemplateReadModel,
+  CampaignWindowProfile,
   HostedRunBindingReadModel,
   SafetyCapsReadModel,
 } from "./types";
@@ -32,11 +34,14 @@ export interface CampaignAuthorizationPayload extends JsonRecord {
   caps: SafetyCapsReadModel;
   run_nonce: string;
   hosted_run: HostedRunBindingReadModel;
+  window_profile: CampaignWindowProfile;
   expires_in_seconds: number;
 }
 
 export const AUTHORIZATION_EXECUTION_MARGIN_SECONDS = 300;
 export const MAX_AUTHORIZATION_EXPIRY_SECONDS = 3_600;
+export const MAX_STAGING_EXTENDED_RUN_TIMEOUT_SECONDS = 14_400;
+export const MAX_STAGING_EXTENDED_AUTHORIZATION_EXPIRY_SECONDS = 14_701;
 
 const positiveFinite = (value: number) => Number.isFinite(value) && value > 0;
 const positiveSafeInteger = (value: number) =>
@@ -48,14 +53,55 @@ const sha256 = (value: string) => /^[a-f0-9]{64}$/.test(value);
  * exact timeout. Flooring plus one makes the resulting expiry strictly greater
  * than timeout + margin, including for fractional timeout values.
  */
-export const authorizationExpirySeconds = (runTimeoutSeconds: number): number | null => {
+export const authorizationExpirySeconds = (
+  runTimeoutSeconds: number,
+  profile: CampaignWindowProfile = "standard",
+  window?: CampaignAuthorizationWindowReadModel,
+): number | null => {
   if (!positiveFinite(runTimeoutSeconds)) return null;
+  const margin = window?.execution_margin_seconds
+    ?? AUTHORIZATION_EXECUTION_MARGIN_SECONDS;
+  const maximumExpiry = profile === "standard"
+    ? window?.standard_max_grant_seconds
+      ?? MAX_AUTHORIZATION_EXPIRY_SECONDS
+    : window?.staging_extended_max_grant_seconds;
+  if (
+    profile === "staging_extended"
+    && (
+      window?.staging_extended_max_run_timeout_seconds === null
+      || window?.staging_extended_max_run_timeout_seconds === undefined
+      || runTimeoutSeconds > window.staging_extended_max_run_timeout_seconds
+    )
+  ) {
+    return null;
+  }
+  if (!positiveSafeInteger(margin) || !positiveSafeInteger(maximumExpiry ?? 0)) {
+    return null;
+  }
   const expiresInSeconds = Math.floor(runTimeoutSeconds)
-    + AUTHORIZATION_EXECUTION_MARGIN_SECONDS
+    + margin
     + 1;
-  return expiresInSeconds <= MAX_AUTHORIZATION_EXPIRY_SECONDS
+  return expiresInSeconds <= (maximumExpiry ?? 0)
     ? expiresInSeconds
     : null;
+};
+
+export const defaultCampaignRunTimeoutSeconds = (
+  template: CampaignTemplateReadModel,
+): number | null => {
+  const selected = template.campaign_window.default_run_timeout_seconds;
+  if (
+    !positiveFinite(selected)
+    || selected > template.maximum_caps.run_timeout_seconds
+    || authorizationExpirySeconds(
+      selected,
+      template.campaign_window.default_profile,
+      template.campaign_window,
+    ) === null
+  ) {
+    return null;
+  }
+  return selected;
 };
 
 /**
@@ -96,10 +142,12 @@ export const campaignAuthorizationBlocker = ({
   template,
   selection,
   runNonce,
+  windowProfile = "standard",
 }: {
   template: CampaignTemplateReadModel | null;
   selection: CampaignCapSelection;
   runNonce: string;
+  windowProfile?: CampaignWindowProfile;
 }): string | null => {
   if (template === null) {
     return "server-supplied immutable corpus and campaign template data";
@@ -157,6 +205,33 @@ export const campaignAuthorizationBlocker = ({
   ) {
     return "complete finite server-supplied target ceilings";
   }
+  const window = template.campaign_window;
+  const extendedWindowIsComplete = (
+    window.staging_extended_max_run_timeout_seconds === null
+    && window.staging_extended_max_grant_seconds === null
+  ) || (
+    positiveFinite(window.staging_extended_max_run_timeout_seconds ?? 0)
+    && (window.staging_extended_max_run_timeout_seconds ?? 0)
+      <= MAX_STAGING_EXTENDED_RUN_TIMEOUT_SECONDS
+    && window.staging_extended_max_grant_seconds
+      === MAX_STAGING_EXTENDED_AUTHORIZATION_EXPIRY_SECONDS
+  );
+  if (
+    window.default_profile !== "standard"
+    || window.execution_margin_seconds !== AUTHORIZATION_EXECUTION_MARGIN_SECONDS
+    || window.standard_max_grant_seconds
+      !== MAX_AUTHORIZATION_EXPIRY_SECONDS
+    || defaultCampaignRunTimeoutSeconds(template) === null
+    || !extendedWindowIsComplete
+  ) {
+    return "complete server-owned campaign authorization-window policy";
+  }
+  if (
+    windowProfile === "staging_extended"
+    && window.staging_extended_max_run_timeout_seconds === null
+  ) {
+    return "an explicitly available staging extended campaign window";
+  }
   if (
     workloadCaps.logical_case_limit > maximum.logical_case_limit
     || workloadCaps.logical_case_limit > maximum.max_attempts_per_run
@@ -193,12 +268,23 @@ export const campaignAuthorizationBlocker = ({
   if (
     !positiveFinite(selection.run_timeout_seconds)
     || selection.run_timeout_seconds > maximum.run_timeout_seconds
+    || (
+      windowProfile === "staging_extended"
+      && selection.run_timeout_seconds
+        > (window.staging_extended_max_run_timeout_seconds ?? 0)
+    )
   ) {
-    return "a positive requested timeout within the target ceiling";
+    return "a positive requested timeout within the target and selected window ceilings";
   }
-  if (authorizationExpirySeconds(selection.run_timeout_seconds) === null) {
+  if (
+    authorizationExpirySeconds(
+      selection.run_timeout_seconds,
+      windowProfile,
+      window,
+    ) === null
+  ) {
     return `a timeout that leaves more than ${AUTHORIZATION_EXECUTION_MARGIN_SECONDS} seconds `
-      + `of execution margin within the ${MAX_AUTHORIZATION_EXPIRY_SECONDS}-second authorization window`;
+      + "of execution margin within the selected authorization window";
   }
   return null;
 };
@@ -207,16 +293,29 @@ export const buildCampaignAuthorizationPayload = ({
   template,
   selection,
   runNonce,
+  windowProfile = "standard",
 }: {
   template: CampaignTemplateReadModel;
   selection: CampaignCapSelection;
   runNonce: string;
+  windowProfile?: CampaignWindowProfile;
 }): CampaignAuthorizationPayload | null => {
-  if (campaignAuthorizationBlocker({ template, selection, runNonce }) !== null) {
+  if (
+    campaignAuthorizationBlocker({
+      template,
+      selection,
+      runNonce,
+      windowProfile,
+    }) !== null
+  ) {
     return null;
   }
   const workloadCaps = exactWorkloadCaps(template);
-  const expiresInSeconds = authorizationExpirySeconds(selection.run_timeout_seconds);
+  const expiresInSeconds = authorizationExpirySeconds(
+    selection.run_timeout_seconds,
+    windowProfile,
+    template.campaign_window,
+  );
   if (
     workloadCaps === null
     || template.hosted_run === null
@@ -237,6 +336,7 @@ export const buildCampaignAuthorizationPayload = ({
     },
     run_nonce: runNonce.trim(),
     hosted_run: template.hosted_run,
+    window_profile: windowProfile,
     expires_in_seconds: expiresInSeconds,
   };
 };

@@ -1350,6 +1350,14 @@ const browserFixture = (): Plugin => ({
               tool_sources: [],
               execution_profile: "live",
               maximum_caps: browserScope.caps,
+              campaign_window: {
+                default_profile: "standard",
+                default_run_timeout_seconds: 900,
+                execution_margin_seconds: 300,
+                standard_max_grant_seconds: 3_600,
+                staging_extended_max_run_timeout_seconds: null,
+                staging_extended_max_grant_seconds: null,
+              },
               workload_caps: {
                 logical_case_limit: 9,
                 physical_request_limit: 9,

@@ -36,6 +36,17 @@ export interface CampaignTargetPolicyReadModel extends JsonRecord {
   synthetic_data_attestation_ref: string;
 }
 
+export type CampaignWindowProfile = "standard" | "staging_extended";
+
+export interface CampaignAuthorizationWindowReadModel extends JsonRecord {
+  default_profile: "standard";
+  default_run_timeout_seconds: number;
+  execution_margin_seconds: 300;
+  standard_max_grant_seconds: 3600;
+  staging_extended_max_run_timeout_seconds: number | null;
+  staging_extended_max_grant_seconds: 14701 | null;
+}
+
 export interface AuthorizationScopeReadModel extends JsonRecord {
   target_id: string;
   target_version: string;
@@ -458,6 +469,7 @@ export interface CampaignTemplateReadModel extends JsonRecord {
   tool_sources: string[];
   execution_profile: "synthetic" | "live";
   maximum_caps: SafetyCapsReadModel;
+  campaign_window: CampaignAuthorizationWindowReadModel;
   workload_caps: CampaignWorkloadCapsReadModel | null;
   target_policy: CampaignTargetPolicyReadModel | null;
   hosted_run: HostedRunBindingReadModel | null;

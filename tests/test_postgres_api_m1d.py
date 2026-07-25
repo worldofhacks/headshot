@@ -195,14 +195,16 @@ def _seed_ready_target(
     principal: Principal,
     *,
     surface_payloads: tuple[dict[str, Any], ...] | None = None,
+    target_definition_payload: dict[str, Any] | None = None,
 ) -> None:
     """Stand in for the still-missing trusted server-side authoring catalog."""
 
     store = ControlPlaneStore(engine, environment="staging")
     backend = PostgresApiBackend(engine, environment="staging")
+    selected_target_payload = target_definition_payload or _target_payload()
     store.register_target(
         principal=principal,
-        target=backend._target(_target_payload()),
+        target=backend._target(selected_target_payload),
         idempotency_key="server-catalog-target-0001",
     )
     selected_surfaces = (_surface_payload(),) if surface_payloads is None else surface_payloads
@@ -552,6 +554,14 @@ def test_agent_models_and_tool_scope_are_real_configurable_projections(
         "synthetic_data_only": True,
         "synthetic_data_attestation_ref": "attestation://synthetic/api-fixture",
     }
+    assert campaign_template["campaign_window"] == {
+        "default_profile": "standard",
+        "default_run_timeout_seconds": 120.0,
+        "execution_margin_seconds": 300,
+        "standard_max_grant_seconds": 3_600,
+        "staging_extended_max_run_timeout_seconds": None,
+        "staging_extended_max_grant_seconds": None,
+    }
     hosted_run = campaign_template["hosted_run"]
     assert hosted_run == {
         "configuration_set_sha256": configuration_sha256,
@@ -583,7 +593,7 @@ def test_agent_models_and_tool_scope_are_real_configurable_projections(
         },
         "run_nonce": "hosted-template-nonce-0001",
         "hosted_run": hosted_run,
-        "expires_in_seconds": 600,
+        "expires_in_seconds": 361,
     }
     substituted = client.post(
         "/api/v1/campaign-authorization-requests",
@@ -597,6 +607,12 @@ def test_agent_models_and_tool_scope_are_real_configurable_projections(
         headers=_headers("hosted-template-substitution-0001"),
     )
     assert substituted.status_code == 409
+    mismatched_expiry = client.post(
+        "/api/v1/campaign-authorization-requests",
+        json={**request_payload, "expires_in_seconds": 362},
+        headers=_headers("hosted-template-expiry-mismatch-0001"),
+    )
+    assert mismatched_expiry.status_code == 409
     authorized = client.post(
         "/api/v1/campaign-authorization-requests",
         json=request_payload,
@@ -1332,7 +1348,7 @@ def test_exact_scope_two_person_flow_reaches_persistence_but_not_unwired_runner(
                 "target_requests_per_second": 0.5,
                 "run_timeout_seconds": 60.0,
             },
-            "expires_in_seconds": 600,
+            "expires_in_seconds": 361,
         },
         headers=_headers("api-auth-request-0001"),
     )
@@ -1426,6 +1442,152 @@ def test_exact_scope_two_person_flow_reaches_persistence_but_not_unwired_runner(
         assert connection.execute(text("SELECT count(*) FROM jobs")).scalar_one() == 1
 
 
+def test_extended_window_is_a_typed_conflict_outside_staging_and_invalid_for_probe(
+    migrated_db: Engine,
+) -> None:
+    _clean(migrated_db)
+    principal = _principal(
+        LAUNCHER_ID,
+        "org:campaign:launch",
+        "org:campaign:authorize",
+    )
+    client = TestClient(_app(migrated_db, principal))
+    client.app.state.api_backend = PostgresApiBackend(
+        migrated_db,
+        environment="production",
+    )
+    payload = {
+        "target_id": "copilot-api",
+        "target_version": "1.0.0",
+        "surface_id": "chat-api",
+        "surface_version": "1.0.0",
+        "corpus_hash": "a" * 64,
+        "run_nonce": "extended-window-denial-0001",
+        "caps": {
+            "budget_usd": 2.0,
+            "max_attempts_per_run": 3,
+            "target_requests_per_second": 0.5,
+            "run_timeout_seconds": 3_600.0,
+        },
+        "window_profile": "staging_extended",
+        "expires_in_seconds": 3_901,
+    }
+
+    campaign = client.post(
+        "/api/v1/campaign-authorization-requests",
+        json=payload,
+        headers=_headers("extended-window-production-denial-0001"),
+    )
+    assert campaign.status_code == 409
+    assert campaign.json()["reason_code"] == "immutable_state_conflict"
+
+    probe = client.post(
+        "/api/v1/live-probe-authorization-requests",
+        json=payload,
+        headers=_headers("extended-window-probe-denial-0001"),
+    )
+    assert probe.status_code == 422
+
+
+def test_staging_extended_window_accepts_exact_four_hour_server_derived_grant(
+    migrated_db: Engine,
+) -> None:
+    _clean(migrated_db)
+    launcher = _principal(
+        LAUNCHER_ID,
+        "org:campaign:launch",
+        "org:targets:manage",
+    )
+    target_definition_payload = _target_payload()
+    target_definition_payload["safety_caps"] = {
+        **target_definition_payload["safety_caps"],
+        "run_timeout_seconds": 14_400.0,
+    }
+    _seed_ready_target(
+        migrated_db,
+        launcher,
+        target_definition_payload=target_definition_payload,
+    )
+    client = TestClient(_app(migrated_db, launcher))
+
+    response = client.post(
+        "/api/v1/campaign-authorization-requests",
+        json={
+            "target_id": "copilot-api",
+            "target_version": "1.0.0",
+            "surface_id": "chat-api",
+            "surface_version": "1.0.0",
+            "corpus_hash": "a" * 64,
+            "run_nonce": "staging-extended-window-0001",
+            "caps": {
+                "budget_usd": 2.0,
+                "max_attempts_per_run": 3,
+                "target_requests_per_second": 0.5,
+                "run_timeout_seconds": 14_400.0,
+            },
+            "window_profile": "staging_extended",
+            "expires_in_seconds": 14_701,
+        },
+        headers=_headers("staging-extended-window-request-0001"),
+    )
+
+    assert response.status_code == 200, response.text
+    request_id = response.json()["resource_id"]
+    with migrated_db.connect() as connection:
+        duration = connection.execute(
+            text(
+                "SELECT extract(epoch FROM expires_at - created_at) "
+                "FROM campaign_authorization_requests WHERE request_id = :request_id"
+            ),
+            {"request_id": request_id},
+        ).scalar_one()
+    assert 14_700 < float(duration) <= 14_701
+
+
+def test_standard_window_is_server_derived_when_profile_and_expiry_are_omitted(
+    migrated_db: Engine,
+) -> None:
+    _clean(migrated_db)
+    launcher = _principal(
+        LAUNCHER_ID,
+        "org:campaign:launch",
+        "org:targets:manage",
+    )
+    _seed_ready_target(migrated_db, launcher)
+    client = TestClient(_app(migrated_db, launcher))
+
+    response = client.post(
+        "/api/v1/campaign-authorization-requests",
+        json={
+            "target_id": "copilot-api",
+            "target_version": "1.0.0",
+            "surface_id": "chat-api",
+            "surface_version": "1.0.0",
+            "corpus_hash": "a" * 64,
+            "run_nonce": "standard-window-default-0001",
+            "caps": {
+                "budget_usd": 2.0,
+                "max_attempts_per_run": 3,
+                "target_requests_per_second": 0.5,
+                "run_timeout_seconds": 60.0,
+            },
+        },
+        headers=_headers("standard-window-default-request-0001"),
+    )
+
+    assert response.status_code == 200, response.text
+    request_id = response.json()["resource_id"]
+    with migrated_db.connect() as connection:
+        duration = connection.execute(
+            text(
+                "SELECT extract(epoch FROM expires_at - created_at) "
+                "FROM campaign_authorization_requests WHERE request_id = :request_id"
+            ),
+            {"request_id": request_id},
+        ).scalar_one()
+    assert 360 < float(duration) <= 361
+
+
 def test_hosted_authorization_is_bound_but_launch_stays_unavailable_until_composed(
     migrated_db: Engine,
 ) -> None:
@@ -1477,7 +1639,7 @@ def test_hosted_authorization_is_bound_but_launch_stays_unavailable_until_compos
                 "provider_max_concurrency": 1,
                 "provider_timeout_seconds": 180.0,
             },
-            "expires_in_seconds": 600,
+            "expires_in_seconds": 361,
         },
         headers=_headers("hosted-auth-request-0001"),
     )

@@ -6,7 +6,9 @@ import {
   authorizationExpirySeconds,
   buildCampaignAuthorizationPayload,
   campaignAuthorizationBlocker,
+  defaultCampaignRunTimeoutSeconds,
   exactWorkloadCaps,
+  MAX_STAGING_EXTENDED_AUTHORIZATION_EXPIRY_SECONDS,
 } from "../src/campaignAuthorization";
 import type {
   CampaignCapSelection,
@@ -44,6 +46,14 @@ const template = (
     logical_case_limit: 40,
     physical_request_limit: 120,
     target_retries_per_turn: 2,
+  },
+  campaign_window: {
+    default_profile: "standard",
+    default_run_timeout_seconds: 1_800,
+    execution_margin_seconds: 300,
+    standard_max_grant_seconds: 3_600,
+    staging_extended_max_run_timeout_seconds: 3_300,
+    staging_extended_max_grant_seconds: 14_701,
   },
   workload_caps: {
     logical_case_limit: 14,
@@ -140,6 +150,56 @@ describe("exact campaign workload authorization", () => {
     expect(authorizationExpirySeconds(900.75)).toBe(1_201);
     expect(authorizationExpirySeconds(3_299.9)).toBe(3_600);
     expect(authorizationExpirySeconds(3_300)).toBeNull();
+  });
+
+  it("requires an explicit staging profile for a four-hour window", () => {
+    const selectedTemplate = template({
+      maximum_caps: {
+        ...template().maximum_caps,
+        run_timeout_seconds: 14_400,
+      },
+      campaign_window: {
+        ...template().campaign_window,
+        staging_extended_max_run_timeout_seconds: 14_400,
+      },
+    });
+    const selectedCaps = selection(14, { run_timeout_seconds: 14_400 });
+
+    expect(buildCampaignAuthorizationPayload({
+      template: selectedTemplate,
+      selection: selectedCaps,
+      runNonce: "reviewed-run-nonce-0001",
+    })).toBeNull();
+    const extended = buildCampaignAuthorizationPayload({
+      template: selectedTemplate,
+      selection: selectedCaps,
+      runNonce: "reviewed-run-nonce-0001",
+      windowProfile: "staging_extended",
+    });
+    expect(extended?.window_profile).toBe("staging_extended");
+    expect(extended?.expires_in_seconds)
+      .toBe(MAX_STAGING_EXTENDED_AUTHORIZATION_EXPIRY_SECONDS);
+  });
+
+  it("keeps the UI default short when the target permits four hours", () => {
+    const selectedTemplate = template({
+      maximum_caps: {
+        ...template().maximum_caps,
+        run_timeout_seconds: 14_400,
+      },
+      campaign_window: {
+        ...template().campaign_window,
+        default_run_timeout_seconds: 1_800,
+        staging_extended_max_run_timeout_seconds: 14_400,
+      },
+    });
+
+    expect(defaultCampaignRunTimeoutSeconds(selectedTemplate)).toBe(1_800);
+    expect(buildCampaignAuthorizationPayload({
+      template: selectedTemplate,
+      selection: selection(14, { run_timeout_seconds: 1_800 }),
+      runNonce: "reviewed-run-nonce-0001",
+    })?.window_profile).toBe("standard");
   });
 
   it("never treats target ceilings as workload data", () => {

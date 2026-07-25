@@ -1738,6 +1738,7 @@ const decodeTarget = (value: unknown): TargetReadModel => {
       "tool_sources",
       "execution_profile",
       "maximum_caps",
+      "campaign_window",
       "workload_caps",
       "target_policy",
       "hosted_run",
@@ -1754,6 +1755,75 @@ const decodeTarget = (value: unknown): TargetReadModel => {
     stringArray(template, "tool_sources", "campaign template");
     literal(template, "execution_profile", ["synthetic", "live"], "campaign template");
     template.maximum_caps = decodeCaps(template.maximum_caps);
+    const authorizationWindow = object(
+      template,
+      "campaign_window",
+      "campaign authorization window",
+    );
+    exactKeys(authorizationWindow, [
+      "default_profile",
+      "default_run_timeout_seconds",
+      "execution_margin_seconds",
+      "standard_max_grant_seconds",
+      "staging_extended_max_run_timeout_seconds",
+      "staging_extended_max_grant_seconds",
+    ], "campaign authorization window");
+    literal(
+      authorizationWindow,
+      "default_profile",
+      ["standard"],
+      "campaign authorization window",
+    );
+    const defaultTimeout = number(
+      authorizationWindow,
+      "default_run_timeout_seconds",
+      "campaign authorization window",
+      { minimum: Number.MIN_VALUE, maximum: 1_800 },
+    );
+    if (defaultTimeout > (template.maximum_caps as SafetyCapsReadModel).run_timeout_seconds) {
+      invalid("campaign authorization window");
+    }
+    if (
+      number(
+        authorizationWindow,
+        "execution_margin_seconds",
+        "campaign authorization window",
+        { integer: true },
+      ) !== 300
+      || number(
+        authorizationWindow,
+        "standard_max_grant_seconds",
+        "campaign authorization window",
+        { integer: true },
+      ) !== 3_600
+    ) {
+      invalid("campaign authorization window");
+    }
+    const extendedTimeout = nullableNumber(
+      authorizationWindow,
+      "staging_extended_max_run_timeout_seconds",
+      "campaign authorization window",
+    );
+    const extendedAuthorization = nullableNumber(
+      authorizationWindow,
+      "staging_extended_max_grant_seconds",
+      "campaign authorization window",
+    );
+    if (
+      (extendedTimeout === null) !== (extendedAuthorization === null)
+      || (
+        extendedTimeout !== null
+        && (
+          extendedTimeout <= 0
+          || extendedTimeout > 14_400
+          || extendedTimeout
+            > (template.maximum_caps as SafetyCapsReadModel).run_timeout_seconds
+          || extendedAuthorization !== 14_701
+        )
+      )
+    ) {
+      invalid("campaign authorization window");
+    }
     if (template.workload_caps !== null) {
       const workloadCaps = object(
         template,

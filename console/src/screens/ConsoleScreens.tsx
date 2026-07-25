@@ -55,6 +55,7 @@ import { navigateTo } from "../router";
 import {
   buildCampaignAuthorizationPayload,
   campaignAuthorizationBlocker,
+  defaultCampaignRunTimeoutSeconds,
   exactWorkloadCaps,
 } from "../campaignAuthorization";
 import {
@@ -66,6 +67,7 @@ import {
   type BirdseyeAttentionReadModel,
   type BirdseyeSnapshotReadModel,
   type CampaignReadModel,
+  type CampaignWindowProfile,
   type ComponentReadModel,
   type ConfigurationReadModel,
   type EvidenceReadModel,
@@ -1307,8 +1309,13 @@ function TargetManagement({
   const [requestsPerSecond, setRequestsPerSecond] = useState(
     () => template ? String(template.maximum_caps.target_requests_per_second) : "",
   );
+  const [windowProfile, setWindowProfile] = useState<CampaignWindowProfile>("standard");
   const [timeoutSeconds, setTimeoutSeconds] = useState(
-    () => template ? String(template.maximum_caps.run_timeout_seconds) : "",
+    () => {
+      if (!template) return "";
+      const defaultTimeout = defaultCampaignRunTimeoutSeconds(template);
+      return defaultTimeout === null ? "" : String(defaultTimeout);
+    },
   );
   const workloadCaps = template ? exactWorkloadCaps(template) : null;
   const parsedCaps = {
@@ -1322,12 +1329,14 @@ function TargetManagement({
         template,
         selection: parsedCaps,
         runNonce,
+        windowProfile,
       })
     : null;
   const authorizationBlocker = campaignAuthorizationBlocker({
     template,
     selection: parsedCaps,
     runNonce,
+    windowProfile,
   });
   return (
     <Panel title="Registered target" meta={targetId ?? undefined}>
@@ -1443,6 +1452,7 @@ function TargetManagement({
               "tool_sources",
               "workload_caps",
               "maximum_caps",
+              "campaign_window",
               "target_policy",
             ]}
           />
@@ -1492,6 +1502,23 @@ function TargetManagement({
             <label className="form-field">
               <span>Run timeout seconds</span>
               <input type="number" min="1" step="1" value={timeoutSeconds} onChange={(event) => setTimeoutSeconds(event.currentTarget.value)} />
+            </label>
+            <label className="form-field">
+              <span>Authorization window profile</span>
+              <select
+                value={windowProfile}
+                onChange={(event) => {
+                  setWindowProfile(event.currentTarget.value as CampaignWindowProfile);
+                }}
+              >
+                <option value="standard">Standard (short)</option>
+                {template.campaign_window
+                  .staging_extended_max_run_timeout_seconds !== null && (
+                  <option value="staging_extended">
+                    Staging extended (explicit, up to 4 hours)
+                  </option>
+                )}
+              </select>
             </label>
           </div>
           <CommandButton

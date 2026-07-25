@@ -12,7 +12,11 @@ from typing import Any, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 
-from agentforge.platform_limits import HOSTED_MAX_PHYSICAL_CALLS
+from agentforge.platform_limits import (
+    HOSTED_MAX_PHYSICAL_CALLS,
+    STAGING_EXTENDED_CAMPAIGN_MAX_RUN_TIMEOUT_SECONDS,
+    STANDARD_CAMPAIGN_DEFAULT_RUN_TIMEOUT_SECONDS,
+)
 
 _LANGFUSE_DELIVERY_STATES = (
     "not_attempted",
@@ -204,6 +208,32 @@ class CampaignTargetPolicyReadModel(_ReadModel):
     synthetic_data_attestation_ref: str
 
 
+class CampaignAuthorizationWindowReadModel(_ReadModel):
+    """Server-owned campaign-window choices exposed to an untrusted browser."""
+
+    default_profile: Literal["standard"]
+    default_run_timeout_seconds: float = Field(
+        gt=0,
+        le=STANDARD_CAMPAIGN_DEFAULT_RUN_TIMEOUT_SECONDS,
+    )
+    execution_margin_seconds: Literal[300]
+    standard_max_grant_seconds: Literal[3600]
+    staging_extended_max_run_timeout_seconds: float | None = Field(
+        default=None,
+        gt=0,
+        le=STAGING_EXTENDED_CAMPAIGN_MAX_RUN_TIMEOUT_SECONDS,
+    )
+    staging_extended_max_grant_seconds: Literal[14701] | None = None
+
+    @model_validator(mode="after")
+    def extended_fields_are_atomic(self) -> Self:
+        if (self.staging_extended_max_run_timeout_seconds is None) != (
+            self.staging_extended_max_grant_seconds is None
+        ):
+            raise ValueError("staging extended campaign-window metadata is incomplete")
+        return self
+
+
 class CampaignTemplateReadModel(_ReadModel):
     target_id: str
     target_version: str
@@ -215,6 +245,7 @@ class CampaignTemplateReadModel(_ReadModel):
     tool_sources: tuple[str, ...]
     execution_profile: Literal["synthetic", "live"]
     maximum_caps: SafetyCapsReadModel
+    campaign_window: CampaignAuthorizationWindowReadModel
     workload_caps: CampaignWorkloadCapsReadModel | None
     target_policy: CampaignTargetPolicyReadModel | None
     hosted_run: HostedRunBindingReadModel | None
@@ -1551,6 +1582,7 @@ __all__ = [
     "BirdseyeSecurityPostureReadModel",
     "BirdseyeSnapshotReadModel",
     "BirdseyeTimelineReadModel",
+    "CampaignAuthorizationWindowReadModel",
     "CampaignReadModel",
     "CampaignTemplateReadModel",
     "CampaignTargetPolicyReadModel",

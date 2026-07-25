@@ -81,6 +81,7 @@ test("390px navigation exposes every screen without application overflow", async
       physical_request_limit: 9,
       target_retries_per_turn: 0,
     },
+    window_profile: "standard",
     expires_in_seconds: 1_201,
   }));
   const firstEvent = page.locator(".event-record").first();
@@ -98,6 +99,7 @@ test("390px navigation exposes every screen without application overflow", async
   await expect(page.getByLabel("Maximum attempts")).toHaveValue("9");
   await expect(page.getByLabel("Target requests / second")).toHaveValue("1");
   await expect(page.getByLabel("Run timeout seconds")).toHaveValue("900");
+  await expect(page.getByLabel("Authorization window profile")).toHaveValue("standard");
   await expect(page.getByRole("button", { name: "Request exact campaign authorization" })).toBeEnabled();
 
   await page.getByRole("button", { name: "More", exact: true }).click();

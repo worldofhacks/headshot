@@ -32,7 +32,11 @@ from agentforge.auth.permissions import (
     TARGETS_MANAGE,
 )
 from agentforge.auth.principal import Principal
-from agentforge.platform_limits import HOSTED_MAX_PHYSICAL_CALLS
+from agentforge.platform_limits import (
+    HOSTED_MAX_PHYSICAL_CALLS,
+    STAGING_EXTENDED_CAMPAIGN_AUTHORIZATION_MAX_SECONDS,
+    STANDARD_CAMPAIGN_AUTHORIZATION_MAX_SECONDS,
+)
 
 router = APIRouter(prefix="/api/v1")
 
@@ -92,7 +96,23 @@ class AuthorizationRequestInput(_StrictModel):
     run_nonce: str = Field(min_length=16, max_length=128)
     caps: CapsInput
     hosted_run: HostedRunBindingInput | None = None
-    expires_in_seconds: int = Field(default=900, ge=60, le=3600)
+    window_profile: Literal["standard", "staging_extended"] = "standard"
+    expires_in_seconds: int | None = Field(
+        default=None,
+        ge=60,
+        le=STAGING_EXTENDED_CAMPAIGN_AUTHORIZATION_MAX_SECONDS,
+    )
+
+
+class LiveProbeAuthorizationRequestInput(AuthorizationRequestInput):
+    """Live probes can never request the staging-only extended campaign window."""
+
+    window_profile: Literal["standard"] = "standard"
+    expires_in_seconds: int | None = Field(
+        default=None,
+        ge=60,
+        le=STANDARD_CAMPAIGN_AUTHORIZATION_MAX_SECONDS,
+    )
 
 
 class AuthorizationDecisionInput(_StrictModel):
@@ -682,7 +702,7 @@ def set_surface_state(
 @router.post("/live-probe-authorization-requests")
 def request_live_probe(
     request: Request,
-    body: AuthorizationRequestInput,
+    body: LiveProbeAuthorizationRequestInput,
     principal: AuthorizePrincipal,
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
 ) -> JSONResponse:
