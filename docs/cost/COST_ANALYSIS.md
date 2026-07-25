@@ -69,18 +69,23 @@ Envelope, same file: provider `openrouter` (`:26`), `HOSTED_MAX_PHYSICAL_CALLS =
 `HOSTED_MAX_MEASURED_USD = $10` (`:28`), `HOSTED_MAX_LOGICAL_RETRIES = 1` (`:29`),
 `HOSTED_MAX_CONCURRENCY = 1` (`:30`). The four role ceilings sum to $7.50, inside the $10 envelope.
 
-Campaign-side caps, committed at `docs/evidence/authorization-requests/caps.json` and mirrored in the
-three target-catalog files: `budget_usd 50.00`, `max_attempts_per_run 130`,
-`logical_case_limit 100`, `physical_request_limit 121`, `target_requests_per_second 0.5`,
-`run_timeout_seconds 3600`, `target_retries_per_turn 0`. The `$50` value is a hard reservation,
-not spend; the expected full-run spend range is `$10–25`.
+Campaign-side Week 2 caps, committed at
+`docs/evidence/authorization-requests/caps.json` and mirrored only onto the intended Week 2 target
+and alias in the three target-catalog files: `budget_usd 50.00`,
+`max_attempts_per_run 100`, `logical_case_limit 100`, `physical_request_limit 121`,
+`target_requests_per_second 0.5`, `run_timeout_seconds 3600`, `target_retries_per_turn 0`.
+Week 1 retains its legacy `$1` / `40` attempt / `40` logical / `60` physical / one-retry
+envelope. The `$50` Week 2 value is a hard aggregate reservation, not spend; the expected
+full-run spend range is `$10–25`.
 
-The 100 cases cannot fit one hosted authority. The landed generation policy reserves four
-cumulative calls per case, while the global hosted ceiling remains 56, so the current safe plan is
-seven 14-case batches plus one two-case batch. This is stricter than an illustrative `2 × 50`
-split: 50 cases would reserve 200 cumulative calls and fail preflight. Batch results must be
-aggregated from retained manifests, and final runtime integration must prove subset-manifest
-authorization before the live run.
+The 100 cases cannot be assigned a safe batch plan from the global `56`-call ceiling alone.
+`scripts/capture_corpus_performance.py` derives the largest safe batch from the exact staged
+`HostedConfigurationSet` and registered generation policy, including per-role and global retry,
+call, input/output/reasoning-token, and price-based spend limits. It then requires reviewed
+per-batch run-budget allocations whose exact aggregate is no more than `$50` and whose individual
+values cover each batch's worst-case staged hosted-spend reservation. Until the staged configuration
+receipt and reconciled corpus are present on the final clean release SHA, no batch count or final
+performance artifact is claimed.
 
 **Per-model prices are not in this repository.** Runtime prices come from an operator-staged hosted
 configuration set held in Postgres; `hosted.py` carries model IDs and ceilings but no prices. The only
