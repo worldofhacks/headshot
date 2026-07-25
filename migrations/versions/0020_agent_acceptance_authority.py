@@ -173,6 +173,46 @@ def _acceptance_execution_guard() -> str:
     )
 
 
+def _acceptance_provider_invocation_guard() -> str:
+    return (
+        "CREATE OR REPLACE FUNCTION m1d_validate_agent_acceptance_provider_invocation() "
+        "RETURNS trigger LANGUAGE plpgsql AS $$ "
+        "DECLARE requested_run_kind text; logical_run_kind text; "
+        "logical_run_id text; logical_attempt_id text; logical_parent_id text; "
+        "logical_role text; logical_model text; logical_configuration text; "
+        "logical_role_configuration text; logical_generation_policy text; BEGIN "
+        "SELECT run_kind INTO requested_run_kind FROM campaign_runs "
+        "WHERE organization_id = NEW.organization_id "
+        "AND run_id = NEW.campaign_run_id FOR SHARE; "
+        "SELECT r.run_kind, e.campaign_run_id, e.attempt_id, e.parent_execution_id, "
+        "e.agent_role, e.model, e.configuration_set_sha256, "
+        "e.role_configuration_sha256, e.generation_policy_sha256 "
+        "INTO logical_run_kind, logical_run_id, logical_attempt_id, logical_parent_id, "
+        "logical_role, logical_model, logical_configuration, "
+        "logical_role_configuration, logical_generation_policy "
+        "FROM agent_executions e JOIN campaign_runs r "
+        "ON r.organization_id = e.organization_id "
+        "AND r.run_id = e.campaign_run_id "
+        "WHERE e.organization_id = NEW.organization_id "
+        "AND e.execution_id = NEW.logical_execution_id FOR SHARE OF e, r; "
+        "IF requested_run_kind = 'agent_acceptance' "
+        "OR logical_run_kind = 'agent_acceptance' THEN "
+        "IF requested_run_kind IS DISTINCT FROM 'agent_acceptance' "
+        "OR logical_run_kind IS DISTINCT FROM 'agent_acceptance' "
+        "OR NEW.campaign_run_id IS DISTINCT FROM logical_run_id "
+        "OR NEW.campaign_attempt_id IS DISTINCT FROM logical_attempt_id "
+        "OR NEW.parent_execution_id IS DISTINCT FROM logical_parent_id "
+        "OR NEW.agent_role IS DISTINCT FROM logical_role "
+        "OR NEW.requested_model IS DISTINCT FROM logical_model "
+        "OR NEW.configuration_set_sha256 IS DISTINCT FROM logical_configuration "
+        "OR NEW.role_configuration_sha256 IS DISTINCT FROM logical_role_configuration "
+        "OR NEW.generation_policy_sha256 IS DISTINCT FROM logical_generation_policy THEN "
+        "RAISE EXCEPTION "
+        "'agent acceptance provider invocation differs from its logical execution' "
+        "USING ERRCODE = '42501'; END IF; END IF; RETURN NEW; END $$"
+    )
+
+
 def upgrade() -> None:
     op.add_column(
         "campaign_runs",
@@ -385,6 +425,12 @@ def upgrade() -> None:
         "BEFORE INSERT OR UPDATE ON agent_executions FOR EACH ROW "
         "EXECUTE FUNCTION m1d_validate_agent_acceptance_execution()"
     )
+    op.execute(_acceptance_provider_invocation_guard())
+    op.execute(
+        "CREATE TRIGGER trg_agent_acceptance_provider_invocation_guard "
+        "BEFORE INSERT ON provider_call_invocations FOR EACH ROW "
+        "EXECUTE FUNCTION m1d_validate_agent_acceptance_provider_invocation()"
+    )
 
 
 def downgrade() -> None:
@@ -396,6 +442,10 @@ def downgrade() -> None:
         "'cannot downgrade 0020 while immutable agent acceptance lineage exists' "
         "USING ERRCODE = '55000'; END IF; END $$"
     )
+    op.execute(
+        "DROP TRIGGER trg_agent_acceptance_provider_invocation_guard ON provider_call_invocations"
+    )
+    op.execute("DROP FUNCTION m1d_validate_agent_acceptance_provider_invocation()")
     op.execute("DROP TRIGGER trg_agent_acceptance_execution_guard ON agent_executions")
     op.execute("DROP FUNCTION m1d_validate_agent_acceptance_execution()")
     op.execute("DROP TRIGGER trg_campaign_attempt_agent_acceptance ON campaign_attempts")

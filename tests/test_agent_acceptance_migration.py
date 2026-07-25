@@ -573,6 +573,62 @@ def test_database_guards_acceptance_execution_attempt_parentage_and_judge(
         )
 
 
+def test_database_binds_acceptance_provider_invocation_to_its_logical_execution(
+    migrated_db: Engine,
+) -> None:
+    configuration_sha256 = uuid.uuid4().hex + uuid.uuid4().hex
+    _seed_hosted_configuration(
+        migrated_db,
+        configuration_sha256=configuration_sha256,
+    )
+    first_run_id = _insert_acceptance(
+        migrated_db,
+        configuration_sha256=configuration_sha256,
+    )
+    second_run_id = _insert_acceptance(
+        migrated_db,
+        configuration_sha256=configuration_sha256,
+    )
+    execution_id = _insert_agent_execution(
+        migrated_db,
+        run_id=first_run_id,
+        configuration_sha256=configuration_sha256,
+        role="orchestrator",
+        parent_execution_id=None,
+        attempt_id=_acceptance_attempt_id(first_run_id),
+    )
+
+    with (
+        pytest.raises(DBAPIError, match="differs from its logical execution"),
+        migrated_db.begin() as connection,
+    ):
+        connection.execute(
+            text(
+                "INSERT INTO provider_call_invocations "
+                "(invocation_id, organization_id, campaign_run_id, campaign_attempt_id, "
+                "logical_execution_id, parent_execution_id, agent_role, physical_sequence, "
+                "idempotency_key, requested_model, configured_upstream, prompt_version, "
+                "prompt_sha256, configuration_set_sha256, role_configuration_sha256, "
+                "generation_policy_sha256) VALUES "
+                "(:invocation, :org, :run, :attempt, :execution, NULL, 'orchestrator', 1, "
+                ":idempotency, 'anthropic/claude-opus-4.8', 'anthropic', '1', "
+                ":prompt, :configuration, :role_configuration, :generation_policy)"
+            ),
+            {
+                "invocation": uuid.uuid4().hex,
+                "org": _ORGANIZATION_ID,
+                "run": second_run_id,
+                "attempt": _acceptance_attempt_id(second_run_id),
+                "execution": execution_id,
+                "idempotency": f"provider-call:{uuid.uuid4().hex}",
+                "prompt": "4" * 64,
+                "configuration": configuration_sha256,
+                "role_configuration": "2" * 64,
+                "generation_policy": _GENERATION_POLICY_SHA256,
+            },
+        )
+
+
 @pytest.mark.parametrize(
     "mutate",
     [

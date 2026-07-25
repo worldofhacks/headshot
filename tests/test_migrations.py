@@ -314,7 +314,7 @@ def test_migration_graph_has_exactly_one_head() -> None:
     from agentforge.readiness import expected_alembic_head
 
     # Raises RuntimeError unless the graph resolves to exactly one head.
-    assert expected_alembic_head() == "0019"
+    assert expected_alembic_head() == "0020"
 
 
 def test_0019_applies_stepwise_over_a_populated_0018_database() -> None:
