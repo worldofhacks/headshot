@@ -39,6 +39,15 @@ class AllowlistEntry:
 
     target_id: str
     adapter_name: str
+    #: Whether this target carries a VERIFIED synthetic-data attestation
+    #: (``synthetic_data_only is True`` AND a non-empty ``synthetic_data_attestation_ref`` on its
+    #: catalog spec). Only an attested target may be dispatched to outside production — see
+    #: ``PolicyGateway._enforce_synthetic_data``.
+    #:
+    #: Defaults to ``False`` so the strict "no live target outside production" rule holds for every
+    #: construction path that has not explicitly established the attestation. Admitting a live
+    #: target is opt-in and must be justified by the target's own attestation, never assumed.
+    synthetic_attested: bool = False
 
 
 @dataclass
