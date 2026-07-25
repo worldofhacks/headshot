@@ -134,6 +134,89 @@ def _insert_governed_run(
     return run_id
 
 
+_MODELS = {
+    "orchestrator": "anthropic/claude-opus-4.8",
+    "red_team": "qwen/qwen3.5-397b-a17b",
+    "judge": "google/gemini-2.5-pro",
+    "documentation": "openai/gpt-5.4",
+}
+
+
+def _insert_governed_execution(
+    engine: Engine,
+    *,
+    run_id: str,
+    role: str,
+    parent_execution_id: str | None,
+    attempt_id: str = _ATTEMPT_ID,
+    judge_calibration_id: str | None = None,
+    judge_calibration_state: str | None = None,
+) -> str:
+    """Raw-insert one governed agent_execution to exercise the isolated governed DB guard."""
+    execution_id = uuid.uuid4().hex
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO agent_executions "
+                "(execution_id, organization_id, campaign_run_id, attempt_id, "
+                "parent_execution_id, agent_role, provider, model, execution_mode, "
+                "configuration_version, input_sha256, trace_id, detail, "
+                "configuration_set_sha256, role_configuration_sha256, "
+                "generation_policy_sha256, judge_calibration_id, "
+                "judge_calibration_state) VALUES "
+                "(:execution, :org, :run, :attempt, :parent, :role, 'openrouter', "
+                ":model, 'hosted_advisory', 1, :input_hash, :trace_id, "
+                '\'{"provider_lineage_state":"canonical_physical"}\'::jsonb, '
+                ":configuration, :role_configuration, :generation_policy, "
+                ":calibration, :calibration_state)"
+            ),
+            {
+                "execution": execution_id,
+                "org": _ORG,
+                "run": run_id,
+                "attempt": attempt_id,
+                "parent": parent_execution_id,
+                "role": role,
+                "model": _MODELS[role],
+                "input_hash": "1" * 64,
+                "trace_id": uuid.uuid4().hex,
+                "configuration": _CONFIG_SHA,
+                "role_configuration": "2" * 64,
+                "generation_policy": _GEN_POLICY_SHA,
+                "calibration": judge_calibration_id,
+                "calibration_state": judge_calibration_state,
+            },
+        )
+    return execution_id
+
+
+def _insert_governed_chain(engine: Engine, run_id: str) -> dict[str, str]:
+    """Insert the exact valid four-role governed lineage; return role -> execution_id."""
+    orchestrator = _insert_governed_execution(
+        engine, run_id=run_id, role="orchestrator", parent_execution_id=None
+    )
+    red_team = _insert_governed_execution(
+        engine, run_id=run_id, role="red_team", parent_execution_id=orchestrator
+    )
+    judge = _insert_governed_execution(
+        engine,
+        run_id=run_id,
+        role="judge",
+        parent_execution_id=red_team,
+        judge_calibration_id=f"JC-{'3' * 64}",
+        judge_calibration_state="enabled",
+    )
+    documentation = _insert_governed_execution(
+        engine, run_id=run_id, role="documentation", parent_execution_id=judge
+    )
+    return {
+        "orchestrator": orchestrator,
+        "red_team": red_team,
+        "judge": judge,
+        "documentation": documentation,
+    }
+
+
 def _fresh_upgraded(admin_url: str) -> tuple[str, Engine, str]:
     database_name = f"agentforge_governed_row_{uuid.uuid4().hex[:12]}"
     base, _ = _db.split_db(admin_url)
@@ -246,6 +329,139 @@ def test_downgrade_refuses_while_a_governed_row_exists(admin_url: str) -> None:
         _insert_governed_run(engine, request_id, scope_hash)
         with pytest.raises(Exception, match="governed acceptance lineage"):
             _db.alembic_downgrade(database_url, "0021")
+    finally:
+        engine.dispose()
+        _db.drop_database(admin_url, database_name)
+
+
+def test_valid_governed_four_role_lineage_inserts(admin_url: str) -> None:
+    database_url, engine, database_name = _fresh_upgraded(admin_url)
+    try:
+        request_id, scope_hash = _seed_config_and_auth(engine, "chain-ok")
+        run_id = _insert_governed_run(engine, request_id, scope_hash)
+        chain = _insert_governed_chain(engine, run_id)
+        with engine.connect() as connection:
+            roles = (
+                connection.execute(
+                    text(
+                        "SELECT agent_role FROM agent_executions "
+                        "WHERE campaign_run_id = :run ORDER BY id"
+                    ),
+                    {"run": run_id},
+                )
+                .scalars()
+                .all()
+            )
+        assert roles == ["orchestrator", "red_team", "judge", "documentation"]
+        assert len(set(chain.values())) == 4
+    finally:
+        engine.dispose()
+        _db.drop_database(admin_url, database_name)
+
+
+def test_governed_execution_guard_refuses_wrong_parent_chain(admin_url: str) -> None:
+    database_url, engine, database_name = _fresh_upgraded(admin_url)
+    try:
+        request_id, scope_hash = _seed_config_and_auth(engine, "wrong-parent")
+        run_id = _insert_governed_run(engine, request_id, scope_hash)
+        orchestrator = _insert_governed_execution(
+            engine, run_id=run_id, role="orchestrator", parent_execution_id=None
+        )
+        # Judge parented directly to the orchestrator skips the mandatory Red Team link.
+        with pytest.raises(DBAPIError, match="child requires its exact parent"):
+            _insert_governed_execution(
+                engine, run_id=run_id, role="judge", parent_execution_id=orchestrator
+            )
+    finally:
+        engine.dispose()
+        _db.drop_database(admin_url, database_name)
+
+
+def test_governed_execution_guard_refuses_orchestrator_with_a_parent(admin_url: str) -> None:
+    database_url, engine, database_name = _fresh_upgraded(admin_url)
+    try:
+        request_id, scope_hash = _seed_config_and_auth(engine, "planner-parent")
+        run_id = _insert_governed_run(engine, request_id, scope_hash)
+        root = _insert_governed_execution(
+            engine, run_id=run_id, role="orchestrator", parent_execution_id=None
+        )
+        with pytest.raises(DBAPIError, match="planner must be the lineage root"):
+            _insert_governed_execution(
+                engine, run_id=run_id, role="orchestrator", parent_execution_id=root
+            )
+    finally:
+        engine.dispose()
+        _db.drop_database(admin_url, database_name)
+
+
+def test_governed_execution_guard_refuses_uncalibrated_judge(admin_url: str) -> None:
+    database_url, engine, database_name = _fresh_upgraded(admin_url)
+    try:
+        request_id, scope_hash = _seed_config_and_auth(engine, "judge-uncal")
+        run_id = _insert_governed_run(engine, request_id, scope_hash)
+        orchestrator = _insert_governed_execution(
+            engine, run_id=run_id, role="orchestrator", parent_execution_id=None
+        )
+        red_team = _insert_governed_execution(
+            engine, run_id=run_id, role="red_team", parent_execution_id=orchestrator
+        )
+        # An all-null-calibration Judge is permitted by the global 0017 reconciliation constraint
+        # (its first branch), so ONLY the governed guard closes this hole for a governed run.
+        with pytest.raises(DBAPIError, match="Judge must be calibration-bound"):
+            _insert_governed_execution(
+                engine,
+                run_id=run_id,
+                role="judge",
+                parent_execution_id=red_team,
+                judge_calibration_id=None,
+                judge_calibration_state=None,
+            )
+    finally:
+        engine.dispose()
+        _db.drop_database(admin_url, database_name)
+
+
+def test_governed_execution_guard_refuses_foreign_attempt(admin_url: str) -> None:
+    database_url, engine, database_name = _fresh_upgraded(admin_url)
+    try:
+        request_id, scope_hash = _seed_config_and_auth(engine, "foreign-attempt")
+        run_id = _insert_governed_run(engine, request_id, scope_hash)
+        with pytest.raises(DBAPIError, match="outside its role or attempt authority"):
+            _insert_governed_execution(
+                engine,
+                run_id=run_id,
+                role="orchestrator",
+                parent_execution_id=None,
+                attempt_id="f" * 64,
+            )
+    finally:
+        engine.dispose()
+        _db.drop_database(admin_url, database_name)
+
+
+def test_governed_guards_dropped_on_downgrade(admin_url: str) -> None:
+    database_url, engine, database_name = _fresh_upgraded(admin_url)
+    try:
+        with engine.connect() as connection:
+            present = connection.execute(
+                text(
+                    "SELECT count(*) FROM pg_proc "
+                    "WHERE proname IN ('m1d_validate_governed_acceptance_execution', "
+                    "'m1d_validate_governed_acceptance_provider_invocation')"
+                )
+            ).scalar_one()
+        assert present == 2
+        _db.alembic_downgrade(database_url, "0021")
+        with engine.connect() as connection:
+            remaining = connection.execute(
+                text(
+                    "SELECT count(*) FROM pg_proc "
+                    "WHERE proname IN ('m1d_validate_governed_acceptance_execution', "
+                    "'m1d_validate_governed_acceptance_provider_invocation')"
+                )
+            ).scalar_one()
+        assert remaining == 0
+        _db.alembic_upgrade(database_url, "head")
     finally:
         engine.dispose()
         _db.drop_database(admin_url, database_name)
