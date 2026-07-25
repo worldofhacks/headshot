@@ -80,6 +80,23 @@ def _seed_config_and_auth(engine: Engine, suffix: str) -> tuple[str, str]:
     return request_id, _SCOPE_HASH
 
 
+_PRODUCTION_LIMITS = {
+    "schema_version": "3",
+    "network_scope": "policy_gateway_target",
+    "target_call_limit": 1,
+    "allowed_roles": ["orchestrator", "red_team", "judge", "documentation"],
+    "role_call_caps": {"orchestrator": 9, "red_team": 19, "judge": 19, "documentation": 9},
+    "role_usd_caps": {
+        "orchestrator": "0.75",
+        "red_team": "1",
+        "judge": "2.50",
+        "documentation": "0.50",
+    },
+    "global_call_cap": 56,
+    "global_usd_cap": "5",
+}
+
+
 def _insert_governed_run(
     engine: Engine,
     request_id: str,
@@ -88,6 +105,7 @@ def _insert_governed_run(
     context_sha: str | None = _CONTEXT_SHA,
     attempt_id: str | None = _ATTEMPT_ID,
     insert_attempt: bool = True,
+    limits: dict | None = None,
 ) -> str:
     """Insert one governed_acceptance run (+ its reviewed-corpus attempt via the deferred FK)."""
     run_id = f"GOV-{uuid.uuid4().hex[:12]}"
@@ -112,7 +130,7 @@ def _insert_governed_run(
                 "gen": _GEN_POLICY_SHA,
                 "ctx": context_sha,
                 "att": attempt_id,
-                "limits": json.dumps(_GOVERNED_LIMITS),
+                "limits": json.dumps(limits if limits is not None else _GOVERNED_LIMITS),
             },
         )
         if insert_attempt and attempt_id is not None:
@@ -329,6 +347,50 @@ def test_downgrade_refuses_while_a_governed_row_exists(admin_url: str) -> None:
         _insert_governed_run(engine, request_id, scope_hash)
         with pytest.raises(Exception, match="governed acceptance lineage"):
             _db.alembic_downgrade(database_url, "0021")
+    finally:
+        engine.dispose()
+        _db.drop_database(admin_url, database_name)
+
+
+def test_production_shaped_governed_limits_insert(admin_url: str) -> None:
+    # The config-derived envelope accepts the 56-call production budget (item 3), not only the
+    # closed 4-call harness budget — the constraint is structural, the budget is derived.
+    database_url, engine, database_name = _fresh_upgraded(admin_url)
+    try:
+        request_id, scope_hash = _seed_config_and_auth(engine, "prod-budget")
+        run_id = _insert_governed_run(engine, request_id, scope_hash, limits=_PRODUCTION_LIMITS)
+        with engine.connect() as connection:
+            stored = connection.execute(
+                text("SELECT acceptance_limits FROM campaign_runs WHERE run_id = :run"),
+                {"run": run_id},
+            ).scalar_one()
+        assert stored["global_call_cap"] == 56
+        assert stored["role_call_caps"]["judge"] == 19
+        assert stored["target_call_limit"] == 1
+    finally:
+        engine.dispose()
+        _db.drop_database(admin_url, database_name)
+
+
+@pytest.mark.parametrize(
+    ("mutation", "match"),
+    [
+        ({"target_call_limit": 2}, "campaign_run_acceptance_limits"),
+        ({"global_call_cap": 100}, "campaign_run_acceptance_limits"),
+        ({"network_scope": "openrouter_langfuse_only"}, "campaign_run_acceptance_limits"),
+    ],
+)
+def test_governed_limits_reject_a_relaxed_dispatch_or_over_ceiling_budget(
+    admin_url: str, mutation: dict, match: str
+) -> None:
+    # The one-dispatch invariant + the 56 platform ceiling are ABSOLUTE: a second dispatch, an
+    # over-ceiling budget, or a target-free scope are all rejected by the acceptance-limits check.
+    database_url, engine, database_name = _fresh_upgraded(admin_url)
+    try:
+        request_id, scope_hash = _seed_config_and_auth(engine, f"bad-{'-'.join(mutation)}")
+        bad = {**_PRODUCTION_LIMITS, **mutation}
+        with pytest.raises(DBAPIError, match=match):
+            _insert_governed_run(engine, request_id, scope_hash, limits=bad)
     finally:
         engine.dispose()
         _db.drop_database(admin_url, database_name)

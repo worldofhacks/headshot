@@ -116,6 +116,58 @@ def _configuration() -> HostedConfigurationSet:
     )
 
 
+_PROD_CALL_CAPS = {"orchestrator": 9, "red_team": 19, "judge": 19, "documentation": 9}
+_PROD_USD_CAPS = {
+    "orchestrator": Decimal("0.75"),
+    "red_team": Decimal("1"),
+    "judge": Decimal("2.50"),
+    "documentation": Decimal("0.50"),
+}
+
+
+def _production_configuration() -> HostedConfigurationSet:
+    """The confirmed production authority: Judge max_calls=56 (roles 9/19/19/9, retries=1)."""
+    return HostedConfigurationSet(
+        roles=tuple(
+            HostedRoleConfiguration(
+                role=role,  # type: ignore[arg-type]
+                provider="openrouter",
+                model_id=_MODELS[role],
+                upstream_provider=_UPSTREAM[role],
+                credential_reference=f"secretref://local/openrouter/{role}/production-1",
+                prompt_sha256=_prompt(role).sha256,
+                policy_sha256=hashlib.sha256(f"{role}:production".encode()).hexdigest(),
+                prices=TokenPrices(
+                    input_usd_per_million_tokens=Decimal("1.25"),
+                    output_usd_per_million_tokens=Decimal("10"),
+                    reasoning_usd_per_million_tokens=Decimal("10"),
+                ),
+                limits=HostedLimits(
+                    max_calls=_PROD_CALL_CAPS[role],
+                    max_input_tokens=_PROD_CALL_CAPS[role] * 10_000,
+                    max_output_tokens=_PROD_CALL_CAPS[role] * 2_000,
+                    max_reasoning_tokens=_PROD_CALL_CAPS[role] * 1_000,
+                    max_usd=_PROD_USD_CAPS[role],
+                    max_retries=1,
+                    max_requests_per_second=Decimal("0.5"),
+                    max_concurrency=1,
+                ),
+            )
+            for role in ("orchestrator", "red_team", "judge", "documentation")
+        ),
+        global_limits=HostedLimits(
+            max_calls=56,
+            max_input_tokens=560_000,
+            max_output_tokens=112_000,
+            max_reasoning_tokens=56_000,
+            max_usd=Decimal("5"),
+            max_retries=1,
+            max_requests_per_second=Decimal("0.5"),
+            max_concurrency=1,
+        ),
+    )
+
+
 def _clean(engine: Engine) -> None:
     with engine.begin() as connection:
         connection.execute(
@@ -552,6 +604,69 @@ def test_governed_completion_requires_the_single_dispatch(migrated_db: Engine) -
             .all()
         )
     assert states == ["running", "complete"]
+
+
+def test_governed_derives_production_config_budget_and_pins_one_dispatch(
+    migrated_db: Engine,
+) -> None:
+    """Item 3 + guardrails: the governed budget DERIVES from the staged 56-call production config,
+    while target_call_limit=1 + policy_gateway_target stay pinned even though the config allows an
+    agent-level retry (retries=1). A relaxed budget never relaxes the dispatch ceiling."""
+    configuration = _production_configuration()
+    derived = canonical_governed_acceptance_limits(configuration)
+    # Budget is DERIVED from the config.
+    assert derived["global_call_cap"] == 56
+    assert derived["role_call_caps"] == {
+        "orchestrator": 9,
+        "red_team": 19,
+        "judge": 19,
+        "documentation": 9,
+    }
+    assert {role: Decimal(cap) for role, cap in derived["role_usd_caps"].items()} == {
+        "orchestrator": Decimal("0.75"),
+        "red_team": Decimal("1"),
+        "judge": Decimal("2.50"),
+        "documentation": Decimal("0.50"),
+    }
+    assert Decimal(derived["global_usd_cap"]) == Decimal("5")
+    # One-dispatch invariant is PINNED, never derived — even with the config's retries=1.
+    assert derived["target_call_limit"] == 1
+    assert derived["network_scope"] == "policy_gateway_target"
+
+    _clean(migrated_db)
+    store = ControlPlaneStore(migrated_db, environment="local")
+    _stage(store, configuration)
+    request_id, scope_hash = _seed_authorization(migrated_db)
+    identity = store.create_governed_acceptance_run(
+        organization_id=_ORGANIZATION_ID,
+        authorization_request_id=request_id,
+        scope_hash=scope_hash,
+        launcher_user_id=_LAUNCHER,
+        launcher_session_id=_LAUNCHER_SESSION,
+        configuration_set_sha256=configuration.configuration_sha256,
+        generation_policy_sha256=_GENERATION_POLICY_SHA256,
+        reviewed_case_id=_REVIEWED_CASE_ID,
+        reviewed_case_content_hash=_REVIEWED_CONTENT_HASH,
+        reviewed_category="prompt_injection",
+        expires_at=datetime.datetime.now(datetime.UTC) + datetime.timedelta(minutes=10),
+    )
+    with migrated_db.connect() as connection:
+        stored = connection.execute(
+            text("SELECT acceptance_limits FROM campaign_runs WHERE run_id = :run"),
+            {"run": identity.run_id},
+        ).scalar_one()
+    # The store derives + matches against the LOADED (staged, content-hashed) config, and the run
+    # row carries exactly that derivation — self-consistent under the stage/load round-trip.
+    loaded = store.load_hosted_configuration_set(
+        organization_id=_ORGANIZATION_ID,
+        configuration_set_sha256=configuration.configuration_sha256,
+        release_sha256=_RELEASE_SHA256,
+    )
+    assert stored == canonical_governed_acceptance_limits(loaded)
+    assert stored["global_call_cap"] == 56
+    assert stored["role_call_caps"]["judge"] == 19
+    assert stored["target_call_limit"] == 1
+    assert stored["network_scope"] == "policy_gateway_target"
 
 
 def test_governed_abort_trips_the_kill_switch(migrated_db: Engine) -> None:
