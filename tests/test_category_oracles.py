@@ -188,17 +188,31 @@ def test_every_deterministic_authored_id_resolves_to_its_reviewed_code_oracle() 
         assert registration.category == case["category"]
         assert registration.expectation_kind == expectation["kind"]
         assert registration.availability == expectation["availability"]
-        # recorder-resource-limits-v1 is the one authored oracle now COMPOSED into the live
-        # adjudication path (its MEASURED consumption trio is collected and the oracle fires end to
-        # end — proven in tests/test_consumption_oracle_wiring.py). Every OTHER authored oracle
-        # remains pending_runtime / runtime_wired=False until its own trusted observation is wired.
-        wired = oracle_id == "recorder-resource-limits-v1"
+        # These authored oracles are now COMPOSED into the live adjudication path and fire end to
+        # end: recorder-resource-limits-v1 (its MEASURED consumption trio is collected and the oracle
+        # fires — proven in tests/test_consumption_oracle_wiring.py), plus the two offline canary
+        # oracles (the re-read /chat transcript is composed into _adjudicate and the CanaryOracle
+        # fires over the seeded canary_ref — proven in tests/test_canary_runtime_wired.py and
+        # tests/test_live_100_canary_confirm.py). Every OTHER authored oracle remains
+        # pending_runtime / runtime_wired=False until its own trusted observation is wired.
+        wired = oracle_id in {
+            "recorder-resource-limits-v1",
+            "offline-system-prompt-canary-v1",
+            "offline-beta-disclosure-canary-v1",
+        }
         assert registration.runtime_wired is wired
 
         if registration.evaluator_type is CanaryOracle:
             canary_ref = expectation["canary_ref"]
             assert registration.canary_refs == {canary_ref}
-            evaluator = registration.build_evaluator(canary_ref=canary_ref)
+            # A wired canary registration never self-asserts runtime wiring through the registry —
+            # the composition root (coordinator._adjudicate) constructs the CanaryOracle directly.
+            # Prove the guard AND that the directly-built evaluator still fires over a trusted
+            # fixture response. (These two canary oracles are wired; the guard fires first.)
+            assert wired
+            with pytest.raises(OracleRegistryError, match="runtime wiring"):
+                registration.build_evaluator(canary_ref=canary_ref)
+            evaluator = CanaryOracle(canary_ref, id=canary_ref)
             signal = evaluator.evaluate(f"trusted fixture response {canary_ref}")
             assert signal["id"] == canary_ref
         else:
@@ -222,7 +236,13 @@ def test_oracle_registry_rejects_unreviewed_ids() -> None:
         resolve_authored_oracle("caller-selected-oracle")
     with pytest.raises(OracleObservationError, match="reviewed alias"):
         RetrievalScopeOracle(oracle_id="caller-selected-oracle")
-    with pytest.raises(OracleRegistryError, match="canary ref"):
+    # offline-beta-disclosure-canary-v1 is now runtime_wired (its transcript is composed into
+    # coordinator._adjudicate). build_evaluator therefore refuses UNCONDITIONALLY through the
+    # runtime-wiring guard, which fires BEFORE the canary-ref check — so even a wrong (unreviewed)
+    # ref is rejected with "runtime wiring", the stronger guarantee: the registry never hands out a
+    # live-wired evaluator regardless of the ref. The composition root builds the CanaryOracle
+    # directly.
+    with pytest.raises(OracleRegistryError, match="runtime wiring"):
         resolve_authored_oracle("offline-beta-disclosure-canary-v1").build_evaluator(
             canary_ref="SYNTH_CANARY_DIFFERENT"
         )
