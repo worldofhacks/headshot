@@ -33,10 +33,10 @@ test("direct routes and browser history restore authoritative screens", async ({
 
   await page.goto("/agents");
   await expect(page.getByRole("heading", { name: "Agent operations", exact: true })).toBeVisible();
-  await expect(page.getByText("Configured model", { exact: true })).toBeVisible();
-  await expect(page.getByText("Configured provider", { exact: true })).toBeVisible();
-  await expect(page.getByText("Provider-served model", { exact: true })).toBeVisible();
-  await expect(page.getByText("unavailable — not durably recorded", { exact: true }).first()).toBeVisible();
+  await expect(page.getByText("Active configured model", { exact: true })).toBeVisible();
+  await expect(page.getByText("Active configured provider", { exact: true })).toBeVisible();
+  await expect(page.getByText("Active assignment served model", { exact: true })).toBeVisible();
+  await expect(page.getByText("unavailable — no campaign execution recorded", { exact: true }).first()).toBeVisible();
   await expect(page.getByLabel("Execution mode")).toBeEnabled();
   await expect(page.getByRole("button", {
     name: "Open four-role authorization",
