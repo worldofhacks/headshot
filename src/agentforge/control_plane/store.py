@@ -5522,24 +5522,65 @@ class ControlPlaneStore:
                 return self._finding_decision(
                     connection, principal.organization_id, existing["decision_id"]
                 )
-            evidence = (
+            self._aggregate_lock(
+                connection,
+                f"finding-decision:{principal.organization_id}:{finding_id}",
+            )
+            finding_exists = connection.execute(
+                text(
+                    "SELECT 1 FROM finding WHERE organization_id = :org AND finding_id = :finding"
+                ),
+                {"org": principal.organization_id, "finding": finding_id},
+            ).scalar_one_or_none()
+            if finding_exists is None:
+                raise RecordNotFoundError("finding does not exist")
+            evidence_rows = (
                 connection.execute(
                     text(
-                        "SELECT ar.*, l.evidence_content_hash FROM finding f "
-                        "JOIN finding_evidence_links l ON l.organization_id = f.organization_id "
-                        "AND l.finding_id = f.finding_id JOIN attempt_result ar "
+                        "SELECT ar.*, l.evidence_content_hash, "
+                        "cr.run_kind AS finding_run_kind, "
+                        "cr.launcher_user_id AS finding_launcher_user_id, "
+                        "cr.launcher_session_id AS finding_launcher_session_id, "
+                        "q.launcher_user_id AS finding_submitter_user_id, "
+                        "q.launcher_session_id AS finding_submitter_session_id "
+                        "FROM finding_evidence_links l JOIN attempt_result ar "
                         "ON ar.organization_id = l.organization_id "
                         "AND ar.campaign_run_id = l.campaign_run_id "
-                        "AND ar.attempt_id = l.attempt_id WHERE f.organization_id = :org "
-                        "AND f.finding_id = :finding"
+                        "AND ar.attempt_id = l.attempt_id "
+                        "LEFT JOIN campaign_runs cr ON cr.organization_id = l.organization_id "
+                        "AND cr.run_id = l.campaign_run_id "
+                        "LEFT JOIN campaign_authorization_requests q "
+                        "ON q.organization_id = cr.organization_id "
+                        "AND q.request_id = cr.authorization_request_id "
+                        "AND q.scope_hash = cr.scope_hash "
+                        "WHERE l.organization_id = :org "
+                        "AND l.finding_id = :finding ORDER BY l.id LIMIT 2"
                     ),
                     {"org": principal.organization_id, "finding": finding_id},
                 )
                 .mappings()
-                .one_or_none()
+                .all()
             )
-            if evidence is None:
-                raise RecordNotFoundError("finding does not exist")
+            if not evidence_rows:
+                if decision == "approved":
+                    raise AuthorizationDeniedError("finding approval lineage is unavailable")
+                raise RecordNotFoundError("finding evidence does not exist")
+            if len(evidence_rows) != 1:
+                raise AuthorizationDeniedError("finding evidence lineage is ambiguous")
+            evidence = evidence_rows[0]
+            if decision == "approved":
+                approval_lineage_valid = (
+                    evidence["finding_run_kind"] in {"campaign", "governed_acceptance"}
+                    and evidence["finding_launcher_user_id"] is not None
+                    and evidence["finding_launcher_user_id"]
+                    == evidence["finding_submitter_user_id"]
+                    and evidence["finding_launcher_session_id"]
+                    == evidence["finding_submitter_session_id"]
+                )
+                if not approval_lineage_valid:
+                    raise AuthorizationDeniedError("finding approval lineage is unavailable")
+                if principal.user_id == evidence["finding_submitter_user_id"]:
+                    raise AuthorizationDeniedError("finding submitter cannot approve own finding")
             candidate: dict[str, Any] = {}
             for column in PERSISTED_EVIDENCE_COLUMNS:
                 value = evidence[column]

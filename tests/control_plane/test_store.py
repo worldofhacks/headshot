@@ -516,6 +516,55 @@ def test_finding_decision_persists_bounded_redacted_plain_text(
     }
     recorder = ExecutionRecorder()
     with migrated_db.begin() as connection:
+        authorization_request_id = f"request-{campaign_run_id}"
+        connection.execute(
+            text(
+                "INSERT INTO campaign_authorization_requests "
+                "(request_id, organization_id, scope_hash, scope_payload, launcher_user_id, "
+                "launcher_session_id, expires_at) VALUES "
+                "(:request, :org, :scope_hash, '{}'::jsonb, :user, :session, "
+                "clock_timestamp() + INTERVAL '10 minutes')"
+            ),
+            {
+                "request": authorization_request_id,
+                "org": ORG_ID,
+                "scope_hash": "a" * 64,
+                "user": LAUNCHER_ID,
+                "session": "sess_M1dLauncher",
+            },
+        )
+        connection.execute(
+            text(
+                "INSERT INTO campaign_authorization_decisions "
+                "(decision_id, organization_id, request_id, scope_hash, decision, "
+                "approver_user_id, approver_session_id) VALUES "
+                "(:decision, :org, :request, :scope_hash, 'approved', :user, :session)"
+            ),
+            {
+                "decision": f"decision-{campaign_run_id}",
+                "org": ORG_ID,
+                "request": authorization_request_id,
+                "scope_hash": "a" * 64,
+                "user": APPROVER_ID,
+                "session": "sess_M1dApprover",
+            },
+        )
+        connection.execute(
+            text(
+                "INSERT INTO campaign_runs "
+                "(run_id, organization_id, authorization_request_id, scope_hash, "
+                "launcher_user_id, launcher_session_id) VALUES "
+                "(:run, :org, :request, :scope_hash, :user, :session)"
+            ),
+            {
+                "run": campaign_run_id,
+                "org": ORG_ID,
+                "request": authorization_request_id,
+                "scope_hash": "a" * 64,
+                "user": LAUNCHER_ID,
+                "session": "sess_M1dLauncher",
+            },
+        )
         stored = recorder.record(evidence_fields, connection)
         verdict_id = connection.execute(
             text(
