@@ -1534,9 +1534,7 @@ def test_largest_reviewed_batch_fits_frozen_models_and_closed_usd_caps() -> None
         ),
     }
     for role_configuration in configuration.roles:
-        input_price, output_price, reasoning_price, usd_cap = prices[
-            role_configuration.role
-        ]
+        input_price, output_price, reasoning_price, usd_cap = prices[role_configuration.role]
         role_configuration.prices.input_usd_per_million_tokens = input_price
         role_configuration.prices.output_usd_per_million_tokens = output_price
         role_configuration.prices.reasoning_usd_per_million_tokens = reasoning_price
