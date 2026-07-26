@@ -107,7 +107,7 @@ class HostedReplaySelector:
             },
             output_schema={
                 "type": "object",
-                "properties": {"case_ref": {"enum": refs}},
+                "properties": {"case_ref": {"type": "string", "enum": refs}},
                 "required": ["case_ref"],
                 "additionalProperties": False,
             },

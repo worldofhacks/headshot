@@ -64,6 +64,7 @@ def test_hosted_selector_emits_only_the_model_selected_reviewed_case() -> None:
         "CASE-001",
         "CASE-002",
     ]
+    assert runtime.calls[0]["output_schema"]["properties"]["case_ref"]["type"] == "string"
 
 
 def test_hosted_selector_fails_closed_on_out_of_corpus_model_choice() -> None:

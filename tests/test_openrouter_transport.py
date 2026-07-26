@@ -502,9 +502,11 @@ def test_transport_rejects_wrong_prompt_version_before_any_side_effect() -> None
         ("atlas-cloud", "AtlasCloud", True),
         ("atlas-cloud/fp8", "AtlasCloud", True),
         ("atlas-cloud", "Together", False),
+        ("digitalocean", "DigitalOcean", True),
+        ("digitalocean", "Together", False),
     ),
 )
-def test_served_provider_normalization_includes_atlas_cloud(
+def test_served_provider_normalization_includes_authorized_routes(
     configured: str,
     served: str,
     expected: bool,
