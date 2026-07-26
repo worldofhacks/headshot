@@ -148,7 +148,7 @@ DEFAULT_HOSTED_GENERATION_POLICY = HostedGenerationPolicy(
             role="orchestrator",
             bounds=HostedCallBounds(
                 input_tokens=8_192,
-                output_tokens=512,
+                output_tokens=1_024,
                 reasoning_tokens=1_024,
                 timeout_seconds=120.0,
             ),
