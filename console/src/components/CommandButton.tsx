@@ -66,6 +66,10 @@ export function CommandButton({
     }
   };
 
+  // Built as whole strings, not JSX interpolation: `{a}{cond ? b : ""}{c}` renders as separate
+  // text nodes, which breaks exact-text matching and fragments the message for assistive tech.
+  const suffix = detail ? `: ${detail}` : "";
+
   return (
     <div className="command-control">
       <button
@@ -84,19 +88,13 @@ export function CommandButton({
         </span>
       )}
       {state === "unavailable" && (
-        <span className="command-note">
-          The server is not ready for this action{detail ? `: ${detail}` : ""}.
-        </span>
+        <span className="command-note">{`The server is not ready for this action${suffix}.`}</span>
       )}
       {state === "conflict" && (
-        <span className="command-note error">
-          Server rejected an immutable or idempotency conflict{detail ? `: ${detail}` : ""}.
-        </span>
+        <span className="command-note error">{`Server rejected an immutable or idempotency conflict${suffix}.`}</span>
       )}
       {state === "error" && (
-        <span className="command-note error">
-          The command was not acknowledged{detail ? `: ${detail}` : ""}.
-        </span>
+        <span className="command-note error">{`The command was not acknowledged${suffix}.`}</span>
       )}
     </div>
   );
