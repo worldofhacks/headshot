@@ -81,7 +81,8 @@ import {
 import { CostsScreen, TracesScreen } from "./ObservabilityScreens";
 
 const AUTHORIZATION_APPROVAL_BUFFER_SECONDS = 900;
-const MAX_AUTHORIZATION_LIFETIME_SECONDS = 7200;
+// The backend permits at most 24 hours and requires the approval to outlive the full run.
+const MAX_AUTHORIZATION_LIFETIME_SECONDS = 86_400;
 
 export const authorizationLifetimeSeconds = (runTimeoutSeconds: number): number =>
   Math.min(
@@ -251,6 +252,17 @@ function AttemptEvidence({ client, attemptId }: { client: ApiClient; attemptId: 
       </ResourceView>
     </Panel>
   );
+}
+
+// The authorization must OUTLIVE the run it authorizes: launch_campaign refuses when
+// `expires_at <= now + caps.run_timeout_seconds` (control_plane/store.py). A hardcoded 900s
+// window could never cover a 7200s target timeout, so every launch failed with "Access denied"
+// no matter what the operator did — and even a 900s target failed, because by launch time `now`
+// has already advanced past creation. Derive the window from the timeout being authorized and
+// add slack for the approve+launch round trip.
+const AUTHORIZATION_SLACK_SECONDS = 900;
+function authorizationWindowSeconds(runTimeoutSeconds: number): number {
+  return Math.ceil(runTimeoutSeconds) + AUTHORIZATION_SLACK_SECONDS;
 }
 
 export function LiveScreen({ client, principal, entityId, getToken }: ScreenProps) {
