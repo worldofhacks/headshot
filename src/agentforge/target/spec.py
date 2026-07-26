@@ -25,6 +25,7 @@ _METHOD_RE = re.compile(r"\A[A-Z][A-Z0-9_-]{0,31}\Z")
 _CORPUS_HASH_RE = re.compile(r"\A[a-f0-9]{64}\Z")
 _RUN_NONCE_RE = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9._-]{15,127}\Z")
 _SESSION_GENERATION_RE = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
+_HOSTED_MAX_GLOBAL_PHYSICAL_CALLS = 136
 _RELATIVE_SEGMENT_RE = re.compile(r"\A[A-Za-z0-9._~-]+\Z")
 # A single path-parameter placeholder segment, e.g. ``{document_id}``. The name grammar is the
 # strict lowercase identifier used elsewhere so a template can never smuggle traversal, a second
@@ -458,9 +459,12 @@ class HostedRunBinding:
             raise DefinitionError("session_generation must be a non-secret immutable generation")
         if (
             type(self.provider_model_call_limit) is not int
-            or not 1 <= self.provider_model_call_limit <= 56
+            or not 1 <= self.provider_model_call_limit <= _HOSTED_MAX_GLOBAL_PHYSICAL_CALLS
         ):
-            raise DefinitionError("provider_model_call_limit must be between 1 and 56")
+            raise DefinitionError(
+                "provider_model_call_limit must be between 1 and "
+                f"{_HOSTED_MAX_GLOBAL_PHYSICAL_CALLS}"
+            )
         try:
             spend = Decimal(self.provider_model_spend_limit_usd)
         except (ArithmeticError, TypeError, ValueError) as exc:

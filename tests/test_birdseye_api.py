@@ -110,6 +110,69 @@ def test_birdseye_is_registry_derived_and_omits_missing_components(
     assert "langfuse" not in component_ids
 
 
+def test_birdseye_projects_only_the_latest_hosted_runtime_configuration(
+    migrated_db: Engine,
+) -> None:
+    environment = "local"
+    organization_id = "org_BirdseyeHostedRuntime"
+    old_configuration = "1" * 64
+    current_configuration = "2" * 64
+    with migrated_db.begin() as connection:
+        connection.execute(
+            text("DELETE FROM runtime_component_status WHERE environment = :environment"),
+            {"environment": environment},
+        )
+        connection.execute(
+            text(
+                "INSERT INTO hosted_configuration_sets "
+                "(organization_id, configuration_sha256, schema_version, release_sha256, "
+                "payload, rationale, actor_user_id, actor_session_id, created_at) VALUES "
+                "(:org, :old_configuration, '1', :old_release, '{}'::jsonb, "
+                "'Historical hosted configuration.', 'user_config', 'session_config', "
+                "'2026-07-25T00:00:00Z'), "
+                "(:org, :current_configuration, '1', :current_release, '{}'::jsonb, "
+                "'Current hosted configuration.', 'user_config', 'session_config', "
+                "'2026-07-25T00:01:00Z')"
+            ),
+            {
+                "org": organization_id,
+                "old_configuration": old_configuration,
+                "old_release": "3" * 64,
+                "current_configuration": current_configuration,
+                "current_release": "4" * 64,
+            },
+        )
+        connection.execute(
+            text(
+                "INSERT INTO runtime_component_status "
+                "(environment, component_id, name, kind, availability, detail, heartbeat_at) "
+                "VALUES "
+                "(:environment, :old_configuration, 'OpenRouter hosted runtime', "
+                "'model-runtime', 'blocked pending authorization', "
+                "'historical binding unavailable', clock_timestamp()), "
+                "(:environment, :current_configuration, 'OpenRouter hosted runtime', "
+                "'model-runtime', 'operational and evidenced', "
+                "'current bindings verified', clock_timestamp())"
+            ),
+            {
+                "environment": environment,
+                "old_configuration": old_configuration,
+                "current_configuration": current_configuration,
+            },
+        )
+
+    with migrated_db.connect() as connection:
+        snapshot = build_birdseye_snapshot(
+            connection,
+            organization_id=organization_id,
+            environment=environment,
+        )
+
+    nodes = {node["component_id"]: node for node in snapshot["nodes"]}
+    assert old_configuration not in nodes
+    assert nodes[current_configuration]["runtime_state"] == "ready"
+
+
 def test_birdseye_projects_security_outcomes_and_recorded_agent_causality(
     migrated_db: Engine,
 ) -> None:

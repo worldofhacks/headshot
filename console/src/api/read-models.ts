@@ -23,6 +23,8 @@ import type {
   BirdseyeSnapshotReadModel,
   BirdseyeTimelineReadModel,
   CampaignReadModel,
+  CampaignSuiteBatchReadModel,
+  CampaignSuiteTemplateReadModel,
   ComponentReadModel,
   ConfigurationReadModel,
   CostReadModel,
@@ -307,7 +309,7 @@ const decodeHostedRun = (value: unknown): HostedRunBindingReadModel => {
     name,
     { integer: true, minimum: 1 },
   );
-  if (callLimit > 56) invalid(name);
+  if (callLimit > 136) invalid(name);
   const retries = number(result, "provider_max_retries", name, { integer: true, minimum: 0 });
   if (retries > 1) invalid(name);
   if (number(result, "provider_max_concurrency", name, { integer: true }) !== 1) {
@@ -1836,6 +1838,7 @@ const decodeTarget = (value: unknown): TargetReadModel => {
     "allowed_lifecycle_transitions",
     "surfaces",
     "campaign_template",
+    "campaign_suite_templates",
     "created_at",
   ], name);
   for (const key of [
@@ -1856,9 +1859,14 @@ const decodeTarget = (value: unknown): TargetReadModel => {
   result.safety_caps = decodeCaps(result.safety_caps);
   stringArray(result, "allowed_lifecycle_transitions", name);
   result.surfaces = records(result.surfaces, "attack surfaces", decodeSurface);
-  if (result.campaign_template !== null) {
-    const template = object(result, "campaign_template", name);
+  const decodeCampaignTemplate = (
+    value: unknown,
+    templateName: string,
+    batch = false,
+  ) => {
+    const template = record(value, templateName);
     exactKeys(template, [
+      ...(batch ? ["ordinal", "batch_id", "physical_request_count"] : []),
       "target_id",
       "target_version",
       "surface_id",
@@ -1870,7 +1878,15 @@ const decodeTarget = (value: unknown): TargetReadModel => {
       "execution_profile",
       "maximum_caps",
       "hosted_run",
-    ], "campaign template");
+    ], templateName);
+    if (batch) {
+      number(template, "ordinal", templateName, { integer: true, minimum: 1 });
+      string(template, "batch_id", templateName);
+      number(template, "physical_request_count", templateName, {
+        integer: true,
+        minimum: 1,
+      });
+    }
     for (const key of [
       "target_id",
       "target_version",
@@ -1878,14 +1894,77 @@ const decodeTarget = (value: unknown): TargetReadModel => {
       "surface_version",
       "corpus_id",
       "corpus_hash",
-    ]) string(template, key, "campaign template");
-    number(template, "case_count", "campaign template", { integer: true, minimum: 1 });
-    stringArray(template, "tool_sources", "campaign template");
-    literal(template, "execution_profile", ["synthetic", "live"], "campaign template");
+    ]) string(template, key, templateName);
+    number(template, "case_count", templateName, { integer: true, minimum: 1 });
+    stringArray(template, "tool_sources", templateName);
+    literal(template, "execution_profile", ["synthetic", "live"], templateName);
     template.maximum_caps = decodeCaps(template.maximum_caps);
     template.hosted_run = template.hosted_run === null
       ? null
       : decodeHostedRun(template.hosted_run);
+    return template;
+  };
+  if (result.campaign_template !== null) {
+    result.campaign_template = decodeCampaignTemplate(
+      result.campaign_template,
+      "campaign template",
+    );
+  }
+  const rawSuites = result.campaign_suite_templates;
+  if (rawSuites !== undefined) {
+    result.campaign_suite_templates = records(
+      rawSuites,
+      "campaign suite templates",
+      (value) => {
+        const suiteName = "campaign suite template";
+        const suite = record(value, suiteName);
+        exactKeys(suite, [
+          "suite_id",
+          "title",
+          "case_count",
+          "physical_request_count",
+          "categories",
+          "batches",
+        ], suiteName);
+        string(suite, "suite_id", suiteName);
+        string(suite, "title", suiteName);
+        number(suite, "case_count", suiteName, { integer: true, minimum: 1 });
+        number(suite, "physical_request_count", suiteName, {
+          integer: true,
+          minimum: 1,
+        });
+        stringArray(suite, "categories", suiteName);
+        const batches = records(
+          suite.batches,
+          "campaign suite batches",
+          (batch) => decodeCampaignTemplate(
+            batch,
+            "campaign suite batch",
+            true,
+          ) as CampaignSuiteBatchReadModel,
+        );
+        suite.batches = batches;
+        if (
+          batches.length === 0
+          || new Set(batches.map((batch) => batch.ordinal)).size
+            !== batches.length
+          || new Set(batches.map((batch) => batch.batch_id)).size
+            !== batches.length
+          || new Set(batches.map((batch) => batch.corpus_id)).size
+            !== batches.length
+          || batches.reduce((total, batch) => total + batch.case_count, 0)
+            !== suite.case_count
+          || batches.reduce(
+            (total, batch) => total + batch.physical_request_count,
+            0,
+          ) !== suite.physical_request_count
+        ) {
+          invalid(suiteName);
+        }
+        batches.sort((left, right) => left.ordinal - right.ordinal);
+        return suite as CampaignSuiteTemplateReadModel;
+      },
+    );
   }
   timestamp(result, "created_at", name);
   return result as TargetReadModel;

@@ -1,7 +1,35 @@
 import { useRef, useState } from "react";
 
-import type { ApiClient } from "../api/client";
+import { ApiClientError, type ApiClient } from "../api/client";
 import type { CommandAcknowledgement } from "../api/contracts";
+
+const unavailableMessage = (reasonCode: string | undefined): string => {
+  switch (reasonCode) {
+    case "provider_credentials_runner_unverified":
+      return "Runner has not verified all four hosted provider bindings.";
+    case "four_role_hosted_runtime_required":
+      return "A complete hosted four-LLM configuration is required.";
+    case "hosted_runtime_not_composed":
+      return "The private Runner is not composed for hosted four-LLM execution.";
+    case "runner_heartbeat_stale":
+    case "runner_execution_composition_missing":
+      return "The private Runner is not ready to accept this campaign.";
+    default:
+      return reasonCode
+        ? `Server refused this action: ${reasonCode.replaceAll("_", " ")}.`
+        : "The server connection for this action is not ready.";
+  }
+};
+
+const failureMessage = (error: unknown): string => {
+  if (error instanceof ApiClientError && error.status === 403) {
+    return "Backend denied this identity or exact scope (403). Refresh the session and verify that the original Operator is launching a separately approved request.";
+  }
+  if (error instanceof ApiClientError && error.status === 401) {
+    return "Authentication expired. Sign in again before retrying.";
+  }
+  return "The command was not acknowledged. No state change was assumed.";
+};
 
 export function CommandButton({
   client,
@@ -26,9 +54,6 @@ export function CommandButton({
     "idle",
   );
   const [acknowledgement, setAcknowledgement] = useState<string | null>(null);
-  // The server always says WHY it refused — a reason_code on an unavailable/conflict response, or
-  // an ApiClientError message on a 4xx. Discarding both left every refusal rendering as the same
-  // "not acknowledged", which is indistinguishable from a network failure.
   const [detail, setDetail] = useState<string | null>(null);
   const action = useRef<{ identity: string; idempotencyKey: string } | null>(null);
 
@@ -48,12 +73,16 @@ export function CommandButton({
         action.current.idempotencyKey,
       );
       if (response.status === "unavailable") {
-        setDetail(response.reason_code ?? null);
+        setDetail(unavailableMessage(response.reason_code));
         setState("unavailable");
         return;
       }
       if (response.status === "conflict") {
-        setDetail(response.reason_code ?? null);
+        setDetail(
+          response.reason_code
+            ? `Server rejected this immutable request: ${response.reason_code.replaceAll("_", " ")}.`
+            : "Server rejected an immutable or idempotency conflict.",
+        );
         setState("conflict");
         return;
       }
@@ -61,14 +90,10 @@ export function CommandButton({
       setState("acknowledged");
       onAcknowledged?.(response);
     } catch (error) {
-      setDetail(error instanceof Error ? error.message : null);
+      setDetail(failureMessage(error));
       setState("error");
     }
   };
-
-  // Built as whole strings, not JSX interpolation: `{a}{cond ? b : ""}{c}` renders as separate
-  // text nodes, which breaks exact-text matching and fragments the message for assistive tech.
-  const suffix = detail ? `: ${detail}` : "";
 
   return (
     <div className="command-control">
@@ -87,15 +112,9 @@ export function CommandButton({
           Server acknowledged{acknowledgement ? ` · ${acknowledgement}` : ""}. Refreshing state.
         </span>
       )}
-      {state === "unavailable" && (
-        <span className="command-note">{`The server is not ready for this action${suffix}.`}</span>
-      )}
-      {state === "conflict" && (
-        <span className="command-note error">{`Server rejected an immutable or idempotency conflict${suffix}.`}</span>
-      )}
-      {state === "error" && (
-        <span className="command-note error">{`The command was not acknowledged${suffix}.`}</span>
-      )}
+      {state === "unavailable" && <span className="command-note">{detail}</span>}
+      {state === "conflict" && <span className="command-note error">{detail}</span>}
+      {state === "error" && <span className="command-note error">{detail}</span>}
     </div>
   );
 }

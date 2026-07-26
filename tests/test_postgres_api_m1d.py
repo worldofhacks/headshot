@@ -189,7 +189,12 @@ def _hosted_configuration_payload() -> dict[str, Any]:
     }
 
 
-def _seed_ready_target(engine: Engine, principal: Principal) -> None:
+def _seed_ready_target(
+    engine: Engine,
+    principal: Principal,
+    *,
+    include_disabled_surface: bool = False,
+) -> None:
     """Stand in for the still-missing trusted server-side authoring catalog."""
 
     store = ControlPlaneStore(engine, environment="staging")
@@ -204,6 +209,20 @@ def _seed_ready_target(engine: Engine, principal: Principal) -> None:
         surface=backend._surface("copilot-api", _surface_payload()),
         idempotency_key="server-catalog-surface-0001",
     )
+    if include_disabled_surface:
+        disabled_surface = _surface_payload()
+        disabled_surface.update(
+            {
+                "surface_id": "aaa-disabled-surface",
+                "relative_path": "disabled",
+                "enabled": False,
+            }
+        )
+        store.register_surface(
+            principal=principal,
+            surface=backend._surface("copilot-api", disabled_surface),
+            idempotency_key="server-catalog-disabled-surface-0001",
+        )
     for lifecycle in (TargetLifecycle.VALIDATING, TargetLifecycle.READY):
         store.transition_target(
             principal=principal,
@@ -362,7 +381,7 @@ def test_agent_models_and_tool_scope_are_real_configurable_projections(
         "org:targets:manage",
         "org:config:manage",
     )
-    _seed_ready_target(migrated_db, principal)
+    _seed_ready_target(migrated_db, principal, include_disabled_surface=True)
     backend = PostgresApiBackend(
         migrated_db,
         environment="staging",
@@ -449,6 +468,7 @@ def test_agent_models_and_tool_scope_are_real_configurable_projections(
     targets_response = client.get("/api/v1/targets")
     assert targets_response.status_code == 200
     campaign_template = targets_response.json()["data"][0]["campaign_template"]
+    assert campaign_template["surface_id"] == "chat-api"
     hosted_run = campaign_template["hosted_run"]
     assert hosted_run == {
         "configuration_set_sha256": configuration_sha256,
@@ -513,6 +533,12 @@ def test_agent_models_and_tool_scope_are_real_configurable_projections(
         "prompt_sha256": red_team_prompt.sha256,
         "system_prompt": red_team_prompt.content,
     }
+    path_bound_prompt = client.get(
+        f"/api/v1/agent-prompts/red_team/{red_team_prompt.version}/{red_team_prompt.sha256}"
+        f"/{configuration_sha256}"
+    )
+    assert path_bound_prompt.status_code == 200
+    assert path_bound_prompt.json() == prompt.json()
     assert client.get("/api/v1/agents/red_team/prompt").status_code == 404
     judge_prompt = _PROMPTS["judge"]
     mismatched_prompt = client.get(
@@ -975,13 +1001,13 @@ def test_agent_activation_calibration_and_budget_follow_latest_authority(
     assert budget["role_physical_calls"] == 2
     assert budget["role_unresolved_physical_calls"] == 2
     assert budget["role_calls_remaining"] == 15
-    assert abs(budget["role_unresolved_usd_exposure"] - 0.257344) < 1e-9
-    assert abs(budget["role_usd_remaining"] - 2.142656) < 1e-9
+    assert abs(budget["role_unresolved_usd_exposure"] - 0.024576) < 1e-9
+    assert abs(budget["role_usd_remaining"] - 2.375424) < 1e-9
     assert budget["global_physical_calls"] == 2
     assert budget["global_unresolved_physical_calls"] == 2
     assert budget["global_calls_remaining"] == 52
-    assert abs(budget["global_unresolved_usd_exposure"] - 0.257344) < 1e-9
-    assert abs(budget["global_usd_remaining"] - 4.642656) < 1e-9
+    assert abs(budget["global_unresolved_usd_exposure"] - 0.024576) < 1e-9
+    assert abs(budget["global_usd_remaining"] - 4.875424) < 1e-9
 
     costs = client.get("/api/v1/costs").json()
     assert costs["state"] == "ready", costs
@@ -1387,6 +1413,25 @@ def test_exact_scope_two_person_flow_reaches_persistence_but_not_unwired_runner(
                 "availability = EXCLUDED.availability, heartbeat_at = clock_timestamp()"
             )
         )
+    client.app.state.api_backend = PostgresApiBackend(
+        migrated_db,
+        environment="staging",
+        runner_available=True,
+        hosted_runtime_available=True,
+    )
+    hosted_only = client.post(
+        "/api/v1/campaigns",
+        json={"authorization_request_id": request_id},
+        headers=_headers("api-launch-hosted-required-0001"),
+    )
+    assert hosted_only.status_code == 503
+    assert hosted_only.json()["reason_code"] == "four_role_hosted_runtime_required"
+    client.app.state.api_backend = PostgresApiBackend(
+        migrated_db,
+        environment="staging",
+        runner_available=True,
+        hosted_runtime_available=False,
+    )
     launched = client.post(
         "/api/v1/campaigns",
         json={"authorization_request_id": request_id},

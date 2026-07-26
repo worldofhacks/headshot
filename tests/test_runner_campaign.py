@@ -8,6 +8,7 @@ import datetime
 import hashlib
 import json
 import time
+from decimal import Decimal
 from types import SimpleNamespace
 from typing import NamedTuple
 
@@ -1359,6 +1360,7 @@ def _hosted_capacity_fixture(
     required_calls = policy.required_logical_calls(case_count=case_count)
     roles = []
     global_tokens = {"input": 0, "output": 0, "reasoning": 0}
+    global_usd = Decimal(0)
     for role, required in required_calls.items():
         bounds = policy.call_bounds[role]
         required_physical_calls = required * (1 + max_retries)
@@ -1369,14 +1371,23 @@ def _hosted_capacity_fixture(
         }
         for token_kind, token_count in totals.items():
             global_tokens[token_kind] += token_count
+        prices = SimpleNamespace(
+            input_usd_per_million_tokens=Decimal("0.000001"),
+            output_usd_per_million_tokens=Decimal("0.000001"),
+            reasoning_usd_per_million_tokens=Decimal("0.000001"),
+        )
+        required_usd = Decimal(sum(totals.values())) / Decimal(1_000_000_000_000)
+        global_usd += required_usd
         roles.append(
             SimpleNamespace(
                 role=role,
+                prices=prices,
                 limits=SimpleNamespace(
                     max_calls=required_physical_calls,
                     max_input_tokens=totals["input"],
                     max_output_tokens=totals["output"],
                     max_reasoning_tokens=totals["reasoning"],
+                    max_usd=required_usd,
                     max_retries=max_retries,
                 ),
             )
@@ -1388,6 +1399,7 @@ def _hosted_capacity_fixture(
             max_input_tokens=global_tokens["input"],
             max_output_tokens=global_tokens["output"],
             max_reasoning_tokens=global_tokens["reasoning"],
+            max_usd=global_usd,
             max_retries=max_retries,
         ),
     )
@@ -1422,6 +1434,27 @@ def test_hosted_preflight_requires_cumulative_global_token_capacity() -> None:
         )
 
 
+def test_hosted_preflight_requires_cumulative_role_and_global_spend_capacity() -> None:
+    configuration = _hosted_capacity_fixture()
+    configuration.roles[0].limits.max_usd /= 2
+
+    with pytest.raises(DispatchUnavailable, match="hosted_role_spend_cap_incompatible"):
+        _require_hosted_workload_capacity(
+            configuration=configuration,  # type: ignore[arg-type]
+            generation_policy=DEFAULT_HOSTED_GENERATION_POLICY,
+            case_count=2,
+        )
+
+    configuration = _hosted_capacity_fixture()
+    configuration.global_limits.max_usd /= 2
+    with pytest.raises(DispatchUnavailable, match="hosted_global_spend_cap_incompatible"):
+        _require_hosted_workload_capacity(
+            configuration=configuration,  # type: ignore[arg-type]
+            generation_policy=DEFAULT_HOSTED_GENERATION_POLICY,
+            case_count=2,
+        )
+
+
 def test_canonical_nine_case_zero_retry_workload_fits_and_one_less_call_fails() -> None:
     configuration = _hosted_capacity_fixture(case_count=9, max_retries=0)
     _require_hosted_workload_capacity(
@@ -1449,6 +1482,70 @@ def test_global_fifty_six_call_cap_requires_zero_retry_nine_case_floor() -> None
             generation_policy=DEFAULT_HOSTED_GENERATION_POLICY,
             case_count=9,
         )
+
+
+@pytest.mark.parametrize(("case_count", "required_calls"), ((34, 136), (33, 132), (33, 132)))
+def test_reviewed_batch_requires_four_hosted_roles_and_zero_retries(
+    case_count: int,
+    required_calls: int,
+) -> None:
+    policy = DEFAULT_HOSTED_GENERATION_POLICY
+    configuration = _hosted_capacity_fixture(case_count=case_count, max_retries=0)
+    assert configuration.global_limits.max_calls == required_calls
+
+    _require_hosted_workload_capacity(
+        configuration=configuration,  # type: ignore[arg-type]
+        generation_policy=policy,
+        case_count=case_count,
+    )
+
+    configuration.global_limits.max_retries = 1
+    for role_configuration in configuration.roles:
+        role_configuration.limits.max_retries = 1
+        role_configuration.limits.max_calls *= 2
+        role_configuration.limits.max_input_tokens *= 2
+        role_configuration.limits.max_output_tokens *= 2
+        role_configuration.limits.max_reasoning_tokens *= 2
+        role_configuration.limits.max_usd *= 2
+    with pytest.raises(DispatchUnavailable, match="hosted_global_call_cap_incompatible"):
+        _require_hosted_workload_capacity(
+            configuration=configuration,  # type: ignore[arg-type]
+            generation_policy=policy,
+            case_count=case_count,
+        )
+
+
+def test_largest_reviewed_batch_fits_frozen_models_and_closed_usd_caps() -> None:
+    configuration = _hosted_capacity_fixture(case_count=34, max_retries=0)
+    prices = {
+        "orchestrator": (Decimal("5"), Decimal("25"), Decimal("25"), Decimal("4")),
+        "red_team": (
+            Decimal("0.39"),
+            Decimal("2.34"),
+            Decimal("2.34"),
+            Decimal("1"),
+        ),
+        "judge": (Decimal("1.25"), Decimal("10"), Decimal("10"), Decimal("5")),
+        "documentation": (
+            Decimal("2.5"),
+            Decimal("15"),
+            Decimal("15"),
+            Decimal("2"),
+        ),
+    }
+    for role_configuration in configuration.roles:
+        input_price, output_price, reasoning_price, usd_cap = prices[role_configuration.role]
+        role_configuration.prices.input_usd_per_million_tokens = input_price
+        role_configuration.prices.output_usd_per_million_tokens = output_price
+        role_configuration.prices.reasoning_usd_per_million_tokens = reasoning_price
+        role_configuration.limits.max_usd = usd_cap
+    configuration.global_limits.max_usd = Decimal("10")
+
+    _require_hosted_workload_capacity(
+        configuration=configuration,  # type: ignore[arg-type]
+        generation_policy=DEFAULT_HOSTED_GENERATION_POLICY,
+        case_count=34,
+    )
 
 
 def test_corpus_hash_drift_refuses_before_adapter_construction(

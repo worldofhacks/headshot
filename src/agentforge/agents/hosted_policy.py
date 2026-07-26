@@ -114,6 +114,7 @@ class HostedGenerationPolicy:
         Report writing is triggered only by a trusted confirmed finding, but preflight reserves
         enough call authority for every case to be confirmed unless an even tighter trusted limit
         is supplied.  Provider retries remain inside the separately authorized physical-call cap.
+
         """
 
         if isinstance(case_count, bool) or not isinstance(case_count, int) or case_count < 1:
@@ -136,17 +137,19 @@ class HostedGenerationPolicy:
         }
 
 
-# Model-facing evidence is intentionally compacted before the Judge call.  These are reservation
-# ceilings, not estimates; OpenRouterTransport independently widens input reservation to the exact
-# encoded message bytes and refuses usage beyond the configured ledger.
+# Model-facing evidence is compacted before every role call. These are hard per-call ceilings, not
+# estimates; OpenRouterTransport independently checks the exact encoded message bytes and refuses
+# usage beyond the configured ledger. Keeping these bounds aligned with the target-free four-role
+# acceptance policy makes the governed 34-case staging batch fit inside the platform's closed
+# $10 / 136-call envelope without weakening physical-call accounting or enabling retries.
 DEFAULT_HOSTED_GENERATION_POLICY = HostedGenerationPolicy(
     roles=(
         HostedRoleCallPolicy(
             role="orchestrator",
             bounds=HostedCallBounds(
-                input_tokens=65_536,
-                output_tokens=2_048,
-                reasoning_tokens=8_192,
+                input_tokens=8_192,
+                output_tokens=512,
+                reasoning_tokens=1_024,
                 timeout_seconds=120.0,
             ),
             invocation_trigger="each_selection_cycle",
@@ -155,8 +158,8 @@ DEFAULT_HOSTED_GENERATION_POLICY = HostedGenerationPolicy(
             role="red_team",
             bounds=HostedCallBounds(
                 input_tokens=4_096,
-                output_tokens=2_048,
-                reasoning_tokens=1_024,
+                output_tokens=512,
+                reasoning_tokens=512,
                 timeout_seconds=60.0,
             ),
             invocation_trigger="each_generation_cycle",
@@ -164,9 +167,9 @@ DEFAULT_HOSTED_GENERATION_POLICY = HostedGenerationPolicy(
         HostedRoleCallPolicy(
             role="judge",
             bounds=HostedCallBounds(
-                input_tokens=100_000,
-                output_tokens=2_048,
-                reasoning_tokens=8_192,
+                input_tokens=8_192,
+                output_tokens=512,
+                reasoning_tokens=1_024,
                 timeout_seconds=180.0,
             ),
             invocation_trigger="each_evaluated_case",
@@ -174,9 +177,9 @@ DEFAULT_HOSTED_GENERATION_POLICY = HostedGenerationPolicy(
         HostedRoleCallPolicy(
             role="documentation",
             bounds=HostedCallBounds(
-                input_tokens=16_384,
-                output_tokens=4_096,
-                reasoning_tokens=4_096,
+                input_tokens=8_192,
+                output_tokens=512,
+                reasoning_tokens=1_024,
                 timeout_seconds=120.0,
             ),
             invocation_trigger="each_confirmed_finding",

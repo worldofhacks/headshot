@@ -17,6 +17,7 @@ from urllib.parse import urlsplit
 from sqlalchemy import Engine, create_engine, text
 
 from agentforge.agents.hosted import (
+    HOSTED_MAX_PHYSICAL_CALLS,
     HostedConfigurationSet,
     preflight_hosted_configuration_set,
     resolve_hosted_prompt,
@@ -33,7 +34,16 @@ from agentforge.api.birdseye import build_birdseye_snapshot
 from agentforge.api.read_models import validate_ready_data
 from agentforge.api.schemas import CommandResult, EventBatch, ResourceResult
 from agentforge.auth.errors import AuthorizationError
-from agentforge.campaign.corpus import AuthoredCorpus, resolve_workload, verified_case_payload
+from agentforge.campaign.corpus import (
+    LIVE_100_BATCH_IDS,
+    LIVE_100_BATCH_SPECS,
+    LIVE_100_CATEGORY_COUNTS,
+    LIVE_100_CORPUS_ID,
+    LIVE_100_PHYSICAL_REQUEST_COUNT,
+    AuthoredCorpus,
+    resolve_workload,
+    verified_case_payload,
+)
 from agentforge.contracts import validate as validate_contract
 from agentforge.control_plane import ControlPlaneStore
 from agentforge.control_plane.errors import (
@@ -3883,6 +3893,7 @@ class PostgresApiBackend(ApiBackend):
                             surface_payload.pop("target_id", None)
                             surface.update(surface_payload)
                         row["campaign_template"] = None
+                        row["campaign_suite_templates"] = []
                         if self._corpus is not None and row["surfaces"]:
                             # Bind an ENABLED surface. The list is ordered by surface_id, so taking
                             # [0] blindly can bind a DISABLED one purely because it sorts first —
@@ -3901,6 +3912,11 @@ class PostgresApiBackend(ApiBackend):
                                 ),
                                 row["surfaces"][0],
                             )
+                            hosted_run = self._latest_hosted_run_binding(
+                                connection,
+                                organization_id=principal.organization_id,
+                                target_payload=payload,
+                            )
                             row["campaign_template"] = {
                                 "target_id": row["target_id"],
                                 "target_version": row["version"],
@@ -3914,12 +3930,62 @@ class PostgresApiBackend(ApiBackend):
                                 if row["target_id"] == SYNTHETIC_TARGET_ID
                                 else "live",
                                 "maximum_caps": row["safety_caps"],
-                                "hosted_run": self._latest_hosted_run_binding(
-                                    connection,
-                                    organization_id=principal.organization_id,
-                                    target_payload=payload,
-                                ),
+                                "hosted_run": hosted_run,
                             }
+                            suite_batches = []
+                            for ordinal, batch_id in enumerate(LIVE_100_BATCH_IDS, start=1):
+                                batch = resolve_workload(batch_id)
+                                spec = LIVE_100_BATCH_SPECS[batch_id]
+                                exact_caps = dict(row["safety_caps"])
+                                exact_caps.update(
+                                    {
+                                        "max_attempts_per_run": spec["case_count"],
+                                        "logical_case_limit": spec["case_count"],
+                                        "physical_request_limit": spec["physical"],
+                                        "target_retries_per_turn": 0,
+                                    }
+                                )
+                                suite_batches.append(
+                                    {
+                                        "ordinal": ordinal,
+                                        "batch_id": batch_id,
+                                        "target_id": row["target_id"],
+                                        "target_version": row["version"],
+                                        "surface_id": surface["surface_id"],
+                                        "surface_version": surface["version"],
+                                        "corpus_id": batch.corpus_id,
+                                        "corpus_hash": batch.content_hash,
+                                        "case_count": len(batch.cases),
+                                        "physical_request_count": spec["physical"],
+                                        "tool_sources": list(batch.tool_sources),
+                                        "execution_profile": (
+                                            "synthetic"
+                                            if row["target_id"] == SYNTHETIC_TARGET_ID
+                                            else "live"
+                                        ),
+                                        "maximum_caps": exact_caps,
+                                        "hosted_run": hosted_run,
+                                    }
+                                )
+                            row["campaign_suite_templates"] = [
+                                {
+                                    "suite_id": LIVE_100_CORPUS_ID,
+                                    "title": "Full 100-case suite",
+                                    "case_count": sum(
+                                        int(spec["case_count"])
+                                        for spec in LIVE_100_BATCH_SPECS.values()
+                                    ),
+                                    "physical_request_count": (LIVE_100_PHYSICAL_REQUEST_COUNT),
+                                    "categories": list(LIVE_100_CATEGORY_COUNTS),
+                                    "batches": suite_batches,
+                                }
+                            ]
+                            if (
+                                self._environment not in {"staging", "production"}
+                                or row["target_id"] == SYNTHETIC_TARGET_ID
+                                or int(row["safety_caps"]["max_attempts_per_run"]) < 34
+                            ):
+                                row["campaign_suite_templates"] = []
                 elif resource == "target_catalog":
                     rows = self._target_catalog_projection(
                         connection,
@@ -4033,10 +4099,33 @@ class PostgresApiBackend(ApiBackend):
                 )
                 return CommandResult.completed(surface.version, resource_id=surface.surface_id)
             if command == "request_campaign_authorization":
-                if self._corpus is not None:
+                requested_corpus_id = payload.get("corpus_id")
+                trusted_corpus = self._corpus
+                if requested_corpus_id in LIVE_100_BATCH_IDS:
+                    if self._environment not in {"staging", "production"}:
+                        raise ApiConflict(
+                            "live-100 batch authorization requires a deployed environment"
+                        )
+                    try:
+                        trusted_corpus = resolve_workload(
+                            str(requested_corpus_id),
+                            expected_content_hash=str(payload.get("corpus_hash", "")),
+                        )
+                    except Exception as exc:
+                        raise ApiConflict("campaign corpus differs from trusted content") from exc
+                    spec = LIVE_100_BATCH_SPECS[str(requested_corpus_id)]
+                    submitted_caps = dict(payload.get("caps") or {})
                     if (
-                        payload.get("corpus_id") != self._corpus.corpus_id
-                        or payload.get("corpus_hash") != self._corpus.content_hash
+                        submitted_caps.get("max_attempts_per_run") != spec["case_count"]
+                        or submitted_caps.get("logical_case_limit") != spec["case_count"]
+                        or submitted_caps.get("physical_request_limit") != spec["physical"]
+                        or submitted_caps.get("target_retries_per_turn") != 0
+                    ):
+                        raise ApiConflict("campaign caps differ from trusted batch")
+                if trusted_corpus is not None:
+                    if (
+                        payload.get("corpus_id") != trusted_corpus.corpus_id
+                        or payload.get("corpus_hash") != trusted_corpus.content_hash
                     ):
                         raise ApiConflict("campaign corpus differs from trusted content")
                     expected_profile = (
@@ -4045,6 +4134,8 @@ class PostgresApiBackend(ApiBackend):
                     if payload.get("execution_profile") != expected_profile:
                         raise ApiConflict("campaign execution profile differs from trusted target")
                 submitted_hosted_run = payload.get("hosted_run")
+                if self._hosted_runtime_available and submitted_hosted_run is None:
+                    return CommandResult.unavailable("four_role_hosted_runtime_required")
                 if submitted_hosted_run is not None:
                     with self._engine.connect() as connection:
                         target_payload = connection.execute(
@@ -4120,6 +4211,8 @@ class PostgresApiBackend(ApiBackend):
                     principal.organization_id,
                     str(payload["authorization_request_id"]),
                 )
+                if self._hosted_runtime_available and hosted_configuration_sha256 is None:
+                    return CommandResult.unavailable("four_role_hosted_runtime_required")
                 requires_hosted_runtime = hosted_configuration_sha256 is not None
                 if not self._hosted_runtime_available and requires_hosted_runtime:
                     return CommandResult.unavailable("hosted_runtime_not_composed")
@@ -4160,23 +4253,16 @@ class PostgresApiBackend(ApiBackend):
             if command == "request_live_probe_authorization":
                 return CommandResult.unavailable("distinct_live_probe_workflow_missing")
             if command == "configure_agent":
-                if payload.get("execution_mode") != "deterministic":
-                    return CommandResult.unavailable("atomic_hosted_configuration_set_required")
-                assignment = self._store.configure_agent(
-                    principal=principal,
-                    agent_role=identifiers.get("agent_role", ""),
-                    provider=str(payload["provider"]),
-                    model=str(payload["model"]),
-                    execution_mode=str(payload["execution_mode"]),
-                    rationale=str(payload["rationale"]),
-                    idempotency_key=idempotency_key,
-                )
-                return CommandResult.completed(
-                    assignment.configuration_sha256,
-                    resource_id=assignment.role,
-                )
+                return CommandResult.unavailable("atomic_hosted_configuration_set_required")
             if command == "stage_hosted_configuration_set":
                 configuration = HostedConfigurationSet.from_payload(dict(payload["configuration"]))
+                if (
+                    self._environment not in {"staging", "production"}
+                    and configuration.global_limits.max_calls > HOSTED_MAX_PHYSICAL_CALLS
+                ):
+                    raise ApiConflict(
+                        "expanded hosted call envelope requires a deployed environment"
+                    )
                 configuration_sha256 = self._store.stage_hosted_configuration_set(
                     principal=principal,
                     configuration=configuration,

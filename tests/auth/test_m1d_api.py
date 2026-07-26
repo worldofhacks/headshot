@@ -91,6 +91,7 @@ def test_meaningful_api_is_default_deny(monkeypatch, auth_environ) -> None:
         "/api/v1/configuration",
         "/api/v1/components",
         "/api/v1/agent-prompts/judge/1/" + "0" * 64 + "?configuration_set_sha256=" + "1" * 64,
+        "/api/v1/agent-prompts/judge/1/" + "0" * 64 + "/" + "1" * 64,
         "/api/v1/birdseye",
         "/api/v1/events",
     ):
@@ -179,6 +180,13 @@ def test_wrong_org_and_missing_permission_are_forbidden(
     assert (
         client.get(
             "/api/v1/agent-prompts/judge/1/" + "0" * 64 + "?configuration_set_sha256=" + "1" * 64,
+            headers={"Authorization": f"Bearer {no_findings}"},
+        ).status_code
+        == 403
+    )
+    assert (
+        client.get(
+            "/api/v1/agent-prompts/judge/1/" + "0" * 64 + "/" + "1" * 64,
             headers={"Authorization": f"Bearer {no_findings}"},
         ).status_code
         == 403

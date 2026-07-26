@@ -407,7 +407,7 @@ def test_scope_hash_binds_complete_non_secret_hosted_run_authority() -> None:
 @pytest.mark.parametrize(
     "overrides",
     (
-        {"provider_model_call_limit": 57},
+        {"provider_model_call_limit": 137},
         {"provider_model_spend_limit_usd": "10.01"},
         {"provider_max_retries": 2},
         {"provider_max_concurrency": 2},
