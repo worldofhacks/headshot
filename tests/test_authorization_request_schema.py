@@ -37,3 +37,11 @@ def test_authorization_accepts_approval_and_launch_buffer() -> None:
     )
 
     assert request.expires_in_seconds == 1800
+
+
+def test_authorization_accepts_two_hour_run_with_protected_buffer() -> None:
+    request = AuthorizationRequestInput.model_validate(
+        _payload(run_timeout_seconds=7200, expires_in_seconds=8100)
+    )
+
+    assert request.expires_in_seconds == 8100

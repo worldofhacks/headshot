@@ -1341,7 +1341,7 @@ export function SimpleResourceScreen({ client, resource }: { client: ApiClient; 
   }
 }
 
-function TargetManagement({
+export function TargetManagement({
   client,
   principal,
   selected,
@@ -1777,76 +1777,106 @@ function SuiteBatchActions({
     hosted_run: batch.hosted_run,
     expires_in_seconds: authorizationLifetimeSeconds(batch.maximum_caps.run_timeout_seconds),
   };
-  if (view.state === "completed" || view.state === "running") return null;
+  if (view.state === "completed") {
+    return <StateNotice state="ready" detail="This batch is complete. The next batch is ready." />;
+  }
+  if (view.state === "running") {
+    return <StateNotice state="pending" detail="The Runner accepted this batch. Live progress appears here automatically." />;
+  }
   if (!batch.hosted_run) {
+    return <StateNotice state="unavailable" detail="The four-LLM runtime is not ready for this pilot." />;
+  }
+  if (pending && canAuthorize && isRequester) {
     return (
-      <button
-        type="button"
-        className="button button-primary"
-        onClick={() => navigateTo({ screen: "config", entityId: null })}
-      >
-        Open Configuration
-      </button>
+      <StateNotice
+        state="unavailable"
+        detail="Two-person control is active. The Operator who requested this batch cannot approve it."
+      />
     );
   }
-  return (
-    <div className="command-row suite-batch-actions">
-      {pending && canAuthorize && (
-        <>
-          <CommandButton
-            client={client}
-            path={COMMAND_PATHS.decideCampaignAuthorization(approval.request_id)}
-            payload={{ decision: "approved" }}
-            label="Approve exact batch"
-            allowed={!isRequester}
-            unavailableReason="a distinct Approver"
-            onAcknowledged={refresh}
-          />
-          <CommandButton
-            client={client}
-            path={COMMAND_PATHS.decideCampaignAuthorization(approval.request_id)}
-            payload={{ decision: "rejected" }}
-            label="Reject exact batch"
-            allowed={true}
-            unavailableReason={PERMISSIONS.campaignAuthorize}
-            destructive
-            onAcknowledged={refresh}
-          />
-        </>
-      )}
-      {view.state === "runnable" && approval && (
+  if (pending && canAuthorize) {
+    return (
+      <div className="command-row suite-batch-actions">
+        <CommandButton
+          client={client}
+          path={COMMAND_PATHS.decideCampaignAuthorization(approval.request_id)}
+          payload={{ decision: "approved" }}
+          label={`Approve batch ${batch.ordinal}`}
+          allowed={true}
+          onAcknowledged={refresh}
+        />
+        <CommandButton
+          client={client}
+          path={COMMAND_PATHS.decideCampaignAuthorization(approval.request_id)}
+          payload={{ decision: "rejected" }}
+          label="Reject"
+          allowed={true}
+          destructive
+          onAcknowledged={refresh}
+        />
+      </div>
+    );
+  }
+  if (pending && canLaunch) {
+    return (
+      <StateNotice
+        state="pending"
+        detail={`Batch ${batch.ordinal} is waiting for the distinct Approver. No Operator action is needed yet.`}
+      />
+    );
+  }
+  if (view.state === "runnable" && approval && canLaunch && isRequester) {
+    return (
+      <div className="command-row suite-batch-actions">
         <CommandButton
           client={client}
           path={COMMAND_PATHS.launchCampaign}
           payload={{ authorization_request_id: approval.request_id }}
-          label="Launch approved batch"
-          allowed={canLaunch && isRequester}
-          unavailableReason={isRequester
-            ? PERMISSIONS.campaignLaunch
-            : "the persisted campaign launcher"}
+          label={`Launch batch ${batch.ordinal}`}
+          allowed={true}
           onAcknowledged={refresh}
         />
-      )}
-      {requestable && (
+      </div>
+    );
+  }
+  if (view.state === "runnable" && approval) {
+    return (
+      <StateNotice
+        state="ready"
+        detail="Approved. The original Operator must return to launch this exact batch."
+      />
+    );
+  }
+  if (requestable) {
+    return (
+      <div className="command-row suite-batch-actions">
         <CommandButton
           client={client}
           path={COMMAND_PATHS.createCampaignAuthorizationRequest}
           payload={requestPayload}
-          label="Request batch authorization"
-          allowed={canLaunch}
-          unavailableReason={PERMISSIONS.campaignLaunch}
+          label={`Request approval for batch ${batch.ordinal}`}
+          allowed={true}
           onAcknowledged={() => {
             setRunNonce(`suite-${batch.ordinal}-${globalThis.crypto.randomUUID()}`);
             refresh();
           }}
         />
-      )}
-      {!canLaunch && !canAuthorize && (
-        <span className="command-note">
-          Read-only access. An Operator requests and launches; a distinct Approver decides.
-        </span>
-      )}
-    </div>
+      </div>
+    );
+  }
+  if (canAuthorize) {
+    return (
+      <StateNotice
+        state="pending"
+        detail={`Waiting for an Operator to request authorization for batch ${batch.ordinal}.`}
+      />
+    );
+  }
+  return (
+    <StateNotice
+      state="empty"
+      detail="Read-only access. An Operator requests and launches; a distinct Approver decides."
+    />
   );
 }
 
@@ -1854,12 +1884,12 @@ function FullCampaignSuite({
   client,
   principal,
   suite,
-  targetLabel,
+  target,
 }: {
   client: ApiClient;
   principal: Principal;
   suite: CampaignSuiteTemplateReadModel;
-  targetLabel: string;
+  target: TargetReadModel;
 }) {
   const approvals = useResource<ApprovalReadModel[]>(
     client,
@@ -1877,80 +1907,191 @@ function FullCampaignSuite({
     campaigns.result.data ?? [],
   );
   const progress = summarizeSuiteProgress(suite, views);
+  const currentView = views.find((view) => view.state === "running")
+    ?? views.find((view) => view.state === "authorization pending")
+    ?? views.find((view) => view.state === "runnable")
+    ?? views.find((view) => view.state !== "completed")
+    ?? null;
   const refresh = () => {
     approvals.refresh();
     campaigns.refresh();
   };
   return (
     <Panel
-      title={`${suite.title} — ${targetLabel}`}
-      meta={suite.suite_id}
-      eyebrow="FULL GOVERNED SUITE"
+      title={target.name}
+      meta={`${target.target_id}@${target.version}`}
+      eyebrow="PILOT RUN"
     >
       <MetricStrip label="Suite progress" values={[
         {
-          label: "Cases",
+          label: "Cases complete",
           value: `${progress.completedCases}/${suite.case_count}`,
-          note: "completed batches only",
+          note: `${suite.categories.length} security categories`,
         },
         {
-          label: "Physical requests",
+          label: "Requests complete",
           value: `${progress.completedRequests}/${suite.physical_request_count}`,
-          note: "completed batches only",
+          note: "persisted requests only",
         },
         {
-          label: "Governed batches",
+          label: "Batches complete",
           value: `${progress.completedBatches}/${suite.batches.length}`,
-          note: "separate exact authorizations",
+          note: "one guided action at a time",
         },
         {
-          label: "Categories",
-          value: count(suite.categories.length),
-          note: suite.categories.join(" · "),
+          label: "Four-LLM runtime",
+          value: suite.batches.every((batch) => batch.hosted_run !== null) ? "Ready" : "Blocked",
+          note: "Orchestrator · Red Team · Judge · Documentation",
         },
       ]} />
-      <StateNotice
-        state={progress.complete ? "ready" : "pending"}
-        detail={progress.complete
-          ? "Suite complete: every trusted batch has a completed campaign record."
-          : "The suite is complete only when all server-owned batches complete. Progress never infers unrecorded physical requests."}
-      />
-      <div className="suite-batch-list">
+      <div className="suite-progress-rail" aria-label="Governed batch progress">
         {views.map((view) => (
-          <article className="suite-batch" key={view.batch.batch_id}>
-            <div className="suite-batch-head">
-              <div>
-                <p className="field-label">Batch {view.batch.ordinal}</p>
-                <strong>{view.batch.batch_id}</strong>
-              </div>
-              <span className={`suite-state suite-state-${view.state.replaceAll(" ", "-")}`}>
-                {view.state}
-              </span>
+          <div
+            className={`suite-progress-step suite-progress-${view.state.replaceAll(" ", "-")}`}
+            key={view.batch.batch_id}
+          >
+            <span>{view.batch.ordinal}</span>
+            <div>
+              <strong>Batch {view.batch.ordinal}</strong>
+              <small>{view.batch.case_count} cases · {view.state}</small>
             </div>
-            <EvidenceGrid values={[
-              { label: "Cases", value: count(view.batch.case_count) },
-              { label: "Requests", value: count(view.batch.physical_request_count) },
-              { label: "Corpus", value: view.batch.corpus_id },
-              {
-                label: "Scope",
-                value: shortId(view.batch.corpus_hash),
-              },
-            ]} />
-            <p className="data-note">{view.detail}</p>
-            <SuiteBatchActions
-              client={client}
-              principal={principal}
-              view={view}
-              refresh={refresh}
-            />
-          </article>
+          </div>
         ))}
       </div>
+      {progress.complete ? (
+        <StateNotice
+          state="ready"
+          detail="The complete 100-case suite is recorded for this pilot."
+        />
+      ) : currentView ? (
+        <div className="suite-next-action">
+          <div className="suite-next-copy">
+            <p className="field-label">Next required step</p>
+            <div className="suite-batch-head">
+              <div>
+                <strong>Batch {currentView.batch.ordinal} of {suite.batches.length}</strong>
+                <p>{currentView.detail}</p>
+              </div>
+              <span className={`suite-state suite-state-${currentView.state.replaceAll(" ", "-")}`}>
+                {currentView.state}
+              </span>
+            </div>
+          </div>
+          <SuiteBatchActions
+            client={client}
+            principal={principal}
+            view={currentView}
+            refresh={refresh}
+          />
+        </div>
+      ) : null}
+      <details className="pilot-technical-details">
+        <summary>Technical scope and batch evidence</summary>
+        <div className="pilot-technical-body">
+          <EvidenceGrid values={[
+            { label: "Target", value: `${target.target_id}@${target.version}` },
+            { label: "Environment", value: target.environment },
+            { label: "Suite", value: suite.suite_id },
+            { label: "Categories", value: suite.categories.join(" · ") },
+          ]} />
+          <div className="suite-batch-evidence">
+            {views.map((view) => (
+              <div key={view.batch.batch_id}>
+                <strong>Batch {view.batch.ordinal}</strong>
+                <span>{view.batch.corpus_id}</span>
+                <span>{shortId(view.batch.corpus_hash)}</span>
+                <span>{view.batch.physical_request_count} requests</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </details>
     </Panel>
   );
 }
 
 export function TargetsScreen({ client, principal }: ScreenProps) {
+  const targets = useResource<TargetReadModel[]>(
+    client,
+    RESOURCE_PATHS.targets,
+    decodeTargets,
+  );
+  const [selectedPilotKey, setSelectedPilotKey] = useState<string | null>(null);
+  const records = targets.result.data ?? [];
+  const pilots = records.flatMap((target) => {
+    if (target.lifecycle !== "ready") return [];
+    return (target.campaign_suite_templates ?? []).map((suite) => ({
+      key: `${target.target_id}\n${target.version}\n${suite.suite_id}`,
+      target,
+      suite,
+    }));
+  });
+  const selectedPilot = pilots.find((pilot) => pilot.key === selectedPilotKey)
+    ?? pilots[0]
+    ?? null;
+
+  return (
+    <div className="screen-stack pilot-runs-screen">
+      <ScreenHeading
+        title="Pilot runs"
+        detail="Choose a ready pilot target. The console shows only the next action your signed-in role can perform."
+      />
+      <ResourceView
+        result={targets.result}
+        emptyLabel="No pilot targets are ready for evaluation."
+      >
+        {() => pilots.length > 0 ? (
+          <>
+            <Panel
+              title="Available pilots"
+              meta={`${pilots.length} ready`}
+              eyebrow="LIVE EVALUATION TARGETS"
+            >
+              <div className="pilot-picker" role="list" aria-label="Available pilot targets">
+                {pilots.map((pilot) => {
+                  const active = pilot.key === selectedPilot?.key;
+                  return (
+                    <button
+                      type="button"
+                      className={`pilot-option${active ? " active" : ""}`}
+                      key={pilot.key}
+                      aria-pressed={active}
+                      onClick={() => setSelectedPilotKey(pilot.key)}
+                    >
+                      <span>
+                        <strong>{pilot.target.name}</strong>
+                        <small>{pilot.target.target_id}@{pilot.target.version}</small>
+                      </span>
+                      <span className="pilot-option-state">
+                        {pilot.target.credential_configured ? "Ready" : "Credentials required"}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </Panel>
+            {selectedPilot && (
+              <FullCampaignSuite
+                key={selectedPilot.key}
+                client={client}
+                principal={principal}
+                suite={selectedPilot.suite}
+                target={selectedPilot.target}
+              />
+            )}
+          </>
+        ) : (
+          <StateNotice
+            state="unavailable"
+            detail="No ready target currently has the governed 100-case suite."
+          />
+        )}
+      </ResourceView>
+    </div>
+  );
+}
+
+export function LegacyTargetsScreen({ client, principal }: ScreenProps) {
   const catalog = useResource<TargetCatalogEntryReadModel[]>(
     client,
     RESOURCE_PATHS.targetCatalog,
@@ -1990,7 +2131,7 @@ export function TargetsScreen({ client, principal }: ScreenProps) {
           client={client}
           principal={principal}
           suite={suite}
-          targetLabel={`${target.name} (${target.target_id}@${target.version})`}
+          target={target}
         />
       )))}
       <Panel

@@ -96,7 +96,7 @@ class AuthorizationRequestInput(_StrictModel):
     run_nonce: str = Field(min_length=16, max_length=128)
     caps: CapsInput
     hosted_run: HostedRunBindingInput | None = None
-    expires_in_seconds: int = Field(default=1800, ge=120, le=7200)
+    expires_in_seconds: int = Field(default=1800, ge=120, le=86_400)
 
     @model_validator(mode="after")
     def require_approval_window(self) -> AuthorizationRequestInput:

@@ -44,6 +44,43 @@ const browserHostedRun = {
   provider_timeout_seconds: 180,
 } as const;
 
+const browserCampaignSuite = {
+  suite_id: "browser-100-case-suite",
+  title: "Full 100-case suite",
+  case_count: 100,
+  physical_request_count: 121,
+  categories: [
+    "prompt_injection",
+    "data_exfiltration",
+    "tool_misuse",
+    "state_corruption",
+    "denial_of_service",
+    "indirect_injection",
+  ],
+  batches: [34, 33, 33].map((caseCount, index) => ({
+    ordinal: index + 1,
+    batch_id: `browser-100-batch-${index + 1}`,
+    target_id: "browser-target",
+    target_version: "v1",
+    surface_id: "chat",
+    surface_version: "v1",
+    corpus_id: `browser-100-batch-${index + 1}`,
+    corpus_hash: String(index + 1).repeat(64),
+    case_count: caseCount,
+    physical_request_count: index === 0 ? 41 : 40,
+    tool_sources: ["garak", "promptfoo", "pyrit"],
+    execution_profile: "live",
+    maximum_caps: {
+      ...browserScope.caps,
+      max_attempts_per_run: caseCount,
+      logical_case_limit: caseCount,
+      physical_request_limit: index === 0 ? 41 : 40,
+      target_retries_per_turn: 0,
+    },
+    hosted_run: browserHostedRun,
+  })),
+} as const;
+
 const browserCoverage = [
   {
     target_version: "browser-target@v1",
@@ -1389,6 +1426,7 @@ const browserFixture = (): Plugin => ({
               maximum_caps: browserScope.caps,
               hosted_run: browserHostedRun,
             },
+            campaign_suite_templates: [browserCampaignSuite],
             created_at: "2026-07-22T00:00:00Z",
           }],
         }));
