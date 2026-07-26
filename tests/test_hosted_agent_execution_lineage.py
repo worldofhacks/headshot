@@ -166,7 +166,7 @@ def _principal(user_id: str, *permissions: str) -> Principal:
     )
 
 
-def _configuration() -> HostedConfigurationSet:
+def _configuration(*, red_team_upstream: str = "together") -> HostedConfigurationSet:
     roles = []
     for role in ("orchestrator", "red_team", "judge", "documentation"):
         roles.append(
@@ -174,7 +174,9 @@ def _configuration() -> HostedConfigurationSet:
                 role=role,  # type: ignore[arg-type]
                 provider="openrouter",
                 model_id=_MODELS[role],
-                upstream_provider=_UPSTREAM[role],
+                upstream_provider=(
+                    red_team_upstream if role == "red_team" else _UPSTREAM[role]
+                ),
                 credential_reference=(
                     f"secretref://staging/providers/openrouter/{role}/{_SESSION_GENERATION}"
                 ),
@@ -227,7 +229,11 @@ def _clean(engine: Engine) -> None:
         )
 
 
-def _authorized_run(engine: Engine) -> tuple[ControlPlaneStore, str, HostedConfigurationSet]:
+def _authorized_run(
+    engine: Engine,
+    *,
+    red_team_upstream: str = "together",
+) -> tuple[ControlPlaneStore, str, HostedConfigurationSet]:
     _clean(engine)
     store = ControlPlaneStore(engine, environment="staging")
     launcher = _principal(
@@ -300,7 +306,7 @@ def _authorized_run(engine: Engine) -> tuple[ControlPlaneStore, str, HostedConfi
             idempotency_key=f"hosted-lineage-target-{lifecycle.value}",
         )
 
-    configuration = _configuration()
+    configuration = _configuration(red_team_upstream=red_team_upstream)
     store.stage_hosted_configuration_set(
         principal=launcher,
         configuration=configuration,
@@ -554,6 +560,52 @@ def _canonical_q_provider(
             timeout_seconds=30,
         ),
     )
+
+
+def test_chutes_success_persists_canonical_provider_event(
+    migrated_db: Engine,
+) -> None:
+    store, run_id, configuration = _authorized_run(
+        migrated_db,
+        red_team_upstream="chutes",
+    )
+    execution_id = _start(
+        store,
+        run_id,
+        configuration,
+        role="red_team",
+    )
+
+    invocation, event = _record_physical_event(
+        store,
+        execution_id=execution_id,
+        role="red_team",
+        upstream_provider="Chutes",
+        provider_request_id="openrouter-chutes-lineage-success",
+        input_tokens=306,
+        output_tokens=60,
+        reasoning_tokens=1,
+        measured_cost_usd=Decimal("0.0047"),
+    )
+
+    assert event.invocation_id == invocation.invocation_id
+    with migrated_db.connect() as connection:
+        persisted = (
+            connection.execute(
+                text(
+                    "SELECT status, upstream_provider, provider_request_id "
+                    "FROM provider_call_events WHERE invocation_id = :invocation"
+                ),
+                {"invocation": invocation.invocation_id},
+            )
+            .mappings()
+            .one()
+        )
+    assert dict(persisted) == {
+        "status": "succeeded",
+        "upstream_provider": "Chutes",
+        "provider_request_id": "openrouter-chutes-lineage-success",
+    }
 
 
 def test_canonical_q_generator_records_physical_lineage_before_returning_variants(
