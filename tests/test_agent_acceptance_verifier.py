@@ -63,7 +63,7 @@ _ROLE_INPUT_CAPS = {
 }
 _ROLE_REASONING_CAPS = {
     "orchestrator": 1_024,
-    "red_team": 512,
+    "red_team": 8_192,
     "judge": 1_024,
     "documentation": 1_024,
 }
@@ -92,7 +92,7 @@ def _configuration() -> HostedConfigurationSet:
                 limits=HostedLimits(
                     max_calls=1,
                     max_input_tokens=_ROLE_INPUT_CAPS[role],
-                    max_output_tokens=512,
+                    max_output_tokens=1_024 if role == "red_team" else 512,
                     max_reasoning_tokens=_ROLE_REASONING_CAPS[role],
                     max_usd=_ROLE_CAPS[role],
                     max_retries=0,
@@ -105,8 +105,8 @@ def _configuration() -> HostedConfigurationSet:
         global_limits=HostedLimits(
             max_calls=4,
             max_input_tokens=28_672,
-            max_output_tokens=2_048,
-            max_reasoning_tokens=3_584,
+            max_output_tokens=2_560,
+            max_reasoning_tokens=11_264,
             max_usd=Decimal("10"),
             max_retries=0,
             max_requests_per_second=Decimal("0.5"),

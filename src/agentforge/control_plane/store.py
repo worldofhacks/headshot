@@ -158,11 +158,11 @@ _AGENT_ACCEPTANCE_ROLE_USD_CAPS: Mapping[AgentRole, Decimal] = {
 _AGENT_ACCEPTANCE_GLOBAL_USD_CAP = Decimal("10")
 _AGENT_ACCEPTANCE_ROLE_TOKEN_CAPS: Mapping[AgentRole, tuple[int, int, int]] = {
     "orchestrator": (8_192, 512, 1_024),
-    "red_team": (4_096, 512, 512),
+    "red_team": (4_096, 1_024, 8_192),
     "judge": (8_192, 512, 1_024),
     "documentation": (8_192, 512, 1_024),
 }
-_AGENT_ACCEPTANCE_GLOBAL_TOKEN_CAPS = (28_672, 2_048, 3_584)
+_AGENT_ACCEPTANCE_GLOBAL_TOKEN_CAPS = (28_672, 2_560, 11_264)
 
 
 @dataclass(frozen=True, slots=True)
@@ -317,56 +317,62 @@ def _canonical_agent_acceptance_limits_for_configuration(
     validate_hosted_configuration_set(configuration)
     if configuration.global_limits.max_calls == len(_LEGACY_AGENT_ACCEPTANCE_ROLES):
         version = "1"
-    elif configuration.global_limits.max_calls == len(_AGENT_ACCEPTANCE_ROLES):
+    elif configuration.global_limits.max_calls >= len(_AGENT_ACCEPTANCE_ROLES):
         version = "2"
     else:
         raise InvalidControlPlaneInput(
-            "global acceptance limits differ from the closed call envelope"
+            "global hosted limits cannot contain the closed acceptance call envelope"
         )
     acceptance_roles = _agent_acceptance_roles_for_version(version)
     roles = {role.role: role for role in configuration.roles}
     for role_name in acceptance_roles:
         role = roles[role_name]
         if (
-            role.limits.max_calls != 1
-            or role.limits.max_usd != _AGENT_ACCEPTANCE_ROLE_USD_CAPS[role_name]
+            role.limits.max_calls < 1
+            or role.limits.max_usd < _AGENT_ACCEPTANCE_ROLE_USD_CAPS[role_name]
             or role.limits.max_retries != 0
             or role.limits.max_concurrency != 1
         ):
             raise InvalidControlPlaneInput(
-                f"{role_name} acceptance limits differ from the closed one-call envelope"
+                f"{role_name} hosted limits cannot contain the closed one-call envelope"
             )
-        if (
-            version == "2"
-            and (
-                role.limits.max_input_tokens,
-                role.limits.max_output_tokens,
-                role.limits.max_reasoning_tokens,
+        if version == "2" and any(
+            configured < required
+            for configured, required in zip(
+                (
+                    role.limits.max_input_tokens,
+                    role.limits.max_output_tokens,
+                    role.limits.max_reasoning_tokens,
+                ),
+                _AGENT_ACCEPTANCE_ROLE_TOKEN_CAPS[role_name],
+                strict=True,
             )
-            != _AGENT_ACCEPTANCE_ROLE_TOKEN_CAPS[role_name]
         ):
             raise InvalidControlPlaneInput(
-                f"{role_name} acceptance token limits differ from the closed one-call envelope"
+                f"{role_name} hosted token limits cannot contain the closed one-call envelope"
             )
     if (
-        configuration.global_limits.max_usd != _AGENT_ACCEPTANCE_GLOBAL_USD_CAP
+        configuration.global_limits.max_usd < _AGENT_ACCEPTANCE_GLOBAL_USD_CAP
         or configuration.global_limits.max_retries != 0
         or configuration.global_limits.max_concurrency != 1
     ):
         raise InvalidControlPlaneInput(
-            "global acceptance limits differ from the closed runtime envelope"
+            "global hosted limits cannot contain the closed acceptance runtime envelope"
         )
-    if (
-        version == "2"
-        and (
-            configuration.global_limits.max_input_tokens,
-            configuration.global_limits.max_output_tokens,
-            configuration.global_limits.max_reasoning_tokens,
+    if version == "2" and any(
+        configured < required
+        for configured, required in zip(
+            (
+                configuration.global_limits.max_input_tokens,
+                configuration.global_limits.max_output_tokens,
+                configuration.global_limits.max_reasoning_tokens,
+            ),
+            _AGENT_ACCEPTANCE_GLOBAL_TOKEN_CAPS,
+            strict=True,
         )
-        != _AGENT_ACCEPTANCE_GLOBAL_TOKEN_CAPS
     ):
         raise InvalidControlPlaneInput(
-            "global acceptance token limits differ from the closed four-call envelope"
+            "global hosted token limits cannot contain the closed four-call envelope"
         )
     return _closed_agent_acceptance_limits(version)
 
@@ -374,7 +380,7 @@ def _canonical_agent_acceptance_limits_for_configuration(
 def canonical_agent_acceptance_limits(
     configuration: HostedConfigurationSet,
 ) -> dict[str, Any]:
-    """Return the exact versioned, zero-target runtime envelope for a staged configuration."""
+    """Derive the exact zero-target sub-envelope contained by a staged configuration."""
 
     return _canonical_agent_acceptance_limits_for_configuration(configuration)
 
@@ -2107,8 +2113,9 @@ class ControlPlaneStore:
         """Create one short-lived zero-target run and its singleton attempt atomically.
 
         The four-role configuration must already have crossed the human CONFIG_MANAGE gate.
-        New authority always uses the four-call v2 envelope. Populated v1 rows remain readable
-        and completable, but this method cannot mint another legacy three-call authority.
+        New authority always derives the fixed four-call v2 sub-envelope without staging or
+        substituting configuration. Populated v1 rows remain readable and completable, but this
+        method cannot mint another legacy three-call authority.
         """
 
         if not isinstance(organization_id, str) or not organization_id or len(organization_id) > 64:

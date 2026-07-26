@@ -36,7 +36,10 @@ from agentforge.agents.red_team.hosted_generation import (
     TracedHostedRedTeamProvider,
     require_red_team_subcap,
 )
-from agentforge.control_plane.store import ControlPlaneStore
+from agentforge.control_plane.store import (
+    ControlPlaneStore,
+    canonical_agent_acceptance_limits,
+)
 from agentforge.policy.scoped_credentials import (
     CredentialResolutionError,
     SealedEnvironmentCredentialResolver,
@@ -423,7 +426,7 @@ def run_agent_acceptance(
             generation_policy_sha256=generation_policy.policy_sha256,
             acceptance_context=context,
             expires_at=datetime.datetime.now(datetime.UTC) + datetime.timedelta(minutes=15),
-            limits=acceptance_limits(),
+            limits=canonical_agent_acceptance_limits(configuration),
             acceptance_actor_id="system:agent-acceptance-cli",
         )
         run_id = identity.run_id

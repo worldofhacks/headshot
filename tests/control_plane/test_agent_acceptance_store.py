@@ -60,7 +60,7 @@ _USD_CAPS = {
 }
 _TOKEN_CAPS = {
     "orchestrator": (8_192, 512, 1_024),
-    "red_team": (4_096, 512, 512),
+    "red_team": (4_096, 1_024, 8_192),
     "judge": (8_192, 512, 1_024),
     "documentation": (8_192, 512, 1_024),
 }
@@ -102,8 +102,8 @@ def _configuration() -> HostedConfigurationSet:
         global_limits=HostedLimits(
             max_calls=4,
             max_input_tokens=28_672,
-            max_output_tokens=2_048,
-            max_reasoning_tokens=3_584,
+            max_output_tokens=2_560,
+            max_reasoning_tokens=11_264,
             max_usd=Decimal("10"),
             max_retries=0,
             max_requests_per_second=Decimal("0.5"),
@@ -312,12 +312,12 @@ def test_four_call_authority_uses_exact_v2_roles_costs_and_token_totals() -> Non
         configuration.global_limits.max_input_tokens,
         configuration.global_limits.max_output_tokens,
         configuration.global_limits.max_reasoning_tokens,
-    ) == (28_672, 2_048, 3_584)
+    ) == (28_672, 2_560, 11_264)
 
     red_team = next(role for role in configuration.roles if role.role == "red_team")
     wrong_red_team = replace(
         red_team,
-        limits=replace(red_team.limits, max_input_tokens=4_097),
+        limits=replace(red_team.limits, max_reasoning_tokens=8_191),
     )
     wrong_role_tokens = replace(
         configuration,
@@ -325,18 +325,134 @@ def test_four_call_authority_uses_exact_v2_roles_costs_and_token_totals() -> Non
             wrong_red_team if role.role == "red_team" else role for role in configuration.roles
         ),
     )
-    with pytest.raises(InvalidControlPlaneInput, match="red_team acceptance token limits"):
+    with pytest.raises(InvalidControlPlaneInput, match="red_team hosted token limits"):
         canonical_agent_acceptance_limits(wrong_role_tokens)
 
     wrong_global_tokens = replace(
         configuration,
         global_limits=replace(
             configuration.global_limits,
-            max_reasoning_tokens=3_585,
+            max_reasoning_tokens=11_263,
         ),
     )
-    with pytest.raises(InvalidControlPlaneInput, match="global acceptance token limits"):
+    with pytest.raises(InvalidControlPlaneInput, match="global hosted token limits"):
         canonical_agent_acceptance_limits(wrong_global_tokens)
+
+    underfunded_orchestrator = replace(
+        configuration.roles[0],
+        limits=replace(configuration.roles[0].limits, max_usd=Decimal("1.49")),
+    )
+    underfunded_configuration = replace(
+        configuration,
+        roles=(underfunded_orchestrator, *configuration.roles[1:]),
+    )
+    with pytest.raises(InvalidControlPlaneInput, match="orchestrator hosted limits"):
+        canonical_agent_acceptance_limits(underfunded_configuration)
+
+
+def test_reviewed_full_scan_configuration_derives_only_the_closed_four_call_authority(
+    migrated_db: Engine,
+) -> None:
+    _clean(migrated_db)
+    base = _configuration()
+    role_usd_caps = {
+        "orchestrator": Decimal("4"),
+        "red_team": Decimal("5"),
+        "judge": Decimal("5"),
+        "documentation": Decimal("2"),
+    }
+    full_scan_roles = tuple(
+        replace(
+            role,
+            limits=replace(
+                role.limits,
+                max_calls=34,
+                max_input_tokens=role.limits.max_input_tokens * 34,
+                max_output_tokens=role.limits.max_output_tokens * 34,
+                max_reasoning_tokens=role.limits.max_reasoning_tokens * 34,
+                max_usd=role_usd_caps[role.role],
+            ),
+        )
+        for role in base.roles
+    )
+    configuration = replace(
+        base,
+        roles=full_scan_roles,
+        global_limits=replace(
+            base.global_limits,
+            max_calls=136,
+            max_input_tokens=sum(role.limits.max_input_tokens for role in full_scan_roles),
+            max_output_tokens=sum(role.limits.max_output_tokens for role in full_scan_roles),
+            max_reasoning_tokens=sum(role.limits.max_reasoning_tokens for role in full_scan_roles),
+        ),
+    )
+    store = ControlPlaneStore(migrated_db, environment="local")
+    _stage(store, configuration)
+
+    limits = canonical_agent_acceptance_limits(configuration)
+    identity = store.create_agent_acceptance_run(
+        organization_id=_ORGANIZATION_ID,
+        configuration_set_sha256=configuration.configuration_sha256,
+        generation_policy_sha256=_GENERATION_POLICY_SHA256,
+        acceptance_context={
+            "fixture": "synthetic-full-scan-sub-envelope",
+            "synthetic_data_only": True,
+            "target_traffic": "forbidden",
+        },
+        expires_at=datetime.datetime.now(datetime.UTC) + datetime.timedelta(minutes=10),
+        limits=limits,
+    )
+
+    with migrated_db.connect() as connection:
+        row = (
+            connection.execute(
+                text(
+                    "SELECT acceptance_configuration_sha256, acceptance_limits "
+                    "FROM campaign_runs WHERE run_id = :run"
+                ),
+                {"run": identity.run_id},
+            )
+            .mappings()
+            .one()
+        )
+        staged_count = connection.execute(
+            text("SELECT count(*) FROM hosted_configuration_sets WHERE organization_id = :org"),
+            {"org": _ORGANIZATION_ID},
+        ).scalar_one()
+
+    assert configuration.global_limits.max_calls == 136
+    assert {role.role: role.limits.max_calls for role in configuration.roles} == {
+        "orchestrator": 34,
+        "red_team": 34,
+        "judge": 34,
+        "documentation": 34,
+    }
+    assert limits["target_call_limit"] == 0
+    assert limits["allowed_roles"] == [
+        "orchestrator",
+        "red_team",
+        "judge",
+        "documentation",
+    ]
+    assert limits["role_call_caps"] == {
+        "orchestrator": 1,
+        "red_team": 1,
+        "judge": 1,
+        "documentation": 1,
+    }
+    assert limits["global_call_cap"] == 4
+    assert all(
+        Decimal(limits["role_usd_caps"][role.role])
+        <= min(role.limits.max_usd, _USD_CAPS[role.role])
+        for role in configuration.roles
+    )
+    assert Decimal(limits["global_usd_cap"]) <= min(
+        configuration.global_limits.max_usd,
+        Decimal("10"),
+    )
+    assert row["acceptance_configuration_sha256"] == configuration.configuration_sha256
+    assert row["acceptance_limits"] == limits
+    assert staged_count == 1
 
 
 def test_acceptance_configuration_load_is_bound_to_the_reviewed_release(
