@@ -1002,13 +1002,13 @@ def test_agent_activation_calibration_and_budget_follow_latest_authority(
     assert budget["role_physical_calls"] == 2
     assert budget["role_unresolved_physical_calls"] == 2
     assert budget["role_calls_remaining"] == 15
-    assert abs(budget["role_unresolved_usd_exposure"] - 0.024576) < 1e-9
-    assert abs(budget["role_usd_remaining"] - 2.375424) < 1e-9
+    assert abs(budget["role_unresolved_usd_exposure"] - 0.073728) < 1e-9
+    assert abs(budget["role_usd_remaining"] - 2.326272) < 1e-9
     assert budget["global_physical_calls"] == 2
     assert budget["global_unresolved_physical_calls"] == 2
     assert budget["global_calls_remaining"] == 52
-    assert abs(budget["global_unresolved_usd_exposure"] - 0.024576) < 1e-9
-    assert abs(budget["global_usd_remaining"] - 4.875424) < 1e-9
+    assert abs(budget["global_unresolved_usd_exposure"] - 0.073728) < 1e-9
+    assert abs(budget["global_usd_remaining"] - 4.826272) < 1e-9
 
     costs = client.get("/api/v1/costs").json()
     assert costs["state"] == "ready", costs

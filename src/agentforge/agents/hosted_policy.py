@@ -139,15 +139,14 @@ class HostedGenerationPolicy:
 
 # Model-facing evidence is compacted before every role call. These are hard per-call ceilings, not
 # estimates; OpenRouterTransport independently checks the exact encoded message bytes and refuses
-# usage beyond the configured ledger. Keeping these bounds aligned with the target-free four-role
-# acceptance policy makes the governed 34-case staging batch fit inside the platform's closed
-# $10 / 136-call envelope without weakening physical-call accounting or enabling retries.
+# usage beyond the configured ledger. Input headroom remains contained by the reviewed cumulative
+# configuration while output/reasoning behavior, physical-call accounting, and retries stay fixed.
 DEFAULT_HOSTED_GENERATION_POLICY = HostedGenerationPolicy(
     roles=(
         HostedRoleCallPolicy(
             role="orchestrator",
             bounds=HostedCallBounds(
-                input_tokens=8_192,
+                input_tokens=12_288,
                 output_tokens=1_024,
                 reasoning_tokens=1_024,
                 timeout_seconds=120.0,
@@ -157,11 +156,10 @@ DEFAULT_HOSTED_GENERATION_POLICY = HostedGenerationPolicy(
         HostedRoleCallPolicy(
             role="red_team",
             bounds=HostedCallBounds(
-                input_tokens=4_096,
+                input_tokens=32_768,
                 # Live replay asks Qwen only to select one exact case_ref from a closed enum.
-                # DigitalOcean has reported slightly more reasoning usage than the exact 4,096
-                # tokens requested on the wire. Authorize conservative accounting headroom while
-                # the transport keeps the provider request itself fixed at 4,096.
+                # Preserve the validated output/reasoning request while the larger input ceiling
+                # contains the transport's conservative byte-based prompt reservation.
                 output_tokens=1_024,
                 reasoning_tokens=8_192,
                 timeout_seconds=60.0,
@@ -171,7 +169,7 @@ DEFAULT_HOSTED_GENERATION_POLICY = HostedGenerationPolicy(
         HostedRoleCallPolicy(
             role="judge",
             bounds=HostedCallBounds(
-                input_tokens=8_192,
+                input_tokens=32_768,
                 output_tokens=512,
                 reasoning_tokens=1_024,
                 timeout_seconds=180.0,
@@ -181,7 +179,7 @@ DEFAULT_HOSTED_GENERATION_POLICY = HostedGenerationPolicy(
         HostedRoleCallPolicy(
             role="documentation",
             bounds=HostedCallBounds(
-                input_tokens=8_192,
+                input_tokens=12_288,
                 output_tokens=512,
                 reasoning_tokens=1_024,
                 timeout_seconds=120.0,

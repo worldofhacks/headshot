@@ -29,6 +29,12 @@ def test_registered_policy_round_trips_exact_bounds_and_role_triggers() -> None:
     ]
     orchestrator = policy.call_bounds["orchestrator"]
     assert orchestrator.output_tokens == 1_024
+    assert {role: bounds.input_tokens for role, bounds in policy.call_bounds.items()} == {
+        "orchestrator": 12_288,
+        "red_team": 32_768,
+        "judge": 32_768,
+        "documentation": 12_288,
+    }
     red_team = policy.call_bounds["red_team"]
     assert red_team.output_tokens == 1_024
     assert red_team.reasoning_tokens == 8_192

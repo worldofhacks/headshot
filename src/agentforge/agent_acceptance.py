@@ -102,17 +102,17 @@ def acceptance_generation_policy() -> HostedGenerationPolicy:
     """
 
     bounds = {
-        "orchestrator": HostedCallBounds(8_192, 512, 1_024, 120.0),
+        "orchestrator": HostedCallBounds(32_768, 512, 1_024, 120.0),
         # Keep the acceptance probe on the same validated Qwen/Chutes envelope as governed
         # campaigns. Smaller reasoning ceilings make this model terminate at ``finish=length``
         # before its strict JSON answer even though it typically consumes only one reasoning
         # token when the complete envelope is available.
         # The transport's byte-based conservative input reservation for this exact two-message
-        # probe is larger than 4,096. Authorize bounded accounting headroom without changing the
-        # reviewed configuration, the provider's output/reasoning ceilings, or the call count.
-        "red_team": HostedCallBounds(8_192, 1_024, 8_192, 60.0),
-        "judge": HostedCallBounds(8_192, 512, 1_024, 120.0),
-        "documentation": HostedCallBounds(8_192, 512, 1_024, 120.0),
+        # probe is larger than 4,096. Keep ample bounded headroom for all role prompts without
+        # changing the reviewed configuration, output/reasoning ceilings, or call counts.
+        "red_team": HostedCallBounds(32_768, 1_024, 8_192, 60.0),
+        "judge": HostedCallBounds(32_768, 512, 1_024, 120.0),
+        "documentation": HostedCallBounds(32_768, 512, 1_024, 120.0),
     }
     return HostedGenerationPolicy(
         roles=tuple(

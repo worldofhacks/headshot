@@ -63,10 +63,10 @@ _USD_CAPS = {
     "documentation": Decimal("1"),
 }
 _TOKEN_CAPS = {
-    "orchestrator": (8_192, 512, 1_024),
-    "red_team": (8_192, 1_024, 8_192),
-    "judge": (8_192, 512, 1_024),
-    "documentation": (8_192, 512, 1_024),
+    "orchestrator": (32_768, 512, 1_024),
+    "red_team": (32_768, 1_024, 8_192),
+    "judge": (32_768, 512, 1_024),
+    "documentation": (32_768, 512, 1_024),
 }
 
 
@@ -105,7 +105,7 @@ def _configuration() -> HostedConfigurationSet:
         ),
         global_limits=HostedLimits(
             max_calls=4,
-            max_input_tokens=32_768,
+            max_input_tokens=131_072,
             max_output_tokens=2_560,
             max_reasoning_tokens=11_264,
             max_usd=Decimal("10"),
@@ -316,12 +316,12 @@ def test_four_call_authority_uses_exact_v2_roles_costs_and_token_totals() -> Non
         configuration.global_limits.max_input_tokens,
         configuration.global_limits.max_output_tokens,
         configuration.global_limits.max_reasoning_tokens,
-    ) == (32_768, 2_560, 11_264)
+    ) == (131_072, 2_560, 11_264)
 
     red_team = next(role for role in configuration.roles if role.role == "red_team")
     wrong_red_team_input = replace(
         red_team,
-        limits=replace(red_team.limits, max_input_tokens=8_191),
+        limits=replace(red_team.limits, max_input_tokens=32_767),
     )
     wrong_role_input_tokens = replace(
         configuration,
@@ -360,7 +360,7 @@ def test_four_call_authority_uses_exact_v2_roles_costs_and_token_totals() -> Non
         configuration,
         global_limits=replace(
             configuration.global_limits,
-            max_input_tokens=32_767,
+            max_input_tokens=131_071,
         ),
     )
     with pytest.raises(InvalidControlPlaneInput, match="global hosted token limits"):

@@ -23,8 +23,14 @@ def test_acceptance_generation_policy_covers_the_staged_four_role_set() -> None:
         "judge",
         "documentation",
     }
-    assert generation_policy.call_bounds["orchestrator"].input_tokens == 8_192
-    assert generation_policy.call_bounds["red_team"].input_tokens == 8_192
+    assert {
+        role: bounds.input_tokens for role, bounds in generation_policy.call_bounds.items()
+    } == {
+        "orchestrator": 32_768,
+        "red_team": 32_768,
+        "judge": 32_768,
+        "documentation": 32_768,
+    }
     assert generation_policy.call_bounds["red_team"].output_tokens == 1_024
     assert generation_policy.call_bounds["red_team"].reasoning_tokens == 8_192
     assert generation_policy.call_bounds["judge"].reasoning_tokens == 1_024
