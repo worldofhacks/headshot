@@ -112,25 +112,37 @@ class RedTeamGenerationResult:
 
 
 def require_red_team_subcap(
-    configuration: Any, *, ceiling_usd: Decimal = RED_TEAM_SUBCAP_CEILING_USD
+    configuration: Any,
+    *,
+    ceiling_usd: Decimal = RED_TEAM_SUBCAP_CEILING_USD,
+    effective_subcap_usd: Decimal | None = None,
 ) -> Decimal:
-    """Assert the configuration's Red Team measured-spend subcap is at or below ``ceiling_usd``.
+    """Assert the effective Red Team measured-spend subcap is authorized and below the ceiling.
 
-    The shared ledger already enforces the configured red_team ``limits.max_usd`` per call; this is
-    the composition-root policy gate that the configured subcap does not exceed the authorized
-    ceiling (default $1). Returns the effective subcap so a caller can surface remaining budget the
-    same way the other roles do (the shared ledger + agent_executions measured cost).
+    By default the effective subcap is the configuration's Red Team ``limits.max_usd``. A runtime
+    using a narrower, configuration-contained :class:`HostedUsageEnvelope` may pass that ledger's
+    effective cap explicitly. The explicit value must still be positive, no larger than the
+    reviewed configuration, and no larger than the absolute policy ceiling (default $1).
     """
     try:
         role = next(item for item in configuration.roles if item.role == "red_team")
         # Coerce through str so a float-typed cap cannot smuggle binary representation drift into a
         # $-denominated cost control (Decimal(0.10) != 0.10); the cap stays exactly what was set.
-        subcap = Decimal(str(role.limits.max_usd))
+        configured_subcap = Decimal(str(role.limits.max_usd))
+        subcap = (
+            configured_subcap
+            if effective_subcap_usd is None
+            else Decimal(str(effective_subcap_usd))
+        )
     except (StopIteration, AttributeError, ArithmeticError, TypeError, ValueError) as exc:
         raise TracedRedTeamGenerationError("red_team role subcap is unavailable") from exc
     if subcap <= 0:
         raise TracedRedTeamGenerationError(
             f"red_team measured-spend subcap {subcap} must be a positive amount"
+        )
+    if subcap > configured_subcap:
+        raise TracedRedTeamGenerationError(
+            "red_team measured-spend subcap exceeds the reviewed configuration"
         )
     if subcap > ceiling_usd:
         raise TracedRedTeamGenerationError(

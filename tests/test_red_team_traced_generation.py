@@ -449,6 +449,19 @@ def test_require_red_team_subcap_accepts_a_cap_at_or_below_one_dollar() -> None:
     assert require_red_team_subcap(_StubConfig(Decimal("0.50"))) == Decimal("0.50")
 
 
+def test_require_red_team_subcap_accepts_a_narrower_contained_runtime_envelope() -> None:
+    assert require_red_team_subcap(
+        _StubConfig(Decimal("5")),
+        effective_subcap_usd=Decimal("1"),
+    ) == Decimal("1")
+
+    with pytest.raises(TracedRedTeamGenerationError, match="reviewed configuration"):
+        require_red_team_subcap(
+            _StubConfig(Decimal("0.50")),
+            effective_subcap_usd=Decimal("1"),
+        )
+
+
 def test_require_red_team_subcap_rejects_a_cap_above_one_dollar() -> None:
     with pytest.raises(TracedRedTeamGenerationError, match="subcap"):
         require_red_team_subcap(_StubConfig(Decimal("1.5")))

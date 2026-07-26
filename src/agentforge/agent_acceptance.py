@@ -575,7 +575,10 @@ def run_agent_acceptance(
             }
         )
         red_team_role = next(role for role in configuration.roles if role.role == "red_team")
-        require_red_team_subcap(configuration)
+        require_red_team_subcap(
+            configuration,
+            effective_subcap_usd=usage_envelope.role_limits["red_team"].max_usd,
+        )
         red_team_provider = TracedHostedRedTeamProvider(
             transport=transport,
             lifecycle=lifecycle,
