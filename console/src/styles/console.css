@@ -256,6 +256,15 @@
 .tool-scope-card > small { display: block; margin-top: 10px; color: var(--tx3); font-size: var(--fs-2xs); }
 .target-detail-grid { margin-top: 14px; }
 .target-detail-grid > div { min-width: 0; padding: 12px; border: 1px solid var(--sep); border-radius: var(--r-sm); background: var(--bg-inset); }
+.suite-batch-list { display: grid; gap: 8px; margin-top: 14px; }
+.suite-batch { min-width: 0; padding: 12px; border: 1px solid var(--sep); border-radius: var(--r-sm); background: var(--bg-inset); }
+.suite-batch-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+.suite-batch-head strong { display: block; margin-top: 4px; font-family: var(--font-mono); font-size: var(--fs-sm); }
+.suite-state { flex: 0 0 auto; padding: 4px 7px; border: 1px solid var(--bd); border-radius: var(--r-xs); color: var(--tx2); font-size: var(--fs-2xs); font-weight: 650; letter-spacing: 0.04em; text-transform: uppercase; }
+.suite-state-completed, .suite-state-runnable { border-color: var(--phos-line); color: var(--phos); }
+.suite-state-running, .suite-state-authorization-pending { border-color: var(--warn-line); color: var(--warn); }
+.suite-state-blocked { color: var(--v-conf); }
+.suite-batch-actions { margin-top: 10px; }
 .audit-grid { grid-template-columns: minmax(300px, 0.8fr) minmax(380px, 1.2fr); }
 
 .trace-explorer-grid { grid-template-columns: minmax(380px, 0.85fr) minmax(480px, 1.15fr); }

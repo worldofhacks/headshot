@@ -14,6 +14,7 @@ from fastapi import APIRouter, Depends, Header, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from agentforge.agents.hosted import HOSTED_MAX_GLOBAL_PHYSICAL_CALLS
 from agentforge.api.backend import ApiBackend, ApiBackendUnavailable, ApiConflict
 from agentforge.api.schemas import CommandResult, EventBatch, ResourceResult
 from agentforge.auth.dependencies import require_permissions
@@ -77,7 +78,7 @@ class HostedRunBindingInput(_StrictModel):
     configuration_set_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
     generation_policy_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
     session_generation: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
-    provider_model_call_limit: int = Field(gt=0, le=56)
+    provider_model_call_limit: int = Field(gt=0, le=HOSTED_MAX_GLOBAL_PHYSICAL_CALLS)
     provider_model_spend_limit_usd: str = Field(min_length=1, max_length=32)
     provider_max_retries: int = Field(ge=0, le=1)
     provider_max_concurrency: Literal[1]
@@ -95,7 +96,17 @@ class AuthorizationRequestInput(_StrictModel):
     run_nonce: str = Field(min_length=16, max_length=128)
     caps: CapsInput
     hosted_run: HostedRunBindingInput | None = None
-    expires_in_seconds: int = Field(default=900, ge=60, le=3600)
+    expires_in_seconds: int = Field(default=1800, ge=120, le=7200)
+
+    @model_validator(mode="after")
+    def require_approval_window(self) -> AuthorizationRequestInput:
+        """Reject scopes that can never cover approval plus their full run timeout."""
+
+        if self.expires_in_seconds <= self.caps.run_timeout_seconds + 60:
+            raise ValueError(
+                "authorization lifetime must exceed the run timeout by more than 60 seconds"
+            )
+        return self
 
 
 class AuthorizationDecisionInput(_StrictModel):
@@ -204,7 +215,7 @@ class HostedTokenPricesInput(_StrictModel):
 
 
 class HostedLimitsInput(_StrictModel):
-    max_calls: int = Field(gt=0, le=56)
+    max_calls: int = Field(gt=0, le=HOSTED_MAX_GLOBAL_PHYSICAL_CALLS)
     max_input_tokens: int = Field(gt=0)
     max_output_tokens: int = Field(gt=0)
     max_reasoning_tokens: int = Field(gt=0)
@@ -464,6 +475,9 @@ def agents(request: Request, principal: ConsolePrincipal) -> JSONResponse:
 
 
 @router.get("/agent-prompts/{agent_role}/{prompt_version}/{prompt_sha256}")
+@router.get(
+    "/agent-prompts/{agent_role}/{prompt_version}/{prompt_sha256}/{configuration_set_sha256}"
+)
 def agent_prompt(
     request: Request,
     agent_role: str,

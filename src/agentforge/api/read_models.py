@@ -13,6 +13,7 @@ from typing import Any, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 
+from agentforge.agents.hosted import HOSTED_MAX_GLOBAL_PHYSICAL_CALLS
 from agentforge.control_plane.finding_decisions import (
     FindingDecisionReasonCode,
     validate_finding_decision_reason_code,
@@ -75,7 +76,7 @@ class HostedRunBindingReadModel(_ReadModel):
     configuration_set_sha256: str
     generation_policy_sha256: str
     session_generation: str
-    provider_model_call_limit: int = Field(gt=0, le=56)
+    provider_model_call_limit: int = Field(gt=0, le=HOSTED_MAX_GLOBAL_PHYSICAL_CALLS)
     provider_model_spend_limit_usd: str
     provider_max_retries: int = Field(ge=0, le=1)
     provider_max_concurrency: Literal[1]
@@ -202,6 +203,21 @@ class CampaignTemplateReadModel(_ReadModel):
     hosted_run: HostedRunBindingReadModel | None
 
 
+class CampaignSuiteBatchReadModel(CampaignTemplateReadModel):
+    ordinal: int = Field(gt=0)
+    batch_id: str
+    physical_request_count: int = Field(gt=0)
+
+
+class CampaignSuiteTemplateReadModel(_ReadModel):
+    suite_id: str
+    title: str
+    case_count: int = Field(gt=0)
+    physical_request_count: int = Field(gt=0)
+    categories: tuple[str, ...]
+    batches: tuple[CampaignSuiteBatchReadModel, ...]
+
+
 class TargetReadModel(_ReadModel):
     target_id: str
     version: str
@@ -218,6 +234,7 @@ class TargetReadModel(_ReadModel):
     allowed_lifecycle_transitions: list[str]
     surfaces: list[SurfaceReadModel]
     campaign_template: CampaignTemplateReadModel | None = None
+    campaign_suite_templates: list[CampaignSuiteTemplateReadModel] = Field(default_factory=list)
     created_at: datetime.datetime
 
 
