@@ -93,7 +93,11 @@ def acceptance_generation_policy() -> HostedGenerationPolicy:
 
     bounds = {
         "orchestrator": HostedCallBounds(8_192, 512, 1_024, 120.0),
-        "red_team": HostedCallBounds(4_096, 512, 512, 60.0),
+        # Keep the acceptance probe on the same validated Qwen/Chutes envelope as governed
+        # campaigns. Smaller reasoning ceilings make this model terminate at ``finish=length``
+        # before its strict JSON answer even though it typically consumes only one reasoning
+        # token when the complete envelope is available.
+        "red_team": HostedCallBounds(4_096, 1_024, 8_192, 60.0),
         "judge": HostedCallBounds(8_192, 512, 1_024, 120.0),
         "documentation": HostedCallBounds(8_192, 512, 1_024, 120.0),
     }

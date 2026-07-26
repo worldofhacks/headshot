@@ -22,7 +22,8 @@ def test_acceptance_generation_policy_covers_the_staged_four_role_set() -> None:
         "documentation",
     }
     assert generation_policy.call_bounds["orchestrator"].input_tokens == 8_192
-    assert generation_policy.call_bounds["red_team"].output_tokens == 512
+    assert generation_policy.call_bounds["red_team"].output_tokens == 1_024
+    assert generation_policy.call_bounds["red_team"].reasoning_tokens == 8_192
     assert generation_policy.call_bounds["judge"].reasoning_tokens == 1_024
     assert generation_policy.call_bounds["documentation"].timeout_seconds == 120.0
 
