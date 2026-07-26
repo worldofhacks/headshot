@@ -57,7 +57,7 @@ _ROLE_CAPS = {
 }
 _ROLE_INPUT_CAPS = {
     "orchestrator": 8_192,
-    "red_team": 4_096,
+    "red_team": 8_192,
     "judge": 8_192,
     "documentation": 8_192,
 }
@@ -104,7 +104,7 @@ def _configuration() -> HostedConfigurationSet:
         ),
         global_limits=HostedLimits(
             max_calls=4,
-            max_input_tokens=28_672,
+            max_input_tokens=32_768,
             max_output_tokens=2_560,
             max_reasoning_tokens=11_264,
             max_usd=Decimal("10"),

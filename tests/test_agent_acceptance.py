@@ -9,6 +9,8 @@ import pytest
 
 import agentforge.agent_acceptance as acceptance
 from agentforge.agents.hosted_runtime import HostedCompositionError, HostedExecutionLineage
+from agentforge.agents.prompts import load_prompt_registry
+from agentforge.agents.red_team.hosted_generation import build_generation_messages
 from agentforge.policy.scoped_credentials import CredentialResolutionError
 
 
@@ -22,11 +24,32 @@ def test_acceptance_generation_policy_covers_the_staged_four_role_set() -> None:
         "documentation",
     }
     assert generation_policy.call_bounds["orchestrator"].input_tokens == 8_192
+    assert generation_policy.call_bounds["red_team"].input_tokens == 8_192
     assert generation_policy.call_bounds["red_team"].output_tokens == 1_024
     assert generation_policy.call_bounds["red_team"].reasoning_tokens == 8_192
     assert generation_policy.call_bounds["judge"].reasoning_tokens == 1_024
     assert generation_policy.call_bounds["documentation"].timeout_seconds == 120.0
     assert acceptance._ACCEPTANCE_SIGNAL_PROVENANCE == "hash_verified_postgres"
+
+
+def test_red_team_acceptance_input_cap_contains_the_exact_conservative_request_bound() -> None:
+    red_team_prompt = next(prompt for prompt in load_prompt_registry() if prompt.role == "red_team")
+    messages = build_generation_messages(
+        {
+            "case_ref": "synthetic-acceptance-seed",
+            "input_sequence": ["Synthetic acceptance seed; propose one test-only continuation."],
+        },
+        1,
+        "prompt_injection",
+        prompt_version=red_team_prompt.version,
+        prompt_sha256=red_team_prompt.sha256,
+    )
+    conservative_bound = acceptance.OpenRouterTransport._conservative_input_token_bound(messages)
+    authorized_bound = (
+        acceptance.acceptance_generation_policy().call_bounds["red_team"].input_tokens
+    )
+
+    assert 4_096 < conservative_bound <= authorized_bound
 
 
 def test_acceptance_refuses_a_release_without_the_canonical_provider_writer() -> None:

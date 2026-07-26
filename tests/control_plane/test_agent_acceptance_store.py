@@ -64,7 +64,7 @@ _USD_CAPS = {
 }
 _TOKEN_CAPS = {
     "orchestrator": (8_192, 512, 1_024),
-    "red_team": (4_096, 1_024, 8_192),
+    "red_team": (8_192, 1_024, 8_192),
     "judge": (8_192, 512, 1_024),
     "documentation": (8_192, 512, 1_024),
 }
@@ -105,7 +105,7 @@ def _configuration() -> HostedConfigurationSet:
         ),
         global_limits=HostedLimits(
             max_calls=4,
-            max_input_tokens=28_672,
+            max_input_tokens=32_768,
             max_output_tokens=2_560,
             max_reasoning_tokens=11_264,
             max_usd=Decimal("10"),
@@ -316,9 +316,23 @@ def test_four_call_authority_uses_exact_v2_roles_costs_and_token_totals() -> Non
         configuration.global_limits.max_input_tokens,
         configuration.global_limits.max_output_tokens,
         configuration.global_limits.max_reasoning_tokens,
-    ) == (28_672, 2_560, 11_264)
+    ) == (32_768, 2_560, 11_264)
 
     red_team = next(role for role in configuration.roles if role.role == "red_team")
+    wrong_red_team_input = replace(
+        red_team,
+        limits=replace(red_team.limits, max_input_tokens=8_191),
+    )
+    wrong_role_input_tokens = replace(
+        configuration,
+        roles=tuple(
+            wrong_red_team_input if role.role == "red_team" else role
+            for role in configuration.roles
+        ),
+    )
+    with pytest.raises(InvalidControlPlaneInput, match="red_team hosted token limits"):
+        canonical_agent_acceptance_limits(wrong_role_input_tokens)
+
     wrong_red_team = replace(
         red_team,
         limits=replace(red_team.limits, max_reasoning_tokens=8_191),
@@ -341,6 +355,16 @@ def test_four_call_authority_uses_exact_v2_roles_costs_and_token_totals() -> Non
     )
     with pytest.raises(InvalidControlPlaneInput, match="global hosted token limits"):
         canonical_agent_acceptance_limits(wrong_global_tokens)
+
+    wrong_global_input_tokens = replace(
+        configuration,
+        global_limits=replace(
+            configuration.global_limits,
+            max_input_tokens=32_767,
+        ),
+    )
+    with pytest.raises(InvalidControlPlaneInput, match="global hosted token limits"):
+        canonical_agent_acceptance_limits(wrong_global_input_tokens)
 
     underfunded_orchestrator = replace(
         configuration.roles[0],
