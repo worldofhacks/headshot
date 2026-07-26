@@ -158,12 +158,13 @@ DEFAULT_HOSTED_GENERATION_POLICY = HostedGenerationPolicy(
             role="red_team",
             bounds=HostedCallBounds(
                 input_tokens=4_096,
-                # DigitalOcean's Qwen endpoint may consume more reasoning tokens than the
-                # requested reasoning sub-cap. Reserve enough total completion capacity for
-                # both its hidden reasoning and the small, strict selection object.
-                output_tokens=12_000,
-                reasoning_tokens=46_000,
-                timeout_seconds=300.0,
+                # Live replay asks Qwen only to select one exact case_ref from a closed enum.
+                # A large reasoning reservation lets the upstream spend minutes on a tiny
+                # decision and can outlive its response path. Keep the answer allowance ample
+                # for strict JSON while bounding hidden reasoning and wall time.
+                output_tokens=1_024,
+                reasoning_tokens=4_096,
+                timeout_seconds=60.0,
             ),
             invocation_trigger="each_generation_cycle",
         ),
