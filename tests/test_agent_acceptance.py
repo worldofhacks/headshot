@@ -58,6 +58,22 @@ def test_red_team_acceptance_input_cap_contains_the_exact_conservative_request_b
     assert 4_096 < conservative_bound <= authorized_bound
 
 
+def test_acceptance_evidence_uses_only_vetted_trusted_signal_mappings() -> None:
+    envelope = acceptance._acceptance_evidence_envelope(
+        run_id="AR-synthetic-test",
+        attempt_id="a" * 64,
+    )
+
+    assert envelope["trusted"]["canary_hits"] == [
+        {
+            "id": "acceptance-canary-marker",
+            "provenance": "code",
+            "hit": True,
+            "detail": "The package-owned synthetic marker was observed.",
+        }
+    ]
+
+
 def test_acceptance_refuses_a_release_without_the_canonical_provider_writer() -> None:
     acceptance._require_canonical_provider_writer()
     assert (
