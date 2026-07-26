@@ -26,11 +26,16 @@ export function CommandButton({
     "idle",
   );
   const [acknowledgement, setAcknowledgement] = useState<string | null>(null);
+  // The server always says WHY it refused — a reason_code on an unavailable/conflict response, or
+  // an ApiClientError message on a 4xx. Discarding both left every refusal rendering as the same
+  // "not acknowledged", which is indistinguishable from a network failure.
+  const [detail, setDetail] = useState<string | null>(null);
   const action = useRef<{ identity: string; idempotencyKey: string } | null>(null);
 
   const execute = async () => {
     setState("sending");
     setAcknowledgement(null);
+    setDetail(null);
     try {
       const identity = `${path}\n${JSON.stringify(payload)}`;
       if (action.current?.identity !== identity) {
@@ -43,17 +48,20 @@ export function CommandButton({
         action.current.idempotencyKey,
       );
       if (response.status === "unavailable") {
+        setDetail(response.reason_code ?? null);
         setState("unavailable");
         return;
       }
       if (response.status === "conflict") {
+        setDetail(response.reason_code ?? null);
         setState("conflict");
         return;
       }
       setAcknowledgement(response.acknowledgement_id ?? null);
       setState("acknowledged");
       onAcknowledged?.(response);
-    } catch {
+    } catch (error) {
+      setDetail(error instanceof Error ? error.message : null);
       setState("error");
     }
   };
@@ -75,9 +83,21 @@ export function CommandButton({
           Server acknowledged{acknowledgement ? ` · ${acknowledgement}` : ""}. Refreshing state.
         </span>
       )}
-      {state === "unavailable" && <span className="command-note">The server connection for this action is not ready.</span>}
-      {state === "conflict" && <span className="command-note error">Server rejected an immutable or idempotency conflict.</span>}
-      {state === "error" && <span className="command-note error">The command was not acknowledged.</span>}
+      {state === "unavailable" && (
+        <span className="command-note">
+          The server is not ready for this action{detail ? `: ${detail}` : ""}.
+        </span>
+      )}
+      {state === "conflict" && (
+        <span className="command-note error">
+          Server rejected an immutable or idempotency conflict{detail ? `: ${detail}` : ""}.
+        </span>
+      )}
+      {state === "error" && (
+        <span className="command-note error">
+          The command was not acknowledged{detail ? `: ${detail}` : ""}.
+        </span>
+      )}
     </div>
   );
 }

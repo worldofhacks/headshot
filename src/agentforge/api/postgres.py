@@ -3884,7 +3884,23 @@ class PostgresApiBackend(ApiBackend):
                             surface.update(surface_payload)
                         row["campaign_template"] = None
                         if self._corpus is not None and row["surfaces"]:
-                            surface = row["surfaces"][0]
+                            # Bind an ENABLED surface. The list is ordered by surface_id, so taking
+                            # [0] blindly can bind a DISABLED one purely because it sorts first —
+                            # e.g. `copilot-week1-app` (disabled) ahead of `copilot-week1-chat`
+                            # (enabled). The server then refuses the authorization request with
+                            # SurfaceUnavailableError, and because the console offers no surface
+                            # picker the target becomes permanently un-authorizable from the UI.
+                            # Preserve surface_id ordering among enabled surfaces so the choice
+                            # stays deterministic; fall back to the first surface only when none is
+                            # enabled, so the caller still gets the same explicit refusal.
+                            surface = next(
+                                (
+                                    candidate
+                                    for candidate in row["surfaces"]
+                                    if candidate.get("enabled")
+                                ),
+                                row["surfaces"][0],
+                            )
                             row["campaign_template"] = {
                                 "target_id": row["target_id"],
                                 "target_version": row["version"],
