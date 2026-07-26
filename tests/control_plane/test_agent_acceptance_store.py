@@ -410,6 +410,7 @@ def test_reviewed_full_scan_configuration_derives_only_the_closed_four_call_auth
         expires_at=datetime.datetime.now(datetime.UTC) + datetime.timedelta(minutes=10),
         limits=limits,
     )
+    execution_id = _start(store, identity, configuration, "orchestrator")
 
     with migrated_db.connect() as connection:
         row = (
@@ -471,6 +472,7 @@ def test_reviewed_full_scan_configuration_derives_only_the_closed_four_call_auth
     assert row["acceptance_configuration_sha256"] == configuration.configuration_sha256
     assert row["acceptance_limits"] == limits
     assert staged_count == 1
+    assert len(execution_id) == 32
 
 
 def test_acceptance_configuration_load_is_bound_to_the_reviewed_release(

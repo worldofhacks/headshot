@@ -6993,11 +6993,16 @@ class ControlPlaneStore:
         role_cost = Decimal(str(stats["role_cost"]))
         global_cap = Decimal(str(limits["global_usd_cap"]))
         role_cap = Decimal(str(limits["role_usd_caps"][role_name]))
-        if global_cost + authority.role_configuration.limits.max_usd > global_cap:
+        # Reserve the closed acceptance sub-envelope, not the reviewed campaign role's full
+        # multi-call budget.  The staged configuration was already proven to contain this role
+        # cap when the authority was created and again when it was loaded above.  Charging its
+        # larger 34-call budget here would make the otherwise-valid one-call sub-envelope
+        # impossible to enter.
+        if global_cost + role_cap > global_cap:
             raise AuthorizationDeniedError(
                 "agent acceptance global spend reservation exceeds its cap"
             )
-        if role_cost + authority.role_configuration.limits.max_usd > role_cap:
+        if role_cost + role_cap > role_cap:
             raise AuthorizationDeniedError(
                 f"{role_name} acceptance spend reservation exceeds its cap"
             )
