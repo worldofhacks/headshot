@@ -303,7 +303,8 @@ def _assessment_schema() -> dict[str, Any]:
                 "type": "array",
                 "items": {"type": "string", "minLength": 1, "maxLength": 120},
                 "maxItems": 32,
-                "uniqueItems": True,
+                # Vertex rejects uniqueItems in structured-output schemas. The
+                # trusted validator below still rejects duplicate criteria.
             },
             "error_code": {"type": ["string", "null"], "maxLength": 120},
         },

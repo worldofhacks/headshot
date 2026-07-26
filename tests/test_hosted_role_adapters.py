@@ -347,6 +347,8 @@ def test_evaluator_input_is_sanitized_integrity_checked_and_provider_bounded() -
     )
 
     user_payload = json.loads(transport.calls[0]["messages"][1]["content"])
+    provider_schema = transport.calls[0]["output_schema"]
+    assert "uniqueItems" not in provider_schema["properties"]["criteria_hits"]
     projected = user_payload["evidence_envelope"]
     assert len(projected["hostile"]["transcript"]) == MAX_EVALUATOR_TRANSCRIPT_CHARS
     assert projected["hostile"]["truncated"] is True
