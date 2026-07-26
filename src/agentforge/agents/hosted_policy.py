@@ -161,8 +161,8 @@ DEFAULT_HOSTED_GENERATION_POLICY = HostedGenerationPolicy(
                 # DigitalOcean's Qwen endpoint may consume more reasoning tokens than the
                 # requested reasoning sub-cap. Reserve enough total completion capacity for
                 # both its hidden reasoning and the small, strict selection object.
-                output_tokens=16_384,
-                reasoning_tokens=49_152,
+                output_tokens=12_000,
+                reasoning_tokens=46_000,
                 timeout_seconds=300.0,
             ),
             invocation_trigger="each_generation_cycle",

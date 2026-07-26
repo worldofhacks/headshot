@@ -28,8 +28,8 @@ def test_registered_policy_round_trips_exact_bounds_and_role_triggers() -> None:
         "each_confirmed_finding",
     ]
     red_team = policy.call_bounds["red_team"]
-    assert red_team.output_tokens == 16_384
-    assert red_team.reasoning_tokens == 49_152
+    assert red_team.output_tokens == 12_000
+    assert red_team.reasoning_tokens == 46_000
     assert red_team.timeout_seconds == 300.0
 
 

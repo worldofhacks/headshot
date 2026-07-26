@@ -237,7 +237,7 @@ def test_prices_and_limits_require_decimal_units_and_closed_bounds() -> None:
     ("role", "invalid_cap"),
     (
         ("orchestrator", Decimal("4.01")),
-        ("red_team", Decimal("1.01")),
+        ("red_team", Decimal("5.01")),
         ("judge", Decimal("5.01")),
         ("documentation", Decimal("2.01")),
     ),

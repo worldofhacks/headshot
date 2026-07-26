@@ -42,7 +42,7 @@ HOSTED_ROLE_MODELS: Mapping[AgentRole, str] = MappingProxyType(
 HOSTED_ROLE_MAX_MEASURED_USD: Mapping[AgentRole, Decimal] = MappingProxyType(
     {
         "orchestrator": Decimal("4"),
-        "red_team": Decimal("1"),
+        "red_team": Decimal("5"),
         "judge": Decimal("5"),
         "documentation": Decimal("2"),
     }
