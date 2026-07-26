@@ -13,7 +13,7 @@ import type { Principal } from "../src/api/contracts";
 import {
   ApprovalsScreen,
   FindingsScreen,
-  TargetsScreen,
+  LegacyTargetsScreen,
 } from "../src/screens/ConsoleScreens";
 import { AgentsScreen } from "../src/screens/AgentToolScreens";
 import {
@@ -683,7 +683,7 @@ describe("target console operability", () => {
     } as unknown as ApiClient;
 
     render(
-      <TargetsScreen
+      <LegacyTargetsScreen
         client={client}
         principal={principal}
         entityId={null}
@@ -734,7 +734,7 @@ describe("target console operability", () => {
     const client = { read, command } as unknown as ApiClient;
 
     render(
-      <TargetsScreen
+      <LegacyTargetsScreen
         client={client}
         principal={principal}
         entityId={null}
@@ -792,7 +792,7 @@ describe("target console operability", () => {
     } as unknown as ApiClient;
 
     render(
-      <TargetsScreen
+      <LegacyTargetsScreen
         client={client}
         principal={launchPrincipal}
         entityId={null}

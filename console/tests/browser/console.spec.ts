@@ -8,7 +8,7 @@ test("direct routes and browser history restore authoritative screens", async ({
 
   await page.getByRole("button", { name: "Targets", exact: true }).click();
   await expect(page).toHaveURL(/\/targets$/);
-  await expect(page.getByRole("heading", { name: "Targets", exact: true, level: 1 })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Pilot runs", exact: true, level: 1 })).toBeVisible();
 
   await page.goBack();
   await expect(page).toHaveURL(/\/reports\/browser-report-prompt-injection$/);
@@ -64,17 +64,13 @@ test("390px navigation exposes every screen without application overflow", async
   expect((await firstEvent.boundingBox())?.height).toBeGreaterThanOrEqual(36);
 
   await page.getByRole("button", { name: "Targets", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Targets", exact: true })).toBeVisible();
-  await page.getByText("Browser Test Target", { exact: true }).click();
-  await expect(page.getByRole("button", { name: "Disable surface" })).toBeEnabled();
+  await expect(page.getByRole("heading", { name: "Pilot runs", exact: true })).toBeVisible();
+  await expect(page.getByText("1 ready", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", {
-    name: "Register exact catalog target",
-  })).toBeDisabled();
-  await expect(page.getByLabel("Budget USD")).toHaveValue("1");
-  await expect(page.getByLabel("Maximum attempts")).toHaveValue("9");
-  await expect(page.getByLabel("Target requests / second")).toHaveValue("1");
-  await expect(page.getByLabel("Run timeout seconds")).toHaveValue("900");
-  await expect(page.getByRole("button", { name: "Request exact campaign authorization" })).toBeEnabled();
+    name: "Request approval for batch 1",
+  })).toBeEnabled();
+  await expect(page.getByText("Trusted target catalog", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("Target registry", { exact: true })).toHaveCount(0);
 
   await page.getByRole("button", { name: "More", exact: true }).click();
   await page.getByRole("button", { name: "Configuration", exact: true }).click();

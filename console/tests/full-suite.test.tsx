@@ -163,7 +163,7 @@ describe("full suite console", () => {
     });
   });
 
-  it("shows Operator request actions and distinct Approver decisions without browser authority", async () => {
+  it("shows one next Operator action and one distinct Approver decision", async () => {
     const target = {
       target_id: "target-1",
       version: "1.0.0",
@@ -207,13 +207,12 @@ describe("full suite console", () => {
       />,
     );
 
-    expect(
-      await screen.findByText(
-        "Full 100-case suite — Demo target (target-1@1.0.0)",
-      ),
-    ).toBeTruthy();
-    expect(screen.getAllByRole("button", { name: "Request batch authorization" }))
-      .toHaveLength(3);
+    expect(await screen.findAllByText("Demo target")).toHaveLength(2);
+    expect(screen.getByText("1 ready")).toBeTruthy();
+    expect(screen.getAllByRole("button", { name: "Request approval for batch 1" }))
+      .toHaveLength(1);
+    expect(screen.queryByRole("button", { name: "Request approval for batch 2" }))
+      .toBeNull();
     expect(screen.getByText("0/100")).toBeTruthy();
     expect(screen.getByText("0/121")).toBeTruthy();
 
@@ -252,9 +251,74 @@ describe("full suite console", () => {
         getToken={async () => "session"}
       />,
     );
-    expect(await screen.findAllByRole("button", { name: "Approve exact batch" }))
-      .toHaveLength(3);
-    expect(screen.getAllByRole("button", { name: "Reject exact batch" })).toHaveLength(3);
-    expect(screen.queryByRole("button", { name: "Request batch authorization" })).toBeNull();
+    expect(await screen.findAllByRole("button", { name: "Approve batch 1" }))
+      .toHaveLength(1);
+    expect(screen.getAllByRole("button", { name: "Reject" })).toHaveLength(1);
+    expect(screen.queryByRole("button", { name: /Request approval/ })).toBeNull();
+  });
+
+  it("shows only ready targets that have a governed pilot suite", async () => {
+    const pilot = (targetId: string, name: string) => ({
+      target_id: targetId,
+      version: "1.0.0",
+      content_hash: `${targetId}-content`,
+      name,
+      adapter_kind: "openemr",
+      environment: "staging",
+      base_url: "https://target.invalid",
+      auth_mode: "bearer",
+      credential_configured: true,
+      synthetic_data_only: true,
+      safety_caps: caps,
+      lifecycle: "ready",
+      allowed_lifecycle_transitions: ["disabled"],
+      surfaces: [],
+      campaign_template: null,
+      campaign_suite_templates: [{
+        ...suite,
+        suite_id: `${targetId}-suite`,
+        batches: suite.batches.map((batch) => ({ ...batch, target_id: targetId })),
+      }],
+      created_at: "2026-07-25T00:00:00Z",
+    });
+    const records = [
+      pilot("clinical-copilot-week1", "Clinical Co-Pilot Week 1"),
+      pilot("clinical-copilot-week2", "Clinical Co-Pilot Week 2"),
+      { ...pilot("obsolete-draft", "Obsolete draft"), lifecycle: "draft" },
+      {
+        ...pilot("historical-target", "Historical target"),
+        campaign_suite_templates: [],
+      },
+    ];
+    const client = {
+      read: vi.fn(async (path: string) => ({
+        state: "ready" as const,
+        data: path === "targets" ? records : [],
+      })),
+      command: vi.fn(),
+    } as unknown as ApiClient;
+    const operator: Principal = {
+      user_id: "operator-1",
+      organization_id: "org-1",
+      organization_role: "org:operator",
+      organization_permissions: [PERMISSIONS.consoleRead, PERMISSIONS.campaignLaunch],
+    };
+
+    render(
+      <TargetsScreen
+        client={client}
+        principal={operator}
+        entityId={null}
+        getToken={async () => "session"}
+      />,
+    );
+
+    expect(await screen.findByText("2 ready")).toBeTruthy();
+    expect(screen.getAllByText("Clinical Co-Pilot Week 1")).toHaveLength(2);
+    expect(screen.getByText("Clinical Co-Pilot Week 2")).toBeTruthy();
+    expect(screen.queryByText("Obsolete draft")).toBeNull();
+    expect(screen.queryByText("Historical target")).toBeNull();
+    expect(screen.queryByText("Trusted target catalog")).toBeNull();
+    expect(screen.queryByText("Target registry")).toBeNull();
   });
 });
