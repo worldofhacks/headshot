@@ -1515,6 +1515,41 @@ def test_reviewed_batch_requires_four_hosted_roles_and_zero_retries(
         )
 
 
+def test_largest_reviewed_batch_fits_frozen_models_and_closed_usd_caps() -> None:
+    configuration = _hosted_capacity_fixture(case_count=34, max_retries=0)
+    prices = {
+        "orchestrator": (Decimal("5"), Decimal("25"), Decimal("25"), Decimal("4")),
+        "red_team": (
+            Decimal("0.39"),
+            Decimal("2.34"),
+            Decimal("2.34"),
+            Decimal("1"),
+        ),
+        "judge": (Decimal("1.25"), Decimal("10"), Decimal("10"), Decimal("5")),
+        "documentation": (
+            Decimal("2.5"),
+            Decimal("15"),
+            Decimal("15"),
+            Decimal("2"),
+        ),
+    }
+    for role_configuration in configuration.roles:
+        input_price, output_price, reasoning_price, usd_cap = prices[
+            role_configuration.role
+        ]
+        role_configuration.prices.input_usd_per_million_tokens = input_price
+        role_configuration.prices.output_usd_per_million_tokens = output_price
+        role_configuration.prices.reasoning_usd_per_million_tokens = reasoning_price
+        role_configuration.limits.max_usd = usd_cap
+    configuration.global_limits.max_usd = Decimal("10")
+
+    _require_hosted_workload_capacity(
+        configuration=configuration,  # type: ignore[arg-type]
+        generation_policy=DEFAULT_HOSTED_GENERATION_POLICY,
+        case_count=34,
+    )
+
+
 def test_corpus_hash_drift_refuses_before_adapter_construction(
     migrated_db: Engine,
     tmp_path,
