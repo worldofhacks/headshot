@@ -10,6 +10,10 @@ from decimal import Decimal
 import pytest
 from sqlalchemy import Engine, text
 
+from agentforge.agent_acceptance import (
+    _acceptance_usage_envelope,
+    acceptance_generation_policy,
+)
 from agentforge.agents.hosted import (
     HostedConfigurationSet,
     HostedLimits,
@@ -390,6 +394,10 @@ def test_reviewed_full_scan_configuration_derives_only_the_closed_four_call_auth
     _stage(store, configuration)
 
     limits = canonical_agent_acceptance_limits(configuration)
+    runtime_envelope = _acceptance_usage_envelope(
+        configuration,
+        acceptance_generation_policy(),
+    )
     identity = store.create_agent_acceptance_run(
         organization_id=_ORGANIZATION_ID,
         configuration_set_sha256=configuration.configuration_sha256,
@@ -441,6 +449,16 @@ def test_reviewed_full_scan_configuration_derives_only_the_closed_four_call_auth
         "documentation": 1,
     }
     assert limits["global_call_cap"] == 4
+    assert {
+        role: role_limits.max_calls for role, role_limits in runtime_envelope.role_limits.items()
+    } == limits["role_call_caps"]
+    assert runtime_envelope.global_limits.max_calls == limits["global_call_cap"]
+    assert format(runtime_envelope.global_limits.max_usd, "f") == limits["global_usd_cap"]
+    assert {
+        role: format(role_limits.max_usd, "f")
+        for role, role_limits in runtime_envelope.role_limits.items()
+    } == limits["role_usd_caps"]
+    runtime_envelope.require_contained_by(configuration)
     assert all(
         Decimal(limits["role_usd_caps"][role.role])
         <= min(role.limits.max_usd, _USD_CAPS[role.role])

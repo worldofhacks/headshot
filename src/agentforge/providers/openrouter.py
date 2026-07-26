@@ -15,8 +15,9 @@ import math
 import threading
 import time
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from decimal import Decimal, InvalidOperation
+from types import MappingProxyType
 from typing import Any
 
 import httpx
@@ -25,11 +26,12 @@ from jsonschema import Draft202012Validator
 from agentforge.agents.hosted import (
     HOSTED_MAX_LOGICAL_RETRIES,
     HostedConfigurationSet,
+    HostedLimits,
     HostedRoleConfiguration,
     resolve_hosted_prompt,
     validate_hosted_configuration_set,
 )
-from agentforge.agents.runtime import AgentRole
+from agentforge.agents.runtime import AGENT_ROLES, AgentRole
 from agentforge.providers.lineage import (
     ProviderInvocationContextV1,
     ProviderLineageRecorder,
@@ -39,6 +41,7 @@ from agentforge.providers.lineage import (
     served_provider_matches_configured,
 )
 from agentforge.secrets import Secret
+from agentforge.target.spec import HostedRunBinding
 
 OPENROUTER_CHAT_COMPLETIONS_URL = "https://openrouter.ai/api/v1/chat/completions"
 _MILLION = Decimal(1_000_000)
@@ -154,6 +157,98 @@ class HostedLedgerSnapshot:
 
 
 @dataclass(frozen=True, slots=True)
+class HostedUsageEnvelope:
+    """A configuration-contained physical usage sub-envelope for one hosted runtime."""
+
+    role_limits: Mapping[AgentRole, HostedLimits]
+    global_limits: HostedLimits
+    envelope_sha256: str = field(init=False)
+
+    def __post_init__(self) -> None:
+        if (
+            not isinstance(self.role_limits, Mapping)
+            or set(self.role_limits) != set(AGENT_ROLES)
+            or any(not isinstance(value, HostedLimits) for value in self.role_limits.values())
+            or not isinstance(self.global_limits, HostedLimits)
+        ):
+            raise ValueError("hosted usage envelope must cover the exact four roles")
+        immutable_roles = MappingProxyType(dict(self.role_limits))
+        object.__setattr__(self, "role_limits", immutable_roles)
+        payload = {
+            "roles": {
+                role: immutable_roles[role].canonical_payload() for role in sorted(immutable_roles)
+            },
+            "global_limits": self.global_limits.canonical_payload(),
+        }
+        object.__setattr__(
+            self,
+            "envelope_sha256",
+            hashlib.sha256(
+                json.dumps(
+                    payload,
+                    allow_nan=False,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                    sort_keys=True,
+                ).encode("utf-8")
+            ).hexdigest(),
+        )
+
+    @classmethod
+    def from_configuration(
+        cls,
+        configuration: HostedConfigurationSet,
+    ) -> HostedUsageEnvelope:
+        validate_hosted_configuration_set(configuration)
+        return cls(
+            role_limits={role.role: role.limits for role in configuration.roles},
+            global_limits=configuration.global_limits,
+        )
+
+    def require_contained_by(self, configuration: HostedConfigurationSet) -> None:
+        validate_hosted_configuration_set(configuration)
+        configured_roles = {role.role: role.limits for role in configuration.roles}
+        for role, limits in self.role_limits.items():
+            configured = configured_roles[role]
+            if (
+                limits.max_calls > configured.max_calls
+                or limits.max_input_tokens > configured.max_input_tokens
+                or limits.max_output_tokens > configured.max_output_tokens
+                or limits.max_reasoning_tokens > configured.max_reasoning_tokens
+                or limits.max_usd > configured.max_usd
+                or limits.max_retries > configured.max_retries
+                or limits.max_requests_per_second > configured.max_requests_per_second
+                or limits.max_concurrency > configured.max_concurrency
+            ):
+                raise ValueError(f"{role} hosted usage envelope exceeds the reviewed configuration")
+        configured_global = configuration.global_limits
+        limits = self.global_limits
+        if (
+            limits.max_calls > configured_global.max_calls
+            or limits.max_input_tokens > configured_global.max_input_tokens
+            or limits.max_output_tokens > configured_global.max_output_tokens
+            or limits.max_reasoning_tokens > configured_global.max_reasoning_tokens
+            or limits.max_usd > configured_global.max_usd
+            or limits.max_retries > configured_global.max_retries
+            or limits.max_requests_per_second > configured_global.max_requests_per_second
+            or limits.max_concurrency > configured_global.max_concurrency
+        ):
+            raise ValueError("global hosted usage envelope exceeds the reviewed configuration")
+
+    def matches_authorization(
+        self,
+        authorization: HostedRunBinding,
+    ) -> bool:
+        return bool(
+            isinstance(authorization, HostedRunBinding)
+            and authorization.provider_model_call_limit == self.global_limits.max_calls
+            and Decimal(authorization.provider_model_spend_limit_usd) == self.global_limits.max_usd
+            and authorization.provider_max_retries == self.global_limits.max_retries
+            and authorization.provider_max_concurrency == self.global_limits.max_concurrency
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class _Reservation:
     ledger_scope: object
     reservation_id: int
@@ -201,10 +296,22 @@ class _UsageObservation:
 class HostedUsageLedger:
     """Thread-safe shared authority for all four roles in one campaign."""
 
-    def __init__(self, configuration: HostedConfigurationSet) -> None:
+    def __init__(
+        self,
+        configuration: HostedConfigurationSet,
+        *,
+        envelope: HostedUsageEnvelope | None = None,
+    ) -> None:
         validate_hosted_configuration_set(configuration)
+        resolved_envelope = envelope or HostedUsageEnvelope.from_configuration(configuration)
+        if not isinstance(resolved_envelope, HostedUsageEnvelope):
+            raise TypeError("hosted usage envelope is invalid")
+        resolved_envelope.require_contained_by(configuration)
         self._configuration = configuration
         self._roles = {role.role: role for role in configuration.roles}
+        self._role_limits = resolved_envelope.role_limits
+        self._global_limits = resolved_envelope.global_limits
+        self._envelope_sha256 = resolved_envelope.envelope_sha256
         self._physical_calls = 0
         self._measured_usd = Decimal(0)
         self._unresolved_usd = Decimal(0)
@@ -217,6 +324,14 @@ class HostedUsageLedger:
         self._next_reservation_id = 1
         self._outstanding_reservations: dict[int, _Reservation] = {}
         self._lock = threading.Lock()
+
+    @property
+    def envelope_sha256(self) -> str:
+        return self._envelope_sha256
+
+    @property
+    def configuration_sha256(self) -> str:
+        return self._configuration.configuration_sha256
 
     @property
     def snapshot(self) -> HostedLedgerSnapshot:
@@ -274,8 +389,8 @@ class HostedUsageLedger:
                 "output": self._global_tokens["output"] + output_tokens,
                 "reasoning": self._global_tokens["reasoning"] + reasoning_tokens,
             }
-            role_limits = configuration.limits
-            global_limits = self._configuration.global_limits
+            role_limits = self._role_limits[role]
+            global_limits = self._global_limits
             if (
                 physical_calls > role_limits.max_calls
                 or measured_usd + unresolved_usd > role_limits.max_usd
@@ -331,8 +446,8 @@ class HostedUsageLedger:
             + reasoning_price * reasoning_tokens
         ) / _MILLION
         with self._lock:
-            global_limits = self._configuration.global_limits
-            role_limits = configuration.limits
+            global_limits = self._global_limits
+            role_limits = self._role_limits[role]
             if self._physical_calls + 1 > global_limits.max_calls:
                 raise HostedBudgetExceeded("shared physical model-call cap is exhausted")
             if self._role_calls[role] + 1 > role_limits.max_calls:
@@ -429,20 +544,17 @@ class HostedUsageLedger:
             self._global_tokens["output"] += output_tokens - reservation.output_tokens
             self._global_tokens["reasoning"] += reasoning_tokens - reservation.reasoning_tokens
             measured_cost_exceeded = (
-                self._measured_usd + self._unresolved_usd
-                > self._configuration.global_limits.max_usd
+                self._measured_usd + self._unresolved_usd > self._global_limits.max_usd
                 or self._role_measured_usd[role] + self._role_unresolved_usd[role]
-                > self._roles[role].limits.max_usd
+                > self._role_limits[role].max_usd
             )
             token_cap_exceeded = (
-                self._tokens[role]["input"] > self._roles[role].limits.max_input_tokens
-                or self._tokens[role]["output"] > self._roles[role].limits.max_output_tokens
-                or self._tokens[role]["reasoning"] > self._roles[role].limits.max_reasoning_tokens
-                or self._global_tokens["input"] > self._configuration.global_limits.max_input_tokens
-                or self._global_tokens["output"]
-                > self._configuration.global_limits.max_output_tokens
-                or self._global_tokens["reasoning"]
-                > self._configuration.global_limits.max_reasoning_tokens
+                self._tokens[role]["input"] > self._role_limits[role].max_input_tokens
+                or self._tokens[role]["output"] > self._role_limits[role].max_output_tokens
+                or self._tokens[role]["reasoning"] > self._role_limits[role].max_reasoning_tokens
+                or self._global_tokens["input"] > self._global_limits.max_input_tokens
+                or self._global_tokens["output"] > self._global_limits.max_output_tokens
+                or self._global_tokens["reasoning"] > self._global_limits.max_reasoning_tokens
             )
         # A reservation is an admission-control estimate for the outgoing request, not a second
         # provider-response contract. OpenRouter endpoints can report prompt or reasoning usage
@@ -590,6 +702,8 @@ class OpenRouterTransport:
         self._client = client or httpx.Client()
         self._owns_client = client is None
         self._ledger = ledger or HostedUsageLedger(configuration)
+        if self._ledger.configuration_sha256 != configuration.configuration_sha256:
+            raise ValueError("hosted usage ledger differs from the transport configuration")
         self._lineage_recorder = lineage_recorder
         self._sleeper = sleeper
         self._monotonic = monotonic
@@ -599,6 +713,10 @@ class OpenRouterTransport:
     @property
     def ledger(self) -> HostedUsageLedger:
         return self._ledger
+
+    @property
+    def usage_envelope_sha256(self) -> str:
+        return self._ledger.envelope_sha256
 
     def close(self) -> None:
         if self._owns_client:
@@ -1464,6 +1582,7 @@ __all__ = [
     "HostedLedgerSnapshot",
     "HostedProviderError",
     "HostedProviderResponseError",
+    "HostedUsageEnvelope",
     "HostedUsageLedger",
     "OPENROUTER_CHAT_COMPLETIONS_URL",
     "OpenRouterResult",

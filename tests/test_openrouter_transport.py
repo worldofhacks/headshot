@@ -30,6 +30,7 @@ from agentforge.providers.openrouter import (
     HostedBudgetExceeded,
     HostedProviderError,
     HostedProviderResponseError,
+    HostedUsageEnvelope,
     HostedUsageLedger,
     OpenRouterTransport,
 )
@@ -1559,6 +1560,86 @@ def test_shared_ledger_hard_stops_at_fifty_six_physical_calls() -> None:
             input_tokens=0,
             output_tokens=0,
             reasoning_tokens=0,
+        )
+
+
+def test_shared_ledger_enforces_a_contained_one_call_per_role_sub_envelope() -> None:
+    configuration = _configuration()
+    envelope = HostedUsageEnvelope(
+        role_limits={
+            role.role: HostedLimits(
+                max_calls=1,
+                max_input_tokens=100,
+                max_output_tokens=50,
+                max_reasoning_tokens=25,
+                max_usd=role.limits.max_usd,
+                max_retries=0,
+                max_requests_per_second=Decimal("0.5"),
+                max_concurrency=1,
+            )
+            for role in configuration.roles
+        },
+        global_limits=HostedLimits(
+            max_calls=4,
+            max_input_tokens=400,
+            max_output_tokens=200,
+            max_reasoning_tokens=100,
+            max_usd=Decimal("5"),
+            max_retries=0,
+            max_requests_per_second=Decimal("0.5"),
+            max_concurrency=1,
+        ),
+    )
+    ledger = HostedUsageLedger(configuration, envelope=envelope)
+
+    for role in _MODELS:
+        reservation = ledger.reserve(
+            role,  # type: ignore[arg-type]
+            input_tokens=100,
+            output_tokens=50,
+            reasoning_tokens=25,
+        )
+        ledger.settle(
+            reservation,
+            measured_cost=Decimal(0),
+            input_tokens=100,
+            output_tokens=50,
+            reasoning_tokens=25,
+        )
+
+    assert ledger.envelope_sha256 == envelope.envelope_sha256
+    assert ledger.snapshot.physical_calls == 4
+    with pytest.raises(HostedBudgetExceeded, match="shared physical model-call cap"):
+        ledger.reserve(
+            "orchestrator",
+            input_tokens=0,
+            output_tokens=0,
+            reasoning_tokens=0,
+        )
+
+
+def test_transport_rejects_a_ledger_for_another_configuration() -> None:
+    configuration = _configuration()
+    other_configuration = replace(
+        configuration,
+        roles=(
+            replace(
+                configuration.roles[0],
+                policy_sha256="f" * 64,
+            ),
+            *configuration.roles[1:],
+        ),
+    )
+
+    with pytest.raises(ValueError, match="ledger differs"):
+        OpenRouterTransport(
+            configuration=configuration,
+            credential_resolver=lambda _reference: Secret("not-a-real-provider-key"),
+            client=httpx.Client(
+                transport=httpx.MockTransport(lambda _request: httpx.Response(500))
+            ),
+            ledger=HostedUsageLedger(other_configuration),
+            lineage_recorder=_ProviderRecorder(),
         )
 
 

@@ -24,7 +24,7 @@ from agentforge.agents.judge import CalibrationGateClosed, JudgeIdentity
 from agentforge.agents.judge.enablement import require_model_judge_enablement
 from agentforge.agents.runtime import AgentRole
 from agentforge.providers.lineage import ProviderLogicalContextV1
-from agentforge.providers.openrouter import OpenRouterResult
+from agentforge.providers.openrouter import HostedUsageEnvelope, OpenRouterResult
 from agentforge.secrets import looks_like_provider_key
 from agentforge.target.spec import HostedRunBinding
 
@@ -182,6 +182,7 @@ def _validate_hosted_authority(
     configuration: HostedConfigurationSet,
     authorization: HostedRunBinding,
     call_bounds: Mapping[AgentRole, HostedCallBounds],
+    usage_envelope: HostedUsageEnvelope | None,
 ) -> dict[AgentRole, HostedCallBounds]:
     try:
         validate_hosted_configuration_set(configuration)
@@ -189,14 +190,29 @@ def _validate_hosted_authority(
         raise HostedCompositionError("hosted configuration failed integrity validation") from exc
     if not isinstance(authorization, HostedRunBinding):
         raise HostedCompositionError("hosted run authorization is invalid")
-    if (
-        authorization.configuration_set_sha256 != configuration.configuration_sha256
-        or authorization.provider_model_call_limit != configuration.global_limits.max_calls
-        or authorization.provider_model_spend_limit_usd
-        != format(configuration.global_limits.max_usd, "f")
-        or authorization.provider_max_retries != configuration.global_limits.max_retries
-        or authorization.provider_max_concurrency != configuration.global_limits.max_concurrency
-    ):
+    configuration_identity_matches = (
+        authorization.configuration_set_sha256 == configuration.configuration_sha256
+    )
+    if usage_envelope is None:
+        runtime_limits_match = (
+            authorization.provider_model_call_limit == configuration.global_limits.max_calls
+            and authorization.provider_model_spend_limit_usd
+            == format(configuration.global_limits.max_usd, "f")
+            and authorization.provider_max_retries == configuration.global_limits.max_retries
+            and authorization.provider_max_concurrency
+            == configuration.global_limits.max_concurrency
+        )
+        role_limits = {role.role: role.limits for role in configuration.roles}
+    else:
+        try:
+            usage_envelope.require_contained_by(configuration)
+        except (TypeError, ValueError) as exc:
+            raise HostedCompositionError(
+                "hosted usage sub-envelope exceeds the reviewed configuration"
+            ) from exc
+        runtime_limits_match = usage_envelope.matches_authorization(authorization)
+        role_limits = dict(usage_envelope.role_limits)
+    if not configuration_identity_matches or not runtime_limits_match:
         raise HostedCompositionError(
             "hosted runtime configuration differs from campaign authorization"
         )
@@ -207,7 +223,7 @@ def _validate_hosted_authority(
     for role, bounds in normalized.items():
         if not isinstance(bounds, HostedCallBounds):
             raise HostedCompositionError("hosted call bounds are invalid")
-        limits = roles[role].limits
+        limits = role_limits[role]
         if (
             bounds.input_tokens > limits.max_input_tokens
             or bounds.output_tokens > limits.max_output_tokens
@@ -235,6 +251,7 @@ class HostedRoleRuntime:
         authorization: HostedRunBinding,
         call_bounds: Mapping[AgentRole, HostedCallBounds],
         execution_lifecycle: HostedExecutionLifecycle,
+        usage_envelope: HostedUsageEnvelope | None = None,
     ) -> None:
         if (
             not callable(getattr(transport, "invoke", None))
@@ -245,10 +262,19 @@ class HostedRoleRuntime:
             raise HostedCompositionError("hosted runtime dependency is unavailable")
         self._configuration = configuration
         self._authorization = authorization
+        if usage_envelope is not None and (
+            not isinstance(usage_envelope, HostedUsageEnvelope)
+            or getattr(transport, "usage_envelope_sha256", None) != usage_envelope.envelope_sha256
+        ):
+            raise HostedCompositionError(
+                "hosted transport does not enforce the authorized usage sub-envelope"
+            )
+        self._usage_envelope = usage_envelope
         self._call_bounds = _validate_hosted_authority(
             configuration=configuration,
             authorization=authorization,
             call_bounds=call_bounds,
+            usage_envelope=usage_envelope,
         )
         self._roles = {role.role: role for role in configuration.roles}
         self._transport = transport
@@ -274,7 +300,15 @@ class HostedRoleRuntime:
             configuration=self._configuration,
             authorization=self._authorization,
             call_bounds=self._call_bounds,
+            usage_envelope=self._usage_envelope,
         )
+        if self._usage_envelope is not None and (
+            getattr(self._transport, "usage_envelope_sha256", None)
+            != self._usage_envelope.envelope_sha256
+        ):
+            raise HostedCompositionError(
+                "hosted transport usage sub-envelope changed after composition"
+            )
         configuration = self._roles.get(role)
         if configuration is None:
             raise HostedCompositionError("hosted role is outside the authorized configuration")

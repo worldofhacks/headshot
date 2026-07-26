@@ -21,6 +21,7 @@ from typing import Any
 from sqlalchemy import Engine, text
 
 from agentforge.agents.documentation import DocumentationInput, HostedReportWriter
+from agentforge.agents.hosted import HostedConfigurationSet, HostedLimits
 from agentforge.agents.hosted_policy import HostedGenerationPolicy, HostedRoleCallPolicy
 from agentforge.agents.hosted_runtime import (
     HostedCallBounds,
@@ -45,13 +46,23 @@ from agentforge.policy.scoped_credentials import (
     SealedEnvironmentCredentialResolver,
 )
 from agentforge.providers.lineage import ProviderLogicalContextV1
-from agentforge.providers.openrouter import HostedUsageLedger, OpenRouterTransport
+from agentforge.providers.openrouter import (
+    HostedUsageEnvelope,
+    HostedUsageLedger,
+    OpenRouterTransport,
+)
 from agentforge.target.spec import HostedRunBinding
 from agentforge.telemetry import OutboundHttpTelemetry
 
 _OWNED_ROLES = ("orchestrator", "red_team", "judge", "documentation")
 _GLOBAL_USD_CAP = Decimal("10")
 _GLOBAL_CALL_CAP = 4
+_ROLE_USD_CAPS = {
+    "orchestrator": Decimal("1.5"),
+    "red_team": Decimal("1"),
+    "judge": Decimal("4"),
+    "documentation": Decimal("1"),
+}
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
 
@@ -75,12 +86,7 @@ def acceptance_limits() -> dict[str, Any]:
         "target_call_limit": 0,
         "allowed_roles": list(_OWNED_ROLES),
         "role_call_caps": {role: 1 for role in _OWNED_ROLES},
-        "role_usd_caps": {
-            "orchestrator": "1.5",
-            "red_team": "1",
-            "judge": "4",
-            "documentation": "1",
-        },
+        "role_usd_caps": {role: format(_ROLE_USD_CAPS[role], "f") for role in _OWNED_ROLES},
         "global_call_cap": _GLOBAL_CALL_CAP,
         "global_usd_cap": format(_GLOBAL_USD_CAP, "f"),
     }
@@ -118,6 +124,41 @@ def acceptance_generation_policy() -> HostedGenerationPolicy:
             )
             for role in ("orchestrator", "red_team", "judge", "documentation")
         )
+    )
+
+
+def _acceptance_usage_envelope(
+    configuration: HostedConfigurationSet,
+    generation_policy: HostedGenerationPolicy,
+) -> HostedUsageEnvelope:
+    """Build the independently enforced one-call-per-role ledger sub-envelope."""
+
+    configured_roles = {role.role: role for role in configuration.roles}
+    role_limits = {
+        role: HostedLimits(
+            max_calls=1,
+            max_input_tokens=generation_policy.call_bounds[role].input_tokens,
+            max_output_tokens=generation_policy.call_bounds[role].output_tokens,
+            max_reasoning_tokens=generation_policy.call_bounds[role].reasoning_tokens,
+            max_usd=_ROLE_USD_CAPS[role],
+            max_retries=0,
+            max_requests_per_second=configured_roles[role].limits.max_requests_per_second,
+            max_concurrency=1,
+        )
+        for role in _OWNED_ROLES
+    }
+    return HostedUsageEnvelope(
+        role_limits=role_limits,  # type: ignore[arg-type]
+        global_limits=HostedLimits(
+            max_calls=_GLOBAL_CALL_CAP,
+            max_input_tokens=sum(limit.max_input_tokens for limit in role_limits.values()),
+            max_output_tokens=sum(limit.max_output_tokens for limit in role_limits.values()),
+            max_reasoning_tokens=sum(limit.max_reasoning_tokens for limit in role_limits.values()),
+            max_usd=_GLOBAL_USD_CAP,
+            max_retries=0,
+            max_requests_per_second=configuration.global_limits.max_requests_per_second,
+            max_concurrency=1,
+        ),
     )
 
 
@@ -396,6 +437,7 @@ def run_agent_acceptance(
         configuration_set_sha256=configuration_set_sha256,
         release_sha256=release_sha256,
     )
+    usage_envelope = _acceptance_usage_envelope(configuration, generation_policy)
     credential_references = tuple(
         role.credential_reference for role in configuration.roles if role.role in _OWNED_ROLES
     )
@@ -434,7 +476,7 @@ def run_agent_acceptance(
         transport = OpenRouterTransport(
             configuration=configuration,
             credential_resolver=resolve_credential,
-            ledger=HostedUsageLedger(configuration),
+            ledger=HostedUsageLedger(configuration, envelope=usage_envelope),
             lineage_recorder=store,
         )
         calibration_id = "JC-" + _digest(
@@ -479,6 +521,7 @@ def run_agent_acceptance(
             ),
             call_bounds=generation_policy.call_bounds,
             execution_lifecycle=lifecycle,
+            usage_envelope=usage_envelope,
         )
     except Exception:
         if run_id is not None:

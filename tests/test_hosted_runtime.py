@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+from dataclasses import replace
 from decimal import Decimal
 from functools import lru_cache
 from pathlib import Path
@@ -22,12 +23,13 @@ from agentforge.agents.hosted_runtime import (
     HostedCallBounds,
     HostedCompositionError,
     HostedFourRoleRuntime,
+    HostedRoleRuntime,
     hosted_judge_identity,
 )
 from agentforge.agents.judge import CalibrationGate
 from agentforge.agents.prompts import load_prompt_registry
 from agentforge.providers.lineage import ProviderLogicalContextV1
-from agentforge.providers.openrouter import OpenRouterResult
+from agentforge.providers.openrouter import HostedUsageEnvelope, OpenRouterResult
 from agentforge.target.spec import HostedRunBinding
 
 _GROUND_TRUTH = Path(__file__).resolve().parents[1] / "evals" / "ground-truth"
@@ -98,6 +100,7 @@ class _FakeTransport:
         self.outputs = outputs
         self.calls: list[str] = []
         self.invocations: list[dict[str, Any]] = []
+        self.usage_envelope_sha256: str | None = None
 
     def invoke(self, **kwargs: Any) -> OpenRouterResult:
         role = kwargs["role"]
@@ -155,6 +158,36 @@ class _FakeExecutionLifecycle:
             role_configuration_sha256=start["role_configuration_sha256"],
             generation_policy_sha256=start["generation_policy_sha256"],
         )
+
+
+def _contained_usage_envelope(
+    configuration: HostedConfigurationSet,
+) -> HostedUsageEnvelope:
+    return HostedUsageEnvelope(
+        role_limits={
+            role.role: HostedLimits(
+                max_calls=1,
+                max_input_tokens=100,
+                max_output_tokens=50,
+                max_reasoning_tokens=25,
+                max_usd=role.limits.max_usd,
+                max_retries=0,
+                max_requests_per_second=Decimal("0.5"),
+                max_concurrency=1,
+            )
+            for role in configuration.roles
+        },
+        global_limits=HostedLimits(
+            max_calls=4,
+            max_input_tokens=400,
+            max_output_tokens=200,
+            max_reasoning_tokens=100,
+            max_usd=Decimal("5"),
+            max_retries=0,
+            max_requests_per_second=Decimal("0.5"),
+            max_concurrency=1,
+        ),
+    )
 
 
 def _outputs(*, judge_state: str = "NO_EXPLOIT_OBSERVED") -> dict[str, dict[str, Any]]:
@@ -277,6 +310,58 @@ def test_runtime_refuses_configuration_not_bound_by_campaign_authorization() -> 
             policy_gateway_dispatch=lambda _attempt: {},
             deterministic_judge=lambda _attempt, _evidence: {"state": "NO_EXPLOIT_OBSERVED"},
             execution_lifecycle=_FakeExecutionLifecycle(),
+        )
+
+
+def test_role_runtime_accepts_only_a_transport_enforced_contained_sub_envelope() -> None:
+    configuration = _configuration()
+    envelope = _contained_usage_envelope(configuration)
+    transport = _FakeTransport(configuration, _outputs())
+    authorization = HostedRunBinding(
+        configuration_set_sha256=configuration.configuration_sha256,
+        generation_policy_sha256=_digest("generation-policy"),
+        session_generation="acceptance-1",
+        provider_model_call_limit=4,
+        provider_model_spend_limit_usd="5",
+        provider_max_retries=0,
+        provider_max_concurrency=1,
+        provider_timeout_seconds=10,
+    )
+    call_bounds = {role.role: HostedCallBounds(100, 50, 25, 10) for role in configuration.roles}
+
+    with pytest.raises(HostedCompositionError, match="transport does not enforce"):
+        HostedRoleRuntime(
+            configuration=configuration,
+            transport=transport,
+            authorization=authorization,
+            call_bounds=call_bounds,
+            execution_lifecycle=_FakeExecutionLifecycle(),
+            usage_envelope=envelope,
+        )
+
+    transport.usage_envelope_sha256 = envelope.envelope_sha256
+    HostedRoleRuntime(
+        configuration=configuration,
+        transport=transport,
+        authorization=authorization,
+        call_bounds=call_bounds,
+        execution_lifecycle=_FakeExecutionLifecycle(),
+        usage_envelope=envelope,
+    )
+
+    oversized = HostedUsageEnvelope(
+        role_limits=envelope.role_limits,
+        global_limits=replace(envelope.global_limits, max_calls=57),
+    )
+    transport.usage_envelope_sha256 = oversized.envelope_sha256
+    with pytest.raises(HostedCompositionError, match="sub-envelope exceeds"):
+        HostedRoleRuntime(
+            configuration=configuration,
+            transport=transport,
+            authorization=replace(authorization, provider_model_call_limit=57),
+            call_bounds=call_bounds,
+            execution_lifecycle=_FakeExecutionLifecycle(),
+            usage_envelope=oversized,
         )
 
 
