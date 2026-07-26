@@ -21,7 +21,7 @@ Wave 21 authorized operational evidence consumes T-F05b confirmed-exploit record
 - **AC-1**: Candidate must reference `EXPLOIT_CONFIRMED`, recorder/evidence hashes and exact target/release; `INDETERMINATE`, simulated or duplicate candidates are rejected.
 - **AC-2**: Report validates against packaged `vuln_report` schema and contains every PRD field; verifier exit 0 and report SHA are retained.
 - **AC-3**: Independent reproduction requires exact authorization artifact and writes expected/observed/result/reviewer hashes; absent authorization means BLOCKED/zero calls.
-- **AC-4**: Three reports complete PRD-32 only if three distinct reports/reproductions verify; fewer stays explicitly incomplete. Critical publication requires distinct approval and is not implied by draft.
+- **AC-4**: Three reports complete PRD-32 only if three distinct reports/reproductions verify; fewer stays explicitly incomplete. Publication at every severity requires distinct approval and is not implied by draft.
 
 ## Definition of Done
 - [ ] Named mechanical verifier and artifact-hash checks have expected exits.

@@ -1,21 +1,22 @@
 # THREAT_MODEL.md — OpenEMR target + Headshot platform identity boundary
 
-> **First-pass** target threat model produced by `/arch-draft` (the "AUDIT.md slot" per CLAUDE.md). The
-> `threat-model` skill deepens it once the platform has probed the live target. Existing target defenses
-> are marked **to-be-probed** where they are not yet observed — never assumed. The six numbered categories
-> describe the **external target**. A separate section below now models the Headshot platform's human
-> identity boundary. Clerk integration and authenticated Railway deployment are selected/planned, not
-> claimed deployed. No real PHI is referenced anywhere in this repo.
+> **Evidence status — 2026-07-24.** This is the living target/platform threat model, not a claim that
+> all listed surfaces have been live-probed. Existing target defenses remain **to-be-probed** unless a
+> linked artifact says otherwise. Candidate-source authorization, queue, evidence, and authentication
+> controls are implemented and offline-tested; staging `2069036e` / `0021` proves deployment mechanics,
+> console-shell loading, and protected-route denial, not final `0022` behavior. Exact live Headshot
+> role/MFA proof and the final authorized campaign remain pending. No real PHI is referenced anywhere
+> in this repository.
 
 ## Summary (~500 words)
 
 The target is a Clinical Co-Pilot chatbot embedded in OpenEMR that helps users retrieve chart
-information, summarize notes, assist with intake, and support clinical operations. From the
-platform's perspective it is a **maximally exposed LLM application**: it retrieves patient data
-(RAG over clinical records), writes back to the record (drafts notes / assists with orders), invokes
-tools/functions, and ingests uploaded content. Each of those four capabilities is an attack surface,
-and their combination is what makes the target dangerous — an indirect injection delivered through an
-uploaded document can reach a tool that writes to another patient's chart. The clinical setting
+information, summarize notes, assist with intake, and support clinical operations. The canonical PRD
+describes a broad clinical-LLM surface: retrieval over clinical records, potential write-back,
+tools/functions, and uploaded content. Those are threat-model assumptions until individually observed
+through the reviewed target contract. Their combination is dangerous — an indirect injection delivered
+through an uploaded document could reach a write-capable tool if both surfaces are actually available.
+The clinical setting
 raises the blast radius from "wrong answer" to "wrong answer a clinician may act on," and from "data
 leak" to "PHI disclosure across patients."
 
@@ -32,7 +33,7 @@ amplification**, because recursive tool calls and long chains already made "runt
 performance difficult to predict." (6) **Identity / role exploitation**, because a co-pilot that
 serves multiple roles is a privilege-escalation surface.
 
-**How the platform prioritizes coverage.** The Orchestrator reads observability — cases-per-category,
+**How the platform is intended to prioritize coverage.** The Orchestrator reads observability — cases-per-category,
 pass/fail trend, open findings, regression risk — and directs the Red Team toward the highest-risk,
 least-covered categories first, in the order above. Coverage is not "run everything once": it is a
 standing loop that re-tests on every target version and escalates categories where partial successes
@@ -41,13 +42,17 @@ regression** and mapped to **OWASP Web Top 10 + OWASP LLM Top 10**, so coverage 
 recognized surface, not an ad-hoc list. Confirmed exploits are admitted to a deterministic regression
 harness so a fixed vulnerability that reappears is caught on the next run.
 
-**What is known vs. to-be-probed.** The target's *capabilities* are confirmed (RAG, write-back,
-tools, uploads). Its *existing defenses* — input filtering, output guardrails, per-patient
-authorization, rate limits, tool allowlists — are largely **unobserved** and are exactly what the
-platform exists to establish empirically. This document therefore states each category's surface and
-impact with confidence, and its existing-defenses column as a hypothesis the eval suite will confirm
-or refute. The exact **external target** auth mode and API shape of the Co-Pilot are open questions pending inspection
-(`PRESEARCH.md` OQ1–OQ3); they change *how* attacks are delivered, not *which* categories apply.
+**What is known vs. to-be-probed.** A reviewed adapter contract defines an exact HTTPS `POST /chat`
+surface with `session_id` in the request body (`src/agentforge/runner.py`, catalog composition).
+Target health and contract review do not prove every
+PRD-described capability or defense and do not authorize an attack. Input filtering, output
+guardrails, patient authorization, rate limits, tool allowlists, upload/RAG behavior, and write-back
+remain empirical questions for an explicitly authorized synthetic-data campaign.
+
+Historical coverage reviews are audit inputs, not current-release authority. The frozen corpus
+manifest and the exact campaign/finding manifests are authoritative for what executed and what was
+observed. Until those final artifacts exist, taxonomy mappings remain broader than demonstrated
+coverage and no checked-in live LLM campaign proves the unexecuted categories.
 
 **Risk scoring** below is qualitative (Likelihood × Clinical Impact → Critical/High/Medium),
 appropriate for a first pass; the MVP threat model attaches measured pass/fail evidence per category.
@@ -68,6 +73,7 @@ anchor): `A03:2025` Software Supply Chain Failures, `A10:2025` Mishandling of Ex
 ---
 
 ## Category 1 — Prompt Injection (direct · indirect · multi-turn)
+
 - **Surface:** user chat input (direct); uploaded documents + RAG-retrieved record content (indirect);
   accumulated conversation context (multi-turn).
 - **Impact:** the model executes attacker instructions — overriding safeguards, exfiltrating data, or
@@ -81,6 +87,7 @@ anchor): `A03:2025` Software Supply Chain Failures, `A10:2025` Mishandling of Ex
 - **Risk: Critical.**
 
 ## Category 2 — Data Exfiltration (PHI leakage · cross-patient · authorization bypass)
+
 - **Surface:** RAG retrieval boundary; any response path that can echo retrieved records; the
   per-patient authorization check (if any).
 - **Impact:** disclosure of PHI, or one patient's data surfacing in another's session — a direct
@@ -93,6 +100,7 @@ anchor): `A03:2025` Software Supply Chain Failures, `A10:2025` Mishandling of Ex
 - **Risk: Critical.**
 
 ## Category 3 — State Corruption (conversation-history manipulation · context poisoning)
+
 - **Surface:** persisted conversation state; any memory/summary the Co-Pilot carries forward; content
   written into the record that later re-enters context.
 - **Impact:** an attacker seeds context so later, legitimate turns behave unsafely — a persistent,
@@ -104,6 +112,7 @@ anchor): `A03:2025` Software Supply Chain Failures, `A10:2025` Mishandling of Ex
 - **Risk: High.**
 
 ## Category 4 — Tool Misuse (unintended invocation · parameter tampering · recursive calls)
+
 - **Surface:** the tool/function-calling layer, especially any **write-back** tool (notes/orders) and
   any tool that takes free-form parameters.
 - **Impact:** the highest-*action* category — corrupting the record, placing an unintended order, or
@@ -115,6 +124,7 @@ anchor): `A03:2025` Software Supply Chain Failures, `A10:2025` Mishandling of Ex
 - **Risk: Critical.**
 
 ## Category 5 — Denial of Service (token exhaustion · infinite loops · cost amplification)
+
 - **Surface:** unbounded generation, recursive tool chains, long multi-turn sessions, large uploads.
 - **Impact:** cost blow-up and degraded availability — the PRD reports costs "increasing faster than
   expected" from recursive tool usage and long chains. In a clinical setting, unavailability is a
@@ -125,6 +135,7 @@ anchor): `A03:2025` Software Supply Chain Failures, `A10:2025` Mishandling of Ex
 - **Risk: High.**
 
 ## Category 6 — Identity & Role Exploitation (privilege escalation · persona hijacking · trust-boundary violation)
+
 - **Surface:** whatever distinguishes roles/permissions inside the Co-Pilot; any system-prompt-defined
   persona; the boundary between "user says" and "system authorizes."
 - **Impact:** a lower-privileged user reaching higher-privileged data/actions, or the assistant being
@@ -142,7 +153,8 @@ protected assets are target configuration, campaign controls, findings, hostile 
 records, and event streams. The trust path is Browser → Clerk → public Railway Web → private Railway
 services/Postgres. Clerk provides human identity; custom organization permissions provide application
 RBAC; service identities and target-scoped credentials remain separate workload controls. All controls
-below are required by the selected design and remain **planned until integration/deployment verification**.
+below are implemented or required as stated in the control column. Backend verification and denial paths
+have source tests; the final candidate deployment and real-role workflow remain unverified.
 
 | Platform identity threat | Abuse path and impact | Required control / failure behavior | OWASP Web Top 10:2021 |
 |---|---|---|---|
@@ -153,7 +165,7 @@ below are required by the selected design and remain **planned until integration
 | **5. RBAC bypass** | Frontend role labels, Clerk system permissions, or client-supplied permission text are treated as authorization and unlock privileged actions. | Backend dependencies authorize only immutable custom organization permissions from the verified session claims. The role label is descriptive; client fields are ignored. Every handler defaults denied without its exact named permission. | **A01** Broken Access Control |
 | **6. IDOR** | A permitted user changes a campaign, finding, evidence, target, or approval identifier to access a different object outside the authorized operation. | Permission checks are necessary but not sufficient: scope every lookup and mutation to the authorized organization/resource relationship; use server-derived identity; return non-enumerating denial; audit object and Principal IDs. | **A01** Broken Access Control |
 | **7. Organization confusion** | A valid Clerk session with no organization, the wrong organization, or a production organization reused in staging is accepted. | Require the exact environment-specific `CLERK_REQUIRED_ORG_ID`; deny missing/wrong org with 403; personal accounts and user-created orgs disabled; staging config containing the production org ID fails load/readiness. | **A01** Broken Access Control; **A04** Insecure Design |
-| **8. Approval identity spoofing** | The launcher supplies an approver ID, changes a role label, or replays their own session to satisfy a two-person gate. | Derive both identities only from verified immutable Principals and server-side workflow state; require `org:campaign:authorize`/`org:findings:approve`; enforce `approver.user_id != launcher_user_id`; bind action nonce; audit both user/session IDs. No solo/break-glass bypass. | **A01** Broken Access Control; **A07** Identification and Authentication Failures; **A04** Insecure Design |
+| **8. Approval identity spoofing** | The launcher or finding raiser supplies an approver ID, changes a role label, replays their own session, or relies on missing lineage to satisfy a two-person gate. | Derive identities only from verified immutable Principals and server-side state. Campaign authorization already enforces a distinct user. Before release, finding approval must mirror distinct raiser/approver and missing-lineage rejection in application and database. Bind action nonce and audit both identities; no solo/break-glass bypass. | **A01** Broken Access Control; **A07** Identification and Authentication Failures; **A04** Insecure Design |
 | **9. Stale/revoked permission behavior** | A user removed from a role or organization continues using a still-valid signed session claim during its remaining lifetime. | Use short session lifetime and re-authentication for high-risk actions; revoke sessions and monitor audit events. **Residual:** networkless JWT verification deliberately accepts a valid signed claim until expiry, so permission revocation is not instantaneous. Never claim otherwise. | **A01** Broken Access Control; **A07** Identification and Authentication Failures |
 | **10. Event-stream leakage** | An unauthenticated or under-authorized SSE/WebSocket subscriber receives findings, traces, costs, or hostile evidence; a token in a query string leaks via logs/referrers. | Authenticate and authorize before opening each stream; require the corresponding read permission and object scope; never place tokens in URLs; close/revalidate at token expiry; sanitize payloads; event routes are excluded from the public allowlist. | **A01** Broken Access Control; **A02** Cryptographic Failures; **A09** Security Logging and Monitoring Failures |
 | **11. Authentication outage / fail-open** | Clerk, verifier, key, or configuration failure causes the service to bypass authentication so work can continue. | Networkless verification keeps valid signed sessions independent of a Clerk/JWKS request. Invalid config blocks readiness; unexpected verifier/SDK/config failure returns generic 503; no cached raw claim, frontend decision, anonymous fallback, or dynamic JWKS escape hatch is accepted. | **A04** Insecure Design; **A05** Security Misconfiguration; **A07** Identification and Authentication Failures |
@@ -168,6 +180,8 @@ target authorization, allowlist, scoped credentials, synthetic data, budget/rate
 ---
 
 ## Target coverage priority (feeds the Orchestrator)
+
 `1 Prompt Injection (Critical)` → `2 Data Exfiltration (Critical)` → `4 Tool Misuse (Critical)` →
 `3 State Corruption (High)` → `5 DoS/Cost (High)` → `6 Identity/Role (High)`. Priority is
-re-evaluated each run from observability; a category with clustering partial-successes is escalated.
+the intended policy. The current Runner/corpus does not yet demonstrate this full adaptive loop; use
+only the final content-addressed corpus and campaign manifests for actual status.

@@ -49,7 +49,7 @@ checks, and **build** only the four capabilities no tool delivers.
 **Defensible to a CISO.** Inter-agent messages are versioned, framework-neutral JSON Schemas with typed
 error taxonomies and both-sided contract tests. Adversarial content is quarantined and never reaches
 the control plane; credentials are bound to their target; every live campaign passes an allowlist +
-synthetic-data + budget/rate gate with a hard abort. Humans approve any critical finding and any
+synthetic-data + budget/rate gate with a hard abort. Humans approve every finding/report publication and any
 remediation. Cost is modeled at 100/1K/10K/100K runs with hosting and inference as separate lines —
 never tokens × N — each tier naming the architectural change it forces.
 
@@ -73,7 +73,7 @@ satisfy the assignment. An agent that both attacks and judges is compromised by 
 | **Orchestrator** | Reads observability → prioritizes the next campaign; triggers regression; governs cost | Trusted control plane | Autonomous within budget/coverage policy | observability + findings + coverage → campaign directives, regression triggers, abort signals |
 | **Red Team** | Generates novel adversarial inputs; mutates partial successes; multi-turn sequences | **Untrusted / quarantined** | Autonomous generation; cannot self-judge or publish | campaign directive + seeds + prior partials → attempts + transcripts |
 | **Judge** | Independent verdict: success / fail / partial; consistent cross-run criteria; uncertainty escalation | **Independent evaluator** | Autonomous verdicts; escalates on uncertainty | transcript + expected-safe behavior + ground truth → verdict |
-| **Documentation** | Confirmed exploit → structured, reproducible vuln report; data-quality gated | Gated | Autonomous drafting; **human gate on critical publish** | confirmed exploit → `vuln-report` |
+| **Documentation** | Confirmed exploit → structured, reproducible vuln report; data-quality gated | Gated | Autonomous drafting; **human gate before any publication** | confirmed exploit → `vuln-report` |
 
 **Why distinct agents (defensible):** attack generation vs evaluation is a conflict of interest in
 one context; strategic prioritization vs execution are different jobs; documentation autonomy needs a
@@ -111,9 +111,9 @@ it, coverage compounds.
   construction.
 - **Authorized-live-campaign gate** `locked`: every live run passes allowlist + synthetic-data
   assertion + budget/rate caps + abort, with full trace capture. Live attacks are always intentional.
-- **Access control:** only the post-Judge documentation path creates published findings; only a human
-  publishes **critical**; only the admission path writes the regression store; the Red Team can do
-  neither.
+- **Access control:** only the post-Judge documentation path creates publication candidates; a human
+  approves every finding/report publication regardless of severity; only the admission path writes
+  the regression store; the Red Team can do neither.
 
 ## §6. Data Model & Storage
 - **Exploit DB = Postgres** `locked` (Railway managed): versioned, queryable, **indexed by severity /
@@ -236,7 +236,7 @@ Storage(rows) + Egress`, where `effective_cost_per_run = list_price / realized_t
 | Overnight run auditability | Append-only audit log reconstructs who/what/when/order |
 
 ## §14. Human Approval Gates & Platform Trust/Safety
-- Gates: **publish a critical-severity finding**, and **any remediation**. Autonomy covers discovery,
+- Gates: **publish any finding/report regardless of severity**, and **any remediation**. Autonomy covers discovery,
   evaluation, regression, and drafting; humans own the high-cost calls.
 - Who may trigger runs / view reports is access-controlled; overnight runs are fully audited.
 - This boundary is the CISO answer: where it proceeds autonomously, where it stops, how it

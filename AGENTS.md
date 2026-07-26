@@ -17,7 +17,8 @@ deployed URL. No target code here.
 ## Non-negotiables
 - Deployed target URL submitted every checkpoint; test a live system, not a mock.
 - Multi-agent, not a pipeline. The Judge is independent of attack generation.
-- Human approval gate before publishing critical findings or remediation.
+- Human approval gate before publishing any finding/report, regardless of severity, or performing
+  remediation.
 - Every eval = boundary | invariant | regression, mapped to OWASP Web + LLM Top 10.
 - The Judge must never approve a confirmed exploit. Cost is never tokens × N.
 - "Optional Engineering Deliverables" are mandatory (the PRD grades them).

@@ -162,7 +162,8 @@ NEXT: report to owner + STOP for explicit bounded live-campaign authorization.
 
 ## 2026-07-24 — Phase 0 / final-submission plan created
 - [locked-decision] Production-grade posture retained; base `23490ea` recorded as 1001 Python passed/3
-  skipped, 75 console tests, 4 browser tests, dual CI green.
+  skipped, 75 console tests, 4 browser tests, GitHub CI green, and exact GitLab mirroring. GitLab
+  pipeline status is not a release gate.
 - [locked-decision] Created the ten-ticket minimum manifest T-F01..T-F10 with exclusive same-wave scopes,
   strict RED→test-review→freeze→GREEN→code/security review sequencing, four-slot accounting, traceability,
   gate mapping, and role prompts. Planning only; no agent dispatch, application/test edit, live traffic,
@@ -170,9 +171,10 @@ NEXT: report to owner + STOP for explicit bounded live-campaign authorization.
 - [open-question] Execution remains gated by fresh staging SMART lease, exact authorization, distinct
   Approver, paid provider/model activation, passing Judge calibration, separate load approval, and any
   true-production isolation/credential choice.
-- [locked-decision] Existing 9×HTTP-200/9×evidence/9×INDETERMINATE/$0.09 run is transport evidence only;
-  no finding/report is fabricated. PRD-32 remains conditional on three genuine independently reproduced
-  findings.
+- [locked-decision] The legacy 9×HTTP-200/9×evidence/9×INDETERMINATE summary is transport evidence
+  only. Its `$0.09` prose is unsupported by a retained billing/request-cost manifest and is not
+  measured spend. No finding/report is fabricated. PRD-32 remains conditional on three genuine,
+  independently reproduced findings.
 
 ## 2026-07-24 — Phase 0 plan-review repairs complete
 - [locked-decision] Adversarial review findings C-1..C-5 and I-1..I-4 repaired before dispatch. Superseded

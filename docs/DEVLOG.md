@@ -59,7 +59,7 @@ Append-only project record. Newest entries appear at the bottom.
 
 ## [2026-07-22] Final integration audit and authoritative four-agent offline slice   ·   type: milestone
 - What: Audited all 72 PRD/optional/user/lead requirements; added verified-signal Orchestration, the typed Red Team proposal handoff, confirmed-only draft Documentation, fail-closed regression disposition, append-only revision `0008`, API projection updates, and current integration/migration evidence.
-- Why: Close the highest-risk runtime gaps without fabricating deployed or human-gated evidence, while preserving exact-corpus authorization, independent Judge authority, synthetic-only fixtures, content-addressed lineage, and draft-only critical findings.
+- Why: Close the highest-risk runtime gaps without fabricating deployed or human-gated evidence, while preserving exact-corpus authorization, independent Judge authority, synthetic-only fixtures, content-addressed lineage, and draft-only findings of every severity.
 - Result: `codex/final-integration-audit` working tree. The authoritative local path is PostgreSQL snapshot → Orchestrator → Red Team → Policy Gateway → adapter → Recorder → PostgreSQL reread/hash verification → Judge → Documentation → regression disposition. Fresh gates: 955 Python tests, 71 console tests, 4 Playwright tests, 15 packaged contracts, clean `0003→0008` and `0008→0007→0008` container migrations, runtime/readiness smokes, and zero Semgrep/pip-audit/npm-audit/gitleaks findings. Final image: `sha256:4af41a54884a8cf918334e5a781c3e2aa510946048d82b9dfe934d4c9dbaf634`.
 - Evidence: `docs/requirements/REQUIREMENTS_MATRIX.csv`, `docs/evidence/baseline/2026-07-22-final-integration.md`, `docs/integration/INTEGRATION_PACKET.md`, and `docs/integration/migration-notes/0008-documentation-regression.md`.
 - Remaining: Judge calibration/drift, deterministic regression execution/target-version replay, performance/load baselines, current dual-CI proof after commit, and a distinct-human-approved bounded staging campaign. Passive health checks do not authorize `/chat`.
@@ -80,3 +80,22 @@ Append-only project record. Newest entries appear at the bottom.
   proof, and a distinct-Approver-authorized live campaign.
 - Stage: Integration branch; no merge, deployment, live campaign, publication, or remediation
   authorized by this entry.
+
+## [2026-07-24] Pre-release source/deployment reconciliation   ·   type: evidence correction
+- What: Re-audited candidate source `eac2968`, both `main` remotes, Railway identity, the Alembic
+  graph, hosted-role composition, durable queue/state, and Langfuse delivery/query-back behavior.
+- Result: Candidate source has one migration head at `0017`; GitHub `main`, GitLab `main`, and the
+  observed Railway release were still `23490ea` with schema `0013`. The candidate Runner composes
+  hosted Orchestrator, Judge, and Documentation roles; traced hosted Red Team generation exists and
+  is tested but is not wired into campaign candidate selection. The staging Langfuse baseline
+  contained zero Headshot observations. GitHub Actions is the release CI authority; GitLab remains an
+  exact passive mirror and its pipeline availability is not a release gate.
+- Documentation: Reconciled the README, architecture, threat model, users, demo script, and
+  requirements matrix so implemented, tested, deployed, live-verified, unavailable, and blocked
+  states are not conflated.
+- Remaining: Integrate the final content-addressed corpus/Judge evidence, deploy one exact commit,
+  apply the sole migration head, obtain GitHub CI proof, run a separately authorized synthetic
+  campaign, query Langfuse back, and attach final cost/performance/demo/social evidence. Exact Clerk
+  role/MFA/two-user proof remains pending but does not substitute for campaign authorization.
+- Stage: Final integration candidate. No deployment, target request, campaign, Langfuse export
+  verification, production promotion, publication, or remediation was performed by this entry.

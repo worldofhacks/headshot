@@ -23,14 +23,15 @@
 ## Shared visual language (apply to every diagram)
 - **Trust zones by fill color** — the **as-built legend** (the load-bearing idea: distinct trust levels):
   - **Blue** = trusted control plane (Railway Web authorization boundary, Policy Gateway,
-    Orchestrator, LangGraph, regression harness).
+    Orchestrator, durable Runner/queue, regression harness).
   - **Green** = data & observability plane (Postgres, Langfuse + OTEL, Coverage + Findings view).
   - **Purple / teal** = governed evaluators (Judge, Documentation).
   - **Red / orange** = **untrusted / quarantined** (Red Team + all adversarial content). The TargetAdapter
     remains inside the trusted blue Policy Gateway + Execution Recorder boundary.
   - **Gray** = external / managed boundary (Clerk, live target, model providers, Railway platform
     boundary). Railway services inside that boundary retain their own blue/green trust fill.
-  - **Yellow** = human-controlled boundary (Browser, critical publish + remediation approval).
+  - **Yellow** = human-controlled boundary (Browser, approval before every finding/report
+    publication and any remediation).
 - **Contrast:** dark text on light fills; ≥ 4.5:1. No color-only meaning — every zone is also labeled.
 - **Edge semantics:** solid = data/message flow; dashed = control/trigger; red-outlined = adversarial
   payload path (must visibly *not* cross into the control plane).
@@ -44,7 +45,7 @@
   boundary containing `public Web: console + FastAPI` (blue), `private Runner` (blue), `private
   Scheduler` (blue), and `private PostgreSQL` (green) · `Policy Gateway + Execution Recorder` (blue,
   inside runner trust boundary) · `OpenEMR Clinical Co-Pilot` (gray, external live URL) · `Model
-  providers` (gray: Anthropic/OpenAI/OpenRouter/local Mac) · `GitHub` (gray).
+  providers` (gray: OpenRouter and its frozen upstream models) · `GitHub` (gray).
 - **Edges:** Browser ↔ Clerk (solid "restricted sign-in + MFA") · Browser → public Railway Web
   (solid "Clerk session_token") · Web verifies token locally using Clerk PEM public key (annotated
   "networkless; exact authorizedParties + Headshot org + custom permissions") · Web → Policy Gateway
@@ -75,7 +76,7 @@
 - **Purpose:** trace a single attack case through every state — the e2e trace evidence.
 - **Swimlanes:** Orchestrator | Red Team | Target | Judge | Documentation | Regression | Human.
 - **Flow:** select campaign → generate attempt → run vs target → judge → {partial → mutate → loop} →
-  {success → document → human gate (if critical) → publish} → admit to regression → future regression
+  {success → document → human gate (every severity) → publish} → admit to regression → future regression
   run. Show the typed-error branch (target-unreachable / budget-exceeded / judge-timeout).
 - **Must convey:** mutation loop on partials; the human gate; regression admission "only if
   reproduces deterministically + passes for the right reason."

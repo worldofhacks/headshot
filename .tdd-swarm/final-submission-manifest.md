@@ -1,12 +1,19 @@
 # Final-submission execution manifest (session-lease scope repair round 3)
 
+> **Historical planning artifact — not the final release manifest.** Current release facts and
+> pending bindable fields live in `SUBMISSION.md` and
+> `docs/submission-artifacts/RELEASE_BINDING.md`. Nothing here overrides retained manifests.
+
 [locked-decision] Canonical requirements remain `Week_3_AgentForge.pdf`; this is not a replacement PRD/roadmap.
 
 ## Evidence boundary
 
-- Baseline `23490ea`: 1001 Python passed/3 skipped, 75 console, 4 browser, dual CI green.
+- Baseline `23490ea`: 1001 Python passed/3 skipped, 75 console, 4 browser, GitHub CI green and the
+  exact commit mirrored to GitLab. GitLab pipeline status is not a release gate.
 - Planning catalog baseline `efd5ce3` adds only the tracked secret-free target catalog; this repair does not amend it. Later shared-worktree commits are not attributed to this planning repair.
-- Run `aceddc495808427992efbd2b73b3598d`: 9 HTTP 200, 9 evidence, 9 `INDETERMINATE`, $0.09 outbound.
+- Legacy summary `aceddc495808427992efbd2b73b3598d` claims 9 HTTP 200 / 9 evidence /
+  9 `INDETERMINATE`. Its `$0.09` figure has no retained billing or immutable request-cost manifest
+  and is quarantined: actual spend is unavailable, not `$0.09`.
 - Judge baseline 60% agreement/33.3% false negatives/60% abstention is failed.
 - [locked-decision] None proves calibrated safe/unsafe outcomes, findings, current-SHA live trace, production isolation, performance, or report completeness.
 
@@ -53,7 +60,7 @@
 - T-F05g consumes and reauthenticates every separate chain artifact. No caller-combined document, local queue count, process boolean, overwrite, reload, rolling overlap, or in-place session/patient swap is authority.
 - T-F05f permits only atomic queue claim before immediate J/K/M validation. All other mutation, resolution, adapter/client construction, network, and spend follow success. Every physical attempt obtains a new L→H/I refresh through M.
 - T-F05e timestamp/reference languages remain Python 3.12 ASCII `re.fullmatch` plus portable Draft 2020-12 patterns, exact lengths, semantic validation, and explicit control rejection including terminal CR/LF.
-- No PHI/secrets/sessions/raw hostile evidence in artifacts; staging/test is never called production. Swarm never merges main, publishes critical findings, remediates, load-tests, or posts socially autonomously.
+- No PHI/secrets/sessions/raw hostile evidence in artifacts; staging/test is never called production. Swarm never merges main, publishes any finding/report, remediates, load-tests, or posts socially autonomously.
 
 ## Deterministic order
 

@@ -155,8 +155,9 @@ The owner supplied a **live target authorization** in answer to §5. It is recor
   the out-of-repo bundle; never committed here.
 - Target is **already partially wired** in-repo (`README.md`, `docs/evidence/zap/*`,
   `evals/results/live-campaign-20260724/*`, three `AF-VULN-2026-0724-*` reports,
-  `scripts/live_probe.py`, `console/vite.config.ts`); a prior live run (`aceddc4…`) already hit
-  it (9×200 / 9 INDETERMINATE / $0.09).
+  `scripts/live_probe.py`, `console/vite.config.ts`); a legacy `aceddc4…` summary claims
+  9×200 / 9 `INDETERMINATE`. The associated `$0.09` prose has no retained billing/request-cost
+  manifest and is quarantined rather than reported as spend.
 
 **What this changes:** the *owner-authorized deployed live target URL + surfaces + provisioned
 synthetic principals* requirement is now satisfied — a real advance for RT-07 (Week2 exposes the

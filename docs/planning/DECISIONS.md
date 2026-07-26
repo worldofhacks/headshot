@@ -10,19 +10,19 @@
 | D1 | Planning mode = Standard; posture = production-grade | locked |
 | D2 | Language = Python 3.12+ | locked |
 | D3 | Full-platform host = Railway; public Web only, private runner/scheduler/Postgres (Docker/GitHub, managed Postgres, deployment-history rollback; no GPU) | locked |
-| D4 | Orchestration = LangGraph (OSS engine only, self-hosted) + PostgresSaver | locked |
+| D4 | Orchestration = package-owned Python coordinator/Runner/Scheduler + PostgreSQL queue and work-unit reservations | locked (as built) |
 | D5 | Observability = **Langfuse Cloud for MVP** (OTEL SDK v4), self-host post-MVP; exploit DB = system-of-record for finding status | locked (rev. 2026-07-20, F3) |
 | D6 | State + queue = one Postgres; `SKIP LOCKED` jobs table + **full delivery semantics**; cron enqueues; no Redis; **per-agent DB roles** | locked (rev. 2026-07-20, F6/S2) |
 | D7 | Exploit DB = Railway Postgres (Alembic migrations; partition/BRIN at scale) | locked |
-| D8 | Models — per-role **configurable defaults** via `HEADSHOT_*_MODEL` (not hard-coded runtime requirements): RedTeam=**hosted-OSS default + local 24–33B switch** (`HEADSHOT_RED_TEAM_MODEL`) · Judge=`claude-sonnet-5` (`HEADSHOT_JUDGE_MODEL`) · Orch=`claude-opus-4-8` (`HEADSHOT_ORCHESTRATOR_MODEL`) · Docs=`gpt-5.4` (`HEADSHOT_DOCUMENTATION_MODEL`); **cross-vendor = defense-in-depth, not the invariant** | locked (rev. 2026-07-21, F7/S5) |
+| D8 | Models = one content-addressed OpenRouter four-role set: Opus 4.8 · Qwen 3.5 397B-A17B · Gemini 2.5 Pro · GPT-5.4; exact-identity calibration and human enablement gate Judge authority | locked (reconciled 2026-07-25) |
 | D9 | Security tooling = configure/wrap OSS; build the 4 graded capabilities; buy nothing | locked (→ ADR-0001) |
 | D10 | Contracts = versioned JSON Schema, framework-neutral, typed error taxonomy | locked |
 | D11 | Compliance = synthetic-data simulation, ATO-*style*; OSS self-host sufficient, no BAA tier | locked |
 | D12 | MVP seed identity remains hand-authored; bounded native tool imports use a separate reviewed corpus hash and fresh authorization; framework orchestrators stay post-MVP | locked (rev. 2026-07-22) |
-| D13 | Judge invariant = **deterministic, fail-closed verdict state machine** (oracle precedence; fail-closed on the verdict, not the run; async dual-judging calibration) | locked (2026-07-20, F1) |
+| D13 | Judge invariant = deterministic oracle precedence plus fail-closed campaign start unless the exact deployed Judge identity has passing, human-enabled ground-truth calibration | locked (reconciled 2026-07-25) |
 | D14 | Trust split = untrusted generator → **trusted Policy Gateway + Execution Recorder** → external target; Judge sees hashed recorder `AttemptResult` only; canonical-hash + append-only (not signatures) within the trust domain | locked (2026-07-20, F2/F5) |
 | D15 | OWASP taxonomy = **anchor 2021** (PRD's set) + 2021↔2025 crosswalk; structured `{framework,version,id,name}` tags | locked (2026-07-20, F8) |
-| D16 | Deploy = **≥2 Railway environments** (prod-only live creds; env-scoped allowlist); expand/contract migrations; drain-before-deploy; PITR as true rollback | locked (2026-07-20, O1/O2) |
+| D16 | Deploy = **≥2 Railway environments** (prod-only live creds; env-scoped allowlist); expand/contract migrations; drain-before-deploy; staging rehearsal + compatible image rollback for this synthetic assignment | locked (reconciled 2026-07-25, O1/O2) |
 | D17 | Cost = **three independent line families** (measured hosted-token cost w/ cache+batch · amortized local/capacity-priced inference · hosting/storage/egress); the `list_price/throughput` division is removed as dimensionally invalid | locked (2026-07-20, F4; index row said "two" while naming three — corrected 2026-07-25 to match the D17 body and `docs/cost/COST_ANALYSIS.md`) |
 | D18 | Evaluator-injection containment: Judge/Documentation consume a **typed, trust-labelled, size-bounded evidence envelope**; oracle results are code-applied typed fields (injection cannot downgrade `EXPLOIT_CONFIRMED`); Judge is a pure evaluator (no creds/mutation/publish/execute); Documentation gets sanitized evidence by default; raw evidence quarantined | locked (2026-07-20, S4) |
 | D19 | Human IdP = Clerk; no custom passwords, OAuth flow, or session database | locked (2026-07-21) |
@@ -36,16 +36,14 @@
 
 ---
 
-### D4 — Orchestration: LangGraph (engine only) + PostgresSaver `locked`
-**Why.** First-class human-in-the-loop (`interrupt()`/`Command(resume=…)`) is the human-approval
-gate; PostgresSaver reuses the Railway Postgres we already run; per-node LLM clients make Judge
-independence *structural*, not conventional. Rejected AutoGen (maintenance mode) and CrewAI (no
-first-class Postgres checkpointer, weaker at-any-node interrupt). We use the **MIT OSS engine only** —
-never LangGraph Platform/LangSmith — so there is no lock-in and contracts stay ours.
-**Fallback.** Thin custom asyncio orchestrator on the *same* JSON-Schema contracts (a swap, not a
-rewrite). Layer DBOS-on-Postgres *under* LangGraph if unattended multi-hour campaigns need exactly-once.
-**Invalidate if.** LangGraph 1.x breaks `interrupt()`/PostgresSaver before MVP; a hard exactly-once
-requirement lands. **Action:** pin the LangGraph 1.x version before the ADR is frozen.
+### D4 — Package-owned orchestration + PostgreSQL durability `locked (as built)`
+**Why.** `SecureCampaignCoordinator` prepares exact authorized work, `DurableCampaignRunner` claims
+and executes it, and `DurableScheduler` records target-version replay plans. PostgreSQL supplies the
+`SKIP LOCKED` queue, leases/heartbeats/reaping, versioned payloads, audit events, and physical
+work-unit reservations. Human approval is persisted policy state, not a framework pause.
+**Fallback.** Keep the versioned JSON-Schema contracts and storage boundary stable if the internal
+orchestrator is replaced. Network exactly-once is not claimed; an ambiguous external send is retained
+and not blindly replayed.
 
 ### D5 — Observability: Langfuse Cloud (Hobby) for MVP, self-host post-MVP; exploit DB is system-of-record `locked (rev. 2026-07-20, F3)`
 **Why.** OTEL-native SDK keeps emission framework-neutral; one-request=one-trace with per-agent span
@@ -90,79 +88,26 @@ SELECT-only. Across a deploy the jobs/checkpoint payloads are **versioned** and 
 with a **drain-before-deploy** step (D16, O2).
 
 ### D8 — Per-role models `locked`
-**Why.** RedTeam must not refuse authorized offensive generation → local uncensored open-weights;
-**on the confirmed 32–48GB Mac, default 24–33B (Dolphin-Mixtral / WhiteRabbitNeo-33B)**, hosted-OSS
-burst for the hardest cases and 10K+ scale (a 70B is throughput-tight here). Per-role models are
-**configurable defaults sourced from `HEADSHOT_*_MODEL`**, not hard-coded runtime requirements. Judge
-default = `claude-sonnet-5` (`HEADSHOT_JUDGE_MODEL`; structurally independent of the local Red Team — its
-refusal behavior is a characteristic, not the invariant, which is deterministic per D13/S5 below).
-Orchestrator default = `claude-opus-4-8` (`HEADSHOT_ORCHESTRATOR_MODEL`; planning reasoning, low call
-volume). Documentation default = `gpt-5.4` (`HEADSHOT_DOCUMENTATION_MODEL`; *different vendor from the
-Judge* → breaks correlated failure; schema-gated output). `claude-sonnet-5` is the current Sonnet;
-`claude-sonnet-4-6` remains available as its predecessor.
-**Fallback.** RedTeam→hosted-OSS uncensored if the Mac saturates/offline; Judge→`gpt-5.4`.
-**Invalidate if.** Real per-agent token/throughput traces move the local-vs-hosted crossover; a
-provider ships a reliable authorized-offensive mode. **Action:** measure token profiles + Mac tok/s at
-MVP before presenting a cost number.
+**Why.** One canonical configuration set binds requested models, prompts, provider/upstream identity,
+limits, and retry policy for all four roles. The frozen OpenRouter envelope is:
 
-**Revision 2026-07-20 (F7 + S5).** Two corrections. (1) **Red Team inference is a config switch with a
-hosted-OSS default** for the *deployed* path (OpenRouter/Together uncensored), because a developer Mac that
-sleeps and is unreachable from Railway cannot support the "continuous / unattended overnight" claim that is
-the spine of the pitch; the local 24–33B Mac is reserved for development + the local cost-baseline, and Mac
-tok/s stays an `open question`. (2) **Cross-provider separation is defense-in-depth, NOT the Judge
-invariant** — the invariant is now deterministic (D13). Refusal behavior is a model *characteristic and
-potential failure mode*, not a security control; Judge model selection is governed by **measured calibration,
-false-negative rate, consistency, latency, and cost**. **Vendor-disjoint failover invariant (S5):** since
-D8's own fallback is `Judge → GPT-5.4` and Documentation *is* GPT-5.4, the platform enforces `Judge.vendor
-!= Documentation.vendor` at run start (fail-closed) — fail the Judge to a third vendor (e.g. Gemini) or move
-Documentation off GPT-5.4 while the Judge is on it.
-
-**Revision 2026-07-25 (code reconciliation, `107c11c`).** D8's "configurable defaults via
-`HEADSHOT_*_MODEL`" no longer describes the deployed hosted path. The hosted role set is now **frozen
-in code** and any deviation is rejected at composition
-(`src/agentforge/agents/hosted.py:352-353`). The authoritative mapping is
-`HOSTED_ROLE_MODELS` (`src/agentforge/agents/hosted.py:31-38`):
-
-| Role | Model ID (frozen) | Role spend ceiling (`hosted.py:39-45`) |
+| Role | Model ID (frozen) | Configuration ceiling (not spend) |
 |---|---|---|
 | `orchestrator` | `anthropic/claude-opus-4.8` | $1.50 |
 | `red_team` | `qwen/qwen3.5-397b-a17b` | $1.00 |
 | `judge` | `google/gemini-2.5-pro` | $4.00 |
 | `documentation` | `openai/gpt-5.4` | $1.00 |
 
-Envelope, same file: `HOSTED_PROVIDER = "openrouter"` (`:26`), `HOSTED_MAX_PHYSICAL_CALLS = 56`
-(`:27`), `HOSTED_MAX_MEASURED_USD = $10` (`:28`), `HOSTED_MAX_LOGICAL_RETRIES = 1` (`:29`),
-`HOSTED_MAX_CONCURRENCY = 1` (`:30`). The four role ceilings sum to $7.50, inside the $10 envelope.
+`HOSTED_PROVIDER = "openrouter"`. Provider/model availability is necessary but not acceptance
+evidence. The release must stage the configuration for the exact deployed SHA, require command
+`resource_id == configuration_sha256`, prove all four sealed bindings and Langfuse readiness in the
+private Runner, and show the same hash/provider/returned identities in Agents.
 
-Three consequences for the D8 text above, recorded rather than silently rewritten:
-
-1. **The Judge is `google/gemini-2.5-pro`, not `claude-sonnet-5`** — a different vendor entirely.
-   `claude-opus-4-8` and bare `gpt-5.4` are not valid identifiers under the frozen set; the
-   provider-qualified forms above are.
-2. **The Red Team is a 397B MoE, not a local 24–33B Mac workload.** The "local 24–33B switch" and the
-   Dolphin-Mixtral/WhiteRabbitNeo/Dolphin-3.0/Euryale candidates are not configured anywhere in
-   `src/`. DeepSeek (`deepseek/deepseek-chat-v3-0324`) is a *documented, unconfigured fallback*
-   (`docs/agents/RED_TEAM_MODEL_RESOLUTION.md`), not the configured model. The one document that named
-   it as the generator (`docs/evidence/agent-trace.md`) was corrected upstream by PR #44 (`2069036`),
-   which also retired the standalone `HostedProvider` generation route to a fail-closed shell
-   (`src/agentforge/agents/red_team/providers.py:216-250`), leaving `TracedHostedRedTeamProvider`
-   (`hosted_generation.py:185`) as the single governed generator — itself not composed into the
-   production Runner.
-3. **The S5 vendor-disjoint failover invariant is not implemented.** No
-   `Judge.vendor != Documentation.vendor` check exists in `src/agentforge/agents/**` and no test
-   references it. The property happens to hold for the frozen set (Google vs OpenAI), but it holds
-   by configuration, not by enforcement, and `HOSTED_PROVIDER` is a single provider for all four
-   roles. `ARCHITECTURE.md` §20 registers S5 as resolved; that registration is corrected in the
-   same pass.
-
-**Not invalidated** — D8's *reasoning* (per-role separation, cross-vendor as defense-in-depth, Judge
-selection governed by measured calibration) stands. Only the model identifiers and the enforcement
-claim moved. Judge selection "governed by measured calibration" remains **aspirational**: the only
-calibration ever measured at this base is of the **deterministic oracle-precedence Judge**
-(`judge_provider = "deterministic-code"`), not of any hosted model, and it **fails** — 30 labels, 18
-agreements, 6 false negatives, 0 false positives, 18 abstentions
-(`tests/test_judge_calibration.py:44-58`). Calibrating a hosted model needs a captured-results bundle;
-none is committed. See D13 and `docs/security/RED_TEAMING_COVERAGE_REVIEW_2026-07-25.md`.
+The observed Judge identity/hash then crosses D13 calibration. Missing, failed, merely passed,
+invalidated, drifted, or hash-mismatched calibration blocks campaign launch; a passing artifact must
+be explicitly human-enabled. Google Judge and OpenAI Documentation are distinct by configuration,
+but one OpenRouter control plane fronts all roles and no vendor-disjoint failover enforcement is
+claimed.
 
 ### D9 — Security tooling: configure/wrap, build the four `locked` → ADR-0001
 **Why.** Garak/PyRIT/Giskard/Promptfoo/ZAP/Semgrep cover breadth, multi-turn scaffolding, RAG seeds,
@@ -197,31 +142,22 @@ correctly *classifies* a successful exploit, and a Judge that refuses to engage 
 oracle/canary hit → `EXPLOIT_CONFIRMED` and the LLM Judge cannot downgrade it; the LLM Judge runs **only**
 where deterministic evidence is inconclusive; states are `EXPLOIT_CONFIRMED · EXPLOIT_LIKELY ·
 NO_EXPLOIT_OBSERVED · INDETERMINATE · ERROR` (never "safe"); `INDETERMINATE`/`ERROR` never count as safe,
-never prove a regression fixed, never enter the regression corpus, never publish. **Fail closed on the
-verdict, not the run** — ambiguous cases park in the human-review queue while the Orchestrator continues
-unrelated work (hard classification gate *and* live unattended runs). A confirmed exploit is marked *fixed*
-only by a deterministic regression oracle + expected-safe assertion, never by an LLM-only verdict.
-> **Implementation status, recorded 2026-07-25 (`107c11c`) — the calibration paragraph below is
-> `specified, NOT implemented`.** `ARCHITECTURE.md` §20's drift register carries the same finding.
-> Three specifics: **dual-judge cross-agreement does not exist** (the gate accepts exactly one
-> evaluator, and `agreement_rate` measures agreement with ground truth, not judge-vs-judge);
-> **per-category disablement does not exist** (per-category metrics are computed, but the reason-code
-> logic applies global rates plus a per-category sample floor); and **no stratified live sample has ever
-> been drawn** — the six ground-truth slices are hand-authored and self-labelled
-> `calibration_status: "AUTHORED_NOT_RUN"`. The deterministic invariant this decision exists to protect
-> **is** implemented and holds (oracle precedence in `src/agentforge/agents/judge/judge.py`); it is the
-> *drift-detection* half that is designed and unbuilt. D26 records why the gap matters less than it
-> looks against a black-box target, and more than it looks for breadth.
+never prove a regression fixed, never enter the regression corpus, never publish. A confirmed exploit
+is marked *fixed* only by a deterministic regression oracle + expected-safe assertion, never by an
+LLM-only verdict.
 
-**Calibration = async dual-judging**, not per-case second-Judge concurrence (concurrence raises false
-negatives on disagreement and doubles cost/latency): dual-judge the full ground-truth set + a stratified
-random live sample + threshold-near/disputed cases; track inter-judge agreement, category false-negative
-rate, calibration error, uncertainty rate, drift; a drift-threshold crossing **disables LLM-only dispositions**
-for that category until recalibration/human approval.
-**Fallback.** Human confirmation resolves `EXPLOIT_LIKELY`/`INDETERMINATE` (`confirmation_source: human`).
-**Invalidate if.** A category proves to have no deterministic oracle *and* an un-seedable external target
-(then that category is Judge-judgment + human escalation, stated honestly — D14/S8), or calibration shows the
-chosen Judge model is unfit on false-negative rate.
+**Calibration authority.** One exact evaluator identity is measured against versioned ground truth.
+The content-addressed artifact binds the slice-set hash, identity hash, and thresholds, including the
+hard false-negative bound. A final hosted campaign cannot start unless the exact identity observed
+from the deployed configuration has a passing artifact that a human explicitly enabled. Missing,
+failed, merely passed, invalidated, drifted, or hash-mismatched calibration closes campaign launch.
+After an enabled run starts, an ambiguous individual case may park as `INDETERMINATE` while unrelated
+authorized work continues; ambiguity never becomes safe.
+
+**Fallback.** There is no advisory campaign-start fallback. Human confirmation may resolve an
+individual `EXPLOIT_LIKELY`/`INDETERMINATE` (`confirmation_source: human`) after the gate is open.
+**Invalidate if.** The observed Judge or Red Team identity, criteria, implementation, ground-truth
+slice set, or thresholds change; recalibration plus new human enablement is required.
 
 ### D14 — Trusted execution + evidence boundary; hashed append-only evidence `locked` (F2/F5)
 **Why.** An **untrusted** component cannot be the enforcement boundary — the draft coloured the Target Adapter
@@ -261,7 +197,9 @@ its **own** Postgres and cannot resolve live-target credentials; **prod alone** 
 gated on green regression SLO + contract tests. Because a code rollback (Railway deployment history) reverts the
 container **not** the managed-Postgres schema/rows: **expand/contract migrations** are the rule, destructive
 migrations are forbidden alongside their consumers, checkpoint/jobs payloads are versioned + unknown rows
-dead-lettered, a **drain/quiesce** precedes deploy, and **Postgres PITR is the true data rollback**.
+dead-lettered, and a **drain/quiesce** precedes deploy. This synthetic assignment requires no backup/PITR
+artifact; its release safety net is exact staging migration proof plus compatible image rollback. A future
+sensitive production deployment would separately require a real data-recovery objective and tested backup.
 
 ### D17 — Cost = three independent line families; invalid formula removed `locked` (F4)
 **Why.** `effective_cost_per_run = list_price / realized_throughput_at_load` is **dimensionally invalid**
@@ -275,7 +213,7 @@ spend is **insufficient**, not absent — token accounting stays. **Numbers are 
 future `cost-model` artifact. No placeholder number is presented.
 
 ### D18 — Evaluator-injection containment (Judge + Documentation) `locked` (S4)
-**Why.** The Judge (`claude-sonnet-5`) and Documentation (`gpt-5.4`) both ingest attacker-controlled text — a
+**Why.** The Judge (`google/gemini-2.5-pro`) and Documentation (`openai/gpt-5.4`) both ingest attacker-controlled text — a
 successful indirect-injection payload echoed back by the target is a *live* injection aimed at whatever LLM
 reads it next. F1's deterministic invariant + calibration address *drift*, not a novel in-transcript injection
 that flips a real success to "fail" or launders attacker content into a human-facing report. Binding controls:

@@ -72,6 +72,6 @@ WP-21B–E live executors consume. This file is authorization **metadata only**.
 `README.md`, `docs/evidence/zap/{AUTHORIZATION.md,README.md,zap-target.json}`,
 `evals/results/live-campaign-20260724/{summary.json,responses.jsonl}`,
 `docs/vulnerabilities/AF-VULN-2026-0724-00{1,2,3}-*.md`, `scripts/live_probe.py`,
-`console/vite.config.ts`. A prior live campaign run (`aceddc4…`, per the final-submission
-manifest) already produced 9×HTTP-200 / 9 evidence / 9 INDETERMINATE / $0.09 outbound against
-this exact target.
+`console/vite.config.ts`. A legacy summary for `aceddc4…` claims 9×HTTP-200 / 9 evidence /
+9 `INDETERMINATE` against this target. Its `$0.09` statement is unsupported by a retained billing
+or immutable request-cost manifest and must not be used as measured cost.

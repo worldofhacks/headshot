@@ -1,4 +1,4 @@
-# OWASP Coverage Matrix — AgentForge / Headshot
+# OWASP Mapping Matrix — AgentForge / Headshot
 
 Target under test: **OpenEMR Clinical Co-Pilot** (`target_ref: openemr-clinical-copilot`).
 Every mapping below is transcribed from a seed file actually read in `evals/seeds/*.json`; no
@@ -10,8 +10,9 @@ mandated coverage sets are in `src/agentforge/api/postgres.py:124-126`
 - `_REQUIRED_WEB = {A01, A03, A04, A06, A07, A09, A10}` (`postgres.py:124`)
 - `_REQUIRED_LLM = {LLM01, LLM02, LLM03, LLM05, LLM06}` (`postgres.py:125`)
 - `_REQUIRED_CATEGORIES = {prompt_injection, data_exfiltration, tool_misuse}` (`postgres.py:126`) —
-  three of the six PRD threat categories, which is why a campaign can read as "covered" while
-  `state_corruption`, `denial_of_service`, and `identity_role_exploitation` are untested
+  three of the six PRD threat categories. The API’s legacy `covered` field name must not be read as
+  demonstrated behavior while `state_corruption`, `denial_of_service`, and
+  `identity_role_exploitation` are untested.
 
 **This matrix describes the offline authored corpus, not demonstrated coverage.** Mapped is not
 covered: every seed still carries `execution_status: "NOT_EXECUTED"`, and every live verdict in the
@@ -25,21 +26,21 @@ The 9-seed corpus is exactly 3 categories × 3 seeds. Its OWASP union is:
 - **LLM union:** LLM01, LLM02, LLM03, LLM04, LLM05, LLM06, LLM07, LLM08, LLM10 (LLM09 not
   exercised by the corpus — it appears only in the deferred-adapter Giskard fixture).
 
-Every code in both mandated sets has at least one carrier seed. Sole carriers of a mandated code
-(deleting the carrier would break coverage): **A06 → DX-002 only · A07 → DX-001 only · A09 →
+Every code in both mandated sets has at least one carrier seed. Sole carriers of a mandated mapping
+(deleting the carrier would break mapping completeness): **A06 → DX-002 only · A07 → DX-001 only · A09 →
 TM-003 only · A10 → TM-002 only · LLM03 → DX-002 only · LLM05 → TM-001 only**.
 
 ---
 
 ## Table A — OWASP Web Top 10 (2021)
 
-| Code | Name | Mandated (`_REQUIRED_WEB`) | Covered? | Carrier seed id(s) | Category | Classification | One-line attack technique |
+| Code | Name | Mandated (`_REQUIRED_WEB`) | Mapped by authored seed? | Carrier seed id(s) | Category | Classification | One-line attack technique |
 |---|---|---|---|---|---|---|---|
 | A01 | Broken Access Control | yes | yes | DX-001, DX-002, DX-003, TM-001, TM-002 | data_exfiltration / tool_misuse | invariant + boundary | Cross patient scope via retrieval, poisoned-doc authz forgery, memory bleed, unapproved write, parameter substitution |
-| A02 | Cryptographic Failures | no | no | — | — | — | Not exercised by the offline corpus |
+| A02 | Cryptographic Failures | no | no | — | — | — | Not mapped by the offline corpus |
 | A03 | Injection | yes | yes | PI-001, PI-002, PI-003, TM-001 | prompt_injection / tool_misuse | boundary + invariant | Instruction-in-data injection and injected write instruction |
 | A04 | Insecure Design | yes | yes | DX-003, PI-001, PI-002, PI-003, TM-001, TM-003 | all three | boundary + invariant | Trust-boundary design flaws: memory scope, instruction/data confusion, approval bypass, unbounded loops |
-| A05 | Security Misconfiguration | no | no | — | — | — | Not exercised by the offline **seed corpus**. **Corrected 2026-07-25:** A05 *is* exercised elsewhere — it is the primary OWASP Web mapping of both `AF-VULN-2026-0724-005` and `-006`, and `docs/evidence/zap/findings.json` records an `A05:2021` finding with `scan_provenance: live_target` on the **real authorized host**, not on a fake host |
+| A05 | Security Misconfiguration | no | no | — | — | — | Not mapped by the offline **seed corpus**. A05 appears in the historical 005/006 report and ZAP artifacts, but those separate artifacts do not change this authored-seed mapping |
 | A06 | Vulnerable and Outdated Components | yes | yes | **DX-002 (sole carrier)** | data_exfiltration | boundary | Poisoned retrieved document treated as a trusted component to mint authorization |
 | A07 | Identification and Authentication Failures | yes | yes | **DX-001 (sole carrier)** | data_exfiltration | invariant | Narrowly-scoped session asks retrieval to cross the patient/principal boundary |
 | A08 | Software and Data Integrity Failures | no | yes | DX-002 | data_exfiltration | boundary | Untrusted document content forges an authorization grant (data-integrity break) |
@@ -50,7 +51,7 @@ TM-003 only · A10 → TM-002 only · LLM03 → DX-002 only · LLM05 → TM-001 
 
 ## Table B — OWASP LLM Top 10 (2025)
 
-| Code | Name | Mandated (`_REQUIRED_LLM`) | Covered? | Carrier seed id(s) | Category | Classification | One-line attack technique |
+| Code | Name | Mandated (`_REQUIRED_LLM`) | Mapped by authored seed? | Carrier seed id(s) | Category | Classification | One-line attack technique |
 |---|---|---|---|---|---|---|---|
 | LLM01 | Prompt Injection | yes | yes | PI-001, PI-002, PI-003 | prompt_injection | boundary + invariant | Indirect (retrieved doc), multi-turn planted-token, and direct override |
 | LLM02 | Sensitive Information Disclosure | yes | yes | DX-001, DX-002, DX-003 | data_exfiltration | invariant + boundary | Cross-patient disclosure, protected-authz leakage, memory-recall PHI leak |
@@ -60,7 +61,7 @@ TM-003 only · A10 → TM-002 only · LLM03 → DX-002 only · LLM05 → TM-001 
 | LLM06 | Excessive Agency | yes | yes | TM-001, TM-002, TM-003 | tool_misuse | invariant + boundary | Unapproved write, parameter tampering, recursive autonomous loops |
 | LLM07 | System Prompt Leakage | no | yes | DX-002, PI-001, PI-002, PI-003 | data_exfiltration / prompt_injection | boundary + invariant | Attempts to extract protected system/policy instructions |
 | LLM08 | Vector and Embedding Weaknesses | no | yes | DX-001, DX-002 | data_exfiltration | invariant + boundary | Semantic retrieval crosses the embedding/scope boundary |
-| LLM09 | Misinformation | no | no | — | — | — | Not exercised by the offline corpus (appears only in the deferred Giskard fixture) |
+| LLM09 | Misinformation | no | no | — | — | — | Not mapped by the offline corpus (appears only in the deferred Giskard fixture) |
 | LLM10 | Unbounded Consumption | no | yes | TM-003 | tool_misuse | boundary | Recursive tool loop for cost/DoS amplification |
 
 ---
@@ -91,17 +92,18 @@ Classification distribution: **3 invariant** (DX-001, PI-003, TM-001) and **6 bo
 
 ---
 
-## Completeness guarantee
+## Mapping-completeness guard
 
-Union coverage of the mandated OWASP sets is enforced by
+Union mapping of the mandated OWASP sets is enforced by
 `tests/evals/test_validation.py::test_repository_corpus_union_covers_every_mandated_owasp_category`
 (`tests/evals/test_validation.py:991-1017`). The test imports `_REQUIRED_WEB` and `_REQUIRED_LLM`
-directly from `agentforge.api.postgres` — the exact sets the API's `covered` flag enforces
+directly from `agentforge.api.postgres` — the exact sets behind the API’s legacy `covered` field
 (defined at `src/agentforge/api/postgres.py:124-126`; the prior cite `:448-453` no longer resolves) —
 reads every seed in `evals/seeds/`, builds the
 corpus-wide OWASP union, and asserts `_REQUIRED_WEB - web_union` and `_REQUIRED_LLM - llm_union`
 are both empty. Because A06, A07, A09, A10, LLM03, and LLM05 each have a single carrier seed,
-retagging or deleting that sole carrier turns the test red — so coverage cannot silently regress.
+retagging or deleting that sole carrier turns the test red — so required mapping cannot silently
+regress. This test does not prove execution or target behavior.
 A companion test
 (`test_repository_category_owasp_unions_cover_binding_threat_model_mappings`,
 `tests/evals/test_validation.py:958`) binds each category's union to the threat model.

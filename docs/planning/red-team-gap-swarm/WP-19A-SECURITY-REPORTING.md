@@ -47,8 +47,8 @@ Render every target/tool/model/operator string as hostile text. Use no remote as
 scripts, active content, Markdown trust, external URLs, or filesystem-relative escape.
 Apply strict CSP, bounded tables/text/artifacts, secret/PHI redaction, stable ordering,
 classification banners, and provenance footers. Reports are drafts only: a Critical
-finding or remediation remains publication-blocked until the existing independent human
-approval record covers the exact manifest hash.
+finding is not exceptional here; every finding/report publication and every remediation
+remain blocked until the independent human approval record covers the exact manifest hash.
 
 Tests cover HTML/CSV/formula/URL injection, huge/recursive fields, missing/tampered
 evidence, cross-org references, status escalation, redaction, deterministic rebuild,

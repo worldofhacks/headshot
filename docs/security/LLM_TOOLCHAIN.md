@@ -9,8 +9,8 @@ PHI. Synthetic prompts only.
 Native tool output is untrusted. An adapter may create a `ToolAttackCandidate` or a `ToolFinding`
 with `scan_only` provenance. It cannot create authorization, `AttemptResult`, trusted evidence,
 Coverage, or a verdict. Only the Policy Gateway dispatches an explicitly reviewed candidate, and
-only the independent Judge adjudicates trusted gateway evidence. Critical publication remains
-blocked pending human approval.
+only the independent Judge adjudicates trusted gateway evidence. Publication of every finding/report,
+regardless of severity, remains blocked pending human approval.
 
 The approved `m11-seed-corpus-v1` remains the nine-case authored baseline. The deployed Web and
 Runner now prepare `headshot-full-scan-v1`: those nine cases plus five explicitly reviewed,

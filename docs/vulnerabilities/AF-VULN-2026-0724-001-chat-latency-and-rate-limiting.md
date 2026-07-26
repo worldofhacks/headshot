@@ -1,7 +1,8 @@
 # AF-VULN-2026-0724-001 — `/chat` interactive latency & target rate-limiting
 
 > **Status: DRAFT — not published.** Publishing is a separate two-person human-approval gate
-> (approver ≠ launcher). Drafted autonomously; awaiting review.
+> (approver ≠ launcher). Human-authored from the cited captures; no runtime Documentation-agent
+> authorship is claimed.
 > **Disposition: LOW (latency/UX). Two earlier "findings" were HARNESS ARTIFACTS and are retracted below.**
 
 | Field | Value |

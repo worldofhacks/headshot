@@ -8,9 +8,13 @@
 > `docs/planning/DECISIONS.md` (D#) and `docs/planning/RESEARCH.md` (R#). The finalize audit trail is
 > `docs/planning/gap-audit.md`; every finding's resolution is registered in **§20**.
 >
-> **Cardinal rule honored:** no value is invented. Cost figures, per-agent token profiles, Mac tok/s,
-> the LangGraph 1.x pin, and the target's exact auth/API shape remain `open question` (§17) — visible,
-> never faked.
+> **Pre-release reconciliation.** The submission packet is prepared from
+> `f39e22722d3b4e256110ac5be5ce160a0ad654e4`, whose sole Alembic head is `0021`. Staging
+> historically proved Runner-first deployment of `2069036e` through `0021`; production remains
+> `23490ea` / `0013`. The intended release adds incoming revision `0022`. Consequently, source
+> capabilities below are not final deployment evidence unless a linked artifact binds the exact
+> release SHA, image, environment, migration, and result. Cost, performance, final corpus/Judge,
+> demo, and publication evidence remain separate release fields; no value is invented here.
 
 ---
 
@@ -41,16 +45,17 @@ runs only where deterministic evidence is inconclusive; ambiguity resolves to `I
 which never count as safe and never enter the regression corpus. Cross-provider separation is retained
 as defense-in-depth, not the invariant.
 
-**Stack (build-vs-configure, ADR-0001).** Python on Railway (Docker-from-GitHub, managed Postgres, cron,
-deployment-history + Postgres PITR rollback). Orchestration is **LangGraph OSS engine** with Postgres
-checkpoints; `interrupt()` is the *pause* mechanic behind a runtime-enforced human-approval gate. One
-Postgres is exploit DB + checkpoints + a `SKIP LOCKED` work/regression queue, partitioned by **per-agent
-DB roles**. Observability is **Langfuse Cloud** for MVP (self-host is a documented, heavier post-MVP
-path). Models are assembled per role — a hosted/uncensored-OSS **Red Team** (frontier models refuse
-offensive work; deployed default is hosted, local Mac is a dev/cost-baseline switch), a **Claude Sonnet
-4.6** Judge, an **Opus 4.8** Orchestrator, and a **GPT-5.4** Documentation agent (cross-vendor from the
-Judge). We configure/wrap Garak, PyRIT, Giskard, Promptfoo, ZAP and Semgrep and build only the four
-capabilities no tool delivers.
+**Stack (build-vs-configure, ADR-0001).** Python on Railway (Docker-from-GitHub, managed Postgres,
+deployment history + database recovery). Runtime orchestration is custom Python:
+`SecureCampaignCoordinator`, `DurableCampaignRunner`, `DurableScheduler`, and a PostgreSQL
+`SKIP LOCKED` job queue. The queue is at-least-once with leases, heartbeats, reaping, cancellation,
+dead-lettering, versioned payloads, and durable physical work-unit reservations. PostgreSQL is the
+system of record; Langfuse Cloud is a redacted projection that must be queried back before export is
+claimed. Hosted role configurations are pinned to Claude Opus 4.8 (Orchestrator), Qwen 3.5
+397B-A17B (Red Team), Gemini 2.5 Pro (Judge), and GPT-5.4 (Documentation), routed through OpenRouter
+with an exact upstream provider and fallback disabled. The current Runner hosts Orchestrator, Judge,
+and Documentation. The traced hosted Red Team generator exists and is tested, but is not yet composed
+into the reviewed-candidate/fresh-authorization campaign loop.
 
 **Human identity and hosting boundary (deployed on staging; signed-in Clerk proof pending).** The full
 console and API now run on a public Railway **Web** service in staging; runner, scheduler, and Postgres
@@ -76,8 +81,8 @@ lifecycle and enable/disable transitions.
 **Defensible to a CISO.** Inter-agent messages are versioned, framework-neutral JSON Schemas with typed
 errors and both-sided contract tests. Adversarial content is quarantined and treated as untrusted data
 even by the Judge and Documentation agents. Credentials are bound to their target; every live campaign
-passes a runtime allowlist + synthetic-data + budget/rate gate with hard abort; critical findings and any
-remediation require a human approver distinct from the run's launcher. Cost is modeled at 100/1K/10K/100K
+passes a runtime allowlist + synthetic-data + budget/rate gate with hard abort; publication of every
+finding/report and any remediation requires a human approver. Cost is modeled at 100/1K/10K/100K
 **runs** as three independent line families — never tokens × N — each tier naming the architectural change
 it forces. Numbers are deliberately deferred to measurement (§11, §17).
 
@@ -120,7 +125,7 @@ assignment (PRD-13). An agent that both attacks and judges is compromised by des
 | **Red Team** | Generates novel adversarial inputs; mutates partial successes; multi-turn sequences | **Untrusted / quarantined** | Autonomous generation; cannot reach the target, hold credentials, produce evidence, self-judge, or publish | directive + seeds + prior partials → `AttackAttempt` |
 | **Policy Gateway + Execution Recorder** | Enforces allowlist, scoped creds, synthetic-data, budget, rate caps, hard abort; executes vs target; records request/response/policy decision; emits canonically-hashed `AttemptResult` | **Trusted enforcement boundary** | Deterministic policy code — no model | `AttackAttempt` → `AttemptResult` (append-only, hashed) |
 | **Judge** | Independent verdict via the deterministic state machine (§5); consistent cross-run criteria; escalates on ambiguity | **Independent evaluator** | Pure evaluator: emits a schema-validated `Verdict` and nothing else — **holds no target credentials, no mutation tools, no publish authority, executes no actions**; never generates/mutates attacks; **never approves a confirmed exploit as safe** | typed **Evidence Envelope** (§4): recorder `AttemptResult` + code-populated oracle/canary results + expected-safe behavior + ground truth → `Verdict` |
-| **Documentation** | Confirmed exploit → structured, reproducible vuln report; data-quality gated | **Gated** | Autonomous drafting; **human gate on critical publish** | confirmed exploit → `VulnReport` |
+| **Documentation** | Confirmed exploit → structured, reproducible vuln report; data-quality gated | **Gated** | Autonomous drafting; **human gate before any finding/report publication** | confirmed exploit → `VulnReport` |
 | **Regression harness** | Versioned exploit store; deterministic replay; reappearance + cross-category detection | **Deterministic** | Runs on Orchestrator trigger / target change | `RegressionAdmissionCandidate` → `RegressionRun` results |
 
 (The observability layer, §9, is the seventh, append-only component — the data substrate the Orchestrator
@@ -147,8 +152,9 @@ loop the platform runs attacks randomly; with it, coverage compounds. The loop c
 - **Format:** versioned **JSON Schema** in `src/agentforge/contracts/v1/` (minimum v1; 18 schemas at
   `107c11c` — there is no repo-root `contracts/` directory), framework-neutral so the stack
   choice never forces a rewrite (D10). Any breaking change → version bump + migration note + updated
-  contract tests (all three, or the run fails — enforced by `contract-steward`). Owned by us; LangGraph
-  never owns the contract (§7).
+  contract tests (all three, or the run fails — enforced by `contract-steward`). The runtime framework
+  never owns the contract (§7). A literal repository-root `/contracts` publication copy is still a
+  submission gap at this audited source baseline.
 - **Physical message boundaries (typed success schemas), corrected per F2:**
   - `Orchestrator → RedTeam`: **CampaignDirective** (target ref, category, coverage goal, budget/rate
     caps, mutation policy, `campaign_id`).
@@ -225,8 +231,8 @@ factor.
 5. Endpoint dependencies require authentication, the Headshot organization, and the exact custom
    permissions needed by that operation. PostgreSQL projections and commands then use the Principal's
    immutable Organization ID for lookup; no browser-supplied organization, role, or permission is
-   authoritative. Authentication is necessary but never sufficient for a live campaign, critical
-   publication, or remediation.
+   authoritative. Authentication is necessary but never sufficient for a live campaign, any
+   finding/report publication, or remediation.
 
 **Roles describe a membership; custom permissions authorize backend actions.** Clerk system
 permissions are not sufficient because they are not present in the session claims used here. A role
@@ -280,16 +286,16 @@ Railway origin or production Organization ID is invalid and fails readiness. No 
 substitute either value.
 
 **Authentication is not live-campaign authorization.** `org:campaign:launch` allows an Operator to
-create a canonical authorization request. Revision `0005` persists that authenticated user as the
+create a canonical authorization request. The control plane persists that authenticated user as the
 immutable launcher and binds approval to a hash over resolved target, surface, endpoint/method, auth
-posture, corpus, caps, and nonce. A different authenticated Principal with
+posture, corpus, hosted configuration, caps, and nonce. A different authenticated Principal with
 `org:campaign:authorize` must approve that exact stored scope; both application code and a database
 trigger reject self-approval. The launcher is never accepted from request input, and queue completion
 is never approval. Only after identity separation succeeds may the Policy Gateway evaluate the exact
 target authorization, environment-scoped allowlist, target credential binding, synthetic-data
 assertion, budget/rate caps, egress policy, timeout, monitoring, and hard abort. Failure of any layer
-denies execution. On this branch, launch remains explicitly unavailable because the trusted private-
-runner execution composition is incomplete.
+denies execution. Source tests exercise these controls; the final deployed two-person success path has
+not yet been proved.
 
 **F2 — the enforcement boundary is trusted, not the adapter.** Attack *generation* (untrusted) is split
 from attack *execution + evidence production* (trusted). The **Policy Gateway + Execution Recorder** is the
@@ -319,9 +325,11 @@ and precedence:
 regression corpus, and never publish as confirmed. A human may resolve `EXPLOIT_LIKELY`/`INDETERMINATE` →
 `EXPLOIT_CONFIRMED` with `confirmation_source: human`. A previously-confirmed exploit is marked *fixed*
 **only** by a deterministic regression oracle + expected-safe assertion — never by an LLM-only
-`NO_EXPLOIT_OBSERVED`. **Fail closed on the verdict, not the run:** ambiguous cases park in the human-review
-queue while the Orchestrator continues unrelated campaign work — the human classification gate stays hard
-*and* unattended runs keep going.
+`NO_EXPLOIT_OBSERVED`. Before a final hosted campaign starts, the exact deployed Judge identity must have
+a passing, content-addressed calibration that a human explicitly enabled; missing, failed,
+passed-but-not-enabled, invalidated, or identity-drifted calibration closes the campaign gate. Once that
+gate has opened, an ambiguous individual case still parks in the human-review queue while unrelated
+authorized work may continue; the ambiguity never becomes a safe verdict.
 
 **S4 — the evaluators consume hostile data, never instructions (D18).** Recorder transcripts and target
 output are **hostile data**: a successful indirect-injection payload echoed back by the target is a live
@@ -374,7 +382,7 @@ against the target it is bound to — cross-target use is impossible by construc
 authorization, budget, rate caps, and egress restriction all live in the Policy Gateway's **runtime code**,
 independent of how execution was triggered (Claude, direct Python, or Railway cron). `disable-model-invocation`
 on the `authorized-live-campaign` skill is a convenience, not a control. Gated side effects (publish) are
-**idempotent** (run-nonce, §6) so a LangGraph `interrupt()` replay cannot double-fire.
+**idempotent** (run nonce and operation hash, §6) so a queue retry cannot double-fire.
 
 **S8 — canary honesty.** Deterministic PHI-leak detection needs canary tokens planted in the *target's* data.
 Where the platform has write access to the target's synthetic fixtures, canary provisioning is an explicit,
@@ -391,10 +399,12 @@ A01:2025; Injection A03:2021 → A05:2025; new A03:2025 Software Supply Chain Fa
 of Exceptional Conditions are forward-looking coverage candidates. LLM mappings already track OWASP LLM Top
 10 (2025). Full per-category mapping is in `THREAT_MODEL.md`.
 
-**Access control:** only the post-Judge documentation path creates published findings; only a verified
-Headshot Principal with `org:findings:approve` and an identity distinct from the launcher may publish a
-**critical** finding (§14); only the admission path writes the regression store; the Red Team can do none
-of these. Clerk controls human access to these application paths, while per-agent DB roles and target-scoped
+**Access control:** only the post-Judge documentation path creates publication candidates. Every
+finding/report, regardless of severity, remains blocked until a verified Headshot Principal with
+`org:findings:approve` approves it. The final release additionally rejects the raiser as approver and
+rejects missing raiser lineage in application and database; the preparation base does not yet claim
+that fix. Only the admission path writes the regression store; the Red Team can do none of these.
+Clerk controls human access to these application paths, while per-agent DB roles and target-scoped
 credentials control workloads; neither identity class can be substituted for the other.
 
 ## §6. Data Model & Storage
@@ -402,8 +412,8 @@ credentials control workloads; neither identity class can be substituted for the
 - **Exploit DB = Postgres** `locked` (Railway managed): versioned, queryable, **indexed by severity /
   category / target-version** (the three common query patterns, PRD-OPT-16), migratable via Alembic
   (expand/contract, §12; time-range partition + BRIN at 10K/100K).
-- **One Postgres, three jobs, role-partitioned** `locked`: the same instance holds the exploit DB, the
-  LangGraph checkpoints, and the **work/regression queue**, with **per-agent DB roles** (§5) as the
+- **One Postgres, role-partitioned** `locked`: the same instance holds the control-plane records,
+  execution ledger, and **work/regression queue**, with **per-agent DB roles** (§5) as the
   access-control boundary. The queue is a `jobs` table drained with `SELECT … FOR UPDATE SKIP LOCKED`, two
   logical queues (`agent_work` | `regression_run`) by a `queue`/priority column. **Delivery semantics (F6):**
   at-least-once delivery via lease + `run_after`/`attempts`; **lease expiry + worker heartbeat + a reaper**
@@ -446,70 +456,67 @@ credentials control workloads; neither identity class can be substituted for the
 
 ## §7. Orchestration Framework & Agent State
 
-**LangGraph (MIT OSS engine only — self-hosted, no LangGraph Platform/LangSmith)** `locked` (D4). Each
-agent's reasoning runs as custom Python inside a node/subgraph. **PostgresSaver** checkpoints to the same
-Railway Postgres (one durable store). `interrupt()` / `Command(resume=…)` provides the **pause/resume
-mechanic** behind the human-approval gate — authorization itself is enforced in runtime policy code (§5,
-F5), because nodes **replay on resume** and pause is not authorization. **Judge independence is structural**
-— its own node, own model client, sharing no weights/provider with the Red Team.
-- **Contracts stay ours:** inter-agent messages are our versioned JSON Schemas, materialized as LangGraph
-  `TypedDict` state — the framework never owns the contract (§4).
-- **Version skew across deploys (O2):** the LangGraph checkpoint/state schema and the jobs-table payload are
-  **versioned**; a consumer **rejects-or-dead-letters** a row/checkpoint it does not understand rather than
-  crashing; a **drain/quiesce** step precedes deploy (§12).
-- **Known gap → resilience (§13):** LangGraph checkpoints are crash-*persistence*, not durable execution (no
-  watchdog/auto-resume, no dup-execution guard). Mitigate with an application-level `thread_id` lock against
-  overlapping campaigns; layer **DBOS-on-Postgres** *under* LangGraph only if unattended multi-hour campaigns
-  need exactly-once. **Pin the LangGraph 1.x version before Defense** (`open question`, §17).
-- **Fallback (a config swap, not a rewrite):** a thin custom asyncio orchestrator on the same contracts (D4).
+The implementation uses custom Python rather than LangGraph. `SecureCampaignCoordinator` prepares and
+authorizes exact work; `PostgresJobQueue` persists it; `DurableCampaignRunner` claims and executes it;
+and `DurableScheduler` records target-version replay plans. PostgreSQL is the durable state boundary.
+
+- Queue delivery is **at-least-once**. Claims use `FOR UPDATE SKIP LOCKED`; leases have heartbeat,
+  expiry/reaping, retry, cancellation, and dead-letter states. Unsupported versioned payloads are
+  rejected or dead-lettered rather than guessed.
+- `campaign_work_unit_reservations` reserves each physical
+  `(run, attempt, turn, retry)` before network I/O. An ambiguous unobserved send is not treated as
+  unsent, preventing a retry from silently exceeding authorization.
+- Campaign, run, attempt, evidence, verdict, finding, report, audit, agent-execution, provider-request,
+  and queue state are persisted independently of process memory. Command idempotency and content
+  fingerprints reject duplicate logical work.
+- Human approval is a persisted policy decision, not an orchestration pause. The Runner revalidates
+  target, allowlist, synthetic-data controls, budget/rate/timeout/physical-call caps, configuration,
+  authorization expiry, and abort state at execution time.
+- Inter-agent communication remains package-owned versioned JSON Schema with both-sided tests (§4).
+  The framework never supplies authorization or evidence authority.
 
 ## §8. Models per Role
 
-A **different model per role**, sized to its refusal-vs-capability need `locked` (D8, amended):
+A content-addressed configuration set binds every requested model, prompt, provider, upstream provider,
+limit, and retry policy before activation. The configured envelope is:
 
-> **Reconciled 2026-07-25 (`107c11c`): the hosted role set below is superseded by the frozen mapping in
-> code.** The design intent — one model per role, sized to refusal-vs-capability need, cross-vendor as
-> defense-in-depth — is unchanged. The identifiers are not. `HOSTED_ROLE_MODELS`
-> (`src/agentforge/agents/hosted.py:31-38`) is authoritative and any deviation is rejected at
-> composition (`:352-353`). See [`DECISIONS.md` D8, revision 2026-07-25](docs/planning/DECISIONS.md).
-
-**Authoritative (code, `107c11c`):**
-
-| Role | Frozen model ID | Role spend ceiling |
+| Role | Frozen OpenRouter model ID | Configuration ceiling (not spend) |
 |---|---|---|
+| **Orchestrator** | `anthropic/claude-opus-4.8` | $1.50 |
 | **Red Team** | `qwen/qwen3.5-397b-a17b` | $1.00 |
 | **Judge** | `google/gemini-2.5-pro` | $4.00 |
-| **Orchestrator** | `anthropic/claude-opus-4.8` | $1.50 |
 | **Documentation** | `openai/gpt-5.4` | $1.00 |
 
-Single provider for all four roles: `HOSTED_PROVIDER = "openrouter"` (`hosted.py:26`).
-`deepseek/deepseek-chat-v3-0324` is a **documented, unconfigured fallback**
-(`docs/agents/RED_TEAM_MODEL_RESOLUTION.md`), not the configured Red Team model. The one document that
-named it as the generator (`docs/evidence/agent-trace.md`) was corrected upstream by PR #44
-(`2069036`), which also retired the standalone `HostedProvider` route to a fail-closed shell
-(`src/agentforge/agents/red_team/providers.py:216-250`). The single governed generator is
-`TracedHostedRedTeamProvider`
-(`src/agentforge/agents/red_team/hosted_generation.py::TracedHostedRedTeamProvider`, currently line 204),
-and it is not composed into the production Runner.
+`HOSTED_PROVIDER = "openrouter"` and `HOSTED_ROLE_MODELS` in
+`src/agentforge/agents/hosted.py` are the source constraints. The governed Red Team implementation is
+`TracedHostedRedTeamProvider`; its composition into the final campaign Runner arrives with the pending
+`0022` runtime and is not claimed by this packet-preparation base.
 
-**Design intent (retained, identifiers superseded):**
+**Fail-closed release-to-calibration chain.** A final hosted campaign may start only after these
+identities cross one ordered boundary:
 
-| Role | Model | Why |
-|---|---|---|
-| **Red Team** | Uncensored open-weights. **Deployed default = hosted OSS** (OpenRouter/Together uncensored, e.g. Dolphin 3.0 / Euryale 70B); **local 24–33B on the Mac** (Dolphin-Mixtral / WhiteRabbitNeo-33B) is a **config switch** for dev + local cost-baseline (F7) | Frontier models refuse authorized offensive generation. Hosted default makes continuous/unattended runs real on Railway; local is ~$0 marginal for development. Never Claude/GPT here |
-| **Judge** | **Claude Sonnet 4.6** (Batch API + prompt-cached rubric) | Selected by **measured calibration, false-negative rate, consistency, latency, cost** — not by refusal behavior (the invariant is deterministic, §5/D13). Structurally independent of the Red Team |
-| **Orchestrator** | **Claude Opus 4.8** (economize to Sonnet/Gemini when hot) | Planning-grade reasoning; low call volume makes frontier affordable |
-| **Documentation** | **GPT-5.4** | *Deliberately a different vendor from the Judge* → no single-vendor correlated failure on the trust chain; output schema-gated by the vuln-report validator regardless of model |
+1. Deploy the exact release candidate Runner-first.
+2. Through the `CONFIG_MANAGE` command, stage one four-role `HostedConfigurationSet` bound to that
+   release. The command's `resource_id` must equal the set's recomputed canonical
+   `configuration_sha256`; any mismatch is rejection, not a warning.
+3. The private Runner loads that exact release/configuration pair, resolves all four sealed OpenRouter
+   provider references, authenticates Langfuse, and publishes the hosted-runtime heartbeat keyed by the
+   same configuration hash.
+4. The Agents read model must show that hash, provider `openrouter`, and the requested/returned model
+   identities. Missing bindings, an unavailable Langfuse gate, a non-operational heartbeat, or identity
+   drift blocks the chain.
+5. Hand the observed Judge identity — provider, model, model version, criteria version,
+   implementation version, Red Team provider/model, and identity SHA-256 — to calibration. Calibration
+   re-attests the versioned ground-truth slices against that exact identity and emits a
+   content-addressed artifact.
+6. The artifact must pass the hard thresholds and then cross the separate human-enable transition
+   (`human_approved=true`, `runtime_enabled=true`). A merely passed artifact has no runtime authority.
+7. Only the same canonical configuration hash and enabled Judge identity may be included in the
+   distinct-principal campaign authorization and sent to the Runner.
 
-Three intents the frozen set does **not** honor: the Judge is Google, not Anthropic; the Red Team is a
-397B MoE, not a local 24–33B Mac workload (the local switch is configured nowhere in `src/`); and
-"selected by measured calibration" is aspirational. The only calibration ever measured at this base is
-of the **deterministic oracle-precedence Judge**, not of any hosted model — `judge_provider =
-"deterministic-code"`, `judge_model = "oracle-precedence"` — and it **fails**: 30 labels, 18 agreements,
-6 false negatives, 0 false positives, 18 abstentions
-(`tests/test_judge_calibration.py:44-58`). **No hosted model has ever been calibrated**, because doing
-so needs a captured-results bundle and none is committed. See
-`docs/security/RED_TEAMING_COVERAGE_REVIEW_2026-07-25.md`.
+Missing, failed, passed-but-not-enabled, invalidated, or drifted calibration closes the final hosted
+campaign gate. There is no advisory fallback that permits that campaign to launch. Deterministic
+oracle/canary precedence remains authoritative inside an enabled run.
 
 **Cross-vendor is defense-in-depth, not the invariant (D8 amended).** Refusal behavior is a model
 *characteristic and potential failure mode*, not a security control.
@@ -531,18 +538,20 @@ presented (`open question`, §17).
 
 ## §9. Observability Layer
 
-**Langfuse Cloud (Hobby, free) for MVP** `locked` (D5 amended, F3), instrumented with the **OTEL-native SDK
-v4** (emission stays framework-neutral). Self-hosting is a documented **post-MVP** path with a real 6-container
-footprint — Web + Worker + PostgreSQL + **ClickHouse (required)** + **Redis/Valkey (required)** + **S3/blob
-(required)**, documented minimum "≥2 CPU / 4 GB across all containers" (a full HA deployment realistically
-lands nearer ~4 vCPU / 8 GB — an estimate, not a Langfuse-quoted figure). Cloud avoids standing up
-ClickHouse+Redis+S3 during the deadline crunch and keeps D6's one-Postgres/no-Redis story true. Synthetic data
-only.
+**Langfuse Cloud** is the external observability backend, using the pinned Python SDK
+`langfuse==4.14.1`. PostgreSQL remains authoritative. One campaign has a stable trace ID; each durable
+`agent_execution` projects a native AGENT observation with a child GENERATION, and each physical target
+request is a child of its same-attempt Red Team observation. The projection records campaign/run/attempt
+lineage, role and order, requested and returned provider/model, duration, usage tokens, retries, typed
+errors, and actual cost when supplied. Payload hashes and byte counts are exported instead of raw
+credentials or hostile bodies.
 
-**One request = one trace:** the Orchestrator opens the root span; Red Team / Gateway / Judge / Documentation
-are child spans tagged `{agent, attack_category, owasp_web, owasp_llm, system_version, verdict}` +
-`{campaign_id, attempt_id, finding_id}` (§6) → native per-agent cost roll-up + inter-agent order, joinable to
-exploit-DB rows and durable across the Cloud→self-host cutover.
+Provider calls fail closed if their Langfuse observation cannot be opened first; deterministic telemetry
+may degrade fail-soft because PostgreSQL still holds the result. SDK flush changes no row to `exported`.
+The paged `scripts/verify_langfuse_campaign.py` query-back must reconcile remote IDs, native parentage,
+environment, model, duration, hashes, token/cost values, and target requests before the durable row is
+marked exported. At this audit, staging had zero Headshot observations, so the candidate path is
+implemented but not live-verified.
 
 - **System-of-record split (pinned so they can't drift):** Langfuse *observes the campaign*; the **Postgres
   exploit DB is system-of-record** for Q4 (open/in-progress/resolved) and Q3 (resilience trend), surfaced via
@@ -562,10 +571,14 @@ exploit-DB rows and durable across the Cloud→self-host cutover.
 **The layer's acceptance criteria are fixed regardless of backend** — it must answer, for a human *and* the
 Orchestrator: (1) categories tested + cases per category; (2) pass/fail rate across categories + versions;
 (3) is the target more/less resilient over time; (4) which vulns are open/in-progress/resolved; (5) run cost
-+ scaling rate; (6) what each agent is doing and in what order. Requirements: inter-agent traces + per-agent
+and scaling rate; (6) what each agent is doing and in what order. Requirements: inter-agent traces + per-agent
 cost attribution; append-only; the data substrate the Orchestrator reads (not just a human dashboard).
 
 ## §10. Regression & Validation Harness
+
+**Current implementation status.** Regression storage/admission and target-version replay planning are
+implemented. The Scheduler records authorization-blocked replay plans; it does not automatically execute
+live replay work. A deployed authorized replay and reappearance/cross-category proof remain pending.
 
 - Stores confirmed exploits in a versioned, queryable format; runs the suite automatically on Orchestrator
   trigger (**Railway cron** enqueues) or target change.
@@ -594,29 +607,31 @@ The dimensionally-invalid `list_price / throughput` division from the draft is *
 means token spend is *insufficient*, not absent — token accounting stays.
 
 `Cost(N) = Hosting(peak_concurrency) + Inference(N) + Storage(rows) + Egress`, where:
-- **Hosting = step function of peak concurrency** (Railway): platform compute, managed Postgres, cron
-  (the one hosting line that scales with N, tiny), and Langfuse (Cloud free at MVP; self-host adds
-  ClickHouse-RAM-driven cost post-MVP).
-- **Inference, modeled per family:**
-  - **Hosted inference** (Judge / Orchestrator / Documentation, and hosted-OSS Red Team) = **measured tokens ×
-    current provider rates**, adjusted for **cached-input (≈0.1× input) and Batch API (≈50%)** pricing.
-  - **Local inference** (Mac Red Team, when the switch selects it) = **hardware amortization + power +
-    operator time ÷ measured capacity** — throughput-capped, not price-capped.
-- **Storage / egress** are their own lines.
 
-**Per-tier architectural change (the whole point — each tier is a different architecture, not a bigger bill):**
-**100** baseline, hosting dominates · **1K** prompt-cache shared context + Batch API · **10K** Red Team fully
-off frontier (hosted-OSS/local) + queue backpressure + time-range partition the exploit DB · **100K**
-*stratified* regression runs (§10) + BRIN-on-timestamp + partial B-tree on hot partitions + dedicated worker +
-bounded verdict caching. Documentation fires on `exploit_rate × N` → sub-linear.
+- **Hosting = fixed/stepwise spend at a given service shape:** Railway Web, Runner, Scheduler,
+  PostgreSQL, and the actual Langfuse Cloud plan. Invoice/usage evidence, not assumed plan pricing,
+  supplies the values.
+- **Inference, modeled per family:**
+  - **Hosted inference** uses provider-reported actual cost when supplied, reconciled to measured
+    input/output tokens, physical calls, retries, and the exact returned provider/model. A published
+    usage-rate estimate is labelled as such rather than presented as billing fact.
+  - **Local inference** is not part of the current hosted role configuration. If later selected, its
+    model must include hardware amortization, power, operator time, and measured capacity.
+- **Security tools, CI/development, storage, observability, egress, and operational overhead** are
+  independent lines.
+
+Each 100/1K/10K/100K tier must model a measured workload mix, fixed infrastructure, physical calls and
+retries, concurrency/queue delay, storage/retention, observability, egress, tooling, and operator work.
+Scaling recommendations follow the measured bottleneck; they are not assumed in advance from tokens alone.
 
 **Rate/failure:** rate-limit handling = **backoff → queue → abort**; a cost circuit-breaker halts on
 no-signal/budget. When the queue backs up, jobs accumulate *durably* in Postgres (nothing dropped), depth rises
 visibly in observability, and the cost governor throttles new campaigns — graceful, observable degradation (the
-CISO-defensible failure mode). **CI/dev runs are their own cost line** (O8) on the $50–200 budget. Exact
-external rate limits + auth are per-target (`open question`, OQ2). **All cost numbers are deferred to
-measurement (§17); no placeholder number appears here** — none is CISO-defensible until measured from real
-traces.
+CISO-defensible failure mode). **CI/dev runs are their own cost line** (O8). Exact external limits are
+environment- and provider-specific. Numeric development spend, measured usage, fixed infrastructure,
+confidence ranges, and 100/1K/10K/100K projections belong to
+[`docs/cost/COST_ANALYSIS.md`](docs/cost/COST_ANALYSIS.md); this architecture does not substitute estimates
+for unavailable billing evidence.
 
 ## §12. Deploy, Rollback & Environments
 
@@ -626,8 +641,8 @@ traces.
   serves the console/API and performs Clerk verification; private
   **runner** services execute queued agent work; a private **scheduler/cron** service only enqueues work;
   private managed **Postgres** holds domain records, checkpoints, and queues. Only Web receives public
-  ingress. Runner, scheduler, and Postgres have no public hostname or inbound route. Deployment history +
-  Postgres PITR provide rollback; no GPU.
+  ingress. Runner, scheduler, and Postgres have no public hostname or inbound route. Deployment
+  history provides image rollback; no GPU.
 - **Environments (O1) — the section now defines them.** At least **two Railway environments**:
   - **non-prod (CI/staging):** TargetAdapter points at a **mock or an explicitly non-production allowlist
     entry**; its **own** Postgres; the environment-scoped allowlist **cannot resolve** the live target's
@@ -644,9 +659,10 @@ traces.
 - **Rollback discipline (O2).** Code rollback (Railway deployment history) reverts the *container*, not the
   managed-Postgres schema/rows. Therefore: **expand/contract (backward-compatible) migrations** are the rule so
   any single deploy is rollback-safe without a DB downgrade; destructive migrations are forbidden in the same
-  release that introduces their consumers; checkpoint/jobs payloads are versioned and unknown rows are
-  dead-lettered (§7); a **pre-deploy drain/quiesce** step ensures a deploy never lands mid-lease; **Postgres
-  PITR is the true rollback of record** for data.
+  release that introduces their consumers; job payloads are versioned and unknown rows are
+  dead-lettered (§7); a **pre-deploy drain/quiesce** step ensures a deploy never lands mid-lease. This
+  synthetic assignment does not require a database-backup/PITR artifact; the release safety net is
+  exact staging migration proof plus compatible image rollback.
 - **Deploy sequence — Runner first:** drain/quiesce work → build and authorize the exact images → deploy
   the private Runner first in a fail-closed wait state → hold public Web routing while Web's canonical
   pre-deploy hook runs `alembic upgrade head` and Web starts behind that hold → verify the single head
@@ -660,11 +676,11 @@ traces.
   `/api/v1/principal` returned `401`, and `/` plus `/sign-in` returned the packaged HTML shell. No
   campaign, provider, or target call was made. This proves deployment mechanics, not live-campaign or
   signed-in Clerk behavior.
-- **Current integrated head and refusal boundary:** pre-deploy runs `alembic upgrade head`; the packaged
-  sole head is **`0021_four_role_agent_acceptance`** (`0005` at the time this section was written;
+- **Preparation-base head and refusal boundary:** pre-deploy runs `alembic upgrade head`; the packet
+  preparation base has the sole head **`0021_four_role_agent_acceptance`**;
   `0017`–`0021` add hosted agent-execution lineage, provider-call lineage, recordable provider identity,
-  agent-acceptance authority, and the four-role acceptance surface). The mechanism claim is unchanged and
-  still correct — readiness resolves the head dynamically and requires exactly one.
+  agent-acceptance authority, and the four-role acceptance surface. The intended release adds
+  incoming `0022`; readiness resolves the packaged head dynamically and requires exactly one.
   `/ready` requires PostgreSQL connectivity, that exact head, built assets, and
   locally parsed Clerk/Web security configuration without Clerk/JWKS/target/model egress. Runner and
   scheduler entrypoints open no public socket. **The blanket "refuse operation" no longer holds:** the
@@ -681,7 +697,7 @@ traces.
 | Failure | Handling |
 |---|---|
 | Red Team produces genuinely harmful content | Quarantine + containment (§5); only ever executed via the Policy Gateway against the allowlisted target; treated as untrusted data even by the Judge/Documentation (S4) |
-| Judge agrees with everything (drift) | Deterministic oracle precedence + async dual-judging calibration + drift detection (`judge-calibration`, §15); escalate on uncertainty; the Judge never occupies the attacker role |
+| Judge agrees with everything (drift) | Deterministic oracle precedence; one exact evaluator measured against versioned ground truth; missing, failed, unenabled, invalidated, or identity-drifted calibration blocks campaign start; uncertain individual cases remain non-closing |
 | Attacker forges/replays evidence | Canonical hash + append-only + per-agent DB roles (S1/S2); run-nonce + UNIQUE constraint (S3) reject replay |
 | Orchestrator has no clear next priority | Fallback policy: least-covered category → oldest open finding → regression sweep |
 | **Observability (Langfuse) unavailable/degraded (O7)** | Orchestrator falls back to the **exploit-DB system-of-record + queue table** for coverage/priority (the documented fallback policy above), degrading to structured signals rather than random or blocked; emits an alert. The coverage signal the Orchestrator needs is derivable from Postgres |
@@ -692,21 +708,22 @@ traces.
 | Clerk verifier/SDK or identity configuration unavailable/invalid | Fail readiness or return generic 503 and deny the operation; never fail open, fetch JWKS dynamically, or trust raw claims |
 | Session stolen or a permission revoked before JWT expiry | Bound exposure with short Clerk session lifetime, MFA, secure browser controls, redaction, and audit/revocation response; networkless verification deliberately accepts a valid signed claim until expiry, so freshness remains an owned residual risk |
 | Cost accrues without signal | Circuit-breaker halts/redirects the campaign; alert fired |
-| Deploy-time version skew | Expand/contract migrations + versioned checkpoints/jobs + drain-before-deploy (§7/§12) |
+| Deploy-time version skew | Expand/contract migrations + versioned job payloads + drain-before-deploy (§7/§12) |
 | Overnight run auditability | Append-only audit log + durable correlation IDs reconstruct who/what/when/order; alerts route human-gate + critical events to a person |
 
 ## §14. Human Approval Gates & Platform Trust/Safety
 
-- **Gates:** authorize a live campaign, **publish a critical-severity finding**, and approve **any
-  remediation**. Autonomy covers discovery, evaluation, regression, and drafting; humans own the
-  high-cost calls. The gates are **runtime-enforced** (§5, F5), not merely a LangGraph pause or a
-  frontend button state.
+- **Gates:** authorize a live campaign, **publish any finding/report regardless of severity**, and
+  approve **any remediation**. Autonomy covers discovery, evaluation, regression, and drafting; humans
+  own publication and remediation. The gates are **runtime-enforced** (§5, F5), not merely a queue
+  pause or a frontend button state.
 - **Separation of duties (S7).** An Operator with `org:campaign:launch` may initiate an operation, but
-  authorization/approval must be cleared by a **different** authenticated Headshot Principal with the
-  applicable Approver custom permission (`org:campaign:authorize` or `org:findings:approve`). Runtime
-  code rejects `approver.user_id == launcher_user_id` regardless of role or permission and writes both
-  immutable user/session identities to the append-only audit log. There is **no solo-user, role-based,
-  break-glass, or emergency self-approval bypass**; insufficient staffing leaves the action pending.
+  campaign authorization must be cleared by a **different** authenticated Headshot Principal with
+  `org:campaign:authorize`; application and database checks enforce that rule. Finding approval also
+  requires `org:findings:approve`, but at the packet preparation base it does **not yet** mirror the
+  distinct raiser/approver and missing-lineage checks. The final release must reject self-approval and
+  absent raiser lineage in both application and database layers. There is no permitted solo-user,
+  role-based, break-glass, or emergency bypass.
 - Read access is also permission-scoped: console/findings/evidence require their named custom read
   permissions and audit history additionally requires `org:audit:read`. Overnight runs and every
   authorization decision are fully attributable.
@@ -718,24 +735,25 @@ traces.
 For each AI-powered role: what AI does, what deterministic verification or human approval follows, and what
 residual risk remains.
 
-- **Red Team (AI, untrusted):** generates/mutates attacks. Verified by: it cannot reach the target, hold
-  credentials, or produce evidence (§5); output is contained and never instructs the control plane. Residual:
-  an uncensored model may generate genuinely harmful content — contained, never executed outside the allowlisted
-  target.
-- **Judge (AI, governed):** classifies attempts. **Independently verifiable (PRD-OPT-08):** the invariant is
-  deterministic (oracles/canaries override, §5/D13); calibration uses **async dual-judging** across the full
-  ground-truth set, a stratified random sample of live cases, and threshold-near/disputed cases — tracking
-  inter-judge agreement, category-specific false-negative rate, calibration error, uncertainty rate, and drift;
-  crossing a **drift threshold disables LLM-only dispositions** for the affected category until recalibration
-  or human approval. Residual: for categories with no deterministic oracle on an un-seedable external target
-  (S8), detection is Judge-judgment + human escalation — stated, not hidden.
+- **Red Team (AI, untrusted):** the hosted Qwen component generates candidates and emits traced lineage, but
+  at this baseline it is not wired into the Runner's reviewed-candidate/fresh-authorization loop. The
+  composed Runner uses deterministic authorized seed selection. Neither path can reach the target, hold
+  credentials, or create authoritative evidence (§5). Residual: a future composed generator may produce
+  genuinely harmful content, which must remain quarantined.
+- **Judge (AI, governed):** Gemini may assess attempts, but deterministic oracle/canary confirmation and
+  evidence errors have precedence. The model becomes decisive only for the exact identity whose calibration
+  artifact is valid and human-enabled. Missing, failed, passed-but-not-enabled, invalidated, or drifted
+  calibration blocks the final hosted campaign before dispatch and cannot downgrade a confirmed exploit.
+  Residual: categories without a deterministic oracle on an unseedable target require model judgment plus
+  human escalation (S8).
 - **Orchestrator (AI, trusted):** prioritizes on **verified** metrics only (S6). Residual: coverage metric
   quality is per-target; poisoned aggregates are guarded by the integrity gate + sanity invariants (§9).
 - **Documentation (AI, gated):** drafts reports from the **validated `Verdict` + approved evidence references
   or sanitized excerpts by default** (S4/D18) — raw adversarial evidence stays quarantined and is revealed
   only by an **intentional, warned operator action**; never free-form summarization of raw payloads;
-  data-quality validated before write; **human approves critical publish** (§14). Residual: injection-laundering
-  into a human-facing report — mitigated by structured rendering, default sanitization, and the human gate.
+  data-quality validated before write; **a human approves every publication regardless of severity**
+  (§14). Residual: injection-laundering into a human-facing report — mitigated by structured rendering,
+  default sanitization, and the human gate.
 - **Where we deliberately did *not* use AI:** the Policy Gateway (deterministic policy), evidence hashing +
   DB-role enforcement, the deterministic oracles/canaries, and the shared validators (contract-compat,
   eval-case schema, duplicate-sequence, data-quality) + Semgrep/ZAP. AI where judgment is needed, determinism
@@ -750,6 +768,7 @@ residual risk remains.
 
 **Configure/wrap the mechanism; build the four graded capabilities.** `locked` (D9; full record + verdict:
 `docs/adrs/0001-build-vs-configure.md`).
+
 - **Wrap (seeds/engine):** Garak (breadth probes) · PyRIT (multi-turn orchestrators + converters) · Giskard
   RAGET (RAG-specific seeds).
 - **Configure (free, satisfies graded reqs):** **Promptfoo** — no-custom-code presets for **OWASP LLM Top 10
@@ -758,8 +777,9 @@ residual risk remains.
   deterministic validator over OWASP ZAP output**, not by Promptfoo; `owasp:api` partially covers the
   API/write-back surface. · **OWASP ZAP** (web-layer DAST, *contingent on a target web surface*, OQ2) ·
   **Semgrep** (SAST on our code).
-- **Build (no tool delivers these):** Orchestrator · the Red Team's autonomous coverage-driven **mutation
-  loop** · the independent, deterministic-fail-closed **Judge** · Documentation + regression-admission.
+- **Build (no tool delivers these):** Orchestrator · the Red Team's governed candidate/selection boundary ·
+  the independent deterministic-oracle-first **Judge** · Documentation + regression admission. The hosted
+  Red Team generation component is not yet composed into live Runner execution.
 - **Do not adopt:** any commercial LLM red-team platform (Lakera / HiddenLayer / Robust Intelligence–Cisco AI
   Defense) — out of budget, closed, un-governable, and *is* the product we're asked to build. Burp Suite Pro
   deferred to optional-at-Final; never Burp DAST/Enterprise. (Promptfoo was OpenAI-acquired Mar 2026 — if it
@@ -774,10 +794,9 @@ residual risk remains.
   (freezes the OWASP-Web DAST slot).
 - **OQ3** seeded-demo-data provenance (confirm synthetic, no real PHI); whether the platform has **write
   access to plant canaries** (S8).
-- **Measure at MVP, do not guess:** per-agent **token profiles**, **Mac tok/s** (local-vs-hosted Red Team
-  crossover), **`exploit_rate`** (Documentation call volume). **No cost number is CISO-defensible until
-  measured** — §11 carries the method, not numbers.
-- **Pin the LangGraph 1.x version** before the ADR is frozen (§7).
+- **Measure at release, do not guess:** exact per-agent token/latency/cost observations and
+  **`exploit_rate`** (Documentation call volume). **No cost number is CISO-defensible until measured**
+  and reconciled to provider usage/invoice evidence — §11 carries the method, not numbers.
 - **D12 (implemented bounded slice):** MVP retains the hand-authored nine-case corpus + custom mutation
   loop. Native Garak/PyRIT/Giskard/Promptfoo artifacts can supply separately reviewed candidates, but a
   tool-augmented corpus has a different hash and requires fresh authorization. Tool orchestrators and
@@ -797,10 +816,10 @@ residual risk remains.
   a permission until token expiry after a Dashboard revocation. Use short session lifetimes, auditable
   revocation response, and re-authentication for high-risk actions; do not claim instantaneous revocation.
 
-**Top risks:** target details slipping Stage 1; Red Team refusals/quality on hosted-OSS; Judge drift on
-un-oracled categories; cost blow-up at scale; the ~2.5h Defense window vs artifact volume; stolen human
-sessions/XSS; authorized-party or organization misconfiguration; permission-revocation freshness; and
-insufficient staffing for the non-bypassable two-person gate (S7).
+**Top risks:** release/source drift; generated-corpus authorization drift; Judge drift on un-oracled
+categories; cost or rate blow-up; incomplete query-back; stale human permissions; target-session theft;
+misconfigured organizations/authorized parties; and insufficient staffing for the non-bypassable
+two-person gate (S7).
 
 ## §18. Platform Testing Strategy
 
@@ -839,6 +858,10 @@ optional, under production-grade posture, and boundary/invariant/regression, not
 The graded "Optional Engineering Deliverables" are mandatory; each has an architectural seam so it is produced,
 not improvised.
 
+The ATO and integration packet structures now exist and link their component evidence. They remain
+pre-release packets until the exact final commit, CI, migration, deployed campaign, Langfuse query-back,
+performance/cost, demo, and publication fields are filled with real evidence.
+
 - **ATO-style evidence packet (PRD-OPT-07)** — a distinct submission artifact (not ARCHITECTURE.md): the D2/D4
   agent-interaction + trust diagram, a data-flow diagram, an **auth-model matrix** (each agent → the
   targets/credentials it may use → via the Policy Gateway, plus each human role → verified Clerk custom
@@ -869,13 +892,13 @@ detail: `docs/planning/gap-audit.md`.
 
 | # | Resolution | Where |
 |---|---|---|
-| **F1** | Deterministic fail-closed Judge invariant (verdict state machine; oracle precedence; fail-closed on the verdict not the run; async dual-judging calibration) | §3, §5, §15; D13; D8 |
+| **F1** | Deterministic oracle precedence plus a fail-closed campaign-start gate for missing, failed, unenabled, invalidated, or drifted exact-identity Judge calibration | §3, §5, §8, §15; D13; D8 |
 | **F2** | Trust split: untrusted generator → trusted Policy Gateway + Execution Recorder → external target; Judge sees hashed recorder `AttemptResult` only; contract direction corrected (migration note) | §3, §4, §5; D14; diagram spec |
 | **F3** | Langfuse Cloud for MVP; self-host full footprint documented post-MVP | §9, §12; D5 |
 | **F4** | Three independent cost line families; invalid `list_price/throughput` division removed | §11; D17 |
 | **F5** | Live-campaign gate enforced in Policy Gateway runtime code, independent of trigger; skill flag is convenience; gated side effects idempotent | §5, §14; D14 |
 | **F6** | Full Postgres queue delivery semantics (lease/heartbeat/reaper/dead-letter/idempotency/dedup/cancel/poison + backpressure) | §6, §7, §11; D6 |
-| **F7** | Config-switch; deployed default = hosted OSS; Mac = dev/cost-baseline; Mac tok/s open | §8, §12; D8 |
+| **F7** | Exact hosted Red Team configuration exists; Runner composition gap and authorization boundary are disclosed | §8, §15; D8 |
 | **F8** | OWASP 2021 anchor + 2021↔2025 crosswalk + `{framework,version,id,name}` tags | §5; `THREAT_MODEL.md`; D15 |
 | **F9** | Stale `PLAN.md` content corrected | `PLAN.md` (done) |
 | **F10** | `disable-model-invocation: true` on `tdd-swarm` | skill file (done) |
@@ -887,11 +910,11 @@ detail: `docs/planning/gap-audit.md`.
 | **S4** | Evaluators consume a typed, trust-labelled, size-bounded **evidence envelope**; oracle/canary results are code-applied typed fields so injection **cannot downgrade `EXPLOIT_CONFIRMED`**; Judge holds no creds/mutation/publish/execute and emits a schema-validated Verdict; Documentation gets the validated Verdict + sanitized excerpts by default; raw evidence quarantined behind a warned operator action; separation/encoding are mitigations, not proof (residual owned) | §3, §4, §5, §15, §18; **D18** |
 | **S5** | Vendor-disjoint Judge failover invariant — **`specified, NOT implemented` (corrected 2026-07-25).** No `Judge.vendor != Documentation.vendor` check exists in `src/agentforge/agents/**` and no test references it. The property holds by configuration only, and one provider (`openrouter`) fronts all four roles | §8; D8; drift register below |
 | **S6** | Coverage/resilience computed only from verified, deduped verdicts + sanity invariants | §9, §13 |
-| **S7** | Clerk-authenticated two-person rule on campaign authorization, critical publish, and remediation; distinct identity + custom permission required; no self-approval exception | §5, §14, §15 |
+| **S7** | Clerk-authenticated gates on campaign authorization, every finding/report publication, and remediation; distinct identity + custom permission required; no self-approval exception | §5, §14, §15 |
 | **S8** | Explicit canary provisioning where writable; honest "not deterministic" where the external target can't be seeded | §5, §10, §15 |
 | **S9** | Hashed `AttemptResult` is authoritative evidence; span carries same hash; reconciliation check | §6, §9 |
 | **O1** | ≥2 environments; prod-only live creds; environment-scoped target allowlist and Clerk origin/org configuration; only Web public; gated promotion | §12 |
-| **O2** | Expand/contract migrations; versioned checkpoints/jobs; drain-before-deploy; PITR as true rollback | §7, §12 |
+| **O2** | Expand/contract migrations; versioned jobs; drain-before-deploy; database recovery as true rollback | §7, §12 |
 | **O3** | Alert channel + conditions tied to durable source | §9, §13 |
 | **O4** | Platform testing strategy (pyramid + BUILD-capability + invariant tests + CI matrix) | §18 |
 | **O5** | Stratified regression (critical + reopened always); bounded verdict caching; two-number SLO | §10, §11 |
@@ -899,56 +922,40 @@ detail: `docs/planning/gap-audit.md`.
 | **O7** | Langfuse-unavailable failure mode → Postgres fallback + alert | §9, §13 |
 | **O8** | CI substrate (ephemeral PG + mock adapter + cassettes); CI/dev as a cost line | §11, §18, §19 |
 
-### Architecture-vs-code drift register (2026-07-25, base `107c11c`)
+### Pre-release evidence reconciliation register
 
-This document is binding. Where it disagrees with the code, **the code is what runs** and the
-divergence is recorded here rather than quietly edited out. Every row was verified by reading the file
-at this commit. Full analysis:
-[`docs/security/RED_TEAMING_COVERAGE_REVIEW_2026-07-25.md`](docs/security/RED_TEAMING_COVERAGE_REVIEW_2026-07-25.md).
+Historical review files under `docs/security/` are audit inputs, not release-status authority. The
+exact shipped source, content-addressed manifests, and
+[`docs/submission-artifacts/RELEASE_BINDING.md`](docs/submission-artifacts/RELEASE_BINDING.md) decide
+what may be claimed. At packet preparation, these gaps remain explicit:
 
-Direction matters: this document mostly **understates** what now exists, which is the safer failure —
-but three rows are load-bearing claims that are simply not true, and those are the reviewer risk.
-
-| § | Doc says | Code at `107c11c` | Direction | Disposition |
-|---|---|---|---|---|
-| §1, §7; D4 | Orchestration is **LangGraph OSS engine** + PostgresSaver checkpoints; `interrupt()`/`Command(resume=…)` is the approval mechanic — `locked` | **LangGraph is not a dependency and is imported nowhere.** Absent from `pyproject.toml`; the only mention under `src/` is a prose docstring (`src/agentforge/storage/models.py:13`), and the only two code references are `tests/test_smoke.py:17` and `tests/test_target_adapter.py:77`, which **assert `"langgraph" not in sys.modules`** | **Doc overstates** | **Open — decision owner.** D4's own fallback ("thin custom asyncio orchestrator on the *same* JSON-Schema contracts — a swap, not a rewrite") appears to be what was actually built. Either re-record D4 as taken-the-fallback, or restore the dependency. Do not leave it `locked` as-is. |
-| §8; D8 | Judge = Claude Sonnet 4.6 / `claude-sonnet-5`; Red Team = hosted OSS with a local 24–33B Mac switch | Judge = `google/gemini-2.5-pro`; Red Team = `qwen/qwen3.5-397b-a17b`; frozen and rejected on deviation (`agents/hosted.py:31-38`, `:352-353`) | **Doc stale** | **Reconciled** in §8 above and D8 revision 2026-07-25. |
-| §8, §18, §20 S5 | The platform enforces `Judge.vendor != Documentation.vendor` at run start, fail-closed | No such check exists; no test references it | **Doc overstates** | **Corrected** — S5 row and §8 now read `specified, NOT implemented`. |
-| §12 | Packaged sole Alembic head is `0005` | Sole head is `0021_four_role_agent_acceptance` | Doc stale | **Corrected** in §12. |
-| §4 | Contracts live in `contracts/v1/` | `src/agentforge/contracts/v1/` (18 schemas); no repo-root `contracts/` | Doc stale (broken path) | **Corrected** in §4. |
-| §1, §12 | Live campaign launch "remains fail-closed unavailable"; runner/scheduler "refuse operation" | `POST /api/v1/campaigns` exists with a gated launch handler returning `CommandResult.accepted`; the Runner is a composed durable loop | **Doc understates** | **Partially corrected** in §12. The *gate* is real and still fail-closed on its preconditions; the blanket unavailability is not. |
-| §1 | "public target/surface authoring remains typed unavailable until a trusted catalog exists" | Only partly true now — surface create/revise still return `unavailable`, but the trusted catalog exists and target registration paths have moved | Doc understates | **Open** — needs a targeted §1/§5 rewrite by the architecture owner, not a one-line patch. |
-| §15; D13 | Present tense: calibration "uses async dual-judging across the full ground-truth set, a stratified random live sample, and threshold-near cases" | The machinery exists as offline code. **Dual-judge cross-agreement does not exist** — the gate accepts exactly one evaluator, and `agreement_rate` measures agreement with ground truth, not judge-vs-judge. Per-category disablement is not implemented (per-category metrics are computed; the reason-code logic applies global rates plus a sample floor). No stratified live sample has ever been drawn | **Doc overstates** (present tense for unbuilt behavior) | **Open — flagged, not rewritten.** §15 is the AI-use disclosure; changing its tense is the architecture owner's call. |
-| §11 | "All cost numbers are deferred to measurement; no placeholder number appears here" | Two appear 16 lines earlier in the same section: cached-input ≈0.1× input and Batch API ≈50%. They are unmeasured provider-discount assumptions | Doc self-contradicts | **Open** — either label them as assumptions or move them to the required-inputs table in `docs/cost/COST_ANALYSIS.md`. |
-| §19 | Baseline profiles (OPT-17) and load/stress (OPT-18) → `docs/performance/` | `docs/performance/` does not exist. Performance code exists (`src/agentforge/performance/`) with **zero producers** — no import from `src/`, `scripts/`, or `console/` | Doc overstates | **Open** — destination is empty; the report library is fed only by test samples. |
-
-One further item that belongs in this register because it contradicts an invariant this document
-registers as resolved (S4/F1): two Judge seams disagree about whether a model may emit
-`EXPLOIT_CONFIRMED`. `agents/judge/hosted.py:22` excludes it and `:313-318` rejects it — that is the
-seam the production runner composes. But
-`agents/hosted_runtime.py::HostedFourRoleRuntime.run_attempt` (Judge schema currently at line 754)
-hands the judge role an output enum that **includes** `EXPLOIT_CONFIRMED` (`_VERDICTS`, lines 31–37),
-and `HostedFourRoleRuntime._deterministic_precedence` returns the hosted verdict verbatim at lines
-863–866 with `deterministic_precedence: False`. It is unreachable today only because nothing in
-`src/` ever constructs `HostedFourRoleRuntime` — not because of any check in that function.
-**Flagged for the owning lane; not patched from a documentation branch.**
+| Boundary | Current evidence | Release disposition |
+|---|---|---|
+| Four-role hosted campaign composition | Three hosted roles exist on the preparation base; the governed Red Team composition is incoming with `0022` | Integrate `0022`, re-run the single-head/runtime checks, and prove all four ordered roles on the exact deployed configuration |
+| Judge authority | Calibration contracts, thresholds, drift invalidation, and human enablement are tested | Execute the §8 exact-identity handoff after deployment; missing or non-enabled calibration blocks campaign launch |
+| Finding publication separation | Campaign authorization enforces distinct principals; finding approval at the preparation base does not yet enforce distinct raiser/approver plus missing-lineage rejection | Land and test both application and database enforcement before any finding/report publication |
+| Performance and cost | Reporting libraries and cost method exist; no representative final artifact or invoice reconciliation exists | Keep values pending until measurements and usage/invoice exports are content-addressed |
+| Vendor-disjoint failover | Google Judge and OpenAI Documentation are distinct by current configuration, while one OpenRouter control plane fronts all roles | Do not claim enforced vendor-disjoint failover; the release uses the exact frozen configuration and fails on identity drift |
 
 ## §21. Non-Goals & Owned Tradeoffs
 
 **Non-goals (deliberately out of scope this week):**
+
 - Testing more than one target (the second adapter is what would *prove* target-agnosticism — conceded, not
   claimed).
 - Real HIPAA/BAA authorization — the posture is synthetic-data ATO-*style* simulation (D11); BAA-upgrade is a
   documented, unpaid hardening path.
-- Durable exactly-once execution — LangGraph checkpoints are crash-persistence; DBOS-on-Postgres is the path
-  only if unattended multi-hour campaigns come into scope (§7).
+- Exactly-once network delivery. The queue is deliberately at-least-once; persisted physical work-unit
+  reservations and conservative ambiguous-send handling enforce authorization without pretending an
+  external request can be made exactly once (§7).
 - Cryptographic signing / KMS for evidence — unneeded within one shared trust domain; the hardening path when
   the recorder crosses a boundary (§5/D14).
 - Building any attack primitive Garak/PyRIT/Giskard already provide (§16).
 
 **Owned tradeoffs (the defense, not softened):**
-- One uncensored Red Team model is unconstrained; the *system* around it is not (§5). We accept an unconstrained
-  generator to avoid frontier refusals, and contain it structurally.
+
+- The hosted Red Team generator may produce unconstrained content; the composed Runner does not yet use it.
+  Composition is accepted only behind reviewed candidates, fresh corpus authorization, and the Policy Gateway.
 - Anyone with repo access + credentials could widen the allowlist; the control is **auditability + two-person
   approval**, not prevention (§14).
 - Networkless Clerk JWT verification removes request-time IdP/JWKS availability from the hot path but means
@@ -956,7 +963,8 @@ and `HostedFourRoleRuntime._deterministic_precedence` returns the hosted verdict
   re-authentication for sensitive actions, and audit/revocation response reduce—not eliminate—that window.
 - The two-person gate deliberately sacrifices availability when only one authorized human is present. The
   operation remains pending; the system does not trade separation of duties for deadline convenience.
-- Cost figures are absent by choice — a measured number later beats a defensible-sounding wrong number now (§11).
+- Cost figures are authoritative only in the measured cost artifact; unavailable billing inputs stay
+  explicitly unavailable rather than being inferred (§11).
 - Where an external target can't be canary-seeded, PHI-exfil detection is honestly non-deterministic (S8) — we
   state the limit rather than imply an oracle we don't have.
 - Prompt injection against our own evaluators (S4/D18) is **contained, not eliminated**: oracle precedence

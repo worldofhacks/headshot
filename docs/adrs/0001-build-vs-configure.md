@@ -1,6 +1,6 @@
 # ADR-0001 — Build vs Configure (security tooling + platform stack)
 
-- **Status:** Accepted (draft — ratified at Architecture Defense; binding after `/arch-finalize`)
+- **Status:** Accepted; reconciled to the as-built platform on 2026-07-25
 - **Date:** 2026-07-20
 - **Deciders:** platform author; reviewed at the Architecture Defense
 - **Required by:** PRD "Optional Engineering Deliverables → Build-versus-configure decisions" (a graded
@@ -30,7 +30,7 @@ fails the assignment, the budget, and the governance model.
 | **Promptfoo** 0.121.19 | Deterministic offline eval-runner + mapping metadata | Native results import and a pre-authored offline eval are operational with remote generation disabled. Promptfoo has no `owasp:web` preset; ZAP supplies deterministic OWASP Web mapping |
 | **OWASP ZAP** | **Web-layer DAST** + CI gate for the OWASP *Web* Top 10 half (upload/ingestion, write-back API, SSRF, path traversal, authz) | Deterministic web scanning is a solved problem; an LLM is the wrong tool. *Contingent on the target exposing a web surface — confirm at inspection* |
 | **Semgrep** (free CLI) | **SAST on our own platform code** (agents, adapter, prompt-construction, policy) | Scans *our* code, never the target; deterministic beats an LLM here |
-| **LangGraph** (MIT engine), **Langfuse Cloud (Hobby) for MVP** (self-host post-MVP), **Postgres `SKIP LOCKED` queue**, **Railway cron** | Infrastructure we configure | Reinventing orchestration/observability/queue is not the assignment. Observability = Langfuse **Cloud Hobby (synthetic data only)** for MVP; self-hosting (Web+Worker+PG+ClickHouse+Redis+S3) is a documented post-MVP path (F3) |
+| **Langfuse Cloud**, **Postgres `SKIP LOCKED` queue**, **Railway services/scheduler** | Infrastructure we configure | Managed hosting, database primitives, and observability transport are infrastructure; campaign policy, orchestration, authorization, evidence, and retry semantics remain package-owned |
 
 ### B. BUILD custom (the four graded capabilities no tool delivers)
 1. **Orchestrator** — reads observability (coverage gaps, open findings, regressions), prioritizes the
@@ -47,17 +47,18 @@ fails the assignment, the budget, and the governance model.
    Postgres exploit DB with the "passed for the right reason" promotion gate.
 
 ### C. Platform-stack build-vs-configure (summary; full rationale in `DECISIONS.md`)
-- **Orchestration = configure LangGraph OSS engine** (not Platform/LangSmith) + PostgresSaver.
-  Human-approval gate via `interrupt()`; Judge independence via per-node clients. Reject AutoGen
-  (maintenance) / CrewAI (no first-class Postgres checkpointer).
+- **Orchestration = build package-owned Python coordination** around versioned contracts and
+  PostgreSQL durability. `SecureCampaignCoordinator`, `DurableCampaignRunner`, and
+  `DurableScheduler` use the queue, leases, audit state, and physical work-unit reservations; human
+  approval is persisted policy state rather than a framework pause.
 - **Observability = configure Langfuse Cloud (Hobby) for MVP** (OTEL SDK v4, synthetic data only);
   **self-hosted Langfuse is a documented post-MVP path only** (its full Web+Worker+PG+ClickHouse+Redis+S3
   footprint is not the MVP choice — F3). The **Postgres exploit DB is the authoritative system of record**
   for finding status, and Langfuse failure falls back to Postgres-derived coverage/priority signals. Reject
   LangSmith/Braintrust (Enterprise-only self-host).
-- **Models = assemble per role** (not one model): local uncensored 24–33B Red Team (Mac), Claude Sonnet
-  4.6 Judge, Opus 4.8 Orchestrator, GPT-5.4 Documentation (cross-vendor from Judge). Frontier models
-  refuse offensive generation → they cannot be the Red Team.
+- **Models = stage one content-addressed OpenRouter set**: Opus 4.8 Orchestrator, Qwen 3.5
+  397B-A17B Red Team, Gemini 2.5 Pro Judge, and GPT-5.4 Documentation. The observed Judge
+  identity/hash must pass ground-truth calibration and be human-enabled before campaign launch.
 - **Queue = build a thin `SKIP LOCKED` Postgres queue**, not configure Redis/Celery — Railway has no
   managed queue and a second stateful service splits state off the exploit DB.
 
@@ -85,9 +86,9 @@ instrumented-runtime testing remain explicitly unclaimed.
   stack runs under our own cost/allowlist governance.
 - **Negative / risks:** the bounded native adapter and offline-execution slice is implemented, but the
   **MVP still ships the reviewed nine-case corpus**. Tool candidates require a separate reviewed corpus
-  hash and fresh authorization; multi-turn framework orchestrators remain adapter-only (D12). LangGraph
-  checkpoints are crash-persistence, not durable execution → add an
-  app-level `thread_id` lock, consider DBOS-on-Postgres for unattended long campaigns. Promptfoo
+  hash and fresh authorization; multi-turn framework orchestrators remain adapter-only (D12). External
+  HTTP side effects are not atomic with PostgreSQL, so the Runner reserves physical work before send,
+  preserves ambiguous outcomes, and refuses blind replay. Promptfoo
   (OpenAI-acquired Mar 2026) is a single-vendor licensing risk → Giskard/custom-runner fallback.
 
 ## Invalidation conditions
@@ -95,5 +96,6 @@ instrumented-runtime testing remain explicitly unclaimed.
   slot drops; re-scope the OWASP-Web half. **Confirm from the running target before freezing.**
 - PyRIT/Garak ship native RAG + tool-intent-verification testing → shrink the custom Judge scope.
 - Promptfoo relicenses off MIT or gates red-team plugins → adopt the Giskard/custom eval-runner fallback.
-- A frontier provider ships a reliable *authorized-offensive* mode → the local Red Team tier could
-  collapse into a hosted one.
+- A frozen model becomes unavailable or returns a different identity → stage a new reviewed
+  configuration hash, re-run acceptance, recalibrate the exact Judge identity, and obtain new
+  authorization rather than silently substituting.

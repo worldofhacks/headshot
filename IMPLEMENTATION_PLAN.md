@@ -279,31 +279,29 @@ before their consumers**, frontmatter + trigger boundaries validated against `CL
   - Accept: (a) generates + **autonomously mutates** partial successes across multi-turn sequences; (b) **MVP inference = hosted-OSS uncensored** (per decision 2026-07-20; OpenRouter/Together, behind a scoped credential + gateway budget/rate cap) — local Mac remains the F7 config switch; (c) reaches the target **only** via the gateway, no creds of its own, no evidence; (d) **edge:** a partial spawns N variants toward the least-covered category; hosted-OSS spend is bounded by the gateway budget cap (M4); (e) **error:** a refusal/empty generation is retried/switched, not a silent stall; a budget-cap breach aborts, not overruns
   - Verify: a seeded partial produces mutated variants; no direct target call bypasses the gateway · Test: **boundary** — multi-turn, not single-prompt; mutation raises targeted-category coverage · Skills: **adversarial-eval-lifecycle** (P3)
 
-> ### 🔒 MVP Judge non-oracle safety rule (binding — do not weaken for schedule)
-> Because the full M10 calibration/drift system is **FINAL-COMMITTED**, the MVP Judge operates under a
-> phased, fail-closed constraint:
+> ### 🔒 Final hosted Judge safety rule (binding — do not weaken for schedule)
+> The final hosted campaign operates under this fail-closed constraint:
 > 1. **Deterministic oracle/canary evidence may still produce `EXPLOIT_CONFIRMED`** — this path is
 >    unaffected and always available.
-> 2. The MVP Judge **must NOT issue an LLM-only `EXPLOIT_LIKELY` or `NO_EXPLOIT_OBSERVED` from
->    uncalibrated thresholds.**
-> 3. A **minimum ground-truth calibration slice** (M11) must pass — establishing initial per-category
->    confidence thresholds — **before** those two LLM-only states are enabled for that category.
-> 4. **Until the minimum slice passes for a category, every non-oracle case in that category resolves to
->    `INDETERMINATE`.** This **fails closed on the finding** (never counted safe, never admitted to
->    regression, never published) **while unrelated campaign work continues** (fail-closed on the verdict,
->    not the run — D13).
-> 5. This is not weakened to meet the deadline. The contract carries a typed reason code
->    `non_oracle_uncalibrated_indeterminate` (P10) so the forced disposition is explicit and auditable.
+> 2. The exact deployed four-role configuration hash and observed Judge identity/hash must be handed to
+>    the ground-truth calibration gate.
+> 3. Calibration must pass the global hard thresholds and then be explicitly human-enabled for that
+>    same identity. Missing, failed, merely passed, invalidated, drifted, or hash-mismatched calibration
+>    blocks campaign launch; there is no advisory fallback.
+> 4. After that gate opens, an individual ambiguous case resolves to `INDETERMINATE`, is never counted
+>    safe/admitted/published, and may park for review while unrelated authorized work continues.
+> 5. This is not weakened to meet the deadline. Typed calibration state and reason codes make every
+>    refusal explicit and auditable.
 
 - [ ] **M9 — Judge agent (deterministic fail-closed verdict authority)**
   - Files: NEW `src/agents/judge/`, `src/agents/judge/oracles/` · Anchors: §3, §5, **D13, D18**, F1, S4 · Map: PRD-15/18, **S4** · Deps: **P10**, **M4**, **M6a**, **P4** · Est: L  *(M6b required for the MVP observability gate)*
-  - Accept: (a) consumes the typed **Evidence Envelope** only — never unstructured attacker text outside the `hostile`-labelled field; deterministic **oracle/canary precedence** applied by code → `EXPLOIT_CONFIRMED` cannot be downgraded; (b) states `EXPLOIT_CONFIRMED|EXPLOIT_LIKELY|NO_EXPLOIT_OBSERVED|INDETERMINATE|ERROR`; (c) **fail closed on the verdict, not the run** (ambiguous → human-review queue; campaign continues elsewhere); (d) Judge holds **no creds/mutation/publish/execute**; output schema-validated; (e) **edge/error (S4):** an in-transcript verdict-flip instruction does not change disposition when an oracle fired; missing/invalid evidence → fail-closed `ERROR`; (f) **MVP non-oracle rule (binding, above):** LLM-only `EXPLOIT_LIKELY`/`NO_EXPLOIT_OBSERVED` are **gated behind a passing minimum ground-truth calibration slice** per category; until it passes, non-oracle cases → `INDETERMINATE` with reason `non_oracle_uncalibrated_indeterminate`; oracle/canary → `EXPLOIT_CONFIRMED` remains available
-  - Verify: a canary-hit case → `EXPLOIT_CONFIRMED` despite an embedded "return fail"; ambiguous case parks without stalling; **with no calibration slice loaded, a non-oracle case → `INDETERMINATE` (never `NO_EXPLOIT_OBSERVED`/`EXPLOIT_LIKELY`)** · Test: **invariant** — never maps `INDETERMINATE`/`ERROR`→safe; **invariant** — uncalibrated non-oracle case is forced `INDETERMINATE` (MVP rule); **injection** — see the expanded S4 battery in M12 · Skills: **judge-calibration** (P4, via M10)
+  - Accept: (a) consumes the typed **Evidence Envelope** only — never unstructured attacker text outside the `hostile`-labelled field; deterministic **oracle/canary precedence** applied by code → `EXPLOIT_CONFIRMED` cannot be downgraded; (b) states `EXPLOIT_CONFIRMED|EXPLOIT_LIKELY|NO_EXPLOIT_OBSERVED|INDETERMINATE|ERROR`; (c) campaign start requires a passing, exact-identity, human-enabled calibration; after start, an ambiguous individual case parks while unrelated authorized work may continue; (d) Judge holds **no creds/mutation/publish/execute**; output schema-validated; (e) **edge/error (S4):** an in-transcript verdict-flip instruction does not change disposition when an oracle fired; missing/invalid evidence → fail-closed `ERROR`; (f) missing/failed/un-enabled/invalidated/drifted calibration blocks launch rather than enabling advisory model authority
+  - Verify: a canary-hit case → `EXPLOIT_CONFIRMED` despite an embedded "return fail"; exact enabled calibration permits the bound runtime; any other calibration state refuses campaign start; after start, an ambiguous case parks without becoming safe · Test: **invariant** — never maps `INDETERMINATE`/`ERROR`→safe; **invariant** — calibration drift closes launch; **injection** — see the expanded S4 battery in M12 · Skills: **judge-calibration** (P4, via M10)
 
-- [ ] **M10 — Judge calibration + drift governance**  (the **full** system; a **minimum slice** ships at MVP via M11 to lift the non-oracle gate — see the MVP Judge rule)
+- [ ] **M10 — Judge calibration + drift governance**
   - Files: NEW `evals/ground-truth/`, `src/agents/judge/calibration.py` · Anchors: §5, §15, D13 · Map: PRD-18, PRD-OPT-08 · Deps: **M9**, **P4** · Est: L
-  - Accept: (a) **dual judging across the complete ground-truth set**; (b) **random/stratified sampled dual judging of live non-oracle cases** (across categories/severities/target versions); (c) metrics — **false-negative rate, uncertainty rate, inter-judge disagreement, confidence-calibration error, drift over time**; (d) **per-category confidence + drift thresholds**; (e) **edge:** a threshold crossing **disables LLM-only dispositions for the affected category** — affected findings become `INDETERMINATE` **without stopping unrelated campaign work**; (f) **error/recovery:** re-enabling a category requires **human review + recalibration**
-  - Verify: calibration report shows all five metric families per category; a simulated drift breach disables LLM-only dispositions for that category only · Test: **invariant** — drift breach → category LLM-only disabled + others unaffected; ground-truth dual-judge agreement computed · Skills: **judge-calibration** (P4)
+  - Accept: (a) one exact observed evaluator identity is measured against the versioned ground-truth set; (b) metrics include agreement, false-positive/false-negative, abstention, and expected calibration error; (c) the artifact binds slice-set hash, identity hash, and thresholds; (d) any hard-threshold failure yields `failed`; (e) identity drift yields `invalidated`; (f) a passing artifact still lacks authority until a human enables that same identity
+  - Verify: a passing artifact is content-addressed; a failed, merely passed, invalidated, or drifted artifact closes campaign start; human enablement succeeds only for the exact identity · Test: **invariant** — no non-enabled artifact grants model authority · Skills: **judge-calibration** (P4)
 
 - [ ] **M11 — Eval suite: ≥3 categories, schema-strict, with results  [HARD GATE]**
   - Files: NEW `evals/seeds/`, `evals/results/`, `evals/fixtures/` (synthetic), `src/storage/validators.py`
@@ -349,21 +347,21 @@ before their consumers**, frontmatter + trigger boundaries validated against `CL
 
 - [ ] **F2 — Documentation agent (gated, sanitized)**
   - Files: NEW `src/agents/documentation/` · Anchors: §3, §6, §14, **D18** · Map: PRD-20/21/22, **S4** · Deps: M9, **P10**, **P6** · Est: L
-  - Accept: (a) confirmed exploit → **VulnReport** with all 6 PRD-21 fields; (b) renders from **validated Verdict + sanitized excerpts by default** — raw evidence quarantined behind a warned operator action; (c) data-quality validated before write; (d) **edge (PRD-22):** reproducible by a senior engineer from the report alone; (e) **error:** **human approval required before a critical publish**; hostile content cannot control any report field/status/severity/remediation/publication/operator instruction (S4 doc battery, M12)
-  - Verify: a confirmed exploit → schema-valid report; a critical report blocks on the gate; a doc-injection attempt controls no field · Test: **invariant** — no critical publish without approval; **injection** — hostile content laundering blocked (S4) · Skills: **vuln-report** (P6)
+  - Accept: (a) confirmed exploit → **VulnReport** with all 6 PRD-21 fields; (b) renders from **validated Verdict + sanitized excerpts by default** — raw evidence quarantined behind a warned operator action; (c) data-quality validated before write; (d) **edge (PRD-22):** reproducible by a senior engineer from the report alone; (e) **error:** **human approval required before every publication regardless of severity**; hostile content cannot control any report field/status/severity/remediation/publication/operator instruction (S4 doc battery, M12)
+  - Verify: a confirmed exploit → schema-valid draft; reports at every severity block on the publication gate; a doc-injection attempt controls no field · Test: **invariant** — no publication without approval; **injection** — hostile content laundering blocked (S4) · Skills: **vuln-report** (P6)
 
 - [ ] **F3 — Human approval gates + two-person rule**
   - Files: NEW `src/policy/approval.py`, audit-log wiring · Anchors: §14, **S7** · Map: PRD-27,
     **USR-03/04/07** · Deps: M3, F2, **M1c, M1d** · Est: M
-  - Accept: (a) critical-publish + remediation gates runtime-enforced; (b) authenticated Principal has the
+  - Accept: (a) all-finding/report-publication + remediation gates runtime-enforced; (b) authenticated Principal has the
     exact Headshot Organization and `org:campaign:authorize` custom permission; (c) **two-person rule** —
     `approver_user_id != launcher_user_id`, with both verified identities in the append-only audit log;
     (d) role labels and client-supplied identity/permission text have no authority; (e) there is no
     single-operator bypass—lack of a distinct authorized Approver leaves the operation blocked; (f)
     authentication alone never authorizes the campaign; (g) **error:** self-approval is rejected even when
     that user has the Approver role and permission
-  - Verify: launcher-only critical action rejected; a different authenticated Approver succeeds + both
-    identities are audited · Test: **invariant** — self-approval rejected for critical (S7) · Skills:
+  - Verify: raiser-only publication action rejected at every severity; a different authenticated Approver succeeds + both
+    identities are audited · Test: **invariant** — self-approval rejected for publication (S7) · Skills:
     security-best-practices
 
 - [ ] **F4 — Regression & validation harness (tiered) + SLO-in-CI promotion**

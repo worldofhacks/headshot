@@ -475,8 +475,8 @@ class SecureCampaignCoordinator:
             measurements=reread_measurements,
         )
 
-        # A confirmed exploit is a critical finding that must be HUMAN-APPROVED before any
-        # publication / remediation / regression-promotion — but it does NOT stop the campaign.
+        # A confirmed exploit may create a draft, but EVERY finding/report publication and any
+        # remediation require HUMAN APPROVAL. That gate does not stop unrelated campaign work.
         requires_human_approval = verdict.get("state") == "EXPLOIT_CONFIRMED"
 
         # (8) IMMUTABLE evidence + verdict manifests (redacted; no raw secret/hostile content).

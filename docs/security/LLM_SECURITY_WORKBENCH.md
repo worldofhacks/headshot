@@ -44,7 +44,7 @@ Judge.
   organization-scoped projections.
 - ZAP is passive and exact-origin. Active DAST, public out-of-band callbacks, DOM testing, and
   instrumented-runtime testing are explicitly not claimed.
-- Tool output remains `scan_only`; critical publication stays
+- Tool output remains `scan_only`; publication of every finding/report stays
   `blocked_pending_human_approval` until an authorized human decision.
 
 This design follows the assignment's requirement to combine deterministic validation, replay,

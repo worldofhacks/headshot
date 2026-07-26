@@ -113,9 +113,9 @@ authoritative measurement.
 | `D_N` | Attempts conclusively decided by a trusted deterministic oracle/canary, requiring no primary LLM Judge call. |
 | `X_N` | Attempts conclusively stopped before any LLM request by missing/malformed evidence, integrity failure, an uncalibrated category gate, or a pre-Judge timeout. Post-request timeouts, contradictions, and disagreements are not skips. |
 | `E_N = A_N - D_N - X_N` | Measured attempts eligible for a primary LLM Judge request; validate that the three buckets are disjoint. Every initiated or billed request remains in the role call/token aggregates even when it times out or ends `INDETERMINATE`. |
-| `s_N` | Approved, measured dual-judge sampling fraction over eligible non-oracle attempts; never implicitly 100%. |
-| `Q_N` | Threshold-near/disputed attempts selected for secondary judging outside the random sample. |
-| `G_N` | Actual total model-call count for scheduled ground-truth calibration at the tier/cadence, including every primary and independent calibration call. |
+| `s_N` | Optional future secondary-evaluator sampling fraction over eligible non-oracle attempts. The current gate has one evaluator, so this is not a present capability or assumed cost. |
+| `Q_N` | Threshold-near/disputed attempts sent for a separately implemented secondary evaluation, if one actually exists; otherwise not applicable. |
+| `G_N` | Actual model-call count for scheduled ground-truth calibration at the tier/cadence. Count only calls that occurred; do not infer a second evaluator. |
 | `R_N`, `J_N`, `Doc_N`, `O_N` | Actual Red Team, Judge, Documentation, and Orchestrator model-call counts. |
 | `U`, `C`, `Out` by role/mode | Measured uncached-input, cached-input, and output token aggregates. |
 | `B` by provider/model/mode/date | Published token billing unit for the applicable rate; do not assume that every quote uses the same unit. |
@@ -154,7 +154,7 @@ provider price is assumed here.
 | Role | Workload accounting | Hosted cost status |
 |---|---|---|
 | Red Team | `R_N` includes only model-backed generation/mutation. Deterministic seed replay creates no inference call. Apply the hosted formula only when the Red Team uses token-priced hosted OSS. | `Hosted_RT(N)` = **TBD — projected, unmeasured** |
-| Judge | Primary live subjects are `E_N`. Secondary live subjects are the deduplicated union of the approved sample from `E_N` and `Q_N`; never all live cases by default. Add the separate measured calibration calls `G_N`. Use actual billed calls, including only measured retries/fallbacks. Deterministic `D_N` and fail-closed `X_N` cases skip primary LLM judging. | `Hosted_Judge(N)` = **TBD — projected, unmeasured** |
+| Judge | Primary live subjects are `E_N`. Add measured calibration calls `G_N`. Add secondary-evaluator calls only if that capability is separately implemented and observed; it does not exist at this preparation base. Use actual billed calls and only observed retries/fallbacks. Deterministic `D_N` and fail-closed `X_N` cases skip primary LLM judging. | `Hosted_Judge(N)` = **TBD — projected, unmeasured** |
 | Documentation | `Doc_N = F_N` only when each approved finding produces one draft; otherwise use measured drafts/revisions. It scales with confirmed approved findings, not directly with `N`. | `Hosted_Doc(N)` = **TBD — projected, unmeasured** |
 | Orchestrator | Use measured planning/prioritization calls `O_N`, including retry or fallback calls only when observed. Do not assume one call per run. | `Hosted_Orch(N)` = **TBD — projected, unmeasured** |
 
@@ -268,7 +268,7 @@ TierTotal(N) = TierFixed(N) + TierVariable(N)
 | Complete test-runs | Required architectural change | Fixed costs | Variable costs and formula | Projected total |
 |---:|---|---|---|---|
 | 100 | Baseline secure run. Instrument per-role tokens/calls, oracle skips, attempt distribution, latency, storage bytes, and peak concurrency. Keep one bounded worker/app and Postgres/observability baseline only after measurement confirms capacity. | `PlatformFixed(100) + CapacityFixed(100)` for the selected mode. **TBD — projected, unmeasured.** | Hosted inference for selected roles, `CapacityVariable(100)`, and `PlatformVariable(100)`. Preserve separate role lines. **TBD — projected, unmeasured.** | `TierTotal(100)` = **TBD — projected, unmeasured** |
-| 1,000 | Add shared-context prompt caching where traces prove reuse and provider semantics permit it; route eligible asynchronous work through Batch. Measure hit/acceptance rates and latency impact. | Baseline commitments plus any minimum batch/worker capacity. **TBD — projected, unmeasured.** | Apply actual cached/uncached/batch token buckets, measured Judge skips and sampled dual-judging, storage/trace growth, and egress. **TBD — projected, unmeasured.** | `TierTotal(1K)` = **TBD — projected, unmeasured** |
+| 1,000 | Add shared-context prompt caching where traces prove reuse and provider semantics permit it; route eligible asynchronous work through Batch. Measure hit/acceptance rates and latency impact. | Baseline commitments plus any minimum batch/worker capacity. **TBD — projected, unmeasured.** | Apply actual cached/uncached/batch token buckets, measured Judge skips, any separately implemented and observed secondary evaluations, storage/trace growth, and egress. **TBD — projected, unmeasured.** | `TierTotal(1K)` = **TBD — projected, unmeasured** |
 | 10,000 | Move Red Team generation fully off frontier to measured hosted-OSS or local capacity; add durable queue backpressure and time-range partition the exploit database. Size capacity to the completion window. | Reserved/local accelerator capacity, worker floor, partitioned Postgres, platform/observability base. **TBD — projected, unmeasured.** | Capacity hours/power/operator time; hosted Judge/Documentation/Orchestrator tokens; queue/storage/observability/egress use. **TBD — projected, unmeasured.** | `TierTotal(10K)` = **TBD — projected, unmeasured** |
 | 100,000 | Use stratified regression: every critical and recently reopened case on target change, sampled lower-risk cases, and a scheduled full suite. Add BRIN on timestamp, partial B-tree indexes on hot partitions, a dedicated worker, and bounded verdict caching keyed by target version plus case-content hash. | Dedicated worker/reserved capacity, partitioned/indexed Postgres, platform and observability commitments. **TBD — projected, unmeasured.** | Measured stratified workload rather than a 100K full-suite assumption; invalidated-cache misses, capacity hours, eligible hosted inference, retained evidence/traces, and egress. **TBD — projected, unmeasured.** | `TierTotal(100K)` = **TBD — projected, unmeasured** |
 
@@ -289,7 +289,7 @@ Neither scenario is currently populated because its authoritative inputs are una
 
 ## Present MVP cost versus future scale
 
-### Present MVP at the 2026-07-23 release candidate
+### Present pre-release evidence boundary
 
 - Offline corpus validation, deterministic fake execution, and tests do not invoke hosted inference.
 - No live campaign has produced attempts, Judge usage, Documentation drafts, or Orchestrator calls.
@@ -301,8 +301,8 @@ Neither scenario is currently populated because its authoritative inputs are una
 
 The four tiers become numeric only after a representative authorized synthetic-data campaign captures
 the inputs above. Recompute from measurements at each tier; do not extrapolate a single average across
-architecture changes. Preserve the deterministic/oracle skip ratio and sampled dual-judge policy in the
-measurement export so cost optimization cannot silently weaken Judge safety.
+architecture changes. Preserve the deterministic/oracle skip ratio and the actual calibration/secondary
+evaluation policy in the measurement export so cost optimization cannot silently weaken Judge safety.
 
 ## Inputs required to replace TBDs
 

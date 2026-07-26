@@ -76,8 +76,9 @@ autonomy needs a trust boundary the generator must not hold. **Separation is the
 an org chart.**
 
 **Say (2) — why an independent Judge.** "An agent that both attacks and judges is compromised by
-design." The Judge shares no model, no provider, and no process with the Red Team — independence *by
-construction*. Its invariant — never approve a confirmed exploit — is **`[selected]` deterministic and
+design." The Judge is a separate evaluator role with a different model identity and no generation,
+target-credential, or publication authority. OpenRouter fronts both roles, so provider separation is
+not claimed. Its invariant — never approve a confirmed exploit — is **`[selected]` deterministic and
 fail-closed**: a canary/oracle hit overrides the LLM Judge, and ambiguity resolves to
 `INDETERMINATE`/`ERROR`, which never count as safe. Model independence is **defense-in-depth, not the
 invariant** (`ARCHITECTURE.md` §5, D13) — see S4b.
@@ -91,9 +92,10 @@ reading the system's own state to decide what to test next.
 unreviewed disclosure.
 
 **If pushed — "isn't this just microservices with prompts?"** "The boundaries are trust boundaries, not
-deployment boundaries. The Red Team runs an uncensored model over untrusted output; the Judge runs a
-different vendor under refusal-integrity. Merging them doesn't cost modularity — it costs the security
-property."
+deployment boundaries. The Red Team handles untrusted generation; the Judge consumes only the
+recorder's typed evidence under deterministic precedence and exact-identity calibration. They use
+different model families but one OpenRouter control plane, so the security property is role authority
+and evidence precedence, not provider diversity."
 
 **Concede.** More agents means more coordination surface, and every boundary is somewhere a contract
 can drift. That is exactly why contracts are versioned and both-sided contract-tested (S4d).
@@ -151,39 +153,31 @@ none of these tools is claimed as executed or as verdict authority.
 
 ### S4b — Per-role models `must-land`
 
-**Say.** "Frontier models refuse authorized offensive generation, so the Red Team is an **uncensored
-open-weights model** — `[selected]` **hosted-OSS by default** for the deployed/overnight path (so
-'continuous, unattended' is real on Railway), with a **local 24–33B on the dev Mac** as a config switch
-for development and the local cost-baseline. The **Judge default is Claude Sonnet 5 (`claude-sonnet-5`)**, chosen on **measured
-calibration, false-negative rate, consistency, latency, and cost** — *not* because of refusal behavior:
-the 'never approve a confirmed exploit' invariant is enforced **deterministically** (oracle/canary
-precedence, fail-closed), and refusal is a model *characteristic and failure mode*, not a security
-control. Documentation default is **GPT-5.4 (`openai/gpt-5.4`)** — a *different vendor from the Judge*, so a single-vendor failure
-can't corrupt the trust chain (defense-in-depth, not the invariant)."
+**Say.** "The frozen OpenRouter envelope is
+`orchestrator=anthropic/claude-opus-4.8`,
+`red_team=qwen/qwen3.5-397b-a17b`,
+`judge=google/gemini-2.5-pro`, and
+`documentation=openai/gpt-5.4`. Those names are configuration, not live proof. For release we first
+stage one canonical four-role configuration and require the command `resource_id` to equal its
+recomputed hash. Runner must resolve all four sealed provider references plus Langfuse, and Agents
+must show OpenRouter and the exact identities for that hash. We then hand the observed Judge
+identity/hash to ground-truth calibration. It must pass, be re-attested for that identity, and be
+explicitly human-enabled before a campaign can launch. Missing, failed, merely passed, invalidated, or
+drifted calibration fails closed."
 
-> **Say the current model names (reconciled 2026-07-25).** The frozen hosted set is
-> `orchestrator=anthropic/claude-opus-4.8`, `red_team=qwen/qwen3.5-397b-a17b`,
-> **`judge=google/gemini-2.5-pro`**, `documentation=openai/gpt-5.4`
-> (`src/agentforge/agents/hosted.py:31-38`, rejected on deviation at `:352-353`). The vendor-separation
-> conclusion still holds — Google Judge vs OpenAI Documentation — but do **not** reach it via
-> "the Judge is Anthropic Sonnet": that premise is stale, and a reviewer who checks `hosted.py` will
-> catch it.
->
-> **If pushed on enforcement, concede immediately.** The `Judge.vendor != Documentation.vendor` check is
-> **specified but not implemented** — no such check exists in `src/agentforge/agents/**` and no test
-> references it. The property holds *by configuration*, and one provider (`openrouter`) fronts all four
-> roles, so provider-level correlated failure is not mitigated. Say that plainly; it is recorded in
-> `ARCHITECTURE.md` §20 and the drift register.
+**Why it holds.** Deterministic oracle/canary precedence enforces the confirmed-exploit invariant;
+exact configuration hashing and calibration bind non-oracle model authority to the identity that was
+actually deployed. Google Judge and OpenAI Documentation are distinct in the frozen configuration,
+but this is defense-in-depth, not an enforced vendor-failover guarantee, and one OpenRouter control
+plane fronts all four roles.
 
-**Why it holds.** Each role's model is chosen for the property that role must guarantee, and vendor
-diversity across Judge and Documentation breaks correlated failure.
+**If pushed — "what constrains offensive generation?"** "The Red Team holds no target credential or
+egress path. Its candidates can leave quarantine only through exact-scope authorization and the
+Policy Gateway's allowlist, synthetic-data, budget, rate, and abort checks. A human must approve every
+finding/report publication."
 
-**If pushed — "you're running an uncensored model?"** "The model is unconstrained; the *system* around
-it is not. Allowlisted target only, synthetic data only, per-target scoped credentials, budget and rate
-caps, full trace capture, human approval before any finding publishes."
-
-**Concede.** Local throughput is unmeasured. Token profiles and Mac tok/s get measured at MVP **before
-any cost number is presented** — see S8.
+**Concede.** The packet has no final live identity/calibration artifact, performance measurement, or
+invoice reconciliation. Do not present configuration ceilings or test fixtures as evidence — see S8.
 
 ---
 
@@ -194,7 +188,7 @@ holds no credentials and has no path to the target — its only exit is a **trus
 Execution Recorder** that enforces the allowlist, per-target scoped credentials, synthetic-data-only,
 budget and rate caps, and a hard abort, and records a **hashed, append-only `AttemptResult`** the Judge
 reads. Credentials are **bound to their target** — cross-target use is impossible by construction, and
-the allowlist is environment-scoped. Humans approve any critical finding and any remediation. **That is
+the allowlist is environment-scoped. Humans approve every finding/report publication and any remediation. **That is
 where autonomy stops.**"
 
 **Why it holds.** Two independent controls: the allowlist decides what you *may* hit; per-target scoped
@@ -249,9 +243,10 @@ separate gates."
 **Why it holds.** Public exposure is intentionally one service. By contract the scheduler only enqueues
 and the runner claims durable work; Postgres carries queue, checkpoints, evidence, findings, approvals,
 and audit data. The private entrypoints require the exact schema head and expose no public listener.
-Pre-deploy Alembic migrations use expand/contract discipline, `/health` proves liveness, `/ready` gates
-DB/schema/local-auth-config readiness, and deployment-history rollback is paired with Postgres PITR because
-rolling back a container does not roll back data.
+Pre-deploy Alembic migrations use expand/contract discipline, `/health` proves liveness, and `/ready`
+gates DB/schema/local-auth-config readiness. For this synthetic assignment the safety boundary is the
+clean staging rehearsal, quiescence, additive migrations, and compatible image rollback; no backup or
+PITR artifact is claimed.
 
 **If pushed — "what is actually live?"** "Staging Web is public at
 `https://web-staging-8e30.up.railway.app`; Runner and Scheduler are private, PostgreSQL is at `0021`,
@@ -317,19 +312,19 @@ with the reason — the eval suite draws its ≥3 categories from the live-testa
 
 | They ask | You answer |
 |---|---|
-| How do you keep the Judge honest / detect drift? | The invariant is **code, not model behavior**: a deterministic oracle/canary hit overrides the LLM Judge, ambiguity fails closed (`INDETERMINATE`/`ERROR`, never "safe"). Drift is caught by async dual-judging over the ground-truth set + a stratified live sample; crossing a drift threshold disables LLM-only dispositions for that category (`judge-calibration`). |
+| How do you keep the Judge honest / detect drift? | The invariant is **code, not model behavior**: a deterministic oracle/canary hit overrides the LLM Judge, ambiguity fails closed (`INDETERMINATE`/`ERROR`, never "safe"). The final hosted campaign cannot launch until calibration re-attests the exact observed deployed identity/hash, passes, and is human-enabled. Missing, failed, unenabled, invalidated, or drifted calibration closes the gate. |
 | What stops the transcript from injecting your *own* Judge or Documentation agent? | A target response echoed back is a live injection aimed at the next LLM — so the Judge/Documentation treat transcript content as **untrusted data, not instructions**: rubric-as-system + fenced transcript, structured extraction, and Documentation renders from structured fields + escaped evidence. Platform-injection cases are in the Judge calibration set. |
 | Where did you deliberately *not* use AI? | The Policy Gateway (deterministic policy), evidence hashing + DB-role enforcement, the oracles/canaries, and validators shared by skill *and* CI: contract-compat, eval-case schema, duplicate-sequence, data-quality — plus Semgrep/ZAP. AI where judgment is needed, determinism where it isn't. |
 | How is this not turned against systems it shouldn't attack? | Allowlist + per-target credential binding + synthetic-data assertion + budget/rate caps + abort — all enforced in the **Policy Gateway's runtime code, independent of trigger** (not a skill flag). Every live run is fully traced. |
 | What if the Red Team produces genuinely harmful content? | Quarantined; holds no credentials; only ever executed via the trusted gateway against the allowlisted target; never runs against our control plane; treated as untrusted data even by the Judge/Documentation. |
-| How is cost not tokens × N? | Two line families on different functions: **hosting** is a step function of peak concurrency; **inference** is modeled *separately* — hosted = measured tokens × current rates (prompt-cache + Batch adjusted), local = amortized capacity — never a `list_price ÷ throughput` figure (that is dimensionally invalid). Each tier (100→100K) names the architectural change it forces. **Numbers are deferred to measurement.** |
-| Deploy / rollback? | `[measured]` Staging used the required Runner-first sequence from candidate `2069036e`, reached schema `0021`, then activated Scheduler and public Web; probes passed. `[planned]` Production and the rollback exercise remain. Deployment history reverts *code*; **expand/contract migrations + Postgres PITR** are the data-recovery design. |
+| How is cost not tokens × N? | Three separate families use their own drivers: hosted inference uses observed provider billing/usage, capacity-priced inference uses measured concurrency and utilization, and platform operations uses measured compute/storage/egress. Each tier (100→100K) names the architectural change it forces. **Numbers are deferred to retained measurement and invoice evidence.** |
+| Deploy / rollback? | `[measured]` Staging used the required Runner-first sequence from candidate `2069036e`, reached schema `0021`, then activated Scheduler and public Web; probes passed. `[planned]` The exact final candidate still needs the same staging proof and production sequence. Additive serialized migrations, service quiescence, and the clean staging rehearsal are the safety net; a blank surface triggers Web-only rollback while Runner and data stay in place. |
 | Who can access the console/API? | `[measured]` In staging, public responses are limited to `/health`, `/ready`, built assets, and the non-data SPA/Clerk shell; a protected request without a token returned `401`. `[implemented]` The code accepts only an active Bearer `session_token` from the exact authorized party and Headshot Organization. `[planned]` Real-user Organization/permission/MFA verification remains. |
 | What happens if Clerk or auth config fails? | Issued sessions verify networklessly from the pinned PEM key, so JWKS is not a hot-path dependency. Missing/invalid auth is `401`, valid identity without org/permission/distinct approver is `403`, and SDK/verifier/security-config failure is fail-closed `503`. Never log the token or authorization header. |
 | Can the launcher approve their own campaign? | No. The authenticated launcher is persisted with the exact authorization scope; approval reloads it server-side, and both application logic and a database trigger compare immutable verified user IDs. The browser cannot provide launcher identity. Queue completion is not approval. There is no solo or emergency bypass. |
 | Is campaign launch operational? | The private staging Runner is deployed and healthy, but the deployment was smoke-only: no campaign, provider call, or target call ran. A live launch remains unverified until exact target authorization, a distinct approver, preflight, and the governed role composition all pass. Authentication or deployment readiness never bypasses those gates. |
 | What backs the queue, and what happens when it backs up? | One Postgres (`SKIP LOCKED`); jobs accumulate *durably* — nothing dropped — depth is visible, and the cost governor throttles new campaigns. Graceful, observable degradation. |
-| One honest weakness? | LangGraph checkpoints are crash-persistence, not exactly-once durable execution — mitigated with an app-level lock; DBOS-on-Postgres is the path if unattended multi-hour campaigns come into scope. |
+| One honest weakness? | An external HTTP side effect cannot be made atomic with the local database. The Runner reserves each physical coordinate before sending, preserves an ambiguous unobserved result, and refuses blind replay; this favors bounded spend and audit truth over pretending network exactly-once delivery. |
 
 ---
 

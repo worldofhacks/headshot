@@ -53,14 +53,13 @@ BAND E  PRIVATE POSTGRES      green   "Railway managed DB · exploit DB · check
                                      (cylinder; no public endpoint)
         PRIVATE RUNNER        blue    "Railway private service · agents and campaign workers"
         LANGFUSE + OTEL       green   "traces · per-agent cost"
-        LANGGRAPH             blue    "orchestration + interrupt()"
+        DURABLE RUNNER        blue    "custom orchestration + PostgreSQL queue"
 LEFT RAIL
         COVERAGE + FINDINGS   green   "SQL view — system of record"
 Z2      LIVE OPENEMR CO-PILOT gray    "external deployed API + UI"
         MODEL PROVIDERS       gray    (cloud icon)
-        LOCAL OSS MODEL       gray    (server icon)
 BELOW-RIGHT
-        HUMAN APPROVAL        yellow  "critical publish + remediation" (diamond)
+        HUMAN APPROVAL        yellow  "every publication + remediation" (diamond)
         VULN REPORT           gray    (document icon)
 
 === EDGES ===
@@ -87,9 +86,9 @@ solid unless noted
 14  BAND B/C/D (grouped) -> LANGFUSE     "traces · cost"              [ONE edge]
 15  PRIVATE POSTGRES  -> COVERAGE+FINDINGS "SQL view"
 16  MODEL PROVIDERS   -> ORCHESTRATOR    "Opus 4.8"        [DASHED]
-17  MODEL PROVIDERS   -> JUDGE           "Sonnet 4.6"      [DASHED]
+17  MODEL PROVIDERS   -> JUDGE           "Gemini 2.5 Pro"  [DASHED]
 18  MODEL PROVIDERS   -> DOCUMENTATION   "GPT-5.4"         [DASHED]
-19  LOCAL OSS MODEL   -> RED TEAM        "local 24-33B"    [DASHED]
+19  MODEL PROVIDERS   -> RED TEAM        "Qwen 3.5 397B"   [DASHED]
 
 === POLICY BADGES (small dashed callouts, top-right inside Z1) ===
 blue dashed    "Versioned JSON Schemas"            -> points at inter-agent edges 2,7,8,11
