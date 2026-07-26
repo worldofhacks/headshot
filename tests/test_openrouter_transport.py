@@ -504,6 +504,8 @@ def test_transport_rejects_wrong_prompt_version_before_any_side_effect() -> None
         ("atlas-cloud", "Together", False),
         ("digitalocean", "DigitalOcean", True),
         ("digitalocean", "Together", False),
+        ("chutes", "Chutes", True),
+        ("chutes", "DigitalOcean", False),
     ),
 )
 def test_served_provider_normalization_includes_authorized_routes(

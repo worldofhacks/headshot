@@ -76,6 +76,7 @@ _OPENROUTER_SERVED_NAMES: Final = {
     "openai": frozenset({"OpenAI"}),
     "atlas-cloud": frozenset({"AtlasCloud"}),
     "digitalocean": frozenset({"DigitalOcean"}),
+    "chutes": frozenset({"Chutes"}),
 }
 
 
