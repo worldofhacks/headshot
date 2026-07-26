@@ -692,8 +692,13 @@ def build_birdseye_snapshot(
         connection,
         "SELECT component_id, name, kind, availability, detail, heartbeat_at "
         "FROM runtime_component_status WHERE environment = :environment "
+        "AND (kind <> 'model-runtime' OR component_id = ("
+        "SELECT configuration_sha256 FROM hosted_configuration_sets "
+        "WHERE organization_id = :org "
+        "ORDER BY created_at DESC, configuration_sha256 DESC LIMIT 1"
+        ")) "
         "ORDER BY component_id",
-        {"environment": environment},
+        {"environment": environment, "org": organization_id},
     )
     seen = {"web-api", "postgres"}
     for component in persisted_components:
