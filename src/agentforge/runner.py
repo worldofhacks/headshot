@@ -2250,7 +2250,26 @@ class DurableCampaignRunner:
                     reason_code=code,
                 )
             with contextlib.suppress(Exception):
-                self.queue.fail(job, failure_code=code, retryable=False)
+                # Persist only exception type names and bounded machine codes. Messages may
+                # contain provider- or target-controlled text and never belong in queue state,
+                # but an opaque ``campaign_aborted`` makes live diagnosis impossible.
+                failure_chain: list[str] = []
+                cause: BaseException | None = exc
+                seen: set[int] = set()
+                while cause is not None and id(cause) not in seen and len(failure_chain) < 6:
+                    seen.add(id(cause))
+                    cause_code = getattr(cause, "code", None)
+                    label = type(cause).__name__
+                    if isinstance(cause_code, str) and cause_code:
+                        label += f"[{cause_code[:64]}]"
+                    failure_chain.append(label)
+                    cause = cause.__cause__ or cause.__context__
+                self.queue.fail(
+                    job,
+                    failure_code=code,
+                    failure_message=" <- ".join(failure_chain),
+                    retryable=False,
+                )
             raise DispatchUnavailable(code) from exc
         finally:
             with contextlib.suppress(Exception):

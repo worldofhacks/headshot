@@ -576,7 +576,7 @@ def test_transport_disables_fallback_and_verifies_usage_and_identity() -> None:
     assert "test-provider-value" not in repr(result)
 
 
-def test_red_team_request_and_reservation_stay_at_4096_while_accounting_accepts_overage() -> None:
+def test_red_team_uses_bounded_reasoning_while_accounting_accepts_reported_overage() -> None:
     seen: list[httpx.Request] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -635,8 +635,8 @@ def test_red_team_request_and_reservation_stay_at_4096_while_accounting_accepts_
     )
 
     payload = __import__("json").loads(seen[0].content)
-    assert payload["max_tokens"] == 5_120
-    assert payload["reasoning"] == {"max_tokens": 4_096}
+    assert payload["max_tokens"] == 1_536
+    assert payload["reasoning"] == {"max_tokens": 512}
     assert result.output == {"case_ref": "case-1"}
     assert result.output_tokens == 274
     assert result.reasoning_tokens == 4_846

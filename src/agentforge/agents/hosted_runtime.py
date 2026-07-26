@@ -482,12 +482,12 @@ class HostedRoleRuntime:
                 result.output_tokens,
                 result.reasoning_tokens,
             )
-        ) or (
-            result.input_tokens > bounds.input_tokens
-            or result.output_tokens > bounds.output_tokens
-            or result.reasoning_tokens > bounds.reasoning_tokens
         ):
-            raise HostedCompositionError("provider result usage exceeds the authorized call bounds")
+            raise HostedCompositionError("provider result usage is invalid")
+        # OpenRouter's measured usage is already reconciled by HostedUsageLedger against the
+        # authorization-bound role and campaign totals. Per-call bounds are admission estimates,
+        # not a second response contract: some endpoints legitimately report prompt or reasoning
+        # usage above the requested estimate.
         try:
             measured_cost = Decimal(result.measured_cost_usd)
         except (InvalidOperation, TypeError, ValueError) as exc:

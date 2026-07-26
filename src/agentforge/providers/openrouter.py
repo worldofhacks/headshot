@@ -45,7 +45,12 @@ _MILLION = Decimal(1_000_000)
 _COST_QUANTUM = Decimal("0.000000000001")
 _MAX_COST = Decimal("99999999.999999999999")
 _MAX_PROVIDER_TOKEN_COUNT = 2_147_483_647
-_RED_TEAM_REQUEST_REASONING_TOKENS = 4_096
+# The Red Team is not authoring a fresh attack here. It selects one exact ``case_ref`` from a
+# closed, authorization-bound enum (one option for the demo workloads). Asking a 397B model for
+# 4,096 thinking tokens made that single choice take more than four minutes on the reviewed
+# OpenRouter route. Keep the generous accounting envelope, but request only the thinking budget
+# this bounded selector needs.
+_RED_TEAM_REQUEST_REASONING_TOKENS = 512
 _RETRYABLE_STATUS = frozenset({429, 502, 503})
 # OpenRouter returns the requested public model ID in ``model`` but identifies some selected
 # upstream endpoints by a dated provider-canonical ID.  Those values are not substitutions: they
@@ -960,9 +965,9 @@ class OpenRouterTransport:
         reservation: _Reservation,
         physical_attempts: int,
     ) -> OpenRouterResult:
-        # The authorization ledger may reserve headroom for provider-reported Qwen usage that
-        # exceeds its requested thinking budget. Keep the physical Red Team request identical:
-        # one 4,096-token reasoning request for the same exact case-selection task.
+        # The authorization ledger reserves headroom for provider-reported Qwen usage that can
+        # exceed its requested thinking budget. The request itself remains a bounded one-choice
+        # case selection and does not need the entire accounting envelope.
         requested_reasoning_tokens = (
             min(reservation.reasoning_tokens, _RED_TEAM_REQUEST_REASONING_TOKENS)
             if configuration.role == "red_team"
