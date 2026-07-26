@@ -57,7 +57,12 @@ describe("non-optimistic command controls", () => {
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Approve exact scope" }));
-    expect(await screen.findByText("The command was not acknowledged.")).toBeTruthy();
+    // The refusal REASON must reach the operator. Rendering a bare "not acknowledged" made a
+    // permission denial, an expired authorization, a stale runner heartbeat and a dropped
+    // connection all look identical, which is what made a real launch failure undiagnosable.
+    expect(
+      await screen.findByText("The command was not acknowledged: ambiguous transport failure."),
+    ).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Approve exact scope" }));
     expect(await screen.findByText(/Server acknowledged · ack-replayed/)).toBeTruthy();
 
