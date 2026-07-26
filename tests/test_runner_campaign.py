@@ -1520,10 +1520,10 @@ def test_largest_reviewed_batch_fits_frozen_models_and_closed_usd_caps() -> None
     prices = {
         "orchestrator": (Decimal("5"), Decimal("25"), Decimal("25"), Decimal("4")),
         "red_team": (
-            Decimal("0.39"),
-            Decimal("2.34"),
-            Decimal("2.34"),
-            Decimal("1"),
+            Decimal("0.385"),
+            Decimal("2.45"),
+            Decimal("2.45"),
+            Decimal("6"),
         ),
         "judge": (Decimal("1.25"), Decimal("10"), Decimal("10"), Decimal("5")),
         "documentation": (
@@ -1539,7 +1539,7 @@ def test_largest_reviewed_batch_fits_frozen_models_and_closed_usd_caps() -> None
         role_configuration.prices.output_usd_per_million_tokens = output_price
         role_configuration.prices.reasoning_usd_per_million_tokens = reasoning_price
         role_configuration.limits.max_usd = usd_cap
-    configuration.global_limits.max_usd = Decimal("10")
+    configuration.global_limits.max_usd = Decimal("12")
 
     _require_hosted_workload_capacity(
         configuration=configuration,  # type: ignore[arg-type]
