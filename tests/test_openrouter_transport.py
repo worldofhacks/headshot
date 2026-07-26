@@ -812,6 +812,90 @@ def test_transport_records_and_settles_coherent_model_substitution() -> None:
     assert transport.ledger.snapshot.unresolved_exposure_usd == 0
 
 
+@pytest.mark.parametrize(
+    ("role_name", "selected_provider", "selected_model"),
+    (
+        (
+            "orchestrator",
+            "Anthropic",
+            "anthropic/claude-4.8-opus-20260528",
+        ),
+        (
+            "red_team",
+            "Together",
+            "qwen/qwen3.5-397b-a17b-20260216",
+        ),
+        (
+            "documentation",
+            "OpenAI",
+            "openai/gpt-5.4-20260305",
+        ),
+    ),
+)
+def test_transport_accepts_reviewed_provider_canonical_endpoint_model(
+    role_name: str,
+    selected_provider: str,
+    selected_model: str,
+) -> None:
+    configuration = _configuration()
+    role = next(item for item in configuration.roles if item.role == role_name)
+    payload = _success().json()
+    payload["model"] = role.model_id
+    payload["openrouter_metadata"]["requested"] = role.model_id
+    endpoint = payload["openrouter_metadata"]["endpoints"]["available"][0]
+    endpoint["provider"] = selected_provider
+    endpoint["model"] = selected_model
+    recorder = _ProviderRecorder()
+    transport = OpenRouterTransport(
+        configuration=configuration,
+        credential_resolver=lambda _reference: Secret("test-provider-value"),
+        client=httpx.Client(
+            transport=httpx.MockTransport(lambda _request: httpx.Response(200, json=payload))
+        ),
+        lineage_recorder=recorder,
+    )
+
+    result = transport.invoke(
+        role=role.role,
+        messages=_messages(role=role_name),
+        output_schema={"type": "object"},
+        schema_name=f"{role_name}_output",
+        generation_policy_sha256=_digest("generation-policy"),
+        input_tokens_upper_bound=100,
+        max_output_tokens=50,
+        max_reasoning_tokens=20,
+        timeout_seconds=5,
+        provider_context=_provider_context(configuration, role_name),
+    )
+
+    assert result.returned_model == role.model_id
+    assert result.upstream_provider == selected_provider
+    assert recorder.events[0].status == "succeeded"
+
+
+def test_transport_rejects_unreviewed_provider_canonical_endpoint_model() -> None:
+    payload = _success().json()
+    payload["openrouter_metadata"]["endpoints"]["available"][0]["model"] = (
+        "google/gemini-2.5-pro-unreviewed"
+    )
+    configuration = _configuration()
+    recorder = _ProviderRecorder()
+    transport = OpenRouterTransport(
+        configuration=configuration,
+        credential_resolver=lambda _reference: Secret("test-provider-value"),
+        client=httpx.Client(
+            transport=httpx.MockTransport(lambda _request: httpx.Response(200, json=payload))
+        ),
+        lineage_recorder=recorder,
+    )
+
+    with pytest.raises(HostedProviderError) as raised:
+        _invoke_judge(transport)
+
+    assert raised.value.code == "provider-identity-invalid"
+    assert recorder.events[0].status == "identity_invalid"
+
+
 def test_transport_records_served_provider_substitution_as_invalid_output() -> None:
     payload = _success().json()
     payload["openrouter_metadata"]["endpoints"]["available"][0]["provider"] = "Together"

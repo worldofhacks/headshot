@@ -46,6 +46,32 @@ _COST_QUANTUM = Decimal("0.000000000001")
 _MAX_COST = Decimal("99999999.999999999999")
 _MAX_PROVIDER_TOKEN_COUNT = 2_147_483_647
 _RETRYABLE_STATUS = frozenset({429, 502, 503})
+# OpenRouter returns the requested public model ID in ``model`` but identifies some selected
+# upstream endpoints by a dated provider-canonical ID.  Those values are not substitutions: they
+# are the currently reviewed physical endpoint identities behind the exact public IDs.  Keep this
+# authority closed and fail-closed so an arbitrary endpoint alias can never satisfy the
+# returned-model invariant.
+_AUTHORIZED_ENDPOINT_MODELS: Mapping[str, frozenset[str]] = {
+    "anthropic/claude-opus-4.8": frozenset(
+        {
+            "anthropic/claude-opus-4.8",
+            "anthropic/claude-4.8-opus-20260528",
+        }
+    ),
+    "qwen/qwen3.5-397b-a17b": frozenset(
+        {
+            "qwen/qwen3.5-397b-a17b",
+            "qwen/qwen3.5-397b-a17b-20260216",
+        }
+    ),
+    "google/gemini-2.5-pro": frozenset({"google/gemini-2.5-pro"}),
+    "openai/gpt-5.4": frozenset(
+        {
+            "openai/gpt-5.4",
+            "openai/gpt-5.4-20260305",
+        }
+    ),
+}
 _EVENT_ERRORS = {
     "timeout": "provider_timeout",
     "retryable_failure": "provider_retryable",
@@ -1025,11 +1051,19 @@ class OpenRouterTransport:
             requested_model=requested_model,
         )
         model_substituted = returned_model_valid and returned_model != requested_model
+        selected_model_authorized = (
+            selected_model_valid
+            and selected_model
+            in _AUTHORIZED_ENDPOINT_MODELS.get(
+                requested_model,
+                frozenset({requested_model}),
+            )
+        )
         identity_invalid = (
             not router_metadata_valid
             or not returned_model_valid
             or not selected_model_valid
-            or selected_model != returned_model
+            or not selected_model_authorized
             or not upstream_provider_valid
             or not request_id_valid
         )
