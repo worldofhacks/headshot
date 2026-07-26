@@ -45,12 +45,16 @@ _MILLION = Decimal(1_000_000)
 _COST_QUANTUM = Decimal("0.000000000001")
 _MAX_COST = Decimal("99999999.999999999999")
 _MAX_PROVIDER_TOKEN_COUNT = 2_147_483_647
-# The Red Team is not authoring a fresh attack here. It selects one exact ``case_ref`` from a
-# closed, authorization-bound enum (one option for the demo workloads). Asking a 397B model for
-# 4,096 thinking tokens made that single choice take more than four minutes on the reviewed
-# OpenRouter route. Keep the generous accounting envelope, but request only the thinking budget
-# this bounded selector needs.
-_RED_TEAM_REQUEST_REASONING_TOKENS = 512
+# ``max_tokens`` is sent as output + reasoning, and OpenRouter counts reasoning inside the
+# completion. Requesting a smaller reasoning value therefore shrinks the whole completion
+# allowance and can truncate the answer before it is emitted. Measured 2026-07-26 against Chutes
+# with the exact hash-pinned Red Team prompt and a 34-case enum:
+#   reasoning 256 / 512 -> 0% valid, 100% finish_reason=length
+#   reasoning 4096      -> 75% valid, 25% finish_reason=length
+#   reasoning 8192      -> 100% valid, 0% finish_reason=length (6/6)
+# The successful calls reported only one actual reasoning token, so request the full
+# authorization-reserved envelope and settle only the provider's measured usage.
+_RED_TEAM_REQUEST_REASONING_TOKENS = 8_192
 _RETRYABLE_STATUS = frozenset({429, 502, 503})
 # OpenRouter returns the requested public model ID in ``model`` but identifies some selected
 # upstream endpoints by a dated provider-canonical ID.  Those values are not substitutions: they
