@@ -57,6 +57,7 @@ from agentforge.telemetry import OutboundHttpTelemetry
 _OWNED_ROLES = ("orchestrator", "red_team", "judge", "documentation")
 _GLOBAL_USD_CAP = Decimal("10")
 _GLOBAL_CALL_CAP = 4
+_ACCEPTANCE_SIGNAL_PROVENANCE = "hash_verified_postgres"
 _ROLE_USD_CAPS = {
     "orchestrator": Decimal("1.5"),
     "red_team": Decimal("1"),
@@ -539,7 +540,7 @@ def run_agent_acceptance(
                 "campaign_run_id": run_id,
                 "target_ref": "synthetic-acceptance-context",
                 "target_version": "acceptance-1",
-                "signal_provenance": "synthetic_content_addressed_acceptance",
+                "signal_provenance": _ACCEPTANCE_SIGNAL_PROVENANCE,
                 "coverage": [
                     {
                         "category": "prompt_injection",

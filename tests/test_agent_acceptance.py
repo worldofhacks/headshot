@@ -26,6 +26,7 @@ def test_acceptance_generation_policy_covers_the_staged_four_role_set() -> None:
     assert generation_policy.call_bounds["red_team"].reasoning_tokens == 8_192
     assert generation_policy.call_bounds["judge"].reasoning_tokens == 1_024
     assert generation_policy.call_bounds["documentation"].timeout_seconds == 120.0
+    assert acceptance._ACCEPTANCE_SIGNAL_PROVENANCE == "hash_verified_postgres"
 
 
 def test_acceptance_refuses_a_release_without_the_canonical_provider_writer() -> None:
