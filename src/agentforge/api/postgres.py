@@ -3981,7 +3981,7 @@ class PostgresApiBackend(ApiBackend):
                                 }
                             ]
                             if (
-                                self._environment != "staging"
+                                self._environment not in {"staging", "production"}
                                 or row["target_id"] == SYNTHETIC_TARGET_ID
                                 or int(row["safety_caps"]["max_attempts_per_run"]) < 34
                             ):
@@ -4102,8 +4102,10 @@ class PostgresApiBackend(ApiBackend):
                 requested_corpus_id = payload.get("corpus_id")
                 trusted_corpus = self._corpus
                 if requested_corpus_id in LIVE_100_BATCH_IDS:
-                    if self._environment != "staging":
-                        raise ApiConflict("live-100 batch authorization is staging-only")
+                    if self._environment not in {"staging", "production"}:
+                        raise ApiConflict(
+                            "live-100 batch authorization requires a deployed environment"
+                        )
                     try:
                         trusted_corpus = resolve_workload(
                             str(requested_corpus_id),
@@ -4255,10 +4257,12 @@ class PostgresApiBackend(ApiBackend):
             if command == "stage_hosted_configuration_set":
                 configuration = HostedConfigurationSet.from_payload(dict(payload["configuration"]))
                 if (
-                    self._environment != "staging"
+                    self._environment not in {"staging", "production"}
                     and configuration.global_limits.max_calls > HOSTED_MAX_PHYSICAL_CALLS
                 ):
-                    raise ApiConflict("expanded hosted call envelope is staging-only")
+                    raise ApiConflict(
+                        "expanded hosted call envelope requires a deployed environment"
+                    )
                 configuration_sha256 = self._store.stage_hosted_configuration_set(
                     principal=principal,
                     configuration=configuration,

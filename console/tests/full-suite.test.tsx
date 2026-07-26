@@ -134,6 +134,7 @@ describe("full suite console", () => {
   it("keeps authorization valid beyond the complete run timeout", () => {
     expect(authorizationLifetimeSeconds(900)).toBe(1800);
     expect(authorizationLifetimeSeconds(3600)).toBe(4500);
+    expect(authorizationLifetimeSeconds(7200)).toBe(8100);
   });
 
   it("counts only completed server-owned batches and requires all three for completion", () => {

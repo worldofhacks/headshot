@@ -1237,8 +1237,11 @@ class DurableCampaignRunner:
             run_corpus.categories
         ):
             blockers.append("corpus_not_complete")
-        if run_corpus.corpus_id in LIVE_100_BATCH_IDS and self.environment != "staging":
-            blockers.append("live_100_batches_staging_only")
+        if run_corpus.corpus_id in LIVE_100_BATCH_IDS and self.environment not in {
+            "staging",
+            "production",
+        }:
+            blockers.append("live_100_batches_require_deployed_environment")
 
         entry: CatalogEntry | None = None
         surface: AttackSurfaceDefinition | None = None
