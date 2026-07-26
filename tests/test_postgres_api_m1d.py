@@ -478,7 +478,7 @@ def test_agent_models_and_tool_scope_are_real_configurable_projections(
         "provider_model_spend_limit_usd": "5",
         "provider_max_retries": 1,
         "provider_max_concurrency": 1,
-        "provider_timeout_seconds": 180.0,
+        "provider_timeout_seconds": 300.0,
     }
     assert "secretref://" not in targets_response.text
     assert "credential_reference" not in targets_response.text
@@ -1496,7 +1496,7 @@ def test_hosted_authorization_is_bound_but_launch_stays_unavailable_until_compos
                 "provider_model_spend_limit_usd": "5",
                 "provider_max_retries": 1,
                 "provider_max_concurrency": 1,
-                "provider_timeout_seconds": 180.0,
+                "provider_timeout_seconds": 300.0,
             },
             "expires_in_seconds": 600,
         },
@@ -1517,7 +1517,7 @@ def test_hosted_authorization_is_bound_but_launch_stays_unavailable_until_compos
         "provider_model_spend_limit_usd": "5",
         "provider_max_retries": 1,
         "provider_max_concurrency": 1,
-        "provider_timeout_seconds": 180.0,
+        "provider_timeout_seconds": 300.0,
     }
     assert "credential_ref" not in json.dumps(approval_scope)
     preflight = client.get(f"/api/v1/campaign-authorization-requests/{request_id}/preflight")
