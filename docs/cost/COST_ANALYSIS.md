@@ -289,13 +289,43 @@ Neither scenario is currently populated because its authoritative inputs are una
 
 ## Present MVP cost versus future scale
 
-### Present MVP at the 2026-07-23 release candidate
+### Present MVP — measured to date
 
-- Offline corpus validation, deterministic fake execution, and tests do not invoke hosted inference.
-- No live campaign has produced attempts, Judge usage, Documentation drafts, or Orchestrator calls.
-- No dated provider-rate snapshot, token/cache/batch trace, hardware/power allocation, labor record,
-  platform invoice, Postgres utilization, observability usage, or egress record is committed.
-- Therefore actual development spend and current deployed-run cost are **TBD — unmeasured**, not zero.
+One workload has produced **measured, retained, per-call hosted-inference cost**. It is small, but it
+is real spend with a content-addressed source, so it is reported as measurement rather than estimate.
+
+| Measured item | Value | Retained source |
+|---|---|---|
+| Judge-calibration capture (`judge-calibration-20260724`) | **$0.75823375** | `evals/results/judge-calibration-20260724/capture-manifest.json` → `ledger.measured_usd` |
+| Physical provider calls | 54 (54 succeeded, 0 failed) | same, `executions` |
+| Unresolved exposure | $0.00 | same, `ledger.unresolved_exposure_usd` |
+| Model actually served | `google/gemini-2.5-pro` (requested == returned) | `captured-results.json` → `provenance` |
+| Mean cost per label | $0.014041 | 54 per-sample `measured_cost_usd` values, summed independently |
+
+The per-sample values sum to the manifest's own ledger figure exactly, so the total is reproducible
+from the artifact rather than asserted by prose.
+
+**The token profile matters more than the total.** That capture consumed 54,707 input, 9,675 output,
+and **59,310 reasoning** tokens — reasoning exceeded visible output by **6.1×**. Any projection built
+on observed output tokens therefore understates this Judge by roughly six-fold. This is a concrete
+instance of why the forbidden shortcut above (`list price × assumed tokens × N`) fails here: the
+dominant term is invisible to anyone reading the transcripts.
+
+Still genuinely unmeasured, and therefore **TBD — not zero**:
+
+- **Provider invoice.** No dated billing export is committed; the figure above is the provider's
+  per-call reported cost, not a reconciled invoice.
+- **Langfuse usage.** The calibration capture is offline and, by its own manifest, *does not export to
+  Langfuse* — so no Langfuse record of it exists. This line is pending by design, not by oversight.
+- **Railway compute, storage, and egress**, across both environments.
+- **CI/development infrastructure**, hardware/power allocation, and labor.
+- **The final authorized campaign**, which has not run. Its reservation ceiling is **not** its cost —
+  see the caps envelope in the capacity write-up; a `$50` hard cap is a refusal threshold, not spend.
+
+The five committed live attempts in `evals/results/platform-live-run-20260724/` add **no** hosted
+inference to this total: that run used deterministic seed-replay for the Red Team and the
+deterministic oracle-precedence Judge, so no model was billed to us. The target's own inference cost
+is borne by the target owner and is out of scope.
 
 ### Future projections
 
