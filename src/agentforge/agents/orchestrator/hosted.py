@@ -237,14 +237,17 @@ class HostedPlanner:
             "type": "object",
             "properties": {
                 "category": {"enum": list(categories)},
-                "coverage_goal": {"type": "string", "minLength": 1, "maxLength": 1_000},
+                # Anthropic's native structured-output compiler rejects validation-only
+                # string/array keywords such as maxLength, maxItems, and uniqueItems. Keep
+                # the provider-facing schema to its supported structural subset; the
+                # trusted validate_recommendation callback below still enforces every
+                # length, cardinality, uniqueness, and authorization constraint.
+                "coverage_goal": {"type": "string"},
                 "mutation_policy": {"enum": list(_MUTATION_POLICIES)},
                 "priority_reason": {"enum": list(_PRIORITY_REASONS)},
                 "regression_triggers": {
                     "type": "array",
-                    "items": {"type": "string", "minLength": 1, "maxLength": 160},
-                    "maxItems": MAX_PLANNER_REGRESSIONS,
-                    "uniqueItems": True,
+                    "items": {"type": "string"},
                 },
             },
             "required": [

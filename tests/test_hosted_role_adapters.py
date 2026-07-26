@@ -303,6 +303,12 @@ def test_live_planner_selects_work_while_code_clamps_identity_and_caps() -> None
     assert result.execution_id == "execution-orchestrator-1"
     assert result.provider_request_id == "provider-orchestrator-1"
     assert transport.calls[0]["role"] == "orchestrator"
+    provider_schema = transport.calls[0]["output_schema"]
+    assert provider_schema["properties"]["coverage_goal"] == {"type": "string"}
+    assert provider_schema["properties"]["regression_triggers"] == {
+        "type": "array",
+        "items": {"type": "string"},
+    }
     assert lifecycle.finishes[0]["status"] == "succeeded"
 
 
