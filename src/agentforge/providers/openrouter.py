@@ -409,11 +409,6 @@ class HostedUsageLedger:
             # single-use authority even when two terminal handlers race.
             del self._outstanding_reservations[reservation.reservation_id]
             role = reservation.role
-            token_reservation_exceeded = (
-                input_tokens > reservation.input_tokens
-                or output_tokens > reservation.output_tokens
-                or reasoning_tokens > reservation.reasoning_tokens
-            )
             self._unresolved_usd -= reservation.maximum_cost
             self._role_unresolved_usd[role] -= reservation.maximum_cost
             self._measured_usd += measured_cost
@@ -440,10 +435,13 @@ class HostedUsageLedger:
                 or self._global_tokens["reasoning"]
                 > self._configuration.global_limits.max_reasoning_tokens
             )
-        # Reconciliation is deliberately completed before reporting an overrun. The provider has
-        # already charged and returned usage; leaving the reservation unresolved would understate
-        # known spend and could admit another call.
-        if token_reservation_exceeded or token_cap_exceeded:
+        # A reservation is an admission-control estimate for the outgoing request, not a second
+        # provider-response contract. OpenRouter endpoints can report prompt or reasoning usage
+        # above the requested per-call estimate. Accept that measured usage while it remains
+        # inside the authorization-bound role and campaign totals. Reconciliation is deliberately
+        # completed before reporting a true aggregate overrun because the provider has already
+        # charged and returned usage.
+        if token_cap_exceeded:
             raise HostedBudgetExceeded("provider usage exceeded its authorized token cap")
         if measured_cost_exceeded:
             raise HostedBudgetExceeded("provider measured cost exceeded its authorized cap")

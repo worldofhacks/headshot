@@ -576,7 +576,7 @@ def test_transport_disables_fallback_and_verifies_usage_and_identity() -> None:
     assert "test-provider-value" not in repr(result)
 
 
-def test_red_team_request_stays_at_4096_while_accounting_accepts_reported_overage() -> None:
+def test_red_team_request_and_reservation_stay_at_4096_while_accounting_accepts_overage() -> None:
     seen: list[httpx.Request] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -629,7 +629,7 @@ def test_red_team_request_stays_at_4096_while_accounting_accepts_reported_overag
         generation_policy_sha256=_digest("generation-policy"),
         input_tokens_upper_bound=4_096,
         max_output_tokens=1_024,
-        max_reasoning_tokens=8_192,
+        max_reasoning_tokens=4_096,
         timeout_seconds=60,
         provider_context=_provider_context(configuration, "red_team"),
     )
@@ -1700,7 +1700,39 @@ def test_shared_ledger_concurrent_double_settlement_has_one_winner() -> None:
     assert ledger.snapshot.unresolved_exposure_usd == 0
 
 
-def test_shared_ledger_overrun_settlement_is_consumed_once() -> None:
+def test_shared_ledger_accepts_per_call_overrun_below_aggregate_caps() -> None:
+    ledger = HostedUsageLedger(_configuration())
+    reservation = ledger.reserve(
+        "judge",
+        input_tokens=100,
+        output_tokens=50,
+        reasoning_tokens=20,
+    )
+
+    ledger.settle(
+        reservation,
+        measured_cost=Decimal("0.1"),
+        input_tokens=101,
+        output_tokens=51,
+        reasoning_tokens=21,
+    )
+    reconciled = ledger.snapshot
+    assert reconciled.measured_usd == Decimal("0.1")
+    assert reconciled.unresolved_exposure_usd == 0
+
+    with pytest.raises(HostedProviderError, match="already settled"):
+        ledger.settle(
+            reservation,
+            measured_cost=Decimal("0.1"),
+            input_tokens=101,
+            output_tokens=51,
+            reasoning_tokens=21,
+        )
+
+    assert ledger.snapshot == reconciled
+
+
+def test_shared_ledger_true_aggregate_overrun_is_consumed_and_rejected() -> None:
     ledger = HostedUsageLedger(_configuration())
     reservation = ledger.reserve(
         "judge",
@@ -1713,7 +1745,7 @@ def test_shared_ledger_overrun_settlement_is_consumed_once() -> None:
         ledger.settle(
             reservation,
             measured_cost=Decimal("0.1"),
-            input_tokens=101,
+            input_tokens=100_001,
             output_tokens=5,
             reasoning_tokens=5,
         )
@@ -1725,7 +1757,7 @@ def test_shared_ledger_overrun_settlement_is_consumed_once() -> None:
         ledger.settle(
             reservation,
             measured_cost=Decimal("0.1"),
-            input_tokens=101,
+            input_tokens=100_001,
             output_tokens=5,
             reasoning_tokens=5,
         )
