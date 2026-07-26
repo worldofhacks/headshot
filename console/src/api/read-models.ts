@@ -309,7 +309,7 @@ const decodeHostedRun = (value: unknown): HostedRunBindingReadModel => {
     name,
     { integer: true, minimum: 1 },
   );
-  if (callLimit > 56) invalid(name);
+  if (callLimit > 136) invalid(name);
   const retries = number(result, "provider_max_retries", name, { integer: true, minimum: 0 });
   if (retries > 1) invalid(name);
   if (number(result, "provider_max_concurrency", name, { integer: true }) !== 1) {
