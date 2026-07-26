@@ -475,6 +475,21 @@ export interface CampaignTemplateReadModel extends JsonRecord {
   hosted_run: HostedRunBindingReadModel | null;
 }
 
+export interface CampaignSuiteBatchReadModel extends CampaignTemplateReadModel {
+  ordinal: number;
+  batch_id: string;
+  physical_request_count: number;
+}
+
+export interface CampaignSuiteTemplateReadModel extends JsonRecord {
+  suite_id: string;
+  title: string;
+  case_count: number;
+  physical_request_count: number;
+  categories: string[];
+  batches: CampaignSuiteBatchReadModel[];
+}
+
 export interface TargetReadModel extends JsonRecord {
   target_id: string;
   version: string;
@@ -491,6 +506,7 @@ export interface TargetReadModel extends JsonRecord {
   allowed_lifecycle_transitions: string[];
   surfaces: AttackSurfaceReadModel[];
   campaign_template: CampaignTemplateReadModel | null;
+  campaign_suite_templates?: CampaignSuiteTemplateReadModel[];
   created_at: string;
 }
 

@@ -2,6 +2,7 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import type { ApiClient } from "../src/api/client";
+import { ApiClientError } from "../src/api/client";
 import type { CommandAcknowledgement } from "../src/api/contracts";
 import { CommandButton } from "../src/components/CommandButton";
 
@@ -57,7 +58,9 @@ describe("non-optimistic command controls", () => {
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Approve exact scope" }));
-    expect(await screen.findByText("The command was not acknowledged.")).toBeTruthy();
+    expect(await screen.findByText(
+      "The command was not acknowledged. No state change was assumed.",
+    )).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Approve exact scope" }));
     expect(await screen.findByText(/Server acknowledged · ack-replayed/)).toBeTruthy();
 
@@ -66,5 +69,28 @@ describe("non-optimistic command controls", () => {
     const secondKey = command.mock.calls[1]?.[3];
     expect(firstKey).toMatch(/^[0-9a-f-]{36}$/);
     expect(secondKey).toBe(firstKey);
+  });
+
+  it("explains a backend authorization denial without exposing credentials", async () => {
+    const client: ApiClient = {
+      read: vi.fn(),
+      command: vi.fn().mockRejectedValue(
+        new ApiClientError("Access denied", "forbidden", 403),
+      ),
+    };
+
+    render(
+      <CommandButton
+        client={client}
+        path="campaigns"
+        payload={{ authorization_request_id: "approved-request" }}
+        label="Launch approved campaign"
+        allowed
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Launch approved campaign" }));
+    expect(await screen.findByText(/Backend denied this identity or exact scope \(403\)/))
+      .toBeTruthy();
   });
 });

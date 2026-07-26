@@ -33,21 +33,18 @@ test("direct routes and browser history restore authoritative screens", async ({
 
   await page.goto("/agents");
   await expect(page.getByRole("heading", { name: "Agent operations", exact: true })).toBeVisible();
-  await expect(page.getByText("Active configured model", { exact: true })).toBeVisible();
-  await expect(page.getByText("Active configured provider", { exact: true })).toBeVisible();
-  await expect(page.getByText("Active assignment served model", { exact: true })).toBeVisible();
-  await expect(page.getByText("unavailable — no campaign execution recorded", { exact: true }).first()).toBeVisible();
-  await expect(page.getByLabel("Execution mode")).toBeEnabled();
+  await expect(page.getByText("Hosted configured model", { exact: true })).toBeVisible();
+  await expect(page.getByText("Hosted configured provider", { exact: true })).toBeVisible();
+  await expect(page.getByText("Provider-served model", { exact: true })).toBeVisible();
+  await expect(page.getByText("unavailable — no hosted campaign execution recorded", { exact: true }).first()).toBeVisible();
+  await expect(page.getByRole("heading", {
+    name: "Hosted role assignment",
+    exact: true,
+  })).toBeVisible();
   await expect(page.getByRole("button", {
     name: "Open four-role authorization",
   })).toBeEnabled();
-  await expect(page.getByRole("button", {
-    name: "Activate deterministic role engine",
-  })).toBeDisabled();
-  await page.getByLabel("Rationale").fill("Restore the reviewed deterministic planner engine.");
-  await expect(page.getByRole("button", {
-    name: "Activate deterministic role engine",
-  })).toBeEnabled();
+  await expect(page.getByText(/There is no per-role or deterministic fallback/i)).toBeVisible();
 });
 
 test("390px navigation exposes every screen without application overflow", async ({ page }) => {

@@ -442,7 +442,7 @@ function TraceDashboard({ traces }: { traces: TraceReadModel[] }) {
       </div>
       <StateNotice
         state="empty"
-        detail="Black-box target requests do not synthesize token usage. Hosted agent generations report provider-measured usage and cost; deterministic agents report an observed zero-dollar execution."
+        detail="Black-box target requests do not synthesize token usage. All four runtime roles report provider-measured hosted usage and cost; target and infrastructure spans remain separately accounted."
       />
     </>
   );

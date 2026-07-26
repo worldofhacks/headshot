@@ -114,6 +114,7 @@ class HostedGenerationPolicy:
         Report writing is triggered only by a trusted confirmed finding, but preflight reserves
         enough call authority for every case to be confirmed unless an even tighter trusted limit
         is supplied.  Provider retries remain inside the separately authorized physical-call cap.
+
         """
 
         if isinstance(case_count, bool) or not isinstance(case_count, int) or case_count < 1:

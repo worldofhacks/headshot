@@ -17,6 +17,11 @@ and is never reached in a test.
 """
 
 from agentforge.agents.red_team.handoff import RedTeamProposalError, SeedReplayRedTeam
+from agentforge.agents.red_team.hosted_replay import (
+    HostedReplaySelectionResult,
+    HostedReplaySelector,
+    HostedReplaySelectorError,
+)
 from agentforge.agents.red_team.mutation import mutate
 from agentforge.agents.red_team.providers import (
     CassetteProvider,
@@ -38,6 +43,9 @@ __all__ = [
     "RedTeam",
     "SeedReplayRedTeam",
     "RedTeamProposalError",
+    "HostedReplaySelectionResult",
+    "HostedReplaySelector",
+    "HostedReplaySelectorError",
     "mutate",
     "select_cases",
     "least_covered_category",

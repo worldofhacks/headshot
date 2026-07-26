@@ -588,6 +588,13 @@ const browserUnavailableProviderBudget = {
   global_call_overrun: 0,
 };
 
+const browserHostedModels = {
+  orchestrator: "anthropic/claude-opus-4.8",
+  red_team: "qwen/qwen3.5-397b-a17b",
+  judge: "google/gemini-2.5-pro",
+  documentation: "openai/gpt-5.4",
+} as const;
+
 const browserAgents = [
   {
     role: "orchestrator",
@@ -654,23 +661,21 @@ const browserAgents = [
     configured_at: null,
     configured_by: null,
   },
-  staged_assignment: agent.role === "red_team"
-    ? {
-        role: agent.role,
-        provider: "openrouter",
-        model: "qwen/qwen3.5-397b-a17b",
-        resolved_model: null,
-        upstream_provider: null,
-        prompt_sha256: "9".repeat(64),
-        prompt_version: "1",
-        execution_mode: "hosted_advisory",
-        activation_state: "staged_pending_authorization",
-        version: 2,
-        configuration_sha256: "a".repeat(64),
-        configured_at: "2026-07-22T00:13:00Z",
-        configured_by: "user_configuration_admin",
-      }
-    : null,
+  staged_assignment: {
+    role: agent.role,
+    provider: "openrouter",
+    model: browserHostedModels[agent.role as keyof typeof browserHostedModels],
+    resolved_model: null,
+    upstream_provider: null,
+    prompt_sha256: String.fromCharCode(98 + index).repeat(64),
+    prompt_version: "1",
+    execution_mode: "hosted_advisory",
+    activation_state: "staged_pending_authorization",
+    version: 2,
+    configuration_sha256: "a".repeat(64),
+    configured_at: "2026-07-22T00:13:00Z",
+    configured_by: "user_configuration_admin",
+  },
   latest_acceptance_execution: null,
   running_count: agent.role === "orchestrator" ? 1 : 0,
   hosted_execution_count: agent.role === "red_team" ? 1 : 0,
@@ -1170,7 +1175,7 @@ const browserFixture = (): Plugin => ({
         response.end(JSON.stringify({ state: "ready", data: browserAgents }));
         return;
       }
-      if (/^\/api\/v1\/agents\/[^/]+\/prompt$/.test(path)) {
+      if (/^\/api\/v1\/agent-prompts\/[^/]+\/[^/]+\/[a-f0-9]{64}\/[a-f0-9]{64}$/.test(path)) {
         const role = path.split("/")[4];
         const agent = browserAgents.find((record) => record.role === role);
         response.end(JSON.stringify(agent
@@ -1178,8 +1183,8 @@ const browserFixture = (): Plugin => ({
               state: "ready",
               data: {
                 role,
-                prompt_version: agent.active_assignment.prompt_version,
-                prompt_sha256: agent.active_assignment.prompt_sha256,
+                prompt_version: agent.staged_assignment.prompt_version,
+                prompt_sha256: agent.staged_assignment.prompt_sha256,
                 system_prompt: `Operate as the ${agent.display_name} using only authorized, synthetic, hash-bound inputs.`,
               },
             }
