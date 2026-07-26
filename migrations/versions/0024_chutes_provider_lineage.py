@@ -24,11 +24,7 @@ depends_on: str | Sequence[str] | None = None
 
 
 def _provider_event_validation(*, include_chutes: bool) -> str:
-    chutes = (
-        "WHEN 'chutes' THEN NEW.upstream_provider = 'Chutes' "
-        if include_chutes
-        else ""
-    )
+    chutes = "WHEN 'chutes' THEN NEW.upstream_provider = 'Chutes' " if include_chutes else ""
     return (
         "CREATE OR REPLACE FUNCTION provider_event_validate_attempt_identity() "
         "RETURNS trigger LANGUAGE plpgsql AS $body$ BEGIN "

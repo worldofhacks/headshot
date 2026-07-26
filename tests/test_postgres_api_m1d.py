@@ -478,7 +478,7 @@ def test_agent_models_and_tool_scope_are_real_configurable_projections(
         "provider_model_spend_limit_usd": "5",
         "provider_max_retries": 1,
         "provider_max_concurrency": 1,
-            "provider_timeout_seconds": 180.0,
+        "provider_timeout_seconds": 180.0,
     }
     assert "secretref://" not in targets_response.text
     assert "credential_reference" not in targets_response.text

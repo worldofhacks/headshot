@@ -174,9 +174,7 @@ def _configuration(*, red_team_upstream: str = "together") -> HostedConfiguratio
                 role=role,  # type: ignore[arg-type]
                 provider="openrouter",
                 model_id=_MODELS[role],
-                upstream_provider=(
-                    red_team_upstream if role == "red_team" else _UPSTREAM[role]
-                ),
+                upstream_provider=(red_team_upstream if role == "red_team" else _UPSTREAM[role]),
                 credential_reference=(
                     f"secretref://staging/providers/openrouter/{role}/{_SESSION_GENERATION}"
                 ),
