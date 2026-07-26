@@ -158,9 +158,10 @@ DEFAULT_HOSTED_GENERATION_POLICY = HostedGenerationPolicy(
             bounds=HostedCallBounds(
                 input_tokens=32_768,
                 # Live replay asks Qwen only to select one exact case_ref from a closed enum.
-                # Preserve the validated output/reasoning request while the larger input ceiling
-                # contains the transport's conservative byte-based prompt reservation.
-                output_tokens=1_024,
+                # Chutes can attribute most of the combined completion to final-answer tokens
+                # even when Qwen uses almost no separately reported reasoning. Keep both measured
+                # dimensions large enough for that provider allocation.
+                output_tokens=8_192,
                 reasoning_tokens=8_192,
                 timeout_seconds=60.0,
             ),

@@ -92,7 +92,7 @@ def _configuration() -> HostedConfigurationSet:
                 limits=HostedLimits(
                     max_calls=1,
                     max_input_tokens=_ROLE_INPUT_CAPS[role],
-                    max_output_tokens=1_024 if role == "red_team" else 512,
+                    max_output_tokens=8_192 if role == "red_team" else 512,
                     max_reasoning_tokens=_ROLE_REASONING_CAPS[role],
                     max_usd=_ROLE_CAPS[role],
                     max_retries=0,
@@ -105,7 +105,7 @@ def _configuration() -> HostedConfigurationSet:
         global_limits=HostedLimits(
             max_calls=4,
             max_input_tokens=131_072,
-            max_output_tokens=2_560,
+            max_output_tokens=9_728,
             max_reasoning_tokens=11_264,
             max_usd=Decimal("10"),
             max_retries=0,

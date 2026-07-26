@@ -171,11 +171,11 @@ _AGENT_ACCEPTANCE_ROLE_USD_CAPS: Mapping[AgentRole, Decimal] = {
 _AGENT_ACCEPTANCE_GLOBAL_USD_CAP = Decimal("10")
 _AGENT_ACCEPTANCE_ROLE_TOKEN_CAPS: Mapping[AgentRole, tuple[int, int, int]] = {
     "orchestrator": (32_768, 512, 1_024),
-    "red_team": (32_768, 1_024, 8_192),
+    "red_team": (32_768, 8_192, 8_192),
     "judge": (32_768, 512, 1_024),
     "documentation": (32_768, 512, 1_024),
 }
-_AGENT_ACCEPTANCE_GLOBAL_TOKEN_CAPS = (131_072, 2_560, 11_264)
+_AGENT_ACCEPTANCE_GLOBAL_TOKEN_CAPS = (131_072, 9_728, 11_264)
 
 
 @dataclass(frozen=True, slots=True)

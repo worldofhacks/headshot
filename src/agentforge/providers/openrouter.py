@@ -395,13 +395,13 @@ class HostedUsageLedger:
                 physical_calls > role_limits.max_calls
                 or measured_usd + unresolved_usd > role_limits.max_usd
                 or input_tokens > role_limits.max_input_tokens
-                or output_tokens > role_limits.max_output_tokens
-                or reasoning_tokens > role_limits.max_reasoning_tokens
+                or output_tokens + reasoning_tokens
+                > role_limits.max_output_tokens + role_limits.max_reasoning_tokens
                 or proposed_global_calls > global_limits.max_calls
                 or proposed_global_usd + proposed_global_unresolved_usd > global_limits.max_usd
                 or proposed_global_tokens["input"] > global_limits.max_input_tokens
-                or proposed_global_tokens["output"] > global_limits.max_output_tokens
-                or proposed_global_tokens["reasoning"] > global_limits.max_reasoning_tokens
+                or proposed_global_tokens["output"] + proposed_global_tokens["reasoning"]
+                > global_limits.max_output_tokens + global_limits.max_reasoning_tokens
             ):
                 raise HostedBudgetExceeded("persisted hosted usage exceeds its authorized cap")
             self._role_calls[role] = physical_calls
@@ -472,14 +472,14 @@ class HostedUsageLedger:
             }
             if (
                 proposed_tokens["input"] > role_limits.max_input_tokens
-                or proposed_tokens["output"] > role_limits.max_output_tokens
-                or proposed_tokens["reasoning"] > role_limits.max_reasoning_tokens
+                or proposed_tokens["output"] + proposed_tokens["reasoning"]
+                > role_limits.max_output_tokens + role_limits.max_reasoning_tokens
             ):
                 raise HostedBudgetExceeded("role token cap would be exceeded")
             if (
                 proposed_global_tokens["input"] > global_limits.max_input_tokens
-                or proposed_global_tokens["output"] > global_limits.max_output_tokens
-                or proposed_global_tokens["reasoning"] > global_limits.max_reasoning_tokens
+                or proposed_global_tokens["output"] + proposed_global_tokens["reasoning"]
+                > global_limits.max_output_tokens + global_limits.max_reasoning_tokens
             ):
                 raise HostedBudgetExceeded("shared token cap would be exceeded")
             self._physical_calls += 1
@@ -550,18 +550,19 @@ class HostedUsageLedger:
             )
             token_cap_exceeded = (
                 self._tokens[role]["input"] > self._role_limits[role].max_input_tokens
-                or self._tokens[role]["output"] > self._role_limits[role].max_output_tokens
-                or self._tokens[role]["reasoning"] > self._role_limits[role].max_reasoning_tokens
+                or self._tokens[role]["output"] + self._tokens[role]["reasoning"]
+                > self._role_limits[role].max_output_tokens
+                + self._role_limits[role].max_reasoning_tokens
                 or self._global_tokens["input"] > self._global_limits.max_input_tokens
-                or self._global_tokens["output"] > self._global_limits.max_output_tokens
-                or self._global_tokens["reasoning"] > self._global_limits.max_reasoning_tokens
+                or self._global_tokens["output"] + self._global_tokens["reasoning"]
+                > self._global_limits.max_output_tokens + self._global_limits.max_reasoning_tokens
             )
         # A reservation is an admission-control estimate for the outgoing request, not a second
-        # provider-response contract. OpenRouter endpoints can report prompt or reasoning usage
-        # above the requested per-call estimate. Accept that measured usage while it remains
-        # inside the authorization-bound role and campaign totals. Reconciliation is deliberately
-        # completed before reporting a true aggregate overrun because the provider has already
-        # charged and returned usage.
+        # provider-response contract. OpenRouter completion usage is split into final-answer and
+        # reasoning fields by the selected endpoint, and that split can differ from the request's
+        # allocation. Enforce the authorization-bound combined completion pool so redistribution
+        # cannot create a false overrun while total usage stays capped. Reconciliation is completed
+        # before reporting a true aggregate overrun because the provider has already charged.
         if token_cap_exceeded:
             raise HostedBudgetExceeded("provider usage exceeded its authorized token cap")
         if measured_cost_exceeded:

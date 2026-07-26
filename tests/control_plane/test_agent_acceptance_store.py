@@ -64,7 +64,7 @@ _USD_CAPS = {
 }
 _TOKEN_CAPS = {
     "orchestrator": (32_768, 512, 1_024),
-    "red_team": (32_768, 1_024, 8_192),
+    "red_team": (32_768, 8_192, 8_192),
     "judge": (32_768, 512, 1_024),
     "documentation": (32_768, 512, 1_024),
 }
@@ -106,7 +106,7 @@ def _configuration() -> HostedConfigurationSet:
         global_limits=HostedLimits(
             max_calls=4,
             max_input_tokens=131_072,
-            max_output_tokens=2_560,
+            max_output_tokens=9_728,
             max_reasoning_tokens=11_264,
             max_usd=Decimal("10"),
             max_retries=0,
@@ -316,7 +316,7 @@ def test_four_call_authority_uses_exact_v2_roles_costs_and_token_totals() -> Non
         configuration.global_limits.max_input_tokens,
         configuration.global_limits.max_output_tokens,
         configuration.global_limits.max_reasoning_tokens,
-    ) == (131_072, 2_560, 11_264)
+    ) == (131_072, 9_728, 11_264)
 
     red_team = next(role for role in configuration.roles if role.role == "red_team")
     wrong_red_team_input = replace(

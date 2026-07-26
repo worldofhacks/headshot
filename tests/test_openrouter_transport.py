@@ -1815,6 +1815,107 @@ def test_shared_ledger_accepts_per_call_overrun_below_aggregate_caps() -> None:
     assert ledger.snapshot == reconciled
 
 
+def _completion_pool_envelope(
+    configuration: HostedConfigurationSet,
+) -> HostedUsageEnvelope:
+    return HostedUsageEnvelope(
+        role_limits={
+            role.role: HostedLimits(
+                max_calls=1,
+                max_input_tokens=32_768,
+                max_output_tokens=8_192,
+                max_reasoning_tokens=8_192,
+                max_usd=role.limits.max_usd,
+                max_retries=0,
+                max_requests_per_second=Decimal("0.5"),
+                max_concurrency=1,
+            )
+            for role in configuration.roles
+        },
+        global_limits=HostedLimits(
+            max_calls=4,
+            max_input_tokens=131_072,
+            max_output_tokens=32_768,
+            max_reasoning_tokens=32_768,
+            max_usd=Decimal("5"),
+            max_retries=0,
+            max_requests_per_second=Decimal("0.5"),
+            max_concurrency=1,
+        ),
+    )
+
+
+def test_shared_ledger_accepts_provider_completion_redistribution_within_combined_cap() -> None:
+    configuration = _configuration()
+    ledger = HostedUsageLedger(
+        configuration,
+        envelope=_completion_pool_envelope(configuration),
+    )
+    reservation = ledger.reserve(
+        "red_team",
+        input_tokens=32_768,
+        output_tokens=8_192,
+        reasoning_tokens=8_192,
+    )
+
+    ledger.settle(
+        reservation,
+        measured_cost=Decimal("0.1"),
+        input_tokens=246,
+        output_tokens=12_000,
+        reasoning_tokens=1,
+    )
+
+    assert ledger.snapshot.measured_usd == Decimal("0.1")
+    assert ledger.snapshot.unresolved_exposure_usd == 0
+
+
+def test_shared_ledger_rejects_a_true_combined_completion_overrun() -> None:
+    configuration = _configuration()
+    ledger = HostedUsageLedger(
+        configuration,
+        envelope=_completion_pool_envelope(configuration),
+    )
+    reservation = ledger.reserve(
+        "red_team",
+        input_tokens=32_768,
+        output_tokens=8_192,
+        reasoning_tokens=8_192,
+    )
+
+    with pytest.raises(HostedBudgetExceeded, match="token cap"):
+        ledger.settle(
+            reservation,
+            measured_cost=Decimal("0.1"),
+            input_tokens=246,
+            output_tokens=16_384,
+            reasoning_tokens=1,
+        )
+
+    assert ledger.snapshot.measured_usd == Decimal("0.1")
+    assert ledger.snapshot.unresolved_exposure_usd == 0
+
+
+def test_shared_ledger_restores_provider_completion_redistribution() -> None:
+    configuration = _configuration()
+    ledger = HostedUsageLedger(
+        configuration,
+        envelope=_completion_pool_envelope(configuration),
+    )
+
+    ledger.restore(
+        "red_team",
+        physical_calls=1,
+        measured_usd=Decimal("0.1"),
+        input_tokens=246,
+        output_tokens=12_000,
+        reasoning_tokens=1,
+    )
+
+    assert ledger.snapshot.physical_calls == 1
+    assert ledger.snapshot.measured_usd == Decimal("0.1")
+
+
 def test_shared_ledger_true_aggregate_overrun_is_consumed_and_rejected() -> None:
     ledger = HostedUsageLedger(_configuration())
     reservation = ledger.reserve(
