@@ -576,6 +576,72 @@ def test_transport_disables_fallback_and_verifies_usage_and_identity() -> None:
     assert "test-provider-value" not in repr(result)
 
 
+def test_red_team_request_stays_at_4096_while_accounting_accepts_reported_overage() -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "id": "gen-red-team-overage",
+                "model": "qwen/qwen3.5-397b-a17b",
+                "openrouter_metadata": {
+                    "requested": "qwen/qwen3.5-397b-a17b",
+                    "endpoints": {
+                        "available": [
+                            {
+                                "provider": "Together",
+                                "model": "qwen/qwen3.5-397b-a17b",
+                                "selected": True,
+                            }
+                        ]
+                    },
+                },
+                "choices": [{"message": {"content": '{"case_ref":"case-1"}'}}],
+                "usage": {
+                    "prompt_tokens": 303,
+                    "completion_tokens": 5_120,
+                    "completion_tokens_details": {"reasoning_tokens": 4_846},
+                    "cost": 0.012660655,
+                },
+            },
+        )
+
+    configuration = _configuration()
+    transport = OpenRouterTransport(
+        configuration=configuration,
+        credential_resolver=lambda _reference: Secret("test-provider-value"),
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+        lineage_recorder=_ProviderRecorder(),
+    )
+
+    result = transport.invoke(
+        role="red_team",
+        messages=_messages(role="red_team", user="Select one exact case."),
+        output_schema={
+            "type": "object",
+            "properties": {"case_ref": {"type": "string", "enum": ["case-1"]}},
+            "required": ["case_ref"],
+            "additionalProperties": False,
+        },
+        schema_name="red_team_reviewed_case_selection",
+        generation_policy_sha256=_digest("generation-policy"),
+        input_tokens_upper_bound=4_096,
+        max_output_tokens=1_024,
+        max_reasoning_tokens=8_192,
+        timeout_seconds=60,
+        provider_context=_provider_context(configuration, "red_team"),
+    )
+
+    payload = __import__("json").loads(seen[0].content)
+    assert payload["max_tokens"] == 5_120
+    assert payload["reasoning"] == {"max_tokens": 4_096}
+    assert result.output == {"case_ref": "case-1"}
+    assert result.output_tokens == 274
+    assert result.reasoning_tokens == 4_846
+
+
 def test_transport_permits_only_one_retry_and_counts_both_physical_calls() -> None:
     responses = iter(
         [

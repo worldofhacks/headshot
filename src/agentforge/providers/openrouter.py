@@ -45,6 +45,7 @@ _MILLION = Decimal(1_000_000)
 _COST_QUANTUM = Decimal("0.000000000001")
 _MAX_COST = Decimal("99999999.999999999999")
 _MAX_PROVIDER_TOKEN_COUNT = 2_147_483_647
+_RED_TEAM_REQUEST_REASONING_TOKENS = 4_096
 _RETRYABLE_STATUS = frozenset({429, 502, 503})
 # OpenRouter returns the requested public model ID in ``model`` but identifies some selected
 # upstream endpoints by a dated provider-canonical ID.  Those values are not substitutions: they
@@ -961,6 +962,14 @@ class OpenRouterTransport:
         reservation: _Reservation,
         physical_attempts: int,
     ) -> OpenRouterResult:
+        # The authorization ledger may reserve headroom for provider-reported Qwen usage that
+        # exceeds its requested thinking budget. Keep the physical Red Team request identical:
+        # one 4,096-token reasoning request for the same exact case-selection task.
+        requested_reasoning_tokens = (
+            min(reservation.reasoning_tokens, _RED_TEAM_REQUEST_REASONING_TOKENS)
+            if configuration.role == "red_team"
+            else reservation.reasoning_tokens
+        )
         response = self._client.post(
             OPENROUTER_CHAT_COMPLETIONS_URL,
             headers={
@@ -982,7 +991,7 @@ class OpenRouterTransport:
                 # found that can handle the requested parameters" for every role — verified
                 # against google/gemini-2.5-pro, whose supported set is
                 # {max_tokens, reasoning, response_format, structured_outputs, ...}.
-                "max_tokens": max_output_tokens + reservation.reasoning_tokens,
+                "max_tokens": max_output_tokens + requested_reasoning_tokens,
                 "stream": False,
                 "provider": {
                     "only": [configuration.upstream_provider],
@@ -998,7 +1007,7 @@ class OpenRouterTransport:
                         "request": 0,
                     },
                 },
-                "reasoning": {"max_tokens": reservation.reasoning_tokens},
+                "reasoning": {"max_tokens": requested_reasoning_tokens},
                 "response_format": {
                     "type": "json_schema",
                     "json_schema": {

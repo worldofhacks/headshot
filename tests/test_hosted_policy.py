@@ -31,7 +31,7 @@ def test_registered_policy_round_trips_exact_bounds_and_role_triggers() -> None:
     assert orchestrator.output_tokens == 1_024
     red_team = policy.call_bounds["red_team"]
     assert red_team.output_tokens == 1_024
-    assert red_team.reasoning_tokens == 4_096
+    assert red_team.reasoning_tokens == 8_192
     assert red_team.timeout_seconds == 60.0
 
 
