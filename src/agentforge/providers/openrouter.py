@@ -45,12 +45,15 @@ _MILLION = Decimal(1_000_000)
 _COST_QUANTUM = Decimal("0.000000000001")
 _MAX_COST = Decimal("99999999.999999999999")
 _MAX_PROVIDER_TOKEN_COUNT = 2_147_483_647
-# The Red Team is not authoring a fresh attack here. It selects one exact ``case_ref`` from a
-# closed, authorization-bound enum (one option for the demo workloads). Asking a 397B model for
-# 4,096 thinking tokens made that single choice take more than four minutes on the reviewed
-# OpenRouter route. Keep the generous accounting envelope, but request only the thinking budget
-# this bounded selector needs.
-_RED_TEAM_REQUEST_REASONING_TOKENS = 512
+# The live-100 Red Team call selects one exact ``case_ref`` from a closed,
+# authorization-bound enum (one option for the exact-manifest workloads). Keep the generous
+# accounting envelope, but bound the physical selector request to the tiny decision it actually
+# makes. The selected reviewed attack bytes are still projected by trusted code and sent through
+# the live Policy Gateway; this is not a deterministic replacement for the Red Team model.
+_RED_TEAM_SELECTION_SCHEMA = "red_team_reviewed_case_selection"
+_RED_TEAM_SELECTION_TOOL = "select_authorized_case"
+_RED_TEAM_SELECTION_OUTPUT_TOKENS = 64
+_RED_TEAM_REQUEST_REASONING_TOKENS = 64
 _RETRYABLE_STATUS = frozenset({429, 502, 503})
 # OpenRouter returns the requested public model ID in ``model`` but identifies some selected
 # upstream endpoints by a dated provider-canonical ID.  Those values are not substitutions: they
@@ -968,49 +971,43 @@ class OpenRouterTransport:
         # The authorization ledger reserves headroom for provider-reported Qwen usage that can
         # exceed its requested thinking budget. The request itself remains a bounded one-choice
         # case selection and does not need the entire accounting envelope.
+        forced_case_selection = (
+            configuration.role == "red_team" and schema_name == _RED_TEAM_SELECTION_SCHEMA
+        )
         requested_reasoning_tokens = (
             min(reservation.reasoning_tokens, _RED_TEAM_REQUEST_REASONING_TOKENS)
-            if configuration.role == "red_team"
+            if forced_case_selection
             else reservation.reasoning_tokens
         )
-        response = self._client.post(
-            OPENROUTER_CHAT_COMPLETIONS_URL,
-            headers={
-                "Authorization": f"Bearer {credential.reveal()}",
-                "Content-Type": "application/json",
-                "X-OpenRouter-Metadata": "enabled",
-            },
-            json={
-                "model": configuration.model_id,
-                "messages": [dict(message) for message in messages],
-                # OpenRouter's completion count includes reasoning tokens. The
-                # configured output bound is only the final-answer allowance.
-                #
-                # The parameter MUST be `max_tokens`, not `max_completion_tokens`: OpenRouter
-                # advertises `max_tokens` in every endpoint's `supported_parameters`, and this
-                # request sets `provider.require_parameters: true`, which refuses any endpoint
-                # that does not support a parameter we send. Sending `max_completion_tokens`
-                # therefore matched NO endpoint and failed routing with HTTP 404 "No endpoints
-                # found that can handle the requested parameters" for every role — verified
-                # against google/gemini-2.5-pro, whose supported set is
-                # {max_tokens, reasoning, response_format, structured_outputs, ...}.
-                "max_tokens": max_output_tokens + requested_reasoning_tokens,
-                "stream": False,
-                "provider": {
-                    "only": [configuration.upstream_provider],
-                    "allow_fallbacks": False,
-                    "require_parameters": True,
-                    "data_collection": "deny",
-                    # OpenRouter interprets prompt/completion values as USD per
-                    # million tokens and refuses the request if no endpoint satisfies
-                    # them. Per-request pricing is disallowed.
-                    "max_price": {
-                        "prompt": float(configuration.prices.input_usd_per_million_tokens),
-                        "completion": float(configuration.prices.output_usd_per_million_tokens),
-                        "request": 0,
-                    },
+        requested_output_tokens = (
+            min(max_output_tokens, _RED_TEAM_SELECTION_OUTPUT_TOKENS)
+            if forced_case_selection
+            else max_output_tokens
+        )
+        structured_output_request: dict[str, Any]
+        if forced_case_selection:
+            structured_output_request = {
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": _RED_TEAM_SELECTION_TOOL,
+                            "description": (
+                                "Select exactly one authorization-bound reviewed case reference."
+                            ),
+                            "parameters": dict(output_schema),
+                            "strict": True,
+                        },
+                    }
+                ],
+                "tool_choice": {
+                    "type": "function",
+                    "function": {"name": _RED_TEAM_SELECTION_TOOL},
                 },
-                "reasoning": {"max_tokens": requested_reasoning_tokens},
+                "temperature": 0,
+            }
+        else:
+            structured_output_request = {
                 "response_format": {
                     "type": "json_schema",
                     "json_schema": {
@@ -1018,8 +1015,49 @@ class OpenRouterTransport:
                         "strict": True,
                         "schema": dict(output_schema),
                     },
+                }
+            }
+        request_payload: dict[str, Any] = {
+            "model": configuration.model_id,
+            "messages": [dict(message) for message in messages],
+            # OpenRouter's completion count includes reasoning tokens. The
+            # configured output bound is only the final-answer allowance.
+            #
+            # The parameter MUST be `max_tokens`, not `max_completion_tokens`: OpenRouter
+            # advertises `max_tokens` in every endpoint's `supported_parameters`, and this
+            # request sets `provider.require_parameters: true`, which refuses any endpoint
+            # that does not support a parameter we send. Sending `max_completion_tokens`
+            # therefore matched NO endpoint and failed routing with HTTP 404 "No endpoints
+            # found that can handle the requested parameters" for every role — verified
+            # against google/gemini-2.5-pro, whose supported set is
+            # {max_tokens, reasoning, response_format, structured_outputs, ...}.
+            "max_tokens": requested_output_tokens + requested_reasoning_tokens,
+            "stream": False,
+            "provider": {
+                "only": [configuration.upstream_provider],
+                "allow_fallbacks": False,
+                "require_parameters": True,
+                "data_collection": "deny",
+                # OpenRouter interprets prompt/completion values as USD per
+                # million tokens and refuses the request if no endpoint satisfies
+                # them. Per-request pricing is disallowed.
+                "max_price": {
+                    "prompt": float(configuration.prices.input_usd_per_million_tokens),
+                    "completion": float(configuration.prices.output_usd_per_million_tokens),
+                    "request": 0,
                 },
             },
+            "reasoning": {"max_tokens": requested_reasoning_tokens},
+            **structured_output_request,
+        }
+        response = self._client.post(
+            OPENROUTER_CHAT_COMPLETIONS_URL,
+            headers={
+                "Authorization": f"Bearer {credential.reveal()}",
+                "Content-Type": "application/json",
+                "X-OpenRouter-Metadata": "enabled",
+            },
+            json=request_payload,
             timeout=timeout_seconds,
         )
         if response.status_code in _RETRYABLE_STATUS:
@@ -1187,7 +1225,11 @@ class OpenRouterTransport:
             ) from settle_error
 
         try:
-            output = self._structured_output(payload, output_schema)
+            output = self._structured_output(
+                payload,
+                output_schema,
+                schema_name=schema_name,
+            )
         except HostedProviderError as exc:
             raise HostedProviderResponseError(
                 "OpenRouter response failed after measured usage was observed",
@@ -1359,10 +1401,31 @@ class OpenRouterTransport:
 
     @staticmethod
     def _structured_output(
-        payload: Mapping[str, Any], output_schema: Mapping[str, Any]
+        payload: Mapping[str, Any],
+        output_schema: Mapping[str, Any],
+        *,
+        schema_name: str,
     ) -> Mapping[str, Any]:
         try:
-            content = payload["choices"][0]["message"]["content"]  # type: ignore[index]
+            message = payload["choices"][0]["message"]  # type: ignore[index]
+            if schema_name == _RED_TEAM_SELECTION_SCHEMA:
+                tool_calls = message["tool_calls"]
+                if (
+                    not isinstance(tool_calls, list)
+                    or len(tool_calls) != 1
+                    or not isinstance(tool_calls[0], Mapping)
+                    or tool_calls[0].get("type") != "function"
+                    or not isinstance(tool_calls[0].get("function"), Mapping)
+                    or tool_calls[0]["function"].get("name") != _RED_TEAM_SELECTION_TOOL
+                    or not isinstance(tool_calls[0]["function"].get("arguments"), str)
+                    or message.get("content") not in (None, "")
+                ):
+                    raise ValueError("invalid forced tool result")
+                content = tool_calls[0]["function"]["arguments"]
+            else:
+                content = message["content"]
+            if not isinstance(content, str) or not content:
+                raise ValueError("structured output content is absent")
             decoded = json.loads(content, object_pairs_hook=_pairs_without_duplicates)
             Draft202012Validator.check_schema(dict(output_schema))
             Draft202012Validator(dict(output_schema)).validate(decoded)

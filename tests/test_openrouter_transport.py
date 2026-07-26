@@ -600,7 +600,23 @@ def test_red_team_uses_bounded_reasoning_while_accounting_accepts_reported_overa
                         ]
                     },
                 },
-                "choices": [{"message": {"content": '{"case_ref":"case-1"}'}}],
+                "choices": [
+                    {
+                        "message": {
+                            "content": None,
+                            "tool_calls": [
+                                {
+                                    "id": "call-select-case",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "select_authorized_case",
+                                        "arguments": '{"case_ref":"case-1"}',
+                                    },
+                                }
+                            ],
+                        }
+                    }
+                ],
                 "usage": {
                     "prompt_tokens": 303,
                     "completion_tokens": 5_120,
@@ -637,8 +653,34 @@ def test_red_team_uses_bounded_reasoning_while_accounting_accepts_reported_overa
     )
 
     payload = __import__("json").loads(seen[0].content)
-    assert payload["max_tokens"] == 1_536
-    assert payload["reasoning"] == {"max_tokens": 512}
+    assert payload["max_tokens"] == 128
+    assert payload["reasoning"] == {"max_tokens": 64}
+    assert "response_format" not in payload
+    assert payload["temperature"] == 0
+    assert payload["tool_choice"] == {
+        "type": "function",
+        "function": {"name": "select_authorized_case"},
+    }
+    assert payload["tools"] == [
+        {
+            "type": "function",
+            "function": {
+                "name": "select_authorized_case",
+                "description": (
+                    "Select exactly one authorization-bound reviewed case reference."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "case_ref": {"type": "string", "enum": ["case-1"]}
+                    },
+                    "required": ["case_ref"],
+                    "additionalProperties": False,
+                },
+                "strict": True,
+            },
+        }
+    ]
     assert result.output == {"case_ref": "case-1"}
     assert result.output_tokens == 274
     assert result.reasoning_tokens == 4_846
