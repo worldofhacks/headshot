@@ -1757,6 +1757,13 @@ function SuiteBatchActions({
   const [runNonce, setRunNonce] = useState(
     () => `suite-${batch.ordinal}-${globalThis.crypto.randomUUID()}`,
   );
+  const [runTimeoutSeconds, setRunTimeoutSeconds] = useState(
+    () => String(batch.maximum_caps.run_timeout_seconds),
+  );
+  const parsedRunTimeoutSeconds = Number(runTimeoutSeconds);
+  const runTimeoutValid = Number.isFinite(parsedRunTimeoutSeconds)
+    && parsedRunTimeoutSeconds > 0
+    && parsedRunTimeoutSeconds <= batch.maximum_caps.run_timeout_seconds;
   const canLaunch = hasPermission(principal, PERMISSIONS.campaignLaunch);
   const canAuthorize = hasPermission(principal, PERMISSIONS.campaignAuthorize);
   const isRequester = approval?.launcher_user_id === principal.user_id;
@@ -1772,10 +1779,13 @@ function SuiteBatchActions({
     corpus_id: batch.corpus_id,
     corpus_hash: batch.corpus_hash,
     execution_profile: batch.execution_profile,
-    caps: batch.maximum_caps,
+    caps: {
+      ...batch.maximum_caps,
+      run_timeout_seconds: parsedRunTimeoutSeconds,
+    },
     run_nonce: runNonce,
     hosted_run: batch.hosted_run,
-    expires_in_seconds: authorizationLifetimeSeconds(batch.maximum_caps.run_timeout_seconds),
+    expires_in_seconds: authorizationLifetimeSeconds(parsedRunTimeoutSeconds),
   };
   if (view.state === "completed") {
     return <StateNotice state="ready" detail="This batch is complete. The next batch is ready." />;
@@ -1849,18 +1859,32 @@ function SuiteBatchActions({
   }
   if (requestable) {
     return (
-      <div className="command-row suite-batch-actions">
-        <CommandButton
-          client={client}
-          path={COMMAND_PATHS.createCampaignAuthorizationRequest}
-          payload={requestPayload}
-          label={`Request approval for batch ${batch.ordinal}`}
-          allowed={true}
-          onAcknowledged={() => {
-            setRunNonce(`suite-${batch.ordinal}-${globalThis.crypto.randomUUID()}`);
-            refresh();
-          }}
-        />
+      <div className="suite-batch-actions">
+        <label className="form-field suite-timeout-field">
+          <span>Run timeout seconds (maximum {batch.maximum_caps.run_timeout_seconds})</span>
+          <input
+            type="number"
+            min="1"
+            max={batch.maximum_caps.run_timeout_seconds}
+            step="1"
+            value={runTimeoutSeconds}
+            onChange={(event) => setRunTimeoutSeconds(event.currentTarget.value)}
+          />
+        </label>
+        <div className="command-row">
+          <CommandButton
+            client={client}
+            path={COMMAND_PATHS.createCampaignAuthorizationRequest}
+            payload={requestPayload}
+            label={`Request approval for batch ${batch.ordinal}`}
+            allowed={runTimeoutValid}
+            unavailableReason="a positive timeout within the reviewed batch maximum"
+            onAcknowledged={() => {
+              setRunNonce(`suite-${batch.ordinal}-${globalThis.crypto.randomUUID()}`);
+              refresh();
+            }}
+          />
+        </div>
       </div>
     );
   }
