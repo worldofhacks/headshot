@@ -1852,10 +1852,12 @@ function FullCampaignSuite({
   client,
   principal,
   suite,
+  targetLabel,
 }: {
   client: ApiClient;
   principal: Principal;
   suite: CampaignSuiteTemplateReadModel;
+  targetLabel: string;
 }) {
   const approvals = useResource<ApprovalReadModel[]>(
     client,
@@ -1879,7 +1881,7 @@ function FullCampaignSuite({
   };
   return (
     <Panel
-      title={suite.title}
+      title={`${suite.title} — ${targetLabel}`}
       meta={suite.suite_id}
       eyebrow="FULL GOVERNED SUITE"
     >
@@ -1986,6 +1988,7 @@ export function TargetsScreen({ client, principal }: ScreenProps) {
           client={client}
           principal={principal}
           suite={suite}
+          targetLabel={`${target.name} (${target.target_id}@${target.version})`}
         />
       )))}
       <Panel

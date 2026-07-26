@@ -206,7 +206,11 @@ describe("full suite console", () => {
       />,
     );
 
-    expect(await screen.findByText("Full 100-case suite")).toBeTruthy();
+    expect(
+      await screen.findByText(
+        "Full 100-case suite — Demo target (target-1@1.0.0)",
+      ),
+    ).toBeTruthy();
     expect(screen.getAllByRole("button", { name: "Request batch authorization" }))
       .toHaveLength(3);
     expect(screen.getByText("0/100")).toBeTruthy();
