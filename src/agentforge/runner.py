@@ -7,6 +7,7 @@ import contextlib
 import copy
 import datetime
 import ipaddress
+import logging
 import os
 import signal
 import socket
@@ -65,7 +66,7 @@ from agentforge.campaign.corpus import (
 )
 from agentforge.campaign.manifest import ManifestStore
 from agentforge.campaign.runtime import SystemClock, accounting_from_environment, production_engine
-from agentforge.control_plane.store import ControlPlaneStore
+from agentforge.control_plane.store import CampaignAttemptRecord, ControlPlaneStore
 from agentforge.policy.gateway import RunPolicy, WorkUnitCoordinates
 from agentforge.policy.scoped_credentials import (
     CampaignCredentialLease,
@@ -107,9 +108,23 @@ _PROVIDER_RECOVERY_INTERVAL_SECONDS = 30.0
 _PROVIDER_RECOVERY_LIMIT = 32
 _PROVIDER_RECOVERY_STALE_AFTER_SECONDS = _DEFAULT_LEASE.total_seconds() + 60.0
 
+_LOGGER = logging.getLogger(__name__)
+
 
 class DispatchUnavailable(RuntimeError):
     """Persisted work cannot pass every current dispatch gate."""
+
+
+class HostedLineageUnsupported(DispatchUnavailable):
+    """A hosted selection path cannot establish attempt lineage before provider I/O.
+
+    Hosted agent rows (``agent_executions``, ``provider_call_invocations``,
+    ``provider_call_events``) are born the instant the role is invoked, and the control plane
+    deliberately refuses to rewrite that lineage afterwards. An attempt id must therefore be known
+    *before* the invocation. That is only true when the workload fixes the next case up front, as
+    the exact-manifest live-100 workloads do. Any other hosted selection shape is refused here —
+    explicitly and by type — rather than silently dropping lineage or relaxing the store guard.
+    """
 
 
 @dataclass(frozen=True, slots=True)
@@ -901,6 +916,43 @@ class DurableCampaignRunner:
                 self.telemetry.flush()
             with contextlib.suppress(Exception):
                 self.telemetry.heartbeat()
+
+    def _ensure_attempt_for_case(
+        self,
+        *,
+        run_id: str,
+        ordinal: int,
+        case: AuthoredCase,
+    ) -> CampaignAttemptRecord:
+        """Create (idempotently) the durable attempt for one exact authorized case.
+
+        Shared by both selection chronologies so the persisted attempt — including the reviewed
+        producer lineage that is distinct from security-tool lineage — is written identically
+        whether it is created before a hosted invocation or after a deterministic proposal.
+        """
+
+        payload = verified_case_payload(case)
+        return self.store.ensure_campaign_attempt(
+            run_id=run_id,
+            ordinal=ordinal,
+            case_id=payload["case_id"],
+            case_content_hash=case.content_hash,
+            category=payload["category"],
+            severity=payload["severity"]["rating"],
+            attack_class=payload["test_design"]["classification"],
+            owasp_mappings=payload["owasp"],
+            fixture_provenance=payload["fixture_provenance"],
+            source_tool=case.source_tool,
+            source_technique=case.source_technique,
+            # Reviewed-workload producer lineage travels with the resolved case so the persisted
+            # attempt records WHICH reviewed instance, review record and generation record
+            # admitted it — distinct from the security-tool lineage above, which stays NULL
+            # unless a catalog tool genuinely produced the case.
+            source_kind=case.source_kind,
+            workload_instance_id=case.instance_id,
+            review_record_sha256=case.review_record_sha256,
+            source_generation_sha256=case.source_generation_sha256,
+        )
 
     def _bind_agent_execution_attempt(
         self,
@@ -1728,16 +1780,38 @@ class DurableCampaignRunner:
             use_hosted_red_team = hosted_red_team is not None and hosted_lifecycle is not None
             red_team_execution: str
             red_team_failure_code = "red_team_execution_failed"
+            # Set only on the hosted path, where the attempt must exist before provider I/O.
+            prebound_attempt: CampaignAttemptRecord | None = None
+            prebound_case: AuthoredCase | None = None
+            if use_hosted_red_team:
+                # Deliberately OUTSIDE the try below: neither the refusal nor the pre-creation is
+                # "proposal" work, and the inner handler rewrites everything it catches into
+                # red_team_proposal_failed — which would erase the typed refusal.
+                if prepared.corpus.corpus_id not in _EXACT_MANIFEST_WORKLOAD_IDS:
+                    # Refuse by type rather than invent lineage. See HostedLineageUnsupported: a
+                    # hosted role that could still choose among several cases has no attempt id to
+                    # be born with, and the control plane will not let one be attached afterwards.
+                    raise HostedLineageUnsupported(
+                        "hosted_red_team_non_exact_selection_unsupported"
+                    )
+                # The manifest already fixes the next case, so its durable attempt can be created
+                # FIRST. Every hosted lineage row — agent_executions, provider_call_invocations,
+                # provider_call_events — is then born carrying this exact attempt id, and no
+                # after-the-fact binding is ever attempted.
+                prebound_case = remaining[0]
+                prebound_attempt = self._ensure_attempt_for_case(
+                    run_id=job.campaign_run_id,
+                    ordinal=next_ordinal,
+                    case=prebound_case,
+                )
+                prebound_attempt_id = prebound_attempt.attempt_id
+                selection_cases = [verified_case_payload(prebound_case)]
             try:
                 try:
                     if use_hosted_red_team:
-                        selection_cases = (
-                            [verified_case_payload(remaining[0])]
-                            if prepared.corpus.corpus_id in _EXACT_MANIFEST_WORKLOAD_IDS
-                            else [verified_case_payload(case) for case in remaining]
-                        )
                         with hosted_lifecycle.invocation(
                             role="red_team",
+                            attempt_id=prebound_attempt_id,
                             detail={
                                 "phase": "authorized_case_selection",
                                 "cycle": orchestration_cycle,
@@ -1780,32 +1854,36 @@ class DurableCampaignRunner:
                     ) from exc
 
                 payload = verified_case_payload(case)
-                attempt = self.store.ensure_campaign_attempt(
-                    run_id=job.campaign_run_id,
-                    ordinal=next_ordinal,
-                    case_id=payload["case_id"],
-                    case_content_hash=case.content_hash,
-                    category=payload["category"],
-                    severity=payload["severity"]["rating"],
-                    attack_class=payload["test_design"]["classification"],
-                    owasp_mappings=payload["owasp"],
-                    fixture_provenance=payload["fixture_provenance"],
-                    source_tool=case.source_tool,
-                    source_technique=case.source_technique,
-                    # Reviewed-workload producer lineage travels with the resolved case so the
-                    # persisted attempt records WHICH reviewed instance, review record and
-                    # generation record admitted it — distinct from the security-tool lineage
-                    # above, which stays NULL unless a catalog tool genuinely produced the case.
-                    source_kind=case.source_kind,
-                    workload_instance_id=case.instance_id,
-                    review_record_sha256=case.review_record_sha256,
-                    source_generation_sha256=case.source_generation_sha256,
-                )
-                self._bind_agent_execution_attempt(
-                    execution_id=red_team_execution,
-                    run_id=authorized.run.run_id,
-                    attempt_id=attempt.attempt_id,
-                )
+                if prebound_attempt is not None:
+                    # Hosted path. The attempt already exists and the lineage is already bound, so
+                    # the only remaining duty is to prove the model returned the exact case we
+                    # pre-committed to. Compare the two facts the attempt row is keyed on rather
+                    # than object identity, so this still holds if the case list is ever rebuilt.
+                    # A mismatch aborts here — before adapter construction, therefore before any
+                    # target traffic.
+                    if (
+                        prebound_case is None
+                        or payload["case_id"] != prebound_attempt.case_id
+                        or case.content_hash != prebound_case.content_hash
+                    ):
+                        raise CampaignAbort(
+                            "hosted Red Team selected a case other than the pre-bound attempt",
+                            code="red_team_selection_attempt_mismatch",
+                        )
+                    attempt = prebound_attempt
+                else:
+                    attempt = self._ensure_attempt_for_case(
+                        run_id=job.campaign_run_id,
+                        ordinal=next_ordinal,
+                        case=case,
+                    )
+                    # Deterministic chronology is unchanged: the execution starts, proposes, and
+                    # only then binds the attempt its own selection derived.
+                    self._bind_agent_execution_attempt(
+                        execution_id=red_team_execution,
+                        run_id=authorized.run.run_id,
+                        attempt_id=attempt.attempt_id,
+                    )
                 if not use_hosted_red_team:
                     self._finish_agent_execution(
                         execution_id=red_team_execution,
@@ -2257,25 +2335,35 @@ class DurableCampaignRunner:
                     state=state,
                     reason_code=code,
                 )
+            # Only exception type names and bounded machine codes. Messages may contain provider-
+            # or target-controlled text, credentials, or payloads and are never included, but an
+            # opaque ``campaign_execution_failed`` makes live diagnosis impossible.
+            failure_chain: list[str] = []
+            cause: BaseException | None = exc
+            seen: set[int] = set()
+            while cause is not None and id(cause) not in seen and len(failure_chain) < 6:
+                seen.add(id(cause))
+                cause_code = getattr(cause, "code", None)
+                label = type(cause).__name__
+                if isinstance(cause_code, str) and cause_code:
+                    label += f"[{cause_code[:64]}]"
+                failure_chain.append(label)
+                cause = cause.__cause__ or cause.__context__
+            sanitized_chain = " <- ".join(failure_chain)
+            # The queue persists the same sanitized summary, but the store redacts it on write, so
+            # this log line is the only place the chain is actually observable in production.
             with contextlib.suppress(Exception):
-                # Persist only exception type names and bounded machine codes. Messages may
-                # contain provider- or target-controlled text and never belong in queue state,
-                # but an opaque ``campaign_aborted`` makes live diagnosis impossible.
-                failure_chain: list[str] = []
-                cause: BaseException | None = exc
-                seen: set[int] = set()
-                while cause is not None and id(cause) not in seen and len(failure_chain) < 6:
-                    seen.add(id(cause))
-                    cause_code = getattr(cause, "code", None)
-                    label = type(cause).__name__
-                    if isinstance(cause_code, str) and cause_code:
-                        label += f"[{cause_code[:64]}]"
-                    failure_chain.append(label)
-                    cause = cause.__cause__ or cause.__context__
+                _LOGGER.error(
+                    "campaign job failed run_id=%s failure_code=%s exception_chain=%s",
+                    job.campaign_run_id,
+                    code,
+                    sanitized_chain,
+                )
+            with contextlib.suppress(Exception):
                 self.queue.fail(
                     job,
                     failure_code=code,
-                    failure_message=" <- ".join(failure_chain),
+                    failure_message=sanitized_chain,
                     retryable=False,
                 )
             raise DispatchUnavailable(code) from exc
@@ -2315,6 +2403,14 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.check:
         return 0 if check_runtime() else 1
+    # Without this the Runner container emits nothing past "Starting Container", so a failed
+    # campaign is only ever visible as a redacted queue row. Level and stream only — no handler
+    # that could ship payloads anywhere.
+    logging.basicConfig(
+        level=logging.INFO,
+        stream=sys.stdout,
+        format="%(asctime)s %(levelname)s %(name)s %(message)s",
+    )
     database_url = os.environ.get("DATABASE_URL")
     environment = os.environ.get("AGENTFORGE_ENVIRONMENT")
     if not database_url or environment not in {"local", "staging", "production"}:

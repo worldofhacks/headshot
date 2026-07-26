@@ -163,7 +163,12 @@ DEFAULT_HOSTED_GENERATION_POLICY = HostedGenerationPolicy(
                 # dimensions large enough for that provider allocation.
                 output_tokens=8_192,
                 reasoning_tokens=8_192,
-                timeout_seconds=60.0,
+                # Measured on live staging: a single Chutes selection took 32.4s wall-clock while
+                # emitting 3,710 output tokens for a one-enum answer. A 60s ceiling left under 2x
+                # headroom, so an ordinarily slower generation would abort the whole campaign.
+                # 180s matches the Judge's existing ceiling. Token dimensions are deliberately
+                # unchanged here — cumulative per-role/global caps would have to move together.
+                timeout_seconds=180.0,
             ),
             invocation_trigger="each_generation_cycle",
         ),

@@ -110,7 +110,9 @@ def acceptance_generation_policy() -> HostedGenerationPolicy:
         # The transport's byte-based conservative input reservation for this exact two-message
         # probe is larger than 4,096. Keep ample bounded headroom for all role prompts without
         # changing the reviewed configuration, output/reasoning ceilings, or call counts.
-        "red_team": HostedCallBounds(32_768, 8_192, 8_192, 60.0),
+        # Timeout tracks the governed policy's 180s for the same measured reason (a live Chutes
+        # selection took 32.4s); token dimensions are unchanged.
+        "red_team": HostedCallBounds(32_768, 8_192, 8_192, 180.0),
         "judge": HostedCallBounds(32_768, 512, 1_024, 120.0),
         "documentation": HostedCallBounds(32_768, 512, 1_024, 120.0),
     }
