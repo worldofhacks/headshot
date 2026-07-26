@@ -29,19 +29,19 @@ def test_acceptance_generation_policy_covers_the_staged_four_role_set() -> None:
 
 
 def test_acceptance_refuses_a_release_without_the_canonical_provider_writer() -> None:
-    try:
-        acceptance._require_canonical_provider_writer()
-    except Exception as exc:
-        assert "provider-lineage writer is unavailable" in str(exc)
-    else:
-        assert (
-            "lineage_recorder"
-            in inspect.signature(acceptance.OpenRouterTransport.__init__).parameters
-        )
-        assert (
-            "provider_context"
-            in inspect.signature(acceptance.OpenRouterTransport.invoke).parameters
-        )
+    acceptance._require_canonical_provider_writer()
+    assert (
+        "lineage_recorder"
+        in inspect.signature(acceptance.OpenRouterTransport.__init__).parameters
+    )
+    assert (
+        "provider_context"
+        in inspect.signature(acceptance.OpenRouterTransport.invoke).parameters
+    )
+    assert (
+        acceptance.OpenRouterTransport.LINEAGE_RECORDER_CONTRACT
+        == "provider-call-final-v1"
+    )
 
 
 def test_acceptance_preflight_requires_every_sealed_binding_and_langfuse_authentication() -> None:

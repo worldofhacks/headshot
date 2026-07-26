@@ -562,6 +562,12 @@ class _PhysicalCallError(HostedProviderError):
 class OpenRouterTransport:
     """Synchronous concurrency-one transport intended for the private Runner only."""
 
+    # Release marker consumed by the target-free four-role acceptance gate. The transport
+    # requires a ProviderLineageRecorder at construction and a ProviderLogicalContextV1 for every
+    # invocation, so declaring the contract makes that already-enforced composition discoverable
+    # without weakening either runtime check.
+    LINEAGE_RECORDER_CONTRACT = "provider-call-final-v1"
+
     def __init__(
         self,
         *,
