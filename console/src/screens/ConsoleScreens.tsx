@@ -239,6 +239,17 @@ function AttemptEvidence({ client, attemptId }: { client: ApiClient; attemptId: 
   );
 }
 
+// The authorization must OUTLIVE the run it authorizes: launch_campaign refuses when
+// `expires_at <= now + caps.run_timeout_seconds` (control_plane/store.py). A hardcoded 900s
+// window could never cover a 7200s target timeout, so every launch failed with "Access denied"
+// no matter what the operator did — and even a 900s target failed, because by launch time `now`
+// has already advanced past creation. Derive the window from the timeout being authorized and
+// add slack for the approve+launch round trip.
+const AUTHORIZATION_SLACK_SECONDS = 900;
+function authorizationWindowSeconds(runTimeoutSeconds: number): number {
+  return Math.ceil(runTimeoutSeconds) + AUTHORIZATION_SLACK_SECONDS;
+}
+
 export function LiveScreen({ client, principal, entityId, getToken }: ScreenProps) {
   const campaigns = useResource<CampaignReadModel[]>(
     client,
@@ -316,7 +327,12 @@ export function LiveScreen({ client, principal, entityId, getToken }: ScreenProp
         },
         run_nonce: rerunNonce,
         hosted_run: rerunTemplate.hosted_run,
-        expires_in_seconds: 900,
+        expires_in_seconds: authorizationWindowSeconds(
+          Math.min(
+            effectiveCampaign.caps.run_timeout_seconds,
+            rerunTemplate.maximum_caps.run_timeout_seconds,
+          ),
+        ),
       }
     : null;
   const componentRecords = components.result.data ?? [];
@@ -1378,7 +1394,7 @@ function TargetManagement({
         caps: parsedCaps,
         run_nonce: runNonce.trim(),
         hosted_run: template.hosted_run,
-        expires_in_seconds: 900,
+        expires_in_seconds: authorizationWindowSeconds(parsedCaps.run_timeout_seconds),
       }
     : null;
   return (
