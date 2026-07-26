@@ -44,6 +44,10 @@ from agentforge.campaign.corpus import (
     resolve_workload,
     verified_case_payload,
 )
+from agentforge.case_taxonomy import (
+    MVP_REQUIRED_CATEGORIES,
+    SUPPORTED_CASE_CATEGORIES,
+)
 from agentforge.contracts import validate as validate_contract
 from agentforge.control_plane import ControlPlaneStore
 from agentforge.control_plane.errors import (
@@ -133,7 +137,10 @@ _ALLOWED_LIFECYCLE_TRANSITIONS = {
 }
 _REQUIRED_WEB = frozenset({"A01", "A03", "A04", "A06", "A07", "A09", "A10"})
 _REQUIRED_LLM = frozenset({"LLM01", "LLM02", "LLM03", "LLM05", "LLM06"})
-_REQUIRED_CATEGORIES = frozenset({"prompt_injection", "data_exfiltration", "tool_misuse"})
+# Coverage has two distinct category rules and they are NOT the same set:
+#   * SUPPORTED_CASE_CATEGORIES gates which evidence is aggregated at all (all six);
+#   * MVP_REQUIRED_CATEGORIES is the coverage FLOOR, applied with issubset (the original three).
+# Both are imported from agentforge.case_taxonomy so they cannot drift apart again.
 _RUNNER_HEARTBEAT_FRESHNESS_SECONDS = 30
 _FINDING_HISTORY_LIMIT = 50
 # Hosted credential readiness is refreshed on a 30-second cadence. Give one missed refresh room
@@ -2952,7 +2959,11 @@ class PostgresApiBackend(ApiBackend):
                         if (
                             identity in seen
                             or not _evidence_verified(source)
-                            or source.get("category") not in _REQUIRED_CATEGORIES
+                            # Accept evidence from every supported category. Filtering on the MVP
+                            # floor here discarded verified state_corruption, denial_of_service and
+                            # identity_role_exploitation outcomes entirely, so work that genuinely
+                            # ran was never aggregated or reported.
+                            or source.get("category") not in SUPPORTED_CASE_CATEGORIES
                             or source.get("attack_class")
                             not in {"boundary", "invariant", "regression"}
                             or not isinstance(fixture, dict)
@@ -3030,7 +3041,11 @@ class PostgresApiBackend(ApiBackend):
                                 "covered": (
                                     len(group["cases"]) >= total_case_count
                                     and total_case_count >= 9
-                                    and group["categories"] == _REQUIRED_CATEGORIES
+                                    # Subset, never equality: the MVP floor is a MINIMUM. Equality
+                                    # meant a richer six-category live-100 run reported as NOT
+                                    # covered precisely because it exercised more ground, while a
+                                    # legacy three-category run still satisfies the same floor.
+                                    and MVP_REQUIRED_CATEGORIES.issubset(group["categories"])
                                     and _REQUIRED_WEB.issubset(group["web"])
                                     and _REQUIRED_LLM.issubset(group["llm"])
                                 ),

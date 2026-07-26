@@ -1792,6 +1792,14 @@ class DurableCampaignRunner:
                     fixture_provenance=payload["fixture_provenance"],
                     source_tool=case.source_tool,
                     source_technique=case.source_technique,
+                    # Reviewed-workload producer lineage travels with the resolved case so the
+                    # persisted attempt records WHICH reviewed instance, review record and
+                    # generation record admitted it — distinct from the security-tool lineage
+                    # above, which stays NULL unless a catalog tool genuinely produced the case.
+                    source_kind=case.source_kind,
+                    workload_instance_id=case.instance_id,
+                    review_record_sha256=case.review_record_sha256,
+                    source_generation_sha256=case.source_generation_sha256,
                 )
                 self._bind_agent_execution_attempt(
                     execution_id=red_team_execution,

@@ -281,8 +281,10 @@ def test_agent_acceptance_migration_is_the_only_head() -> None:
     # The point of this test is that there is exactly ONE head, not that the head is any
     # particular revision. Chain: ... -> 0022 (attempt_result.resource_measurements)
     # -> 0023 (governed target-bound four-role acceptance authority)
-    # -> 0024 (Chutes provider-lineage observation).
-    assert script.get_heads() == ["0024"]
+    # -> 0024 (Chutes provider-lineage observation)
+    # -> 0025 (six supported categories + reviewed-workload provenance).
+    assert script.get_heads() == ["0025"]
+    assert script.get_revision("0025").down_revision == "0024"
     assert script.get_revision("0024").down_revision == "0023"
     assert script.get_revision("0023").down_revision == "0022"
     assert script.get_revision("0022").down_revision == "0021"

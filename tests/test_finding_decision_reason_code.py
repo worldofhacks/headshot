@@ -135,7 +135,7 @@ def _seed_confirmed_finding(
                 "INSERT INTO campaign_attempts "
                 "(organization_id, run_id, attempt_id, ordinal, case_id, case_content_hash, "
                 "category, severity, attack_class, owasp_mappings, fixture_provenance) VALUES "
-                "(:org, :run, :attempt, 0, :case_id, :case_hash, 'access-control', 'high', "
+                "(:org, :run, :attempt, 0, :case_id, :case_hash, 'prompt_injection', 'high', "
                 "'boundary', CAST(:mappings AS jsonb), CAST(:fixture AS jsonb))"
             ),
             {
@@ -167,7 +167,7 @@ def _seed_confirmed_finding(
                 "INSERT INTO finding "
                 "(finding_id, organization_id, state, severity, category, target_version, "
                 "source_kind, execution_profile) VALUES "
-                "(:finding, :org, 'candidate', 'high', 'access-control', '1.0.0', "
+                "(:finding, :org, 'candidate', 'high', 'prompt_injection', '1.0.0', "
                 "'campaign', 'synthetic')"
             ),
             {"finding": finding_id, "org": organization_id},
@@ -225,7 +225,7 @@ def _append_same_launcher_evidence(
                 "INSERT INTO campaign_attempts "
                 "(organization_id, run_id, attempt_id, ordinal, case_id, case_content_hash, "
                 "category, severity, attack_class, owasp_mappings, fixture_provenance) VALUES "
-                "(:org, :run, :attempt, 1, :case_id, :case_hash, 'access-control', 'high', "
+                "(:org, :run, :attempt, 1, :case_id, :case_hash, 'prompt_injection', 'high', "
                 "'boundary', CAST(:mappings AS jsonb), CAST(:fixture AS jsonb))"
             ),
             {
@@ -417,7 +417,7 @@ def test_finding_approval_rejects_missing_submitter_lineage(migrated_db: Engine)
                 "INSERT INTO finding "
                 "(finding_id, organization_id, state, severity, category, target_version, "
                 "source_kind, execution_profile) VALUES "
-                "(:finding, :org, 'candidate', 'high', 'access-control', '1.0.0', "
+                "(:finding, :org, 'candidate', 'high', 'prompt_injection', '1.0.0', "
                 "'campaign', 'synthetic')"
             ),
             {"finding": finding_id, "org": ORG_ID},

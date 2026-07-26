@@ -41,6 +41,11 @@ from agentforge.auth.permissions import (
     TARGETS_MANAGE,
 )
 from agentforge.auth.principal import Principal
+from agentforge.case_taxonomy import (
+    REVIEWED_WORKLOAD_SOURCE_KINDS,
+    SUPPORTED_CASE_CATEGORIES,
+    WORKLOAD_INSTANCE_ID_PATTERN,
+)
 from agentforge.contracts import validate as validate_contract
 from agentforge.control_plane.errors import (
     AuthorizationDeniedError,
@@ -85,6 +90,7 @@ from agentforge.providers.lineage import (
     ProviderTerminalEventV1,
     served_provider_matches_configured,
 )
+from agentforge.security_tools.catalog import SECURITY_TOOL_CATALOG
 from agentforge.target.registry import TargetRegistry, TargetRegistryError
 from agentforge.target.spec import (
     AttackSurfaceDefinition,
@@ -115,8 +121,15 @@ _CAMPAIGN_JOB_ATTEMPT_ID = "campaign"
 _CAMPAIGN_PAYLOAD_SCHEMA = "campaign.execute"
 _CAMPAIGN_PAYLOAD_VERSION = 1
 _SHA256 = re.compile(r"\A[a-f0-9]{64}\Z")
-_CASE_CATEGORIES = frozenset({"prompt_injection", "data_exfiltration", "tool_misuse"})
+# Case categories are the shared accept-list in agentforge.case_taxonomy. They previously lived
+# here as a private three-element copy, which silently made every state_corruption,
+# denial_of_service and identity_role_exploitation case in the reviewed live-100 workload
+# inadmissible. The MVP coverage FLOOR is a separate concept and is unchanged.
 _ATTACK_CLASSES = frozenset({"boundary", "invariant", "regression"})
+# Only a tool the platform can actually execute may be recorded as having produced a case, so the
+# accepted identifiers are the trusted catalog itself rather than any well-formed string. The
+# catalog module imports nothing from agentforge, so this cannot create an import cycle.
+_CATALOG_TOOL_IDS = frozenset(tool.tool_id for tool in SECURITY_TOOL_CATALOG)
 _SEVERITIES = frozenset({"low", "medium", "high", "critical"})
 _EXACT_COUNT_CORPUS_ID = "headshot-live-100-v1"
 _JUDGE_CALIBRATION_STATES = frozenset({"unavailable", "failed", "passed", "invalidated", "enabled"})
@@ -1484,6 +1497,10 @@ class ControlPlaneStore:
         fixture_provenance: Mapping[str, Any] | None = None,
         source_tool: str | None = None,
         source_technique: str | None = None,
+        source_kind: str | None = None,
+        workload_instance_id: str | None = None,
+        review_record_sha256: str | None = None,
+        source_generation_sha256: str | None = None,
     ) -> CampaignAttemptRecord:
         if isinstance(ordinal, bool) or not isinstance(ordinal, int) or ordinal < 0:
             raise InvalidControlPlaneInput("attempt ordinal must be non-negative")
@@ -1508,7 +1525,7 @@ class ControlPlaneStore:
                 or _SHA256.fullmatch(case_content_hash) is None
             ):
                 raise InvalidControlPlaneInput("case content hash is invalid")
-            if category not in _CASE_CATEGORIES:
+            if category not in SUPPORTED_CASE_CATEGORIES:
                 raise InvalidControlPlaneInput("case category is invalid")
             if severity not in _SEVERITIES:
                 raise InvalidControlPlaneInput("case severity is invalid")
@@ -1535,6 +1552,10 @@ class ControlPlaneStore:
                 or not source_tool
                 or len(source_tool) > 64
                 or re.fullmatch(r"[a-z0-9][a-z0-9-]*", source_tool) is None
+                # A tool identity is only meaningful if it names a tool the platform actually
+                # knows how to run. Accepting arbitrary well-formed strings here is what let a
+                # producer kind ("hosted_red_team") be recorded as though it were a scanner.
+                or source_tool not in _CATALOG_TOOL_IDS
             ):
                 raise InvalidControlPlaneInput("case source tool is invalid")
             if source_technique is not None and (
@@ -1548,6 +1569,41 @@ class ControlPlaneStore:
         else:
             normalized_mappings = None
             normalized_fixture = None
+        # Reviewed-workload (producer) lineage is an all-or-nothing tuple, validated independently
+        # of the case metadata above. Legacy attempts predate reviewed workloads and legitimately
+        # carry none of it, so "all four absent" stays valid; what must never happen is PARTIAL
+        # provenance, which would let a case claim review without naming the record that reviewed
+        # it. This mirrors the same-shaped CHECK constraints added in migration 0025.
+        workload_lineage = (
+            source_kind,
+            workload_instance_id,
+            review_record_sha256,
+            source_generation_sha256,
+        )
+        if any(value is not None for value in workload_lineage):
+            if not metadata_supplied:
+                raise InvalidControlPlaneInput(
+                    "reviewed-workload lineage requires complete case metadata"
+                )
+            if source_kind not in REVIEWED_WORKLOAD_SOURCE_KINDS:
+                raise InvalidControlPlaneInput("case source kind is invalid")
+            if (
+                not isinstance(workload_instance_id, str)
+                or re.fullmatch(WORKLOAD_INSTANCE_ID_PATTERN, workload_instance_id) is None
+            ):
+                raise InvalidControlPlaneInput("case workload instance identity is invalid")
+            for lineage_hash in (review_record_sha256, source_generation_sha256):
+                if not isinstance(lineage_hash, str) or _SHA256.fullmatch(lineage_hash) is None:
+                    raise InvalidControlPlaneInput("case reviewed lineage hash is invalid")
+            if source_kind == "reviewed_full_scan":
+                if source_tool is None:
+                    raise InvalidControlPlaneInput(
+                        "reviewed full-scan lineage requires security-tool provenance"
+                    )
+            elif source_tool is not None:
+                raise InvalidControlPlaneInput(
+                    "non-tool reviewed source kind cannot carry security-tool provenance"
+                )
         identity = f"m1d-attempt:v1\0{run_id}\0{ordinal}\0{case_id}"
         attempt_id = hashlib.sha256(identity.encode("utf-8")).hexdigest()
         with self._engine.begin() as connection:
@@ -1589,6 +1645,18 @@ class ControlPlaneStore:
                     or existing["source_technique"] != source_technique
                 ):
                     raise RecordConflictError("attempt metadata differs from immutable case")
+                # Reviewed-workload lineage is compared on its own so an idempotent replay cannot
+                # quietly re-attribute an already-persisted attempt to a different producer,
+                # review record, or generation record.
+                if (
+                    existing["source_kind"] != source_kind
+                    or existing["workload_instance_id"] != workload_instance_id
+                    or existing["review_record_sha256"] != review_record_sha256
+                    or existing["source_generation_sha256"] != source_generation_sha256
+                ):
+                    raise RecordConflictError(
+                        "attempt reviewed-workload lineage differs from immutable case"
+                    )
                 return self._campaign_attempt_from_row(existing)
             row = (
                 connection.execute(
@@ -1596,10 +1664,13 @@ class ControlPlaneStore:
                         "INSERT INTO campaign_attempts "
                         "(organization_id, run_id, attempt_id, ordinal, case_id, "
                         "case_content_hash, category, severity, attack_class, owasp_mappings, "
-                        "fixture_provenance, source_tool, source_technique) VALUES "
+                        "fixture_provenance, source_tool, source_technique, source_kind, "
+                        "workload_instance_id, review_record_sha256, source_generation_sha256) "
+                        "VALUES "
                         "(:org, :run_id, :attempt_id, :ordinal, :case_id, :case_hash, :category, "
                         ":severity, :attack_class, CAST(:owasp AS jsonb), CAST(:fixture AS jsonb), "
-                        ":source_tool, :source_technique) "
+                        ":source_tool, :source_technique, :source_kind, :workload_instance_id, "
+                        ":review_record_sha256, :source_generation_sha256) "
                         "RETURNING *"
                     ),
                     {
@@ -1620,6 +1691,10 @@ class ControlPlaneStore:
                         else None,
                         "source_tool": source_tool,
                         "source_technique": source_technique,
+                        "source_kind": source_kind,
+                        "workload_instance_id": workload_instance_id,
+                        "review_record_sha256": review_record_sha256,
+                        "source_generation_sha256": source_generation_sha256,
                     },
                 )
                 .mappings()
@@ -2944,6 +3019,10 @@ class ControlPlaneStore:
             not isinstance(reviewed_category, str)
             or not reviewed_category
             or len(reviewed_category) > 64
+            # This value is written straight into campaign_attempts.category, which is now
+            # constrained by the database. Accepting any well-formed string here would let the
+            # runtime admit a category PostgreSQL then rejects, so the two must agree.
+            or reviewed_category not in SUPPORTED_CASE_CATEGORIES
         ):
             raise InvalidControlPlaneInput("governed acceptance category is invalid")
         supplied_limits = (
@@ -5381,7 +5460,7 @@ class ControlPlaneStore:
             except (EvidenceIntegrityError, TypeError, ValueError) as exc:
                 raise AuthorizationDeniedError("outcome evidence integrity is unavailable") from exc
             if (
-                row["category"] not in _CASE_CATEGORIES
+                row["category"] not in SUPPORTED_CASE_CATEGORIES
                 or row["severity"] not in _SEVERITIES
                 or row["execution_profile"] not in {"synthetic", "live"}
                 or row["evidence_provenance"] not in {"synthetic_offline", "live_target"}

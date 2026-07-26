@@ -7,12 +7,16 @@ import json
 import os
 import re
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
 from agentforge.agents.hosted import HOSTED_MAX_PHYSICAL_CALLS
 from agentforge.agents.red_team.seed_replay import corpus_sha256, seed_to_attempt
+from agentforge.case_taxonomy import (
+    REVIEWED_WORKLOAD_SOURCE_KINDS,
+    WORKLOAD_INSTANCE_ID_PATTERN,
+)
 from agentforge.evals.validation import (
     detect_duplicate_sequences,
     load_fixture_registry,
@@ -22,6 +26,7 @@ from agentforge.evals.validation import (
     validate_corpus,
 )
 from agentforge.security_tools.candidates import ToolAttackCandidate, parse_tool_attack_bundle
+from agentforge.security_tools.catalog import SECURITY_TOOL_CATALOG
 
 MVP_CORPUS_ID = "m11-seed-corpus-v1"
 MVP_CASE_COUNT = 9
@@ -74,7 +79,7 @@ LIVE_100_BATCH_SPECS: dict[str, dict[str, object]] = {
 TRUSTED_WORKLOAD_IDS = frozenset(
     {MVP_CORPUS_ID, FULL_SCAN_CORPUS_ID, LIVE_100_CORPUS_ID, *LIVE_100_BATCH_IDS}
 )
-_WORKLOAD_ID = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9._:-]{0,127}\Z")
+_WORKLOAD_ID = re.compile(rf"\A{WORKLOAD_INSTANCE_ID_PATTERN}\Z")
 _SHA256 = re.compile(r"\A[0-9a-f]{64}\Z")
 _REVIEWED_BUNDLES = {
     "garak.bundle.json": "b4e0ec281f720b68064dd3923d995f846f9a6498bf8cc0bc474dd5954c54c923",
@@ -91,8 +96,16 @@ class CorpusUnavailable(RuntimeError):
 class AuthoredCase:
     payload: dict[str, Any]
     content_hash: str
+    # Security-tool lineage. Populated ONLY for cases genuinely produced by a tool in
+    # ``agentforge.security_tools.catalog``, and always as a complete pair. A producer that is not
+    # a catalog security tool (notably ``hosted_red_team``) leaves both of these ``None`` so it can
+    # never be counted as a tool execution.
     source_tool: str | None = None
     source_technique: str | None = None
+    # Reviewed-workload producer lineage, distinct from the security-tool lineage above.
+    # One of ``agentforge.case_taxonomy.REVIEWED_WORKLOAD_SOURCE_KINDS``; ``None`` for corpora that
+    # carry no reviewed-workload provenance (the MVP and full-scan corpora).
+    source_kind: str | None = None
     instance_id: str | None = None
     review_record_sha256: str | None = None
     source_generation_sha256: str | None = None
@@ -459,8 +472,7 @@ def _load_reviewed_workload_manifest(
             or _WORKLOAD_ID.fullmatch(review["reviewer_id"]) is None
             or _SHA256.fullmatch(str(review.get("review_record_sha256", ""))) is None
             or _SHA256.fullmatch(str(review.get("source_generation_sha256", ""))) is None
-            or review.get("source_kind")
-            not in {"m11_seed", "reviewed_full_scan", "hosted_red_team"}
+            or review.get("source_kind") not in REVIEWED_WORKLOAD_SOURCE_KINDS
         ):
             raise CorpusUnavailable("live-100 workload review provenance is invalid")
         try:
@@ -527,16 +539,81 @@ def _load_reviewed_workload_manifest(
             AuthoredCase(
                 payload=payload,
                 content_hash=case_sha256,
-                source_tool=(
-                    "hosted_red_team" if review["source_kind"] == "hosted_red_team" else None
-                ),
-                source_technique=review["source_kind"],
+                # Security-tool lineage is NOT known here and is never inferred from the producer
+                # kind. ``hosted_red_team`` is a producer, not a catalog security tool, and
+                # ``m11_seed`` cases were authored by hand — writing either into ``source_tool``
+                # would both misreport tool coverage and leave ``source_technique`` unpaired.
+                # Real tool identity is restored for ``reviewed_full_scan`` cases only, from the
+                # hash-verified full-scan baseline, by
+                # :func:`_restore_reviewed_tool_lineage`.
+                source_tool=None,
+                source_technique=None,
+                source_kind=review["source_kind"],
                 instance_id=instance_id,
                 review_record_sha256=review["review_record_sha256"],
                 source_generation_sha256=review["source_generation_sha256"],
             )
         )
     return cases, hosted_variant_count, manifest_sha256
+
+
+def _restore_reviewed_tool_lineage(
+    cases: list[AuthoredCase],
+    baseline: AuthoredCorpus,
+) -> list[AuthoredCase]:
+    """Reattach real security-tool lineage to ``reviewed_full_scan`` cases, and only those.
+
+    The reviewed workload manifest records WHICH producer created a case (``source_kind``) but not
+    the security-tool identity, so the manifest alone cannot say that a case came from Garak or
+    PyRIT.  That identity is recovered here from the byte-pinned, hash-verified full-scan baseline
+    rather than inferred from case names or free text.
+
+    The join is on BOTH ``case_id`` and ``content_hash``: an identifier collision alone can never
+    attach a tool to a case whose bytes differ from the reviewed original.  Every branch fails
+    closed — a ``reviewed_full_scan`` case that is absent from the baseline, whose hash differs,
+    or whose recorded tool is not in the trusted security-tool catalog aborts the load rather than
+    downgrading to "no tool", which would silently understate tool coverage.
+
+    Cases with any other ``source_kind`` are returned untouched with no tool lineage, so a
+    hosted-generated or hand-authored case can never be reported as a security-tool execution.
+    """
+
+    catalog_tool_ids = {tool.tool_id for tool in SECURITY_TOOL_CATALOG}
+    baseline_tools = {
+        baseline_case.payload["case_id"]: baseline_case
+        for baseline_case in baseline.cases
+        if baseline_case.source_tool is not None
+    }
+    restored: list[AuthoredCase] = []
+    for case in cases:
+        if case.source_kind != "reviewed_full_scan":
+            if case.source_tool is not None or case.source_technique is not None:
+                raise CorpusUnavailable(
+                    "reviewed workload case carries tool lineage without a tool-derived source kind"
+                )
+            restored.append(case)
+            continue
+        baseline_case = baseline_tools.get(case.payload["case_id"])
+        if baseline_case is None or baseline_case.content_hash != case.content_hash:
+            raise CorpusUnavailable(
+                "reviewed full-scan case does not match the pinned tool-derived baseline"
+            )
+        if (
+            baseline_case.source_tool not in catalog_tool_ids
+            or not isinstance(baseline_case.source_technique, str)
+            or not baseline_case.source_technique
+        ):
+            raise CorpusUnavailable(
+                "reviewed full-scan baseline tool provenance is incomplete or uncatalogued"
+            )
+        restored.append(
+            replace(
+                case,
+                source_tool=baseline_case.source_tool,
+                source_technique=baseline_case.source_technique,
+            )
+        )
+    return restored
 
 
 def load_live_100_corpus(
@@ -586,10 +663,11 @@ def load_live_100_corpus(
     for index, baseline_case in enumerate(baseline.cases):
         expected_source_kind = "m11_seed" if index < MVP_CASE_COUNT else "reviewed_full_scan"
         admitted = actual_by_id[baseline_case.payload["case_id"]]
-        if admitted.source_technique != expected_source_kind:
+        if admitted.source_kind != expected_source_kind:
             raise CorpusUnavailable("live-100 baseline review provenance is misclassified")
     if hosted_variant_count != LIVE_100_CASE_COUNT - FULL_SCAN_CASE_COUNT:
         raise CorpusUnavailable("live-100 workload hosted variants are absent or misclassified")
+    cases = _restore_reviewed_tool_lineage(cases, baseline)
 
     return AuthoredCorpus(
         corpus_id=LIVE_100_CORPUS_ID,
@@ -597,7 +675,10 @@ def load_live_100_corpus(
         cases=tuple(cases),
         categories=frozenset(category_counts),
         root=selected,
-        tool_sources=tuple(sorted((*baseline.tool_sources, "hosted_red_team"))),
+        # Only genuine catalog security tools appear here. ``hosted_red_team`` is a producer kind,
+        # not a tool: including it previously reported a fourth "tool" to the console and would
+        # inflate tool coverage against Garak/PyRIT/Promptfoo/Giskard accounting.
+        tool_sources=baseline.tool_sources,
     )
 
 
@@ -607,6 +688,7 @@ def load_live_100_batch(
     *,
     manifest_path: str | os.PathLike[str] | None = None,
     expected_manifest_sha256: str | None = None,
+    bundle_root: str | os.PathLike[str] | None = None,
 ) -> AuthoredCorpus:
     """Load one separately-authorized live-100 batch sub-workload — a strict frozen subset.
 
@@ -661,12 +743,25 @@ def load_live_100_batch(
     if physical > HOSTED_MAX_PHYSICAL_CALLS:
         raise CorpusUnavailable("live-100 batch physical request count exceeds the hosted cap")
 
+    # A batch is a strict subset of the SAME reviewed cases, so its tool-derived members must carry
+    # the same real tool lineage as the whole. Restoring it here — through the identical
+    # hash-verified join — keeps batch and whole provenance identical; without it a batch attempt
+    # would silently lose the Garak/PyRIT/Promptfoo attribution the whole workload records.
+    baseline = load_full_scan_corpus(selected, bundle_root=bundle_root)
+    cases = _restore_reviewed_tool_lineage(cases, baseline)
+
     return AuthoredCorpus(
         corpus_id=batch_id,
         content_hash=manifest_sha256,
         cases=tuple(cases),
         categories=frozenset(case.payload["category"] for case in cases),
         root=selected,
+        # Report exactly the catalog tools that produced cases in THIS batch. Reporting none while
+        # the batch genuinely contains tool-derived cases would understate tool coverage just as
+        # dishonestly as listing a non-tool producer would overstate it.
+        tool_sources=tuple(
+            sorted({case.source_tool for case in cases if case.source_tool is not None})
+        ),
     )
 
 
@@ -739,6 +834,11 @@ def resolve_workload(
             selected_id,
             root,
             manifest_path=manifest_path,
+            # Batches resolve the same hash-verified full-scan baseline as the whole workload in
+            # order to restore tool lineage, so they must honour the caller's bundle root too.
+            # Dropping it here would silently load a different baseline for batches than for the
+            # whole.
+            bundle_root=bundle_root,
         )
     else:
         raise CorpusUnavailable("workload identity is not in the trusted registry")

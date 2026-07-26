@@ -7,6 +7,7 @@ import hashlib
 import json
 from typing import Any
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import Engine, text
 
@@ -2182,6 +2183,113 @@ def test_coverage_and_resilience_project_one_authoritative_regression(
     assert regression_body["state"] == "ready"
     assert regression_body["data"][0]["regression_id"] == regression.attempt_id
     assert regression_body["data"][0]["status"] == "NO_EXPLOIT_OBSERVED"
+
+
+@pytest.mark.parametrize(
+    ("category", "llm_id"),
+    [
+        ("state_corruption", "LLM04"),
+        ("denial_of_service", "LLM10"),
+        ("identity_role_exploitation", "LLM05"),
+    ],
+)
+def test_coverage_retains_every_supported_non_mvp_category(
+    migrated_db: Engine,
+    category: str,
+    llm_id: str,
+) -> None:
+    _clean(migrated_db)
+    viewer = _principal(
+        LAUNCHER_ID,
+        "org:console:read",
+        "org:findings:read",
+        "org:campaign:launch",
+        "org:targets:manage",
+    )
+    _seed_ready_target(migrated_db, viewer)
+    run, _, scope = _seed_scheduled_tool_attempt(migrated_db, viewer)
+    attempt = ControlPlaneStore(migrated_db, environment="staging").ensure_campaign_attempt(
+        run_id=run.run_id,
+        ordinal=1,
+        case_id=f"coverage-{category}-0001",
+        case_content_hash=hashlib.sha256(category.encode()).hexdigest(),
+        category=category,
+        severity="high",
+        attack_class="boundary",
+        owasp_mappings=[
+            {
+                "framework": "OWASP Web",
+                "version": "2021",
+                "id": "A04",
+                "name": "Insecure Design",
+            },
+            {
+                "framework": "OWASP LLM",
+                "version": "2025",
+                "id": llm_id,
+                "name": "Supported category mapping",
+            },
+        ],
+        fixture_provenance={
+            "classification": "synthetic",
+            "fixture_id": "coverage-supported-category-fixture",
+            "fixture_version": "1.0.0",
+            "source": "hand_authored",
+            "contains_real_phi": False,
+        },
+    )
+    with migrated_db.begin() as connection:
+        ExecutionRecorder().record(
+            {
+                "schema_version": "1",
+                "campaign_run_id": run.run_id,
+                "attempt_id": attempt.attempt_id,
+                "campaign_id": run.run_id,
+                "target_id": scope.target_id,
+                "target_version": scope.target_version,
+                "attack_attempt": {
+                    "schema_version": "1",
+                    "case_ref": f"coverage-{category}-0001",
+                    "input_sequence": ["Exercise one reviewed supported category."],
+                    "category": category,
+                },
+                "request_transcript": {"turns": ["Exercise one reviewed supported category."]},
+                "response_transcript": "Synthetic supported-category response.",
+                "policy_decision_id": f"coverage-{category}-policy",
+                "executed_at": "2026-07-26T12:00:00+00:00",
+                "trace_id": None,
+                "correlation_id": run.run_id,
+                "recorder_identity": "recorder@1",
+                "recorder_version": "1",
+                "organization_id": ORG_ID,
+                "surface_id": scope.surface_id,
+                "surface_version": scope.surface_version,
+                "authorization_scope_hash": run.scope_hash,
+                "execution_profile": "live",
+                "evidence_provenance": "live_target",
+            },
+            connection,
+        )
+        connection.execute(
+            text(
+                "INSERT INTO verdict "
+                "(state, confidence, campaign_run_id, attempt_id, organization_id, reason_codes) "
+                "VALUES ('NO_EXPLOIT_OBSERVED', 1.0, :run, :attempt, :org, "
+                "'[\"supported_category_observed\"]'::jsonb)"
+            ),
+            {"org": ORG_ID, "run": run.run_id, "attempt": attempt.attempt_id},
+        )
+
+    result = PostgresApiBackend(
+        migrated_db,
+        environment="staging",
+    ).read("coverage", viewer)
+
+    assert result.state == "ready"
+    assert len(result.data) == 1
+    assert result.data[0]["verified_attempt_count"] == 1
+    assert result.data[0]["category_count"] == 1
+    assert result.data[0]["owasp_llm"] == [llm_id]
 
 
 # --- Cost & trace read-model projections (M1d live-console pages) ----------------------------
