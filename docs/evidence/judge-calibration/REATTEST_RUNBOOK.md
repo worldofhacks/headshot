@@ -9,14 +9,109 @@ carried forward** — see §5 for exactly why, and for what part of it was and w
 
 ---
 
-## 1. Blocked on (both required, neither is mine)
+## 1. Blocked on — ONE input remains
 
-| # | Input | Owner | Why it blocks |
+| # | Input | Owner | Status |
 |---|---|---|---|
-| B1 | Staged **production** hosted configuration set + its attested `configuration_sha256` | **m** | The Judge identity is derived from it. Without it there is nothing to bind to, and a capture would again attest a configuration production does not run. |
-| B2 | **Two-person human ground-truth attestation** over the exact `slice_set_sha256` | **g** + a distinct approver | `scripts/enable_model_judge.py` refuses to flip `runtime_enabled` without it. Every label on disk today is rule- or agent-authored. |
+| B1 | Staged **production** hosted configuration set + its attested `configuration_sha256` | **integrator** | **STILL BLOCKING.** The Judge identity is derived from it. No staged payload exists anywhere on the integration head — production role configs live in the Postgres `hosted_configuration_sets` table. Without it there is nothing to bind to, and a capture would again attest a configuration production does not run. |
+| B2 | Two-person human ground-truth attestation | g + a distinct approver | **LIFTED for the deadline** (owner). Enablement now accepts a weaker, explicitly-named baseline — see §1b. |
+| B3 | OpenRouter usage export | — | **OPTIONAL** (owner). Enablement now accepts `lineage_consistent` — see §1b. |
 
-A third constraint is not a blocker but changes the plan — see §4 (56-call ceiling).
+A further constraint is not a blocker but changes the plan — see §4 (56-call ceiling).
+
+## 1b. Graded provenance — accept a weaker baseline, never disguise one
+
+Provenance is **computed from the evidence supplied**, never declared
+(`src/agentforge/agents/judge/provenance.py`). The approving human names the weakest tier they
+accept; enablement refuses if the real tier is weaker, and the accepted tiers are encoded into
+`approver_ref` so the downgrade travels **inside** the artifact.
+
+| Ground-truth tier | Meaning |
+|---|---|
+| `human_two_person` | two distinct identified principals, blind to Judge output |
+| `model_labeled` | every label names the model that proposed it |
+| `rule_derived` | **what is on disk today** — labels derived in code from a static design table |
+| `unattested` | no label provenance at all |
+
+| Provider tier | Meaning |
+|---|---|
+| `usage_export_reconciled` | every sample matched to the provider's own usage export |
+| `lineage_consistent` | **what the committed bundle earns** — unique provider-shaped request ids, provider-reported distinct costs and token counts. Strong circumstantial evidence, *not proof* |
+| `unverified` | shape-valid only |
+
+**The committed 54-label corpus classifies as `rule_derived`.** Those labels come from
+`_LABEL_TABLE[slug]` in `scripts/build_calibration_corpus.py` — resolved in code from the sample
+slug, with no model involved.
+
+**`GT-AUTO-M11-LIVE100` classifies as `model_labeled`** and is the adopted baseline for the
+100-case corpus (see §1c).
+
+## 1c. Adopted: GT-AUTO-M11-LIVE100 (independent automated labels)
+
+| | |
+|---|---|
+| artifact | `GT-AUTO-M11-LIVE100`, `content_sha256` `0ffc85fa…5432c81` (pinned at adoption) |
+| labeller | `claude-opus-5[1m]` — a **different model family** from the Judge under calibration (`gemini-2.5-pro`), so agreement is independent rather than self-agreement |
+| labels | 200 = 100 model-proposed + 100 rule-derived resist |
+| human attestation | **none.** `two_person_human_gate_satisfied: false`, enforced in the data |
+| corpus execution | `NOT_EXECUTED` — labels state the designed-in success branch, never an observed outcome |
+
+The labelling lane left the schema question to this lane, correctly. `ground-truth-slice.v1.json`
+now admits `automated_model_agent` as a `label_source`, with `labeler_model_id` required — but it
+**deliberately does not inherit `human_expert`'s privilege** of licensing an `EXPLOIT_CONFIRMED`
+with no oracle or canary hit. Only an oracle, a canary, or a human may confirm, and a model
+labeller is none of those. A model-labelled confirmation without a deterministic hit is therefore
+rejected by validation outright.
+
+### The eight excluded cases
+
+`AF-M11-DX-003 · DX-118 · PI-003 · TM-009 · TM-010 · TM-013 · TOOL-PROMPTFOO-68E9DFE5599D ·
+TOOL-PYRIT-1D2BE5077815`
+
+Flagged by the labeller itself as `over_claimed_provability`: labelled `CONFIRM` where the
+candidate said `LIKELY`, asserting a deterministic artifact would fix the verdict when the case
+binds no such oracle. Excluded from scoring because scoring them would be incoherent twice over:
+
+1. the model Judge is **structurally incapable** of returning `EXPLOIT_CONFIRMED`
+   (`agents/judge/model_authority.py`), so a `CONFIRM` expectation it cannot satisfy measures the
+   architecture, not the Judge; and
+2. `CalibrationGate` scores `expected EXPLOIT_CONFIRMED` + non-positive actual as a **false
+   negative**, and `_reasons` raises the hard `confirmed_exploit_missed` invariant on it — which
+   fails the entire calibration regardless of every rate threshold.
+
+They would manufacture phantom false negatives against a Judge behaving exactly as designed. The
+exclusion is **derived from the artifact's own flags**, not hard-coded, and cross-checked against
+its declared `over_claimed_provability_n` so a drift between list and headline is an error.
+Excluded labels are partitioned out and **counted in the report**, never dropped silently:
+16 labels excluded, **184 scored**, of 200.
+
+### The honest headline
+
+> Independent automated labelling of the 100-case corpus by `claude-opus-5[1m]`, blind to the
+> candidate labels, to each case's own `oracle_expectation`, and to Judge output:
+> **92/100 agreement** with the candidate labels (Cohen's κ 0.743), **0 false negatives**, and the
+> confusion is **one-directional** — all 8 disagreements run `LIKELY → CONFIRM`; there is no
+> `CONFIRM → LIKELY` cell at all. Per category: DoS, identity-role and state-corruption 1.00;
+> data-exfiltration 0.889; prompt-injection 0.85; tool-misuse 0.833. Inter-pass agreement 0.88
+> (κ 0.596) across two passes, 12 adjudicated.
+>
+> This is **not human ground truth.** No human attested any label. The labeller over-claimed
+> provability on 8 cases and under-claimed on none, so its bias runs toward asserting
+> deterministic provability rather than away from it — which is why those 8 are excluded rather
+> than scored.
+
+The disclosure the report must carry at the current tiers, verbatim:
+
+> Ground truth: automated-labeled baseline — labels derived in code from a static design table
+> (`scripts/build_calibration_corpus.py`), NOT model-labeled and NOT human ground truth. The labels
+> encode what the corpus author intended each sample to be, so the measurement shows agreement with
+> that intent, not with an independent judgement of the evidence. Provider calls: consistent with a
+> real provider run, NOT reconciled against the provider's records — unique provider-shaped request
+> ids, provider-reported per-sample costs and distinct token counts. Strong circumstantial evidence;
+> it is not proof the calls occurred.
+
+Relaxing label provenance does **not** relax the human approver: `--approver-ref` and `--confirm`
+are unchanged, and enablement remains a separate, attributable human act.
 
 ## 2. What m hands over
 
@@ -110,16 +205,30 @@ PYTHONPATH=src python scripts/analyze_judge_calibration.py \
   --output "$R/stratified-report.json" \
   --require-non-oracle-pass
 
-# (g) human enablement — refuses unless every gate in §6 holds
+# (g) human enablement — refuses unless every gate in §6 holds.
+#     Full-strength form:
 PYTHONPATH=src python scripts/enable_model_judge.py \
   --calibration "$R/calibration-accepted.json" \
   --hosted-configuration-set <staged-prod-config.json> \
-  --expected-configuration-sha256 <sha-m-attested> \
+  --expected-configuration-sha256 <sha-attested> \
   --ground-truth-attestation <two-person-attestation.json> \
   --provenance-attestation "$R/provenance-attestation.json" \
+  --accept-ground-truth-tier human_two_person \
+  --accept-provider-tier usage_export_reconciled \
   --approver-ref <authorized-human> \
-  --output "$R/calibration-enabled.json" \
-  --confirm
+  --output "$R/calibration-enabled.json" --confirm
+
+#     Deadline form — weaker baseline, explicitly named and recorded in the artifact:
+PYTHONPATH=src python scripts/enable_model_judge.py \
+  --calibration "$R/calibration-accepted.json" \
+  --hosted-configuration-set <staged-prod-config.json> \
+  --expected-configuration-sha256 <sha-attested> \
+  --captured-results "$R/captured-results.json" \
+  --accept-ground-truth-tier rule_derived \
+  --accept-provider-tier lineage_consistent \
+  --approver-ref <authorized-human> \
+  --output "$R/calibration-enabled.json" --confirm
+# -> approver_ref becomes "gt=rule_derived;prov=lineage_consistent;by=<authorized-human>"
 ```
 
 Steps (a)–(f) report whatever the numbers are. Step (g) is the only one that grants authority, and
@@ -140,6 +249,16 @@ sample count, so it too is constant across sub-runs and the merged bundle has on
 
 The aggregate over all batches is the number that governs. Per-batch metrics are reported alongside
 so a degraded sub-run stays visible instead of being averaged away.
+
+> **Carry this into the real run.** On the rehearsal split of the committed 54-sample bundle, the
+> two halves were not equivalent: batch-0 scored non-oracle agreement **0.9524** and batch-1
+> **0.8571**, against a 0.9048 aggregate that shows neither. That spread is a property of which
+> labels landed in which half — batches are cut from the corpus sorted by `label_id`, so a batch
+> can concentrate one category's hard cases. **Report the per-batch table with the real numbers,
+> and if one batch sits near or under `min_agreement_rate` while the aggregate passes, say so
+> explicitly rather than letting the aggregate speak for it.** A batch that fails on its own is
+> not automatically disqualifying — the aggregate is the defined gate — but it is a finding, and
+> it is the kind of thing an aggregate is designed to hide.
 
 **Cost:** one physical Judge call per label. The 54-label slice set measured $0.75823375, so budget
 **~$0.014/label** — about **$2.80 for a 200-label corpus** across 4 batches of 56/56/56/32.

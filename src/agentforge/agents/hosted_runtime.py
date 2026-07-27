@@ -22,6 +22,12 @@ from agentforge.agents.hosted import (
 )
 from agentforge.agents.judge import CalibrationGateClosed, JudgeIdentity
 from agentforge.agents.judge.enablement import require_model_judge_enablement
+from agentforge.agents.judge.model_authority import (
+    MODEL_ASSESSMENT_STATES,
+    ModelAuthorityViolation,
+    model_may_decide,
+    sanitize_model_state,
+)
 from agentforge.agents.runtime import AgentRole
 from agentforge.providers.lineage import ProviderLogicalContextV1
 from agentforge.providers.openrouter import HostedUsageEnvelope, OpenRouterResult
@@ -36,16 +42,10 @@ _VERDICTS = (
     "ERROR",
 )
 
-#: The states a MODEL Judge may return.  ``EXPLOIT_CONFIRMED`` is deliberately absent: only an
-#: oracle, a canary, or a human confirms an exploit (D13), so the model is not given the vocabulary
-#: to claim one.  This mirrors ``agents/judge/hosted.py::_assessment_schema`` — the two model-Judge
-#: surfaces must not disagree about what the model is allowed to say.
-_MODEL_ASSESSMENT_VERDICTS = (
-    "EXPLOIT_LIKELY",
-    "NO_EXPLOIT_OBSERVED",
-    "INDETERMINATE",
-    "ERROR",
-)
+#: The states a MODEL Judge may return, from the one canonical definition in
+#: ``agents/judge/model_authority.py``. Sorted so the emitted JSON Schema enum is deterministic.
+#: ``EXPLOIT_CONFIRMED`` is absent: only an oracle, a canary, or a human confirms (D13).
+_MODEL_ASSESSMENT_VERDICTS = tuple(sorted(MODEL_ASSESSMENT_STATES))
 _JUDGE_CRITERIA_VERSION = "independent-judge-assessment-v2"
 _JUDGE_IMPLEMENTATION_VERSION = "hosted-role-runtime-v2"
 _SCHEMA_NAME = re.compile(r"\A[a-z][a-z0-9_]{0,63}\Z")
@@ -820,8 +820,11 @@ class HostedFourRoleRuntime:
             deterministic_verdict=deterministic_verdict,
             hosted_verdict=judge.result.output,
             # Authority comes from the enablement gate __init__ already passed, never from the
-            # model's own output.
-            model_calibration_enabled=self._judge_calibration_id is not None,
+            # model's own output. __init__ raises unless require_model_judge_enablement returned
+            # a calibration, so reaching here means the gate is open.
+            model_calibration_enabled=model_may_decide(
+                calibration_state=("enabled" if self._judge_calibration_id else "unavailable"),
+            ),
         )
 
         documentation: Mapping[str, Any] | None = None
@@ -901,17 +904,12 @@ class HostedFourRoleRuntime:
     ) -> dict[str, Any]:
         """Reconcile one model assessment against deterministic ground truth, in code.
 
-        Two authorities are deliberately never taken from the model's own output:
-
-        * **Confirmation.** Only an oracle, a canary, or a human confirms an exploit. The model's
-          output schema omits ``EXPLOIT_CONFIRMED``; should one arrive anyway (a provider that
-          ignores the schema, a replayed fixture, a future caller), it is DOWNGRADED to
-          ``EXPLOIT_LIKELY`` rather than passed through. A model-sourced confirmation would
-          otherwise reach Documentation and produce a vulnerability draft with no evidence
-          behind it.
-        * **Calibration status.** Whether the model may issue a decisive ``NO_EXPLOIT_OBSERVED``
-          is decided by the caller's enablement gate, not by a boolean the model emits about
-          itself. A model that asserts its own calibration could otherwise clear a case.
+        Model authority is decided by the shared guard in ``agents/judge/model_authority.py``,
+        the same one ``reconcile_judge_assessment`` uses, so the two composition roots cannot
+        drift apart on what a model is allowed to assert. This root passes
+        ``on_confirmation='downgrade'``: a campaign should not abort every remaining case because
+        one response violated its schema, and the downgraded ``EXPLOIT_LIKELY`` keeps the unsafe
+        signal while withholding the authority to call it confirmed.
         """
 
         deterministic_state = deterministic_verdict.get("state")
@@ -924,18 +922,21 @@ class HostedFourRoleRuntime:
                 "state": deterministic_state,
                 "deterministic_precedence": True,
             }
-        hosted_state = hosted_verdict.get("state")
-        if hosted_state not in _VERDICTS:
-            raise HostedCompositionError("hosted Judge returned an invalid verdict state")
-        if hosted_state == "EXPLOIT_CONFIRMED":
-            # Keep the unsafe signal, refuse the confirmation authority.
+        try:
+            hosted_state, substitution = sanitize_model_state(
+                hosted_verdict.get("state"),
+                on_confirmation="downgrade",
+            )
+        except ModelAuthorityViolation as exc:
+            raise HostedCompositionError("hosted Judge returned an invalid verdict state") from exc
+        if substitution is not None:
             return {
                 **dict(hosted_verdict),
-                "state": "EXPLOIT_LIKELY",
+                "state": hosted_state,
                 "deterministic_precedence": False,
-                "reason": "model_confirmation_refused",
+                "reason": substitution,
             }
-        if hosted_state == "NO_EXPLOIT_OBSERVED" and model_calibration_enabled is not True:
+        if hosted_state == "NO_EXPLOIT_OBSERVED" and not model_calibration_enabled:
             return {
                 **dict(hosted_verdict),
                 "state": "INDETERMINATE",

@@ -77,7 +77,20 @@
             ]
           },
           "label_source": {
-            "enum": ["deterministic_oracle", "deterministic_canary", "human_expert", "policy_rule"]
+            "$comment": "automated_model_agent admits a model-proposed label. It deliberately does NOT inherit human_expert's privilege of licensing an EXPLOIT_CONFIRMED with no oracle or canary hit: only an oracle, a canary, or a human may confirm, and a model labeller is none of those. A model-labelled CONFIRM without a deterministic hit therefore fails validation by design.",
+            "enum": [
+              "deterministic_oracle",
+              "deterministic_canary",
+              "human_expert",
+              "automated_model_agent",
+              "policy_rule"
+            ]
+          },
+          "labeler_model_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160,
+            "$comment": "Required when label_source is automated_model_agent: a model-proposed label must name the model that proposed it, or its provenance cannot be graded."
           },
           "evidence_status": {
             "enum": [
