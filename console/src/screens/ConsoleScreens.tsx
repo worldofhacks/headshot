@@ -10,6 +10,7 @@ import { COMMAND_PATHS, RESOURCE_PATHS } from "../api/paths";
 import {
   decodeApprovals,
   decodeApprovalDetail,
+  decodeAgentActivity,
   decodeAttempts,
   decodeAuditHistory,
   decodeBirdseye,
@@ -64,6 +65,7 @@ import {
   PERMISSIONS,
   type ApprovalReadModel,
   type ApprovalDetailReadModel,
+  type AgentActivityReadModel,
   type AttemptReadModel,
   type AuthorizationScopeReadModel,
   type AuditReadModel,
@@ -1266,12 +1268,248 @@ export function ApprovalsScreen({ client, principal, entityId }: ScreenProps) {
   );
 }
 
+const terminalCampaignStates = new Set<CampaignReadModel["state"]>([
+  "complete",
+  "aborted",
+  "failed",
+]);
+
+export const completionReportCampaigns = (
+  campaigns: CampaignReadModel[],
+): CampaignReadModel[] => campaigns
+  .filter((campaign) => terminalCampaignStates.has(campaign.state))
+  .sort((left, right) => Date.parse(right.created_at) - Date.parse(left.created_at));
+
+export const campaignSecurityConclusion = (
+  operations: CampaignOperationsReadModel,
+): {
+  label: "CONFIRMED FINDINGS" | "INCONCLUSIVE" | "INCOMPLETE" | "NO CONFIRMED FINDINGS";
+  detail: string;
+  nextAction: string;
+  tone: "success" | "failure" | "queued";
+} => {
+  const verdicts = operations.verdict_distribution;
+  const confirmed = verdicts.EXPLOIT_CONFIRMED ?? 0;
+  const indeterminate = verdicts.INDETERMINATE ?? 0;
+  const errors = verdicts.ERROR ?? 0;
+  const adjudicated = Object.values(verdicts).reduce((total, value) => total + value, 0);
+  const unadjudicated = Math.max(0, operations.progress.started - adjudicated);
+
+  if (confirmed > 0) {
+    return {
+      label: "CONFIRMED FINDINGS",
+      detail: `${count(confirmed)} confirmed exploit finding(s) were recorded. Individual vulnerability reports remain human-gated.`,
+      nextAction: "Review the corresponding vulnerability drafts and complete the independent publication decision.",
+      tone: "failure",
+    };
+  }
+  if (operations.state !== "complete") {
+    return {
+      label: "INCOMPLETE",
+      detail: `The campaign ended ${operations.state}; its partial evidence does not support a complete security conclusion.`,
+      nextAction: "Resolve the terminal condition, obtain a fresh exact-scope approval, and launch a new campaign.",
+      tone: "failure",
+    };
+  }
+  if (indeterminate > 0 || errors > 0 || unadjudicated > 0) {
+    return {
+      label: "INCONCLUSIVE",
+      detail: `The campaign completed operationally, but ${count(indeterminate)} verdict(s) were indeterminate, ${count(errors)} were errors, and ${count(unadjudicated)} started case(s) were not adjudicated. No confirmed vulnerability was produced.`,
+      nextAction: "Enable an exact-identity, human-approved Judge calibration or add deterministic oracle/canary evidence, then run a fresh authorized campaign.",
+      tone: "queued",
+    };
+  }
+  return {
+    label: "NO CONFIRMED FINDINGS",
+    detail: "The campaign completed with no confirmed exploit in the authorized cases. This bounded result is not proof that the target is secure.",
+    nextAction: "Review coverage and evidence, then authorize any additional scope needed for stronger assurance.",
+    tone: "success",
+  };
+};
+
+const judgeCalibrationLabel = (activity: AgentActivityReadModel[]): string => {
+  const states = new Set(
+    activity
+      .filter((row) => row.agent_role === "judge")
+      .map((row) => row.judge_calibration_state ?? "unavailable"),
+  );
+  if (states.size === 0) return "Unavailable";
+  return [...states].sort().map((state) => state.toUpperCase()).join(" · ");
+};
+
+function CampaignCompletionReport({
+  client,
+  campaign,
+}: {
+  client: ApiClient;
+  campaign: CampaignReadModel;
+}) {
+  const operations = useResource<CampaignOperationsReadModel>(
+    client,
+    RESOURCE_PATHS.campaignOperations(campaign.run_id),
+    decodeCampaignOperations,
+    { pollIntervalMs: LIVE_RESOURCE_POLL_INTERVAL_MS },
+  );
+  const activity = useResource<AgentActivityReadModel[]>(
+    client,
+    RESOURCE_PATHS.campaignAgentActivity(campaign.run_id),
+    decodeAgentActivity,
+    { pollIntervalMs: LIVE_RESOURCE_POLL_INTERVAL_MS },
+  );
+
+  return (
+    <ResourceView
+      result={operations.result}
+      emptyLabel="No authoritative completion projection is available for this campaign."
+    >
+      {(data) => {
+        const conclusion = campaignSecurityConclusion(data);
+        const activityRows = activity.result.data ?? [];
+        const verifiedLangfuse = activityRows.filter(
+          (row) => row.langfuse_status === "exported" && row.langfuse_verified_at !== null,
+        ).length;
+        const verdictCount = Object.values(data.verdict_distribution)
+          .reduce((total, value) => total + value, 0);
+        const confirmed = data.verdict_distribution.EXPLOIT_CONFIRMED ?? 0;
+        return (
+          <Panel
+            title="Campaign completion report"
+            meta={shortId(campaign.run_id)}
+            eyebrow="IMMUTABLE RUN SUMMARY"
+          >
+            <MetricStrip
+              label="Campaign report summary"
+              values={[
+                {
+                  label: "Operational outcome",
+                  value: data.state.toUpperCase(),
+                  note: data.state === "complete"
+                    ? "Campaign reached a terminal completion state"
+                    : "Campaign ended before complete execution",
+                },
+                {
+                  label: "Security conclusion",
+                  value: conclusion.label,
+                  note: "Finding authority is never inferred from model output",
+                },
+                {
+                  label: "Cases",
+                  value: `${count(data.progress.started)} / ${data.progress.planned === null ? "—" : count(data.progress.planned)}`,
+                  note: `${count(verdictCount)} adjudicated`,
+                },
+                {
+                  label: "Confirmed findings",
+                  value: count(confirmed),
+                  note: confirmed > 0
+                    ? "Vulnerability drafts may be available below"
+                    : "No vulnerability report was generated",
+                },
+              ]}
+            />
+            <StateNotice state={conclusion.tone} detail={conclusion.detail} />
+            <div className="panel-grid">
+              <div>
+                <p className="field-label">Execution accounting</p>
+                <EvidenceGrid values={[
+                  { label: "Logical attempts", value: count(data.executions.logical_attempts) },
+                  { label: "Target requests", value: count(data.executions.physical_target_requests) },
+                  { label: "Provider calls", value: count(data.executions.provider_calls) },
+                  {
+                    label: "Provider cost",
+                    value: measuredCost(
+                      data.costs.provider_measured_usd,
+                      data.costs.provider_measurement_state,
+                    ),
+                  },
+                  {
+                    label: "Target cost",
+                    value: measuredCost(
+                      data.costs.target_measured_usd,
+                      data.costs.target_measurement_state,
+                    ),
+                  },
+                ]} />
+              </div>
+              <div>
+                <p className="field-label">Evidence and decision authority</p>
+                <EvidenceGrid values={[
+                  {
+                    label: "Judge calibration",
+                    value: activity.result.state === "loading"
+                      ? "Loading"
+                      : judgeCalibrationLabel(activityRows),
+                    tone: judgeCalibrationLabel(activityRows) === "ENABLED" ? "success" : "queued",
+                  },
+                  {
+                    label: "Langfuse query-back",
+                    value: activity.result.state === "loading"
+                      ? "Loading"
+                      : `${count(verifiedLangfuse)} / ${count(activityRows.length)}`,
+                  },
+                  {
+                    label: "Indeterminate",
+                    value: count(data.verdict_distribution.INDETERMINATE ?? 0),
+                    tone: (data.verdict_distribution.INDETERMINATE ?? 0) > 0 ? "queued" : undefined,
+                  },
+                  {
+                    label: "Operational errors",
+                    value: count(data.verdict_distribution.ERROR ?? 0),
+                    tone: (data.verdict_distribution.ERROR ?? 0) > 0 ? "failure" : undefined,
+                  },
+                  {
+                    label: "Vulnerability report",
+                    value: confirmed > 0 ? "Generated per finding" : "Not generated",
+                  },
+                ]} />
+              </div>
+            </div>
+            <p className="field-label">Recorded verdicts</p>
+            {Object.keys(data.verdict_distribution).length === 0
+              ? <StateNotice state="empty" detail="No verdicts were recorded." />
+              : (
+                <DistributionBars
+                  rows={Object.entries(data.verdict_distribution).map(([label, value]) => ({
+                    label,
+                    value,
+                    tone: toneFor(label),
+                  }))}
+                />
+              )}
+            <div className="state-notice" role="status">
+              <span className="state-kicker mono">NEXT ACTION</span>
+              <span>{conclusion.nextAction}</span>
+            </div>
+            {activity.result.state !== "loading" && activity.result.state !== "ready" && (
+              <StateNotice
+                state={activity.result.state}
+                reason={activity.result.reason_code}
+                detail={activity.result.detail}
+              />
+            )}
+          </Panel>
+        );
+      }}
+    </ResourceView>
+  );
+}
+
 export function ReportsScreen({ client, entityId }: ScreenProps) {
+  const campaigns = useResource<CampaignReadModel[]>(
+    client,
+    RESOURCE_PATHS.campaigns,
+    decodeCampaigns,
+    { pollIntervalMs: LIVE_RESOURCE_POLL_INTERVAL_MS },
+  );
   const reports = useResource<ReportReadModel[]>(
     client,
     RESOURCE_PATHS.reports,
     decodeReports,
+    { pollIntervalMs: LIVE_RESOURCE_POLL_INTERVAL_MS },
   );
+  const completionCampaigns = completionReportCampaigns(campaigns.result.data ?? []);
+  const selectedCampaign = entityId
+    ? completionCampaigns.find((campaign) => campaign.run_id === entityId) ?? null
+    : completionCampaigns[0] ?? null;
   const selected = entityId
     ? reports.result.data?.find((report) => report.report_id === entityId) ?? null
     : null;
@@ -1279,24 +1517,56 @@ export function ReportsScreen({ client, entityId }: ScreenProps) {
     <div className="screen-stack">
       <ScreenHeading
         title="Reports"
-        eyebrow="DOCUMENTATION AGENT DRAFTS"
-        detail="Schema-validated vulnerability reports remain unpublished until a separate human decision. Every report below is reconciled to immutable evidence before display."
+        eyebrow="CAMPAIGN OUTCOMES AND FINDINGS"
+        detail="Every terminal campaign has an operational completion report. Vulnerability reports are created only for confirmed exploits and remain unpublished until a separate human decision."
       />
-      <ResourceView result={reports.result} emptyLabel="No vulnerability reports have been drafted.">
+      <ResourceView
+        result={campaigns.result}
+        emptyLabel="No terminal campaign is available for a completion report."
+      >
         {(data) => {
-          const gated = data.filter(
-            (report) => report.publication_state === "blocked_pending_human_approval",
-          ).length;
-          const admitted = data.filter((report) => report.regression?.admitted === true).length;
-          return (
-            <>
-              <MetricStrip label="Report summary" values={[
-                { label: "Validated drafts", value: count(data.length), note: "Documentation output, never publication authority" },
-                { label: "Human-gated", value: count(gated), note: `${data.length - gated} draft unpublished` },
-                { label: "Regression admitted", value: count(admitted), note: "Requires deterministic replay and human approval" },
-                { label: "Integrity verified", value: `${data.filter((report) => report.report_integrity === "verified").length}/${data.length}`, note: "Report, lineage and reproduction hash" },
-              ]} />
-              <Panel title="Report register" meta="select a report for the full chain">
+          const terminal = completionReportCampaigns(data);
+          return terminal.length === 0
+            ? <StateNotice state="empty" detail="No terminal campaign is available for a completion report." />
+            : (
+              <Panel title="Campaign report register" meta="latest terminal campaigns">
+                <RecordTable
+                  data={terminal}
+                  identityKeys={["run_id"]}
+                  columns={[
+                    { key: "run_id", label: "Campaign", mono: true },
+                    { key: "target_id", label: "Target", mono: true },
+                    { key: "state", label: "Operational state" },
+                    { key: "attempt_count", label: "Attempts" },
+                    { key: "created_at", label: "Started", mono: true, timestamp: true },
+                  ]}
+                  onSelect={(record) => {
+                    const campaignId = identity(record, ["run_id"]);
+                    if (campaignId) navigateTo({ screen: "reports", entityId: campaignId });
+                  }}
+                />
+              </Panel>
+            );
+        }}
+      </ResourceView>
+      {selectedCampaign && (
+        <CampaignCompletionReport client={client} campaign={selectedCampaign} />
+      )}
+      <Panel title="Vulnerability reports" meta="confirmed findings only" eyebrow="DOCUMENTATION AGENT DRAFTS">
+        <ResourceView result={reports.result} emptyLabel="No confirmed exploit produced a vulnerability report.">
+          {(data) => {
+            const gated = data.filter(
+              (report) => report.publication_state === "blocked_pending_human_approval",
+            ).length;
+            const admitted = data.filter((report) => report.regression?.admitted === true).length;
+            return (
+              <>
+                <MetricStrip label="Vulnerability report summary" values={[
+                  { label: "Validated drafts", value: count(data.length), note: "Documentation output, never publication authority" },
+                  { label: "Human-gated", value: count(gated), note: `${data.length - gated} draft unpublished` },
+                  { label: "Regression admitted", value: count(admitted), note: "Requires deterministic replay and human approval" },
+                  { label: "Integrity verified", value: `${data.filter((report) => report.report_integrity === "verified").length}/${data.length}`, note: "Report, lineage and reproduction hash" },
+                ]} />
                 <RecordTable
                   data={data}
                   identityKeys={["report_id"]}
@@ -1314,11 +1584,11 @@ export function ReportsScreen({ client, entityId }: ScreenProps) {
                     if (reportId) navigateTo({ screen: "reports", entityId: reportId });
                   }}
                 />
-              </Panel>
-            </>
-          );
-        }}
-      </ResourceView>
+              </>
+            );
+          }}
+        </ResourceView>
+      </Panel>
       {entityId && selected && (
         <Panel title="Vulnerability report" meta={selected.report_id} eyebrow="DRAFT · HUMAN GATED">
           <RecordDetails
@@ -1351,9 +1621,10 @@ export function ReportsScreen({ client, entityId }: ScreenProps) {
           <VerificationChain verification={selected.verification} />
         </Panel>
       )}
-      {entityId && !selected && reports.result.state !== "loading" && (
-        <Panel title="Vulnerability report">
-          <StateNotice state="empty" detail="That report is not in the organization-scoped response." />
+      {entityId && !selected && !selectedCampaign
+        && reports.result.state !== "loading" && campaigns.result.state !== "loading" && (
+        <Panel title="Report">
+          <StateNotice state="empty" detail="That campaign or vulnerability report is not in the organization-scoped response." />
         </Panel>
       )}
     </div>
