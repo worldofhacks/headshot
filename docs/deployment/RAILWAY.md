@@ -30,7 +30,8 @@ Staging:
 - Web, Runner, and Scheduler are successful and share generation-policy digest `b83acb23…`;
 - their packaged `hosted_policy.py` SHA-256 is identical;
 - PostgreSQL must be verified by revision and schema shape: canonical `0026` adds campaign
-  outcomes and `0027` adds immutable prompt snapshots;
+  outcomes, `0027` adds immutable prompt snapshots, and `0028` adds bounded provider response
+  evidence columns on `provider_call_events`;
 - `/health` and `/ready` return 200; and
 - unauthenticated `/api/v1/principal` returns 401.
 
@@ -54,8 +55,9 @@ All services build `Dockerfile`. The runtime image contains:
 
 Only `railway/web.json` declares `alembic upgrade head`. Runner and Scheduler call an exact-head
 readiness check before consuming/enqueuing work. The canonical repository chain is `0025` reviewed
-workload provenance → `0026` campaign outcome breakdown → `0027` immutable prompt snapshots. Never
-hard-code a revision into automation that should derive the packaged or deployed head.
+workload provenance → `0026` campaign outcome breakdown → `0027` immutable prompt snapshots →
+`0028` physical provider response evidence. Never hard-code a revision into automation that should
+derive the packaged or deployed head.
 
 One release must be tested as an immutable artifact. Do not independently rebuild services from
 different source states.
@@ -146,7 +148,15 @@ Use this order for schema-affecting releases:
 7. **Target-free acceptance.** Run the four-role OpenRouter/Langfuse acceptance with
    `target_call_limit = 0`.
 8. **Langfuse query-back.** Verify remote observations; SDK flush is insufficient.
-9. **Fresh live authority.** Only now create a new campaign request and obtain distinct-person
+9. **Headshot projection.** Read the campaign-scoped `provider-calls` endpoint and confirm each
+   durable OpenRouter invocation appears in Run Operations, Traces, and Costs with matching
+   sequence, request ID, tokens, measured cost, status, and Langfuse locator. Parent-agent
+   verification must not be described as independent per-child query-back proof. Confirm the
+   aggregate payload carries no prompt or response bytes, and that
+   `provider-calls/{invocation_id}/evidence` returns 401/403 without `org:evidence:read` and serves
+   the exact prompt and recorded response with it. Calls recorded before `0028` correctly report no
+   response rather than a reconstructed one.
+10. **Fresh live authority.** Only now create a new campaign request and obtain distinct-person
    approval for the exact deployed policy/configuration/workload/lease.
 
 For migrations whose constraints make old/new Runner overlap unsafe, scale the old Runner to zero
@@ -158,6 +168,14 @@ append-only `agent_prompt_snapshots` table, lineage trigger, and role grants bef
 candidate Runner. `0027` is a normal forward migration from the canonical campaign-outcome
 revision `0026`; do not rewrite or stamp migration history. Web has `SELECT` only; Runner has
 `SELECT`/`INSERT`; neither service role may update/delete.
+
+`0028` is a normal forward migration on top of `0027` and needs no Runner quiescence of its own. It
+adds only a nullable `TEXT`, a defaulted `BOOLEAN`, a nullable digest column, and three CHECK
+constraints to `provider_call_events`; on PostgreSQL 11+ these are catalog-only changes, so the
+physical hot-path table is not rewritten and no long `ACCESS EXCLUSIVE` lock is taken. It grants no
+new privileges — whether Web may read the recorded response is settled at the API boundary by
+`org:evidence:read`. Its `downgrade()` destroys observed provider evidence that cannot be re-derived
+from any other row, so treat it as forward-only in staging and production.
 
 ## Hosted configuration and policy parity
 

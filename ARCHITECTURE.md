@@ -102,8 +102,8 @@ Only Web runs `alembic upgrade head` as a Railway pre-deploy command. Runner and
 unless the database is at the exact packaged head — the head compiled into the artifact being
 run, which is not necessarily the newest head in the repository. The canonical migration chain is
 `0025` reviewed workload provenance → `0026` campaign outcome breakdown → `0027` immutable prompt
-snapshots. Candidate, packaged, and deployed heads are distinct facts; the exact deployed state lives
-in `docs/CURRENT_STATE.md`.
+snapshots → `0028` physical provider response evidence. Candidate, packaged, and deployed heads are
+distinct facts; the exact deployed state lives in `docs/CURRENT_STATE.md`.
 
 Staging currently has one policy-aligned service set. Production is reachable but release-skewed and
 must not run campaigns until it is intentionally realigned. Dynamic deployment facts live in
@@ -235,7 +235,11 @@ provenance added by migration `0025` records reviewed workload instance, review-
 generation hash separately from security-tool provenance. Migration `0026` adds durable
 decisive/indeterminate/operational-error outcome counts. Migration `0027` adds one append-only,
 organization-scoped prompt snapshot per logical execution with the exact package-owned system prompt,
-ordered provider messages, hashes, and bounded redaction metadata.
+ordered provider messages, hashes, and bounded redaction metadata. Migration `0028` completes the
+pair by recording the *received* side: expand-only, bounded (65,536-byte) `response_text`,
+`response_truncated`, and `response_sha256` columns on `provider_call_events`, written by the same
+append-only INSERT that settles the physical call. Absence is represented as `NULL`, never as an
+invented body, and the digest always covers exactly the bytes retained after truncation.
 
 ## 7. Human identity and authorization
 
@@ -260,6 +264,13 @@ enforce object ownership plus the two-person invariant.
 The single-execution prompt-snapshot route is part of the evidence boundary: it requires
 `org:console:read` plus `org:evidence:read`, scopes by verified Organization, and never joins prompt
 contents into list, aggregate, event-stream, logging, or Langfuse payloads.
+
+The single-invocation provider-call evidence route sits on the same boundary under the same
+permission pair. It serves one physical call's exact sent prompt — reused from that call's protected
+snapshot through the same store accessor, so identical hash recomputation and secret/PHI rejection
+apply — alongside the exact recorded provider response. Both are nullable and never reconstructed,
+so a missing snapshot or an unobserved response is reported as absent rather than approximated from
+a hash.
 
 Authentication is never a target credential and never replaces Policy Gateway authorization.
 
@@ -358,8 +369,9 @@ process; provider concurrency is one in the current configuration. Command mutat
 keys.
 
 Alembic applies an expand/contract history and rejects schema skew. The current sole repository
-head is `0027`: `0026` preserves the reviewed campaign-resilience outcome migration and `0027`
-adds immutable prompt snapshots. Runner and Scheduler do not migrate.
+head is `0028`: `0026` preserves the reviewed campaign-resilience outcome migration, `0027`
+adds immutable prompt snapshots, and `0028` adds bounded append-only provider response evidence.
+Runner and Scheduler do not migrate.
 
 ## 12. Observability and Langfuse
 
@@ -376,15 +388,24 @@ as unknown/partial rather than zero.
 
 Prompt contents are fetched only for one explicitly expanded execution through the protected
 evidence route and remain collapsed by default. The console does not receive Langfuse/provider
-secrets, and prompt content is absent from aggregate views and event streams.
+secrets, and prompt content is absent from aggregate views and event streams. A protected
+`provider-calls` projection joins immutable invocations, terminal provider events, and their logical
+agent parents. Run Operations, Traces, and Costs reuse that projection to show one OpenRouter row per
+physical call without copying accounting facts into another store. That projection selects an
+explicit measurement column list, so recorded response bytes are structurally excluded from it; each
+row instead carries a collapsed, permission-gated "Prompt & response" disclosure that reads the
+single-invocation evidence route only when an operator expands it.
 
 Langfuse currently projects:
 
 - a logical agent observation with a child cost-bearing generation; and
+- one metadata-only `provider.attempt.<sequence>` child span for each durable physical OpenRouter
+  invocation/event; and
 - target HTTP observations under the campaign/attempt lineage.
 
 Payloads are sanitized to metadata, hashes, sizes, timing, usage, cost, and bounded status. Raw
-credentials, real PHI, and unbounded hostile content are excluded.
+credentials, real PHI, and unbounded hostile content are excluded. Physical-child usage and cost are
+metadata only; billable usage/cost stay on the logical generation to avoid double counting.
 
 SDK `flush()` leaves durable rows `queued`. Only authenticated exact remote query-back may set
 `exported` and `langfuse_verified_at`.
@@ -393,7 +414,7 @@ Current gaps:
 
 - the verifier accepts only completed campaign summaries;
 - failed/aborted partial traces cannot be verified;
-- physical provider attempts are durable but not separate Langfuse child observations;
+- per-child query-back proof is not persisted separately from the logical agent row;
 - query-back is not an automatic durable reconciler; and
 - a Runner crash loses in-memory projection handles.
 

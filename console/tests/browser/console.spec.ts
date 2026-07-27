@@ -34,6 +34,9 @@ test("exact six primary groups preserve legacy routes and expose Run operations 
   })).toBeVisible();
   await expect(page.getByText("Physical target requests", { exact: true })).toBeVisible();
   await expect(page.getByText("Provider calls", { exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Live OpenRouter calls", exact: true }))
+    .toBeVisible();
+  await expect(page.getByText("provider.attempt.2", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Abort selected campaign", exact: true }))
     .toBeEnabled();
 
@@ -242,15 +245,26 @@ test("Traces and Costs use the selected campaign scope through grouped navigatio
     return url.pathname === "/api/v1/traces"
       && url.searchParams.get("campaign_id") === "browser-campaign-gamma";
   });
+  const providerCallRequest = page.waitForRequest((request) => {
+    const url = new URL(request.url());
+    return url.pathname === "/api/v1/provider-calls"
+      && url.searchParams.get("campaign_id") === "browser-campaign-gamma";
+  });
   await page.getByLabel("Primary navigation")
     .getByRole("button", { name: "Observability", exact: true })
     .click();
   await traceRequest;
+  await providerCallRequest;
   await expect(page).toHaveURL(/\/observability\/browser-campaign-gamma$/);
   await expect(page.getByRole("heading", { name: "Traces", exact: true, level: 1 }))
     .toBeVisible();
   await expect(page.getByRole("tab", { name: "Traces", exact: true }))
     .toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("heading", { name: "OpenRouter physical calls", exact: true }))
+    .toBeVisible();
+  await expect(page.getByRole("table", {
+    name: "OpenRouter physical provider call ledger",
+  })).toBeVisible();
 
   const costRequest = page.waitForRequest((request) => {
     const url = new URL(request.url());
@@ -264,6 +278,10 @@ test("Traces and Costs use the selected campaign scope through grouped navigatio
     .toBeVisible();
   await expect(page.getByRole("tab", { name: "Costs", exact: true }))
     .toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("heading", {
+    name: "Per-call OpenRouter cost ledger",
+    exact: true,
+  })).toBeVisible();
 
   await page.goto("/traces");
   await expect(page.getByRole("heading", { name: "Traces", exact: true, level: 1 }))
@@ -360,4 +378,53 @@ test("browser boundary has no console errors or external asset requests", async 
     const names = [...new URL(request.url).searchParams.keys()];
     expect(names.some((name) => /auth|bearer|jwt|session|token/i.test(name))).toBe(false);
   }
+});
+
+test("per-call prompt and response evidence is permission-gated, lazy, and absent from the aggregate ledger", async ({
+  page,
+}) => {
+  const evidenceRequests: string[] = [];
+  let aggregateBody = "";
+  page.on("request", (request) => {
+    if (/\/api\/v1\/provider-calls\/[^/]+\/evidence$/.test(new URL(request.url()).pathname)) {
+      evidenceRequests.push(request.url());
+    }
+  });
+  page.on("response", async (response) => {
+    if (new URL(response.url()).pathname === "/api/v1/provider-calls") {
+      aggregateBody = await response.text().catch(() => "");
+    }
+  });
+
+  await page.goto("/runs");
+  await expect(page.getByRole("heading", { name: "Run operations", exact: true }))
+    .toBeVisible();
+  await expect(page.getByRole("table", {
+    name: "OpenRouter physical provider call ledger",
+  })).toBeVisible();
+
+  const responseText = '{"case_ref":"browser-case-2"}';
+  const systemPrompt =
+    "Select exactly one authorized case reference from the reviewed workload.";
+
+  // The aggregate listing must carry measurements only — never prompt or response bytes.
+  expect(aggregateBody).not.toContain(responseText);
+  expect(aggregateBody).not.toContain(systemPrompt);
+
+  const disclosure = page.locator("details.event-record").filter({
+    has: page.getByText("Prompt & response", { exact: true }),
+  }).first();
+  await expect(disclosure).not.toHaveAttribute("open", "");
+  expect(evidenceRequests).toEqual([]);
+
+  await disclosure.locator(":scope > summary").focus();
+  await page.keyboard.press("Enter");
+  await expect(disclosure).toHaveAttribute("open", "");
+
+  // Only now may the protected evidence read be issued.
+  await expect.poll(() => evidenceRequests.length).toBeGreaterThan(0);
+  await expect(disclosure.getByText("red-team-v3", { exact: true })).toBeVisible();
+  await expect(disclosure.getByText(responseText, { exact: true })).toBeVisible();
+  await expect(disclosure.getByText("Complete recorded response", { exact: true }))
+    .toBeVisible();
 });

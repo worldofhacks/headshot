@@ -1340,6 +1340,75 @@ def test_campaign_scoped_costs_include_failed_and_partial_target_accounting(
     assert cross_organization.state == "empty"
 
 
+def test_provider_call_projection_exposes_per_call_openrouter_and_langfuse_lineage(
+    migrated_db: Engine,
+) -> None:
+    organization_id = "org_ProviderCallConsoleProjection"
+    run_id = "run-provider-call-console-projection"
+    attempt_id = "attempt-provider-call-console-projection"
+    configuration = _operations_hosted_configuration()
+    _seed_failed_campaign(
+        migrated_db,
+        organization_id=organization_id,
+        launcher_user_id="user_ProviderCallConsoleProjection",
+        run_id=run_id,
+        request_id="request-provider-call-console-projection",
+        attempt_complete=attempt_id,
+        attempt_failed="attempt-provider-call-failed",
+        hosted_configuration=configuration,
+    )
+    _seed_measured_provider_usage(
+        migrated_db,
+        organization_id=organization_id,
+        run_id=run_id,
+        attempt_id=attempt_id,
+        configuration=configuration,
+        agent_role="red_team",
+        usage_index=1,
+        measured_cost=Decimal("0.012345"),
+        input_tokens=530,
+        output_tokens=137,
+        reasoning_tokens=752,
+    )
+    backend = PostgresApiBackend(migrated_db, environment="staging")
+
+    result = backend.read(
+        "provider_calls",
+        _principal(organization_id),
+        identifiers={"campaign_id": run_id},
+    )
+
+    assert result.state == "ready", result
+    assert len(result.data) == 1
+    call = result.data[0]
+    assert call["campaign_id"] == run_id
+    assert call["attempt_id"] == attempt_id
+    assert call["agent_role"] == "red_team"
+    assert call["physical_sequence"] == 1
+    assert call["provider"] == "openrouter"
+    assert call["requested_model"] == "qwen/qwen3.5-397b-a17b"
+    assert call["configured_upstream"] == "together"
+    assert call["returned_model"] == "qwen/qwen3.5-397b-a17b"
+    assert call["upstream_provider"] == "Together"
+    assert call["provider_request_id"] == "measured-usage-red_team-1"
+    assert call["status"] == "succeeded"
+    assert call["input_tokens"] == 530
+    assert call["output_tokens"] == 137
+    assert call["reasoning_tokens"] == 752
+    assert call["measured_cost_usd"] == 0.012345
+    assert call["accounting_status"] == "measured"
+    assert call["langfuse_observation_name"] == "provider.attempt.1"
+    assert call["langfuse_attempt_label"] == f"attempt:{attempt_id}"
+    assert call["langfuse_status"] == "not_attempted"
+
+    cross_organization = backend.read(
+        "provider_calls",
+        _principal("org_OtherProviderCallTenant"),
+        identifiers={"campaign_id": run_id},
+    )
+    assert cross_organization.state == "empty"
+
+
 def test_campaign_operations_does_not_report_in_flight_target_cost_as_zero(
     operations_db: Engine,
 ) -> None:

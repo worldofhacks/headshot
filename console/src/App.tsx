@@ -254,6 +254,7 @@ function ConsoleShellContent({
       screen = (
         <ObservabilityWorkspace
           client={client}
+          principal={principal}
           campaignId={activeCampaignId}
           view={workspace.view}
           onViewChange={(view) => go({

@@ -9,6 +9,7 @@ import {
   decodeCampaignOperations,
   decodeCampaigns,
   decodeEvidence,
+  decodeProviderCalls,
 } from "../api/read-models";
 import { COMMAND_PATHS, RESOURCE_PATHS } from "../api/paths";
 import {
@@ -30,6 +31,7 @@ import {
 import { CommandButton } from "../components/CommandButton";
 import { ResourceView, StateNotice } from "../components/ResourceView";
 import { RunFailurePanel } from "../components/RunFailurePanel";
+import { ProviderCallLedger } from "../components/ProviderCallLedger";
 import {
   LIVE_RESOURCE_POLL_INTERVAL_MS,
   useResource,
@@ -42,6 +44,7 @@ import type {
   CampaignOperationsReadModel,
   CampaignReadModel,
   EvidenceReadModel,
+  ProviderCallReadModel,
 } from "../types";
 import { PERMISSIONS } from "../types";
 
@@ -727,6 +730,12 @@ function SelectedRunOperations({
     decodeCampaignOperations,
     { pollIntervalMs: LIVE_RESOURCE_POLL_INTERVAL_MS },
   );
+  const providerCalls = useResource<ProviderCallReadModel[]>(
+    client,
+    RESOURCE_PATHS.campaignProviderCalls(campaignId),
+    decodeProviderCalls,
+    { pollIntervalMs: LIVE_RESOURCE_POLL_INTERVAL_MS },
+  );
   return (
     <>
       <ResourceView
@@ -745,6 +754,25 @@ function SelectedRunOperations({
           </>
         )}
       </ResourceView>
+      <Panel
+        title="Live OpenRouter calls"
+        meta="physical attempts · newest first"
+        eyebrow="PROVIDER OPERATIONS"
+      >
+        <ResourceView
+          result={providerCalls.result}
+          emptyLabel="No OpenRouter calls have started for this campaign."
+        >
+          {(data) => (
+            <ProviderCallLedger
+              calls={data}
+              limit={24}
+              client={client}
+              principal={principal}
+            />
+          )}
+        </ResourceView>
+      </Panel>
       <AttemptList
         client={client}
         principal={principal}

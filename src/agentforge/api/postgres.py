@@ -3188,6 +3188,82 @@ class PostgresApiBackend(ApiBackend):
                                 "created_at": snapshot.created_at,
                             }
                         ]
+                elif resource == "provider_call_evidence":
+                    invocation_id = identifiers.get("invocation_id", "")
+                    if (
+                        not isinstance(invocation_id, str)
+                        or not invocation_id
+                        or len(invocation_id) > 64
+                    ):
+                        return ResourceResult.empty()
+                    # One physical call, organization-scoped, associated to its protected
+                    # prompt snapshot by the logical execution that issued it. The join only
+                    # establishes that association; the snapshot CONTENT is served by the
+                    # protected store accessor below so its credential/PHI checks and hash
+                    # recomputation apply here exactly as they do to `agent_prompt_snapshot`.
+                    evidence_rows = _rows(
+                        connection,
+                        "SELECT e.invocation_id, e.campaign_run_id, "
+                        "e.campaign_attempt_id AS attempt_id, e.agent_role, "
+                        "e.physical_sequence, e.status, e.error_code, "
+                        "e.logical_execution_id, e.response_text, "
+                        "e.response_truncated, e.response_sha256, "
+                        "s.execution_id AS snapshot_execution_id "
+                        "FROM provider_call_events e "
+                        "LEFT JOIN agent_prompt_snapshots s "
+                        "ON s.organization_id = e.organization_id "
+                        "AND s.execution_id = e.logical_execution_id "
+                        "WHERE e.organization_id = :org "
+                        "AND e.invocation_id = :invocation",
+                        {
+                            "org": principal.organization_id,
+                            "invocation": invocation_id,
+                        },
+                    )
+                    if not evidence_rows:
+                        rows = []
+                    else:
+                        source = evidence_rows[0]
+                        evidence_prompt: dict[str, Any] | None = None
+                        if source["snapshot_execution_id"] is not None:
+                            try:
+                                snapshot = self._store.agent_prompt_snapshot(
+                                    principal=principal,
+                                    execution_id=str(source["logical_execution_id"]),
+                                )
+                            except RecordNotFoundError:
+                                evidence_prompt = None
+                            else:
+                                evidence_prompt = {
+                                    "system_prompt_version": snapshot.system_prompt_version,
+                                    "system_prompt_sha256": snapshot.system_prompt_sha256,
+                                    "system_prompt_content": snapshot.system_prompt_content,
+                                    "provider_messages": list(snapshot.provider_messages),
+                                    "transcript_sha256": snapshot.transcript_sha256,
+                                    "redactions": list(snapshot.redactions),
+                                }
+                        response_text = source["response_text"]
+                        rows = [
+                            {
+                                "invocation_id": source["invocation_id"],
+                                "campaign_run_id": source["campaign_run_id"],
+                                "attempt_id": source["attempt_id"],
+                                "agent_role": source["agent_role"],
+                                "physical_sequence": source["physical_sequence"],
+                                "status": source["status"],
+                                "error_code": source["error_code"],
+                                "prompt": evidence_prompt,
+                                "response": (
+                                    None
+                                    if response_text is None
+                                    else {
+                                        "text": response_text,
+                                        "truncated": bool(source["response_truncated"]),
+                                        "sha256": source["response_sha256"],
+                                    }
+                                ),
+                            }
+                        ]
                 elif resource == "agent_activity":
                     campaign_id = _optional_campaign_id(identifiers)
                     activity_parameters = {"org": principal.organization_id}
@@ -4543,6 +4619,74 @@ class PostgresApiBackend(ApiBackend):
                                 "recorded_at": source["recorded_at"],
                             }
                         )
+                elif resource == "provider_calls":
+                    campaign_id = _optional_campaign_id(identifiers)
+                    provider_call_parameters = {"org": principal.organization_id}
+                    provider_call_scope = ""
+                    provider_call_limit = " LIMIT 1000"
+                    if campaign_id is not None:
+                        provider_call_parameters["campaign_id"] = campaign_id
+                        provider_call_scope = "AND i.campaign_run_id = :campaign_id "
+                        provider_call_limit = ""
+                    provider_call_rows = _rows(
+                        connection,
+                        "SELECT i.invocation_id, e.event_id, "
+                        "i.campaign_run_id AS campaign_id, "
+                        "i.campaign_attempt_id AS attempt_id, "
+                        "i.logical_execution_id AS execution_id, i.parent_execution_id, "
+                        "i.agent_role, i.physical_sequence, i.requested_model, "
+                        "i.configured_upstream, e.returned_model, e.upstream_provider, "
+                        "e.provider_request_id, coalesce(e.status, 'in_flight') AS status, "
+                        "e.error_code, e.input_tokens, e.output_tokens, e.reasoning_tokens, "
+                        "coalesce(e.cost_measurement_state, 'pending') "
+                        "AS cost_measurement_state, e.measured_cost_usd, "
+                        "i.started_at, e.finished_at, e.duration_ms, "
+                        "x.trace_id, x.langfuse_status, x.langfuse_verified_at "
+                        "FROM provider_call_invocations i "
+                        "JOIN agent_executions x ON x.organization_id = i.organization_id "
+                        "AND x.execution_id = i.logical_execution_id "
+                        "LEFT JOIN provider_call_events e "
+                        "ON e.organization_id = i.organization_id "
+                        "AND e.invocation_id = i.invocation_id "
+                        "WHERE i.organization_id = :org "
+                        + provider_call_scope
+                        + "ORDER BY i.started_at DESC, i.physical_sequence DESC"
+                        + provider_call_limit,
+                        provider_call_parameters,
+                    )
+                    rows = []
+                    for source in provider_call_rows:
+                        cost_state = str(source["cost_measurement_state"])
+                        rows.append(
+                            {
+                                **source,
+                                "provider": "openrouter",
+                                "accounting_status": (
+                                    "pending"
+                                    if cost_state == "pending"
+                                    else _accounting_status(cost_state)
+                                ),
+                                "measured_cost_usd": (
+                                    float(source["measured_cost_usd"])
+                                    if source["measured_cost_usd"] is not None
+                                    else None
+                                ),
+                                "duration_ms": (
+                                    float(source["duration_ms"])
+                                    if source["duration_ms"] is not None
+                                    else None
+                                ),
+                                "currency": "USD",
+                                "langfuse_observation_name": (
+                                    f"provider.attempt.{source['physical_sequence']}"
+                                ),
+                                "langfuse_attempt_label": (
+                                    f"attempt:{source['attempt_id']}"
+                                    if source["attempt_id"] is not None
+                                    else None
+                                ),
+                            }
+                        )
                 elif resource == "traces":
                     campaign_id = _optional_campaign_id(identifiers)
                     trace_parameters = {"org": principal.organization_id}
@@ -5247,7 +5391,11 @@ class PostgresApiBackend(ApiBackend):
         # Prompt snapshots have already passed the protected store's credential/PHI checks and
         # hash recomputation. Generic display redaction would change the exact provider input, so
         # the strict prompt decoder is the only serialization boundary for this resource.
-        sanitized = rows if resource == "agent_prompt_snapshot" else _safe(rows)
+        # `provider_call_evidence` carries that same store-validated prompt plus the recorded
+        # provider response, and both are digest-verified by their strict decoders; redacting
+        # them here would break the very hashes that prove the evidence is exact.
+        exact_evidence_resources = {"agent_prompt_snapshot", "provider_call_evidence"}
+        sanitized = rows if resource in exact_evidence_resources else _safe(rows)
         if resource in {
             "campaign",
             "campaign_operations",
@@ -5258,6 +5406,7 @@ class PostgresApiBackend(ApiBackend):
             "report",
             "agent_prompt",
             "agent_prompt_snapshot",
+            "provider_call_evidence",
             "configuration",
             "birdseye",
             "hosted_configuration_set",

@@ -144,6 +144,18 @@ Keep PostgreSQL authoritative and add:
 - bounded automatic flush/query-back reconciliation; and
 - backlog/age/error metrics.
 
+Implemented in current source: physical provider calls are emitted as metadata-only child spans and
+the protected Headshot `provider-calls` projection renders their exact durable facts plus
+trace/name/attempt locators in Run Operations, Traces, and Costs. Migration `0028` and the
+single-invocation evidence route additionally make the sent prompt and the exact received provider
+response readable per physical call, under `org:evidence:read`, without adding either to Langfuse
+metadata, aggregate payloads, event streams, or logs.
+
+Still outstanding: terminal failed/aborted query-back, automatic reconciliation/backlog metrics, and
+distinct persisted verification proof for each physical child span. Provider response evidence is
+recorded only from the revision that introduced it forward — physical calls settled before `0028`
+report no recorded response, and that gap is permanent by design rather than backfillable.
+
 Extend the verifier to terminal `complete`, `failed`, and `aborted` campaigns:
 
 - complete runs require the full canonical chain;

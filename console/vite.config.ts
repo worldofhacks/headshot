@@ -995,6 +995,79 @@ const browserAgentActivity = [
   duration_ms: duration,
 }));
 
+const browserProviderCalls = [1, 2].map((sequence) => ({
+  invocation_id: sha256(`browser-provider-invocation-${sequence}`),
+  event_id: sha256(`browser-provider-event-${sequence}`),
+  campaign_id: "browser-campaign-gamma",
+  attempt_id: "browser-attempt-3",
+  execution_id: "agent-execution-red-team",
+  parent_execution_id: "agent-execution-orchestrator",
+  agent_role: "red_team",
+  physical_sequence: sequence,
+  provider: "openrouter",
+  requested_model: "qwen/qwen3.5-397b-a17b",
+  configured_upstream: "chutes",
+  returned_model: "qwen/qwen3.5-397b-a17b",
+  upstream_provider: "Chutes",
+  provider_request_id: `browser-openrouter-request-${sequence}`,
+  status: "succeeded",
+  error_code: null,
+  input_tokens: 320 + sequence,
+  output_tokens: 3000 + sequence * 10,
+  reasoning_tokens: 12,
+  cost_measurement_state: "measured",
+  accounting_status: "measured",
+  measured_cost_usd: 0.009255 + sequence / 100000,
+  currency: "USD",
+  started_at: `2026-07-22T00:24:0${sequence}Z`,
+  finished_at: `2026-07-22T00:24:${String(20 + sequence).padStart(2, "0")}Z`,
+  duration_ms: 20_000 + sequence * 1_000,
+  trace_id: "3".repeat(32),
+  langfuse_observation_name: `provider.attempt.${sequence}`,
+  langfuse_attempt_label: "attempt:browser-attempt-3",
+  langfuse_status: "exported",
+  langfuse_verified_at: "2026-07-22T00:25:10Z",
+}));
+
+// Per-physical-call prompt and response evidence, served only by the dedicated evidence route so
+// the browser suite can prove the disclosure is lazy: these bytes must never appear in the
+// aggregate /api/v1/provider-calls payload above.
+const browserProviderCallEvidence = new Map(
+  browserProviderCalls.map((call) => {
+    const systemPrompt =
+      "Select exactly one authorized case reference from the reviewed workload.";
+    const responseText = `{"case_ref":"browser-case-${call.physical_sequence}"}`;
+    return [call.invocation_id, {
+      invocation_id: call.invocation_id,
+      campaign_run_id: call.campaign_id,
+      attempt_id: call.attempt_id,
+      agent_role: call.agent_role,
+      physical_sequence: call.physical_sequence,
+      status: call.status,
+      error_code: null,
+      prompt: {
+        system_prompt_version: "red-team-v3",
+        system_prompt_sha256: sha256(systemPrompt),
+        system_prompt_content: systemPrompt,
+        provider_messages: [
+          { role: "system", content: systemPrompt },
+          {
+            role: "user",
+            content: `Physical attempt ${call.physical_sequence} of the governed selection.`,
+          },
+        ],
+        transcript_sha256: sha256(`browser-transcript-${call.physical_sequence}`),
+        redactions: [],
+      },
+      response: {
+        text: responseText,
+        truncated: false,
+        sha256: sha256(responseText),
+      },
+    }];
+  }),
+);
+
 const browserTooling = [
   ["garak", "NVIDIA Garak", "0.15.1", "llm-attack", "in_campaign", 1, 1, 0, 0],
   ["pyrit", "Microsoft PyRIT", "0.14.0", "llm-attack", "in_campaign", 3, 3, 0, 0],
@@ -1319,6 +1392,33 @@ const browserFixture = (): Plugin => ({
               inspection_owasp_mappings: [],
             })),
           ],
+        }));
+        return;
+      }
+      const providerCallEvidenceMatch =
+        /^\/api\/v1\/provider-calls\/([^/]+)\/evidence$/.exec(path);
+      if (providerCallEvidenceMatch !== null) {
+        const record = browserProviderCallEvidence.get(
+          decodeURIComponent(providerCallEvidenceMatch[1] ?? ""),
+        );
+        response.end(JSON.stringify(
+          record === undefined
+            ? { state: "empty", data: null }
+            : { state: "ready", data: record },
+        ));
+        return;
+      }
+      if (path === "/api/v1/provider-calls") {
+        const campaignId = new URL(
+          request.url ?? path,
+          "http://browser-fixture.test",
+        ).searchParams.get("campaign_id");
+        const calls = campaignId === null || campaignId === "browser-campaign-gamma"
+          ? browserProviderCalls
+          : [];
+        response.end(JSON.stringify({
+          state: calls.length === 0 ? "empty" : "ready",
+          data: calls.length === 0 ? null : calls,
         }));
         return;
       }

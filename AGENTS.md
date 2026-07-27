@@ -42,8 +42,11 @@ queue/Runner, not LangGraph.
 
 ## Current operational facts
 
-- `origin/main == gitlab/main == 2916668` at the latest 2026-07-26 read-only check.
-- Staging Web/Runner/Scheduler share policy digest `b83acb23…`; PostgreSQL is at Alembic `0025`.
+- `origin/main == gitlab/main == d6136ff` at the 2026-07-27 read-only check, immediately before the
+  provider-call observability candidate was pushed.
+- The repository package head is Alembic `0028`; staging PostgreSQL was verified at `0026` before
+  that candidate was deployed.
+- Staging Web/Runner/Scheduler share policy digest `b83acb23…`.
 - Production is release-skewed and is not campaign-ready.
 - The latest 34-case staging run reached case 12, then a schema-invalid Gemini Judge response
   terminated the batch.

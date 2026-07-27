@@ -134,10 +134,14 @@ Unknown, Unavailable, or Partial. The same live operations projection backs Targ
 surfaces.
 
 Observability's Traces view visualizes the durable request ledger correlated to Langfuse: transport
-status, endpoint metadata, latency, volume, measured cost, and export state. Costs visualizes
-campaign spend, approved budget utilization, cost per request, duration, and reconciliation between
-campaign summaries and physical ledgers. Both receive the selected campaign explicitly so an older
-campaign is not lost outside a bounded global projection.
+status, endpoint metadata, latency, volume, measured cost, and export state. It also renders the
+campaign-scoped `provider-calls` projection: one row per OpenRouter invocation with exact
+attempt/role/retry sequence, requested and served model/upstream, provider request ID, latency,
+tokens, cost, status, and Langfuse trace/name locator. Costs reuses the same rows as a per-call cost
+ledger alongside campaign spend, approved budget utilization, cost per request, duration, and
+summary reconciliation. Run Operations shows the newest physical calls while a campaign is active.
+All three receive the selected campaign explicitly so an older campaign is not lost outside a
+bounded global projection.
 
 The event feed invalidates affected cached projections after each authenticated event, reconnects
 with `Last-Event-ID`, and falls back to five-second polling when streaming is unavailable. Last valid
@@ -147,10 +151,29 @@ An expanded execution can fetch its immutable prompt snapshot only with `org:evi
 System-prompt and ordered provider-message contents stay collapsed by default; no prompt is included
 in list, aggregate, SSE, log, or Langfuse payloads.
 
+Every physical-call row in all three ledgers carries the same guarantee for one physical call. A
+collapsed "Prompt & response" disclosure requires `org:console:read` plus `org:evidence:read`; a
+principal without the evidence permission sees an explicit notice and the console issues no evidence
+request at all. Expanding it — and only expanding it — fetches
+`provider-calls/{invocation_id}/evidence`, which returns the exact sent system prompt and ordered
+messages plus the exact recorded provider response for that invocation. The client re-checks that
+the returned invocation, role, and physical sequence match the row before rendering.
+
+Neither content member is ever reconstructed. A call with no prompt snapshot and a call whose
+response was never observed each render an explicit empty state instead of a hash or a guess, so a
+timeout, transport failure, or crash-recovered call reads as "no response was recorded" rather than
+an approximation. Failed and schema-invalid calls do show their recorded body, because the bytes are
+captured before validation. Response text renders through the same adversarial-text treatment used
+for other hostile evidence, and these contents never appear in the aggregate `provider-calls`
+payload, SSE, logs, Langfuse metadata, or the production bundle.
+
 PostgreSQL is authoritative and Langfuse is a fail-soft external projection. The console does not
 query Langfuse with browser credentials. Hosted provider token/cost facts come from provider responses
 and physical-call records; target-call accounting is a separate contracted value. SDK flush is not
-remote proof, so `queued` remains visible until exact query-back.
+remote proof, so `queued` remains visible until exact query-back. A physical-call row's Langfuse
+locator identifies its projected `provider.attempt.<sequence>` child span. The current
+`langfuse_verified_at` value proves query-back for the logical agent parent; it is not presented as
+independent per-child verification.
 
 ## Honest unavailable features
 

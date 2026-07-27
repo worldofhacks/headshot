@@ -849,6 +849,107 @@ class TraceReadModel(_ReadModel):
         return self
 
 
+class ProviderCallReadModel(_ReadModel):
+    """One durable OpenRouter physical call and its Langfuse projection locator."""
+
+    invocation_id: str = Field(pattern=r"^[0-9a-f]{64}$")
+    event_id: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    campaign_id: str
+    attempt_id: str | None = None
+    execution_id: str
+    parent_execution_id: str | None = None
+    agent_role: Literal["orchestrator", "red_team", "judge", "documentation"]
+    physical_sequence: int = Field(ge=1)
+    provider: Literal["openrouter"]
+    requested_model: str
+    configured_upstream: str
+    returned_model: str | None = None
+    upstream_provider: str | None = None
+    provider_request_id: str | None = None
+    status: Literal[
+        "in_flight",
+        "succeeded",
+        "timeout",
+        "retryable_failure",
+        "terminal_failure",
+        "model_mismatch",
+        "identity_invalid",
+        "route_unauthorized",
+        "invalid_usage",
+        "invalid_output",
+        "outcome_unknown",
+    ]
+    error_code: str | None = None
+    input_tokens: int | None = Field(default=None, ge=0)
+    output_tokens: int | None = Field(default=None, ge=0)
+    reasoning_tokens: int | None = Field(default=None, ge=0)
+    cost_measurement_state: Literal[
+        "pending",
+        "measured",
+        "partial",
+        "not_observed",
+        "invalid",
+    ]
+    accounting_status: Literal["pending", "measured", "partial", "unavailable"]
+    measured_cost_usd: float | None = Field(default=None, ge=0)
+    currency: Literal["USD"]
+    started_at: datetime.datetime
+    finished_at: datetime.datetime | None = None
+    duration_ms: float | None = Field(default=None, ge=0)
+    trace_id: str
+    langfuse_observation_name: str
+    langfuse_attempt_label: str | None = None
+    langfuse_status: Literal[
+        "not_attempted",
+        "disabled",
+        "queued",
+        "exported",
+        "error",
+    ]
+    langfuse_verified_at: datetime.datetime | None = None
+
+    @model_validator(mode="after")
+    def reconcile_physical_call(self) -> Self:
+        terminal = self.status != "in_flight"
+        if terminal != (self.event_id is not None):
+            raise ValueError("terminal provider calls require one durable event")
+        if terminal != (self.finished_at is not None and self.duration_ms is not None):
+            raise ValueError("provider call timing does not match its terminal state")
+        expected_accounting = {
+            "pending": "pending",
+            "measured": "measured",
+            "partial": "partial",
+            "not_observed": "unavailable",
+            "invalid": "unavailable",
+        }[self.cost_measurement_state]
+        if self.accounting_status != expected_accounting:
+            raise ValueError("provider call accounting contradicts its persisted cost state")
+        if (self.measured_cost_usd is not None) != (
+            self.cost_measurement_state in {"measured", "partial"}
+        ):
+            raise ValueError("provider call measured cost contradicts its cost state")
+        provider_identity = (
+            self.returned_model,
+            self.upstream_provider,
+            self.provider_request_id,
+        )
+        if any(value is None for value in provider_identity) != all(
+            value is None for value in provider_identity
+        ):
+            raise ValueError("provider call identity must be recorded as one complete tuple")
+        expected_observation = f"provider.attempt.{self.physical_sequence}"
+        if self.langfuse_observation_name != expected_observation:
+            raise ValueError("provider call Langfuse observation name is not deterministic")
+        expected_attempt_label = (
+            f"attempt:{self.attempt_id}" if self.attempt_id is not None else None
+        )
+        if self.langfuse_attempt_label != expected_attempt_label:
+            raise ValueError("provider call Langfuse attempt label does not match its lineage")
+        if (self.langfuse_status == "exported") != (self.langfuse_verified_at is not None):
+            raise ValueError("exported provider call parent requires Langfuse query-back proof")
+        return self
+
+
 class AgentBudgetReadModel(_ReadModel):
     """One role's run-scoped subcap plus the shared provider kill switch."""
 
@@ -1452,6 +1553,42 @@ class AgentPromptSnapshotRedactionReadModel(_ReadModel):
         return self
 
 
+def _validate_prompt_transcript_identity(
+    *,
+    system_prompt_content: str,
+    system_prompt_sha256: str,
+    provider_messages: tuple[AgentPromptSnapshotMessageReadModel, ...],
+    transcript_sha256: str,
+    redactions: tuple[AgentPromptSnapshotRedactionReadModel, ...],
+) -> None:
+    """Recompute both persisted prompt digests; never trust a stored hash on its own."""
+
+    prompt_bytes = system_prompt_content.encode("utf-8")
+    if not 1 <= len(prompt_bytes) <= 1_048_576:
+        raise ValueError("system prompt is outside its storage bound")
+    if hashlib.sha256(prompt_bytes).hexdigest() != system_prompt_sha256:
+        raise ValueError("system prompt hash does not match its content")
+
+    messages = [message.model_dump(mode="python") for message in provider_messages]
+    if messages[0] != {
+        "role": "system",
+        "content": system_prompt_content,
+    } or any(message["role"] == "system" for message in messages[1:]):
+        raise ValueError("provider transcript does not begin with its exact system prompt")
+    transcript_json = canonical_json({"messages": messages})
+    if len(transcript_json.encode("utf-8")) > 1_572_864:
+        raise ValueError("provider transcript exceeds its storage bound")
+    if hashlib.sha256(transcript_json.encode("utf-8")).hexdigest() != transcript_sha256:
+        raise ValueError("provider transcript hash does not match its messages")
+
+    decoded_redactions = [redaction.model_dump(mode="python") for redaction in redactions]
+    redactions_json = canonical_json({"redactions": decoded_redactions})
+    if len(redactions_json.encode("utf-8")) > 16_384:
+        raise ValueError("prompt redaction metadata exceeds its storage bound")
+    if any(redaction["replacement"] not in transcript_json for redaction in decoded_redactions):
+        raise ValueError("prompt redaction metadata does not identify persisted text")
+
+
 class AgentPromptSnapshotReadModel(_ReadModel):
     """Exact immutable provider input for one evidence-authorized execution."""
 
@@ -1472,31 +1609,88 @@ class AgentPromptSnapshotReadModel(_ReadModel):
 
     @model_validator(mode="after")
     def validate_immutable_prompt_identity(self) -> Self:
-        prompt_bytes = self.system_prompt_content.encode("utf-8")
-        if not 1 <= len(prompt_bytes) <= 1_048_576:
-            raise ValueError("system prompt is outside its storage bound")
-        if hashlib.sha256(prompt_bytes).hexdigest() != self.system_prompt_sha256:
-            raise ValueError("system prompt hash does not match its content")
-
-        messages = [message.model_dump(mode="python") for message in self.provider_messages]
-        if messages[0] != {
-            "role": "system",
-            "content": self.system_prompt_content,
-        } or any(message["role"] == "system" for message in messages[1:]):
-            raise ValueError("provider transcript does not begin with its exact system prompt")
-        transcript_json = canonical_json({"messages": messages})
-        if len(transcript_json.encode("utf-8")) > 1_572_864:
-            raise ValueError("provider transcript exceeds its storage bound")
-        if hashlib.sha256(transcript_json.encode("utf-8")).hexdigest() != self.transcript_sha256:
-            raise ValueError("provider transcript hash does not match its messages")
-
-        redactions = [redaction.model_dump(mode="python") for redaction in self.redactions]
-        redactions_json = canonical_json({"redactions": redactions})
-        if len(redactions_json.encode("utf-8")) > 16_384:
-            raise ValueError("prompt redaction metadata exceeds its storage bound")
-        if any(redaction["replacement"] not in transcript_json for redaction in redactions):
-            raise ValueError("prompt redaction metadata does not identify persisted text")
+        _validate_prompt_transcript_identity(
+            system_prompt_content=self.system_prompt_content,
+            system_prompt_sha256=self.system_prompt_sha256,
+            provider_messages=self.provider_messages,
+            transcript_sha256=self.transcript_sha256,
+            redactions=self.redactions,
+        )
         return self
+
+
+class ProviderCallEvidencePromptReadModel(_ReadModel):
+    """The exact messages sent on one physical call, reused from its protected snapshot."""
+
+    system_prompt_version: str = Field(min_length=1, max_length=64)
+    system_prompt_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    system_prompt_content: str
+    provider_messages: tuple[AgentPromptSnapshotMessageReadModel, ...] = Field(
+        min_length=1,
+        max_length=64,
+    )
+    transcript_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    redactions: tuple[AgentPromptSnapshotRedactionReadModel, ...] = Field(max_length=64)
+
+    @model_validator(mode="after")
+    def validate_immutable_prompt_identity(self) -> Self:
+        _validate_prompt_transcript_identity(
+            system_prompt_content=self.system_prompt_content,
+            system_prompt_sha256=self.system_prompt_sha256,
+            provider_messages=self.provider_messages,
+            transcript_sha256=self.transcript_sha256,
+            redactions=self.redactions,
+        )
+        return self
+
+
+class ProviderCallEvidenceResponseReadModel(_ReadModel):
+    """The recorded provider response for one physical call, verified against its digest."""
+
+    text: str
+    truncated: bool
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @model_validator(mode="after")
+    def validate_recorded_response_identity(self) -> Self:
+        if "\x00" in self.text:
+            raise ValueError("provider response contains a NUL byte")
+        payload = self.text.encode("utf-8")
+        if len(payload) > 65_536:
+            raise ValueError("provider response exceeds its storage bound")
+        if hashlib.sha256(payload).hexdigest() != self.sha256:
+            raise ValueError("provider response hash does not match its content")
+        return self
+
+
+class ProviderCallEvidenceReadModel(_ReadModel):
+    """One physical provider call's exact sent prompt and its exact recorded response.
+
+    Both content members are nullable and are never reconstructed: ``prompt`` is ``None``
+    when the call's logical execution has no protected snapshot row, and ``response`` is
+    ``None`` when no response text was recorded for that physical call.
+    """
+
+    invocation_id: str = Field(pattern=r"^[0-9a-f]{64}$")
+    campaign_run_id: str = Field(min_length=1, max_length=64)
+    attempt_id: str | None = Field(default=None, min_length=1, max_length=64)
+    agent_role: Literal["orchestrator", "red_team", "judge", "documentation"]
+    physical_sequence: int = Field(ge=1)
+    status: Literal[
+        "succeeded",
+        "timeout",
+        "retryable_failure",
+        "terminal_failure",
+        "model_mismatch",
+        "identity_invalid",
+        "route_unauthorized",
+        "invalid_usage",
+        "invalid_output",
+        "outcome_unknown",
+    ]
+    error_code: str | None = Field(default=None, min_length=1, max_length=64)
+    prompt: ProviderCallEvidencePromptReadModel | None = None
+    response: ProviderCallEvidenceResponseReadModel | None = None
 
 
 class AgentActivityReadModel(_ReadModel):
@@ -1997,6 +2191,7 @@ _LIST_ADAPTERS = {
     "resilience": TypeAdapter(list[ResilienceReadModel]),
     "costs": TypeAdapter(list[CostReadModel]),
     "traces": TypeAdapter(list[TraceReadModel]),
+    "provider_calls": TypeAdapter(list[ProviderCallReadModel]),
     "components": TypeAdapter(list[ComponentReadModel]),
     "agents": TypeAdapter(list[AgentReadModel]),
     "agent_activity": TypeAdapter(list[AgentActivityReadModel]),
@@ -2013,6 +2208,7 @@ _SINGLE_ADAPTERS = {
     "report": TypeAdapter(ReportReadModel),
     "agent_prompt": TypeAdapter(AgentPromptReadModel),
     "agent_prompt_snapshot": TypeAdapter(AgentPromptSnapshotReadModel),
+    "provider_call_evidence": TypeAdapter(ProviderCallEvidenceReadModel),
     "configuration": TypeAdapter(ConfigurationReadModel),
     "birdseye": TypeAdapter(BirdseyeSnapshotReadModel),
 }
@@ -2071,6 +2267,10 @@ __all__ = [
     "FindingVerificationReadModel",
     "JudgeCalibrationSummaryReadModel",
     "PrincipalReadModel",
+    "ProviderCallEvidencePromptReadModel",
+    "ProviderCallEvidenceReadModel",
+    "ProviderCallEvidenceResponseReadModel",
+    "ProviderCallReadModel",
     "ReportReadModel",
     "ResilienceReadModel",
     "SurfaceReadModel",

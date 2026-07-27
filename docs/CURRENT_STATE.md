@@ -4,9 +4,11 @@
 
 **Repository base before the operations candidate:** `cf18e119dc1592d72aa6a707d280ad65062dd093`
 
-**Repository parity at the latest read-only check:** `origin/main == gitlab/main == cf18e11`
+**Repository parity at the latest read-only check:** `origin/main == gitlab/main == d6136ff`
+(2026-07-27, immediately before this candidate was pushed)
 
-**Packaged schema:** sole Alembic head `0027`; the verified staging database is at canonical `0026`
+**Packaged schema:** sole Alembic head `0028`; the verified staging database is at canonical `0026`
+before this candidate is deployed
 
 **Canonical requirements:** [`Week_3_AgentForge.pdf`](../Week_3_AgentForge.pdf)
 
@@ -44,12 +46,15 @@ occurred.
 | Web | `SUCCESS` | deployment `74d39043-7ef8-410e-963d-e7aee107ec13` |
 | Runner | `SUCCESS` | deployment `0a6a2303-4bc2-4c20-b156-12ed34e545df` |
 | Scheduler | `SUCCESS` | deployment `6689fdf2-a92e-4af1-808b-6d8068f05ef2` |
-| PostgreSQL | ready | repository candidate head `0027`; deployed staging at canonical `0026` |
+| PostgreSQL | ready | repository candidate head `0028`; deployed staging at canonical `0026` |
 | Public Web | healthy | `/health` 200, `/ready` 200, unauthenticated `/api/v1/principal` 401 |
 
-These deployments predate the integrated operations candidate. Their exact source commit is not
-authoritatively represented in Railway's local-upload metadata, so service parity must be
-re-established by deploying one reviewed candidate SHA to all three services.
+This table is the pre-candidate baseline: these deployment IDs predate the provider-call
+observability candidate and are superseded the moment it is deployed. Their exact source commit is
+not authoritatively represented in Railway's local-upload metadata, so service parity must be
+re-established by deploying one reviewed candidate SHA to all three services. The deployment IDs,
+migration revision, and live verification for a given release are recorded in that release's
+handoff rather than asserted here, so this file never claims a deployment it did not verify.
 
 The packaged default generation-policy digest remains
 `b83acb23122de9b4911032738bce136f214a34328357b457935ad821b44b0b18`. This is a source-package
@@ -95,11 +100,22 @@ credential-generation, synthetic-fixture, canary, cap, lease, and two-person aut
 | Deployment | One Docker artifact; Railway Web, Runner, Scheduler, PostgreSQL; Web-only public ingress |
 | CI/release | GitHub Actions and GitLab CI must both pass; release refs must be identical |
 
-The repository package is now at Alembic `0027`. Migration `0026` adds durable campaign outcome
+The repository package is now at Alembic `0028`. Migration `0026` adds durable campaign outcome
 counts; migration `0027` adds immutable,
 organization-scoped prompt snapshots for logical agent executions. Runner can insert/select those
 rows; Web can only select them. Append-only triggers prevent update/delete and enforce run,
 attempt, role, and organization lineage.
+
+Migration `0028` makes the *received* side of a hosted call provable. Before it,
+`provider_call_events` recorded only measurements, so the platform could state that a physical call
+happened and what it cost but never what the provider actually returned. `0028` is expand-only and
+adds three columns to that table: `response_text` (nullable, bounded to 65,536 bytes),
+`response_truncated`, and `response_sha256`. Nothing is backfilled — rows written before this
+revision genuinely have no observed response and stay `NULL` rather than acquiring an invented one.
+Check constraints force the digest to cover exactly the stored text and force text and digest to
+appear and vanish together. The columns are populated by the same single INSERT that records the
+call's terminal facts, under the append-only trigger from `0018`; the revision adds no mutation
+path.
 
 ## Operations-console candidate
 
@@ -114,11 +130,41 @@ distribution, and terminal failure facts. Unknown or incomplete facts remain nul
 than becoming zero. The console consumes authenticated SSE with last-event reconnection and a
 five-second polling fallback while preserving the last valid snapshot with freshness state.
 
+`GET /api/v1/provider-calls?campaign_id=…` projects one row per durable OpenRouter invocation from
+`provider_call_invocations` joined to its terminal `provider_call_events` row and logical
+`agent_executions` parent. It exposes attempt/role/sequence, requested and returned model/upstream,
+provider request ID, latency, tokens, measured cost, terminal status, and a deterministic Langfuse
+trace/observation locator. The same physical-call ledger is rendered in Run Operations,
+Observability → Traces, and Observability → Costs. It creates no second accounting store and does not
+query Langfuse from the browser.
+
 `GET /api/v1/agent-executions/{execution_id}/prompt-snapshot` requires both
 `org:console:read` and `org:evidence:read`. It returns one exact package-owned system prompt and the
 ordered provider role/content transcript only after organization scoping, hash verification,
 secret/PHI rejection, and bounded redaction validation. Prompt contents are collapsed by default and
 are excluded from aggregate/list/SSE/log/Langfuse payloads.
+
+`GET /api/v1/provider-calls/{invocation_id}/evidence` requires the same `org:console:read` plus
+`org:evidence:read` pair and serves one physical call at a time. It returns the exact sent prompt —
+reused from that call's protected `agent_prompt_snapshots` row through the same store accessor, so
+the identical hash recomputation and secret/PHI rejection apply — together with the exact provider
+response recorded for that invocation by migration `0028`. Both members are nullable and neither is
+ever reconstructed: `prompt` is `null` when the logical execution has no snapshot, and `response` is
+`null` when no response was observed for that physical call. A hash is never presented as response
+content.
+
+The response bytes are captured in the transport *before* structured-output validation, so the body
+that failed validation is exactly the one an operator can read. They are credential-redacted using
+the same sanitizer the outbound telemetry exporter uses, plus the literal bearer value that call
+sent, so an upstream echoing the `Authorization` header cannot durably store the credential.
+Capture is thread-local and cleared at the start of every physical attempt, so a retry never
+inherits the previous attempt's body and each physical response stays bound to its own invocation.
+
+These contents are served only by this per-call route. The aggregate
+`GET /api/v1/provider-calls` projection selects an explicit measurement column list and never
+includes prompt or response bytes; they are likewise absent from SSE, logs, Langfuse metadata, and
+the browser bundle. In the console the evidence is a collapsed "Prompt & response" disclosure on
+every ledger row, and the protected read is issued only when an operator expands it.
 
 ## Hosted role set and per-call policy
 
@@ -239,8 +285,15 @@ For the latest failed run:
 
 The existing verifier accepts only campaigns present in `campaign_run_summaries`, so a failed or
 aborted run exits with `campaign must be a completed live run`. That means current tooling cannot
-query-back verify the exact partial trace of a failed campaign. Provider physical attempts are
-durable in PostgreSQL, but they are not yet first-class child observations in Langfuse.
+query-back verify the exact partial trace of a failed campaign.
+
+Current source projects every durable physical provider attempt as a metadata-only
+`provider.attempt.<sequence>` child span beneath the cost-bearing logical runtime generation. The
+span carries model, upstream, provider request ID, tokens, measured cost, duration, status, and error
+as metadata; usage/cost remain on the logical generation so Langfuse cannot double count them.
+Headshot exposes the deterministic trace/name/attempt locator for each call. Exact remote
+query-back proof is still persisted at the logical agent-row level, not as a separate timestamp for
+each physical child span.
 
 Do not equate SDK `flush()` with remote delivery. Only authenticated exact query-back may mark a row
 `exported`.
@@ -253,7 +306,7 @@ Do not equate SDK `flush()` with remote delivery. Only authenticated exact query
 3. One exhausted provider-format failure still aborts the entire batch.
 4. A terminal batch cannot resume from its durable completed attempts.
 5. Langfuse query-back rejects failed/aborted campaigns.
-6. Physical provider attempts are not first-class Langfuse observations.
+6. Per-child Langfuse query-back proof is not persisted separately from the logical agent row.
 7. Exact current-identity Judge calibration is not enabled in staging.
 8. Orchestrator and Red Team calls are expensive for an exact manifest whose next case is already
    fixed for lineage; the current model-selected singleton path adds latency without changing bytes.

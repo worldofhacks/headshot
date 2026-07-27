@@ -20,6 +20,11 @@ export const RESOURCE_PATHS = {
   resilience: "resilience",
   traces: "traces",
   campaignTraces: (campaignId: string) => campaignScoped("traces", campaignId),
+  providerCalls: "provider-calls",
+  campaignProviderCalls: (campaignId: string) =>
+    campaignScoped("provider-calls", campaignId),
+  providerCallEvidence: (invocationId: string) =>
+    `provider-calls/${segment(invocationId)}/evidence`,
   costs: "costs",
   campaignCosts: (campaignId: string) => campaignScoped("costs", campaignId),
   targetCatalog: "target-catalog",

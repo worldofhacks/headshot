@@ -48,6 +48,10 @@ import type {
   FindingVerificationReadModel,
   HostedRunBindingReadModel,
   JudgeCalibrationSummaryReadModel,
+  ProviderCallEvidencePromptReadModel,
+  ProviderCallEvidenceReadModel,
+  ProviderCallEvidenceResponseReadModel,
+  ProviderCallReadModel,
   RegressionDispositionReadModel,
   ReportReadModel,
   ResilienceReadModel,
@@ -1916,6 +1920,147 @@ const decodeTrace = (value: unknown): TraceReadModel => {
 export const decodeTraces: ReadModelDecoder<TraceReadModel[]> = (value) =>
   records(value, "traces", decodeTrace);
 
+const decodeProviderCall = (value: unknown): ProviderCallReadModel => {
+  const name = "provider call";
+  const result = record(value, name);
+  exactKeys(result, [
+    "invocation_id",
+    "event_id",
+    "campaign_id",
+    "attempt_id",
+    "execution_id",
+    "parent_execution_id",
+    "agent_role",
+    "physical_sequence",
+    "provider",
+    "requested_model",
+    "configured_upstream",
+    "returned_model",
+    "upstream_provider",
+    "provider_request_id",
+    "status",
+    "error_code",
+    "input_tokens",
+    "output_tokens",
+    "reasoning_tokens",
+    "cost_measurement_state",
+    "accounting_status",
+    "measured_cost_usd",
+    "currency",
+    "started_at",
+    "finished_at",
+    "duration_ms",
+    "trace_id",
+    "langfuse_observation_name",
+    "langfuse_attempt_label",
+    "langfuse_status",
+    "langfuse_verified_at",
+  ], name);
+  sha256(result, "invocation_id", name);
+  const eventId = nullableString(result, "event_id", name);
+  if (eventId !== null && !/^[0-9a-f]{64}$/.test(eventId)) invalid(name);
+  for (const key of [
+    "campaign_id",
+    "execution_id",
+    "requested_model",
+    "configured_upstream",
+    "trace_id",
+    "langfuse_observation_name",
+  ]) {
+    string(result, key, name);
+  }
+  const attemptId = nullableString(result, "attempt_id", name);
+  nullableString(result, "parent_execution_id", name);
+  literal(result, "agent_role", agentRoles, name);
+  const sequence = number(
+    result,
+    "physical_sequence",
+    name,
+    { integer: true, minimum: 1 },
+  );
+  literal(result, "provider", ["openrouter"], name);
+  const providerIdentity = [
+    nullableString(result, "returned_model", name),
+    nullableString(result, "upstream_provider", name),
+    nullableString(result, "provider_request_id", name),
+  ];
+  if (providerIdentity.some((entry) => entry === null) !== providerIdentity.every(
+    (entry) => entry === null,
+  )) {
+    invalid(name);
+  }
+  const status = literal(
+    result,
+    "status",
+    ["in_flight", ...providerEventStatuses],
+    name,
+  );
+  nullableString(result, "error_code", name);
+  nullableNonnegativeInteger(result, "input_tokens", name);
+  nullableNonnegativeInteger(result, "output_tokens", name);
+  nullableNonnegativeInteger(result, "reasoning_tokens", name);
+  const costState = literal(
+    result,
+    "cost_measurement_state",
+    ["pending", "measured", "partial", "not_observed", "invalid"],
+    name,
+  );
+  const accountingStatus = literal(
+    result,
+    "accounting_status",
+    ["pending", "measured", "partial", "unavailable"],
+    name,
+  );
+  const expectedAccounting = {
+    pending: "pending",
+    measured: "measured",
+    partial: "partial",
+    not_observed: "unavailable",
+    invalid: "unavailable",
+  }[costState];
+  if (accountingStatus !== expectedAccounting) invalid(name);
+  const measuredCost = nullableNumber(result, "measured_cost_usd", name);
+  if (
+    (measuredCost !== null) !== ["measured", "partial"].includes(costState)
+    || (measuredCost !== null && measuredCost < 0)
+  ) {
+    invalid(name);
+  }
+  literal(result, "currency", ["USD"], name);
+  timestamp(result, "started_at", name);
+  const finishedAt = nullableTimestamp(result, "finished_at", name);
+  const durationMs = nullableNumber(result, "duration_ms", name);
+  if (
+    (status === "in_flight") !== (eventId === null)
+    || (status === "in_flight") !== (finishedAt === null && durationMs === null)
+    || (durationMs !== null && durationMs < 0)
+  ) {
+    invalid(name);
+  }
+  if (result.langfuse_observation_name !== `provider.attempt.${sequence}`) {
+    invalid(name);
+  }
+  const attemptLabel = nullableString(result, "langfuse_attempt_label", name);
+  if (attemptLabel !== (attemptId === null ? null : `attempt:${attemptId}`)) {
+    invalid(name);
+  }
+  literal(result, "langfuse_status", [
+    "not_attempted",
+    "disabled",
+    "queued",
+    "exported",
+    "error",
+  ], name);
+  const verifiedAt = nullableTimestamp(result, "langfuse_verified_at", name);
+  if ((result.langfuse_status === "exported") !== (verifiedAt !== null)) {
+    invalid(name);
+  }
+  return result as ProviderCallReadModel;
+};
+
+export const decodeProviderCalls: ReadModelDecoder<ProviderCallReadModel[]> = (value) =>
+  records(value, "provider calls", decodeProviderCall);
+
 const decodeCost = (value: unknown): CostReadModel => {
   const name = "cost";
   const result = record(value, name);
@@ -2836,6 +2981,99 @@ export const decodeAgentPromptSnapshot: ReadModelDecoder<AgentPromptSnapshotRead
   result.redactions = redactions;
   timestamp(result, "created_at", name);
   return result as AgentPromptSnapshotReadModel;
+};
+
+const decodeProviderCallEvidencePrompt = (
+  value: unknown,
+): ProviderCallEvidencePromptReadModel => {
+  const name = "provider call evidence";
+  const result = record(value, name);
+  exactKeys(result, [
+    "system_prompt_version",
+    "system_prompt_sha256",
+    "system_prompt_content",
+    "provider_messages",
+    "transcript_sha256",
+    "redactions",
+  ], name);
+  const promptVersion = string(result, "system_prompt_version", name);
+  if (promptVersion.length > 64 || promptVersion.includes("\u0000")) invalid(name);
+  sha256(result, "system_prompt_sha256", name);
+  sha256(result, "transcript_sha256", name);
+  const systemPrompt = string(result, "system_prompt_content", name);
+  if (
+    systemPrompt.includes("\u0000")
+    || utf8Length(systemPrompt) > 1_048_576
+  ) invalid(name);
+  const messages = records(
+    result.provider_messages,
+    name,
+    decodeAgentPromptSnapshotMessage,
+  );
+  if (
+    messages.length === 0
+    || messages.length > 64
+    || messages[0]?.role !== "system"
+    || messages[0].content !== systemPrompt
+    || messages.slice(1).some((message) => message.role === "system")
+    || utf8Length(JSON.stringify(messages)) > 1_572_864
+  ) invalid(name);
+  result.provider_messages = messages;
+  const redactions = records(
+    result.redactions,
+    name,
+    decodeAgentPromptSnapshotRedaction,
+  );
+  if (
+    redactions.length > 64
+    || utf8Length(JSON.stringify(redactions)) > 16_384
+  ) invalid(name);
+  result.redactions = redactions;
+  return result as ProviderCallEvidencePromptReadModel;
+};
+
+const decodeProviderCallEvidenceResponse = (
+  value: unknown,
+): ProviderCallEvidenceResponseReadModel => {
+  const name = "provider call evidence";
+  const result = record(value, name);
+  exactKeys(result, ["text", "truncated", "sha256"], name);
+  const text = result.text;
+  if (typeof text !== "string" || utf8Length(text) > 65_536) invalid(name);
+  boolean(result, "truncated", name);
+  sha256(result, "sha256", name);
+  return result as ProviderCallEvidenceResponseReadModel;
+};
+
+export const decodeProviderCallEvidence: ReadModelDecoder<ProviderCallEvidenceReadModel> = (
+  value,
+) => {
+  const name = "provider call evidence";
+  const result = record(value, name);
+  exactKeys(result, [
+    "invocation_id",
+    "campaign_run_id",
+    "attempt_id",
+    "agent_role",
+    "physical_sequence",
+    "status",
+    "error_code",
+    "prompt",
+    "response",
+  ], name);
+  for (const key of ["invocation_id", "campaign_run_id"]) string(result, key, name);
+  nullableString(result, "attempt_id", name);
+  literal(result, "agent_role", agentRoles, name);
+  number(result, "physical_sequence", name, { integer: true, minimum: 1 });
+  literal(result, "status", ["in_flight", ...providerEventStatuses], name);
+  nullableString(result, "error_code", name);
+  result.prompt = result.prompt === null
+    ? null
+    : decodeProviderCallEvidencePrompt(result.prompt);
+  result.response = result.response === null
+    ? null
+    : decodeProviderCallEvidenceResponse(result.response);
+  return result as ProviderCallEvidenceReadModel;
 };
 
 const decodeAgentActivityRecord = (value: unknown): AgentActivityReadModel => {

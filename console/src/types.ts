@@ -498,6 +498,67 @@ export interface TraceReadModel extends JsonRecord {
   inspection_owasp_mappings: string[];
 }
 
+export interface ProviderCallReadModel extends JsonRecord {
+  invocation_id: string;
+  event_id: string | null;
+  campaign_id: string;
+  attempt_id: string | null;
+  execution_id: string;
+  parent_execution_id: string | null;
+  agent_role: "orchestrator" | "red_team" | "judge" | "documentation";
+  physical_sequence: number;
+  provider: "openrouter";
+  requested_model: string;
+  configured_upstream: string;
+  returned_model: string | null;
+  upstream_provider: string | null;
+  provider_request_id: string | null;
+  status: "in_flight" | ProviderEventStatus;
+  error_code: string | null;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  reasoning_tokens: number | null;
+  cost_measurement_state: "pending" | CostMeasurementState;
+  accounting_status: "pending" | "measured" | "partial" | "unavailable";
+  measured_cost_usd: number | null;
+  currency: "USD";
+  started_at: string;
+  finished_at: string | null;
+  duration_ms: number | null;
+  trace_id: string;
+  langfuse_observation_name: string;
+  langfuse_attempt_label: string | null;
+  langfuse_status: "not_attempted" | "disabled" | "queued" | "exported" | "error";
+  langfuse_verified_at: string | null;
+}
+
+export interface ProviderCallEvidencePromptReadModel extends JsonRecord {
+  system_prompt_version: string;
+  system_prompt_sha256: string;
+  system_prompt_content: string;
+  provider_messages: AgentPromptSnapshotMessageReadModel[];
+  transcript_sha256: string;
+  redactions: AgentPromptSnapshotRedactionReadModel[];
+}
+
+export interface ProviderCallEvidenceResponseReadModel extends JsonRecord {
+  text: string;
+  truncated: boolean;
+  sha256: string;
+}
+
+export interface ProviderCallEvidenceReadModel extends JsonRecord {
+  invocation_id: string;
+  campaign_run_id: string;
+  attempt_id: string | null;
+  agent_role: "orchestrator" | "red_team" | "judge" | "documentation";
+  physical_sequence: number;
+  status: "in_flight" | ProviderEventStatus;
+  error_code: string | null;
+  prompt: ProviderCallEvidencePromptReadModel | null;
+  response: ProviderCallEvidenceResponseReadModel | null;
+}
+
 export interface CostReadModel extends JsonRecord {
   accounting_id: string;
   campaign_id: string;

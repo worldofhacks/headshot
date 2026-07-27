@@ -221,10 +221,11 @@ export type ObservabilityView = "traces" | "costs";
 
 export function ObservabilityWorkspace({
   client,
+  principal,
   campaignId,
   view,
   onViewChange,
-}: Pick<SharedWorkspaceProps, "client"> & {
+}: Pick<SharedWorkspaceProps, "client" | "principal"> & {
   campaignId?: string | null;
   view: ObservabilityView;
   onViewChange: (view: ObservabilityView) => void;
@@ -241,8 +242,20 @@ export function ObservabilityWorkspace({
         ]}
       />
       {view === "traces"
-        ? <TracesScreen client={client} campaignId={campaignId ?? undefined} />
-        : <CostsScreen client={client} campaignId={campaignId ?? undefined} />}
+        ? (
+          <TracesScreen
+            client={client}
+            principal={principal}
+            campaignId={campaignId ?? undefined}
+          />
+        )
+        : (
+          <CostsScreen
+            client={client}
+            principal={principal}
+            campaignId={campaignId ?? undefined}
+          />
+        )}
     </div>
   );
 }

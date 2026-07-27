@@ -4171,11 +4171,13 @@ class ControlPlaneStore:
                     "campaign_attempt_id, logical_execution_id, agent_role, physical_sequence, "
                     "status, returned_model, upstream_provider, provider_request_id, "
                     "input_tokens, output_tokens, reasoning_tokens, cost_measurement_state, "
-                    "measured_cost_usd, error_code, finished_at, duration_ms) VALUES "
+                    "measured_cost_usd, error_code, finished_at, duration_ms, "
+                    "response_text, response_truncated, response_sha256) VALUES "
                     "(:event, :invocation, :org, :run, :attempt, :execution, :role, :sequence, "
                     ":status, :returned_model, :upstream, :request_id, :input_tokens, "
                     ":output_tokens, :reasoning_tokens, :cost_state, :cost, :error, "
-                    ":finished, :duration)"
+                    ":finished, :duration, :response_text, :response_truncated, "
+                    ":response_sha256)"
                 ),
                 {
                     "event": event.event_id,
@@ -4198,6 +4200,11 @@ class ControlPlaneStore:
                     "error": event.error_code,
                     "finished": event.finished_at,
                     "duration": duration_ms,
+                    # Already redacted, bounded and digested by the transport; the event contract
+                    # refuses any other combination, so this INSERT stores it verbatim.
+                    "response_text": event.response_text,
+                    "response_truncated": event.response_truncated,
+                    "response_sha256": event.response_sha256,
                 },
             )
             cost, cost_state, event_ids, physical_attempts = self._provider_cost_projection(
@@ -4442,10 +4449,14 @@ class ControlPlaneStore:
                         "physical_sequence, status, returned_model, upstream_provider, "
                         "provider_request_id, input_tokens, output_tokens, reasoning_tokens, "
                         "cost_measurement_state, measured_cost_usd, error_code, finished_at, "
-                        "duration_ms) VALUES "
+                        "duration_ms, response_text, response_truncated, response_sha256) VALUES "
                         "(:event, :invocation, :org, :run, :attempt, :execution, :role, "
                         ":sequence, 'outcome_unknown', NULL, NULL, NULL, NULL, NULL, NULL, "
-                        "'not_observed', NULL, 'provider_outcome_unknown', :finished, :duration)"
+                        "'not_observed', NULL, 'provider_outcome_unknown', :finished, :duration, "
+                        # Recovery reconstructs this row from the reservation alone: the process
+                        # that made the call is gone and nobody saw what came back. NULL is that
+                        # fact. Anything else here would be invented evidence.
+                        "NULL, false, NULL)"
                     ),
                     {
                         "event": event_id,
@@ -4652,7 +4663,12 @@ class ControlPlaneStore:
         *,
         organization_id: str,
     ) -> tuple[Any, ...]:
-        """Return physical facts for one already-authorized organization scope."""
+        """Return physical facts for one already-authorized organization scope.
+
+        Measurements only. The recorded response body is deliberately NOT projected here: it is
+        single-call evidence gated on ``org:evidence:read`` and read one call at a time, and a
+        bulk listing is exactly the shape that would spread it into logs and aggregate views.
+        """
 
         if not isinstance(organization_id, str) or not organization_id:
             raise InvalidControlPlaneInput("organization identity is invalid")
@@ -4660,7 +4676,13 @@ class ControlPlaneStore:
             rows = (
                 connection.execute(
                     text(
-                        "SELECT * FROM provider_call_events "
+                        "SELECT event_id, invocation_id, organization_id, campaign_run_id, "
+                        "campaign_attempt_id, logical_execution_id, agent_role, "
+                        "physical_sequence, status, returned_model, upstream_provider, "
+                        "provider_request_id, input_tokens, output_tokens, reasoning_tokens, "
+                        "cost_measurement_state, measured_cost_usd, error_code, finished_at, "
+                        "duration_ms "
+                        "FROM provider_call_events "
                         "WHERE organization_id = :org "
                         "ORDER BY finished_at, physical_sequence, event_id"
                     ),
@@ -4744,6 +4766,11 @@ class ControlPlaneStore:
             measured_cost_usd=row["measured_cost_usd"],
             error_code=row["error_code"],
             finished_at=row["finished_at"],
+            # Included so an idempotent replay compares the whole durable row. Omitting them would
+            # make a re-recorded call look like it had "different terminal facts".
+            response_text=row["response_text"],
+            response_truncated=row["response_truncated"],
+            response_sha256=row["response_sha256"],
         )
 
     @staticmethod

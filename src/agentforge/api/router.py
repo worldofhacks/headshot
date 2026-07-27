@@ -449,6 +449,30 @@ def costs(
     return _read(request, "costs", principal, identifiers)
 
 
+@router.get("/provider-calls")
+def provider_calls(
+    request: Request,
+    principal: ConsolePrincipal,
+    campaign_id: Annotated[str | None, Query(min_length=1, max_length=64)] = None,
+) -> JSONResponse:
+    identifiers = {"campaign_id": campaign_id} if campaign_id is not None else None
+    return _read(request, "provider_calls", principal, identifiers)
+
+
+@router.get("/provider-calls/{invocation_id}/evidence")
+def provider_call_evidence(
+    request: Request,
+    invocation_id: str,
+    principal: EvidencePrincipal,
+) -> JSONResponse:
+    return _read(
+        request,
+        "provider_call_evidence",
+        principal,
+        {"invocation_id": invocation_id},
+    )
+
+
 @router.get("/targets")
 def targets(request: Request, principal: ConsolePrincipal) -> JSONResponse:
     return _read(request, "targets", principal)

@@ -11,8 +11,9 @@ def test_integrated_alembic_head_is_the_single_forward_revision() -> None:
     # 0022 adds attempt_result.resource_measurements — the JSONB column persisting the MEASURED
     # consumption trio (elapsed_ms/request_count/response_size) the consumption oracle adjudicates.
     # 0025 admits the six supported case categories and records reviewed-workload provenance.
-    # 0026 adds campaign outcome breakdowns; 0027 adds protected, immutable prompt evidence.
-    assert expected_alembic_head() == "0027"
+    # 0026 adds campaign outcome breakdowns; 0027 adds protected, immutable prompt evidence;
+    # 0028 adds the bounded, append-only provider response recorded per physical call.
+    assert expected_alembic_head() == "0028"
 
 
 def test_database_schema_ready_accepts_migrated_integrated_head(migrated_db) -> None:

@@ -37,11 +37,17 @@ from agentforge.providers.lineage import (
     ProviderLineageRecorder,
     ProviderLogicalContextV1,
     ProviderTerminalEventV1,
+    capture_response_evidence,
     normalize_provider_observation,
     served_provider_matches_configured,
 )
 from agentforge.secrets import Secret
 from agentforge.target.spec import HostedRunBinding
+
+# The same redaction the outbound telemetry exporter applies to provider payloads. Response
+# evidence and Langfuse spans must not disagree about what counts as a credential, so they share
+# one implementation rather than growing a second, drifting copy here.
+from agentforge.telemetry.outbound import _sanitize_text
 
 OPENROUTER_CHAT_COMPLETIONS_URL = "https://openrouter.ai/api/v1/chat/completions"
 _MILLION = Decimal(1_000_000)
@@ -783,6 +789,12 @@ class OpenRouterTransport:
         self._monotonic = monotonic
         self._last_request_at: float | None = None
         self._concurrency = threading.BoundedSemaphore(configuration.global_limits.max_concurrency)
+        # The observed response body travels from the send to the terminal record without passing
+        # through the result or the exception, so it is never returned to a caller who did not ask
+        # for evidence. It is thread-local because the concurrency semaphore admits more than one
+        # in-flight send per transport, and evidence attributed to the wrong physical call would
+        # be a fabrication, not a glitch.
+        self._observed_response = threading.local()
 
     @property
     def ledger(self) -> HostedUsageLedger:
@@ -1157,8 +1169,11 @@ class OpenRouterTransport:
         cost_measurement_state: str,
         measured_cost_usd: Decimal | None,
     ) -> None:
-        try:
-            event = ProviderTerminalEventV1(
+        response_text, response_truncated, response_sha256 = self._take_response_evidence()
+        finished_at = datetime.datetime.now(datetime.UTC)
+
+        def build(with_response: bool) -> ProviderTerminalEventV1:
+            return ProviderTerminalEventV1(
                 invocation_id=invocation.invocation_id,
                 physical_sequence=invocation.physical_sequence,
                 status=status,
@@ -1171,8 +1186,20 @@ class OpenRouterTransport:
                 cost_measurement_state=cost_measurement_state,
                 measured_cost_usd=measured_cost_usd,
                 error_code=_EVENT_ERRORS.get(status),
-                finished_at=datetime.datetime.now(datetime.UTC),
+                finished_at=finished_at,
+                response_text=response_text if with_response else None,
+                response_truncated=response_truncated if with_response else False,
+                response_sha256=response_sha256 if with_response else None,
             )
+
+        try:
+            try:
+                event = build(True)
+            except Exception:
+                # Losing the response evidence is acceptable; losing the terminal record of a real
+                # provider call is not. If the event is invalid for any other reason, the retry
+                # raises identically and the outer handler still reports it.
+                event = build(False)
             recorded = self._lineage_recorder.finish_physical_attempt(
                 invocation,
                 event,
@@ -1187,6 +1214,40 @@ class OpenRouterTransport:
                 "physical provider terminal recorder changed observed facts",
                 physical_attempts=invocation.physical_sequence,
             )
+
+    def _capture_response_evidence(
+        self,
+        response: httpx.Response,
+        credential: Secret,
+    ) -> None:
+        """Keep the provider's own bytes for this physical call, redacted and bounded.
+
+        Best-effort by construction. Evidence is a byproduct of the call, never a precondition of
+        it, so every failure mode here degrades to "no response recorded" — an honest ``NULL`` —
+        and none of them can propagate into the caller's result.
+        """
+
+        try:
+            body = response.text
+            if not isinstance(body, str):
+                return
+            # The bearer value this exact call sent is passed as a literal redaction so an
+            # upstream that echoes the Authorization header back cannot durably store our
+            # credential, on top of the shared pattern-based screening.
+            self._observed_response.evidence = capture_response_evidence(
+                _sanitize_text(body, (credential.reveal(),))
+            )
+        except Exception:
+            self._observed_response.evidence = None
+
+    def _take_response_evidence(self) -> tuple[str | None, bool, str | None]:
+        """Consume the evidence for the physical call being terminalized, exactly once."""
+
+        evidence = getattr(self._observed_response, "evidence", None)
+        self._observed_response.evidence = None
+        if not isinstance(evidence, tuple) or len(evidence) != 3:
+            return None, False, None
+        return evidence
 
     def _pace(self, configuration: HostedRoleConfiguration) -> None:
         rate = min(
@@ -1219,6 +1280,10 @@ class OpenRouterTransport:
         reservation: _Reservation,
         physical_attempts: int,
     ) -> OpenRouterResult:
+        # Nothing has been observed for THIS physical attempt yet. Clearing first is what makes a
+        # timeout or transport failure record no response at all instead of the previous
+        # attempt's.
+        self._observed_response.evidence = None
         # The authorization ledger reserves headroom for provider-reported Qwen usage that can
         # exceed its requested thinking budget. The request itself remains a bounded one-choice
         # case selection and does not need the entire accounting envelope.
@@ -1276,6 +1341,10 @@ class OpenRouterTransport:
             },
             timeout=timeout_seconds,
         )
+        # Captured here, before any validation can reject the payload: the response that failed
+        # schema validation is exactly the one an operator needs to read, and it is the only
+        # moment those bytes exist.
+        self._capture_response_evidence(response, credential)
         if response.status_code in _RETRYABLE_STATUS:
             raise _RetryableResponse(self._retry_after(response))
         if response.status_code < 200 or response.status_code >= 300:

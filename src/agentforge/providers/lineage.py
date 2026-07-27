@@ -34,6 +34,10 @@ _COST_STATES: Final = frozenset({"measured", "partial", "not_observed", "invalid
 _COST_QUANTUM: Final = Decimal("0.000000000001")
 _MAX_COST: Final = Decimal("99999999.999999999999")
 _MAX_INTEGER: Final = 2_147_483_647
+# Mirrors the ``provider_event_response_bounded`` check added in migration 0028. Provider response
+# bytes are untrusted input recorded on the physical hot path, so the ceiling lives in the contract
+# as well as the schema and a violation is refused here rather than at the INSERT.
+MAX_PROVIDER_RESPONSE_BYTES: Final = 65_536
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _SAFE_IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ._:/@+-]*$")
 _SENSITIVE = re.compile(
@@ -141,6 +145,31 @@ def normalize_provider_observation(
             ),
             False,
         )
+
+
+def capture_response_evidence(value: object) -> tuple[str | None, bool, str | None]:
+    """Bound and digest one observed provider response body for durable evidence.
+
+    Returns ``(response_text, response_truncated, response_sha256)`` ready for
+    :class:`ProviderTerminalEventV1`. The digest always covers the bytes that are actually kept:
+    over-long text is cut to :data:`MAX_PROVIDER_RESPONSE_BYTES` *before* hashing, and the cut is
+    made on a UTF-8 boundary so the stored text re-encodes to exactly the digested bytes.
+
+    Anything that is not text — including absence — yields ``(None, False, None)``. This function
+    never raises: a caller on the provider hot path must be able to give up on evidence without
+    giving up on the call.
+    """
+
+    if not isinstance(value, str):
+        return None, False, None
+    encoded = value.encode("utf-8")
+    truncated = len(encoded) > MAX_PROVIDER_RESPONSE_BYTES
+    if truncated:
+        # ``errors="ignore"`` drops the partial code point the byte cut may have split, so the
+        # kept text is valid UTF-8 and encodes to at most the bound.
+        value = encoded[:MAX_PROVIDER_RESPONSE_BYTES].decode("utf-8", "ignore")
+        encoded = value.encode("utf-8")
+    return value, truncated, hashlib.sha256(encoded).hexdigest()
 
 
 def _sha(value: object, *, field_name: str) -> str:
@@ -275,7 +304,14 @@ class ProviderInvocationContextV1:
 
 @dataclass(frozen=True, slots=True)
 class ProviderTerminalEventV1:
-    """Validated terminal facts for one already-committed physical invocation."""
+    """Validated terminal facts for one already-committed physical invocation.
+
+    The optional response fields carry the exact bytes the provider returned for THIS physical
+    call, already credential-redacted and bounded by the producer. They default to absent so that
+    a caller with nothing to record — a timeout, a transport failure, a crash-recovered row —
+    states that fact rather than inventing a body. Use :func:`capture_response_evidence` to
+    produce them; constructing them by hand is validated, not trusted.
+    """
 
     invocation_id: str
     physical_sequence: int
@@ -291,6 +327,9 @@ class ProviderTerminalEventV1:
     error_code: str | None
     finished_at: datetime.datetime
     event_id: str = field(default_factory=_new_event_id)
+    response_text: str | None = None
+    response_truncated: bool = False
+    response_sha256: str | None = None
 
     def __post_init__(self) -> None:
         _sha(self.invocation_id, field_name="invocation_id")
@@ -351,7 +390,32 @@ class ProviderTerminalEventV1:
             or self.cost_measurement_state != "measured"
         ):
             raise ValueError("successful provider event requires complete measured observations")
+        self._validate_response_evidence()
         _aware(self.finished_at, field_name="finished_at")
+
+    def _validate_response_evidence(self) -> None:
+        """Refuse any response evidence the row could not honestly stand behind.
+
+        Deliberately strict rather than self-correcting: silently truncating or re-digesting a
+        caller's text would make the event disagree with what the caller believes it recorded.
+        Producers call :func:`capture_response_evidence` first, which cannot fail these checks.
+        """
+
+        if not isinstance(self.response_truncated, bool):
+            raise ValueError("response_truncated must be a boolean")
+        if self.response_text is None:
+            if self.response_sha256 is not None:
+                raise ValueError("an unobserved response cannot carry a digest")
+            if self.response_truncated:
+                raise ValueError("an unobserved response cannot be truncated")
+            return
+        if not isinstance(self.response_text, str):
+            raise ValueError("response_text must be text or absent")
+        encoded = self.response_text.encode("utf-8")
+        if len(encoded) > MAX_PROVIDER_RESPONSE_BYTES:
+            raise ValueError("response_text exceeds the evidence bound; truncate before hashing")
+        if self.response_sha256 != hashlib.sha256(encoded).hexdigest():
+            raise ValueError("response_sha256 must digest the exact recorded response text")
 
 
 class ProviderLineageRecorder(Protocol):
@@ -371,6 +435,8 @@ class ProviderLineageRecorder(Protocol):
 
 
 __all__ = [
+    "MAX_PROVIDER_RESPONSE_BYTES",
+    "capture_response_evidence",
     "normalize_provider_observation",
     "ProviderInvocationContextV1",
     "ProviderLineageRecorder",

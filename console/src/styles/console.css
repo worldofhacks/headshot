@@ -129,6 +129,14 @@
 .record-table tr:last-child td { border-bottom: 0; }
 .record-table tr.selectable { cursor: pointer; }
 .record-table tr.selectable:hover { background: var(--hover); }
+.provider-call-ledger { display: flex; flex-direction: column; gap: 12px; }
+.provider-call-table td { height: auto; padding-block: 9px; vertical-align: top; }
+.provider-call-table strong { font-weight: 600; }
+.provider-call-table tr.provider-call-evidence-row > td.provider-call-evidence { max-width: none; padding-top: 0; padding-bottom: 12px; overflow: visible; white-space: normal; }
+.provider-call-evidence .event-record { max-width: 100%; }
+.provider-call-evidence-note { margin: 0; padding-top: 0; border-top: 0; }
+.table-subline { display: block; margin-top: 4px; color: var(--tx3); font-size: var(--fs-2xs); font-weight: 450; line-height: 1.35; }
+.failure-text { color: var(--v-conf); }
 
 .detail-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1px; margin: 0; border: 1px solid var(--sep); border-radius: var(--r-sm); overflow: hidden; background: var(--sep); }
 .detail-grid > div { min-width: 0; padding: 11px 12px; background: var(--bg-inset); }

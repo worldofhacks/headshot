@@ -1,11 +1,16 @@
 import { useState } from "react";
 
 import type { ApiClient } from "../api/client";
-import type { ResourceResult } from "../api/contracts";
+import type { Principal, ResourceResult } from "../api/contracts";
 import { RESOURCE_PATHS } from "../api/paths";
-import { decodeCosts, decodeTraces } from "../api/read-models";
+import {
+  decodeCosts,
+  decodeProviderCalls,
+  decodeTraces,
+} from "../api/read-models";
 import { AdversarialText } from "../components/AdversarialText";
 import { ExpandableEvidence } from "../components/ExpandableEvidence";
+import { ProviderCallLedger } from "../components/ProviderCallLedger";
 import {
   count,
   DistributionBars,
@@ -29,6 +34,7 @@ import {
 import type {
   AgentBudgetReadModel,
   CostReadModel,
+  ProviderCallReadModel,
   TraceReadModel,
 } from "../types";
 
@@ -1100,9 +1106,14 @@ function CostDashboard({
 export function TracesScreen({
   client,
   campaignId,
+  principal,
 }: {
   client: ApiClient;
   campaignId?: string;
+  // Optional so a caller that renders traces without an organization principal still works; the
+  // per-call evidence disclosure then reports itself unavailable rather than issuing a read it
+  // cannot authorize.
+  principal?: Principal;
 }) {
   const traces = useResource<TraceReadModel[]>(
     client,
@@ -1112,12 +1123,34 @@ export function TracesScreen({
     decodeTraces,
     { pollIntervalMs: LIVE_RESOURCE_POLL_INTERVAL_MS },
   );
+  const providerCalls = useResource<ProviderCallReadModel[]>(
+    client,
+    campaignId
+      ? RESOURCE_PATHS.campaignProviderCalls(campaignId)
+      : RESOURCE_PATHS.providerCalls,
+    decodeProviderCalls,
+    { pollIntervalMs: LIVE_RESOURCE_POLL_INTERVAL_MS },
+  );
   return (
     <div className="screen-stack">
-      <ScreenHeading title="Traces" detail="Campaign-scoped failures, agent executions and physical target requests, ordered for incident response and correlated to the durable ledger and Langfuse delivery evidence." eyebrow="HEADSHOT OBSERVABILITY" />
+      <ScreenHeading title="Traces" detail="Campaign-scoped failures, logical agent executions, physical OpenRouter calls and target requests, correlated to the durable ledger and Langfuse projection." eyebrow="HEADSHOT OBSERVABILITY" />
       <ResourceView result={traces.result} emptyLabel="No request or agent telemetry has been recorded yet.">
         {(data) => <TraceDashboard traces={data} campaignId={campaignId} />}
       </ResourceView>
+      <Panel
+        title="OpenRouter physical calls"
+        meta="one row per provider invocation"
+        eyebrow="PER-CALL OBSERVABILITY"
+      >
+        <ResourceView
+          result={providerCalls.result}
+          emptyLabel="No OpenRouter physical calls have been recorded yet."
+        >
+          {(data) => (
+            <ProviderCallLedger calls={data} client={client} principal={principal} />
+          )}
+        </ResourceView>
+      </Panel>
     </div>
   );
 }
@@ -1125,9 +1158,11 @@ export function TracesScreen({
 export function CostsScreen({
   client,
   campaignId,
+  principal,
 }: {
   client: ApiClient;
   campaignId?: string;
+  principal?: Principal;
 }) {
   const costs = useResource<CostReadModel[]>(
     client,
@@ -1143,6 +1178,14 @@ export function CostsScreen({
       ? RESOURCE_PATHS.campaignTraces(campaignId)
       : RESOURCE_PATHS.traces,
     decodeTraces,
+    { pollIntervalMs: LIVE_RESOURCE_POLL_INTERVAL_MS },
+  );
+  const providerCalls = useResource<ProviderCallReadModel[]>(
+    client,
+    campaignId
+      ? RESOURCE_PATHS.campaignProviderCalls(campaignId)
+      : RESOURCE_PATHS.providerCalls,
+    decodeProviderCalls,
     { pollIntervalMs: LIVE_RESOURCE_POLL_INTERVAL_MS },
   );
   return (
@@ -1162,6 +1205,20 @@ export function CostsScreen({
           />
         )}
       </ResourceView>
+      <Panel
+        title="Per-call OpenRouter cost ledger"
+        meta="provider-measured · no token estimates"
+        eyebrow="PHYSICAL COST EVIDENCE"
+      >
+        <ResourceView
+          result={providerCalls.result}
+          emptyLabel="No OpenRouter provider-call costs have been recorded yet."
+        >
+          {(data) => (
+            <ProviderCallLedger calls={data} client={client} principal={principal} />
+          )}
+        </ResourceView>
+      </Panel>
     </div>
   );
 }
