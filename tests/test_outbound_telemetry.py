@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import pytest
 from sqlalchemy import Engine, text
 
@@ -10,7 +11,11 @@ from agentforge.secrets import Secret
 from agentforge.target.base import TargetRequest
 from agentforge.target.openemr_adapter import OpenEmrAdapter
 from agentforge.telemetry import OutboundHttpTelemetry
-from agentforge.telemetry.outbound import _LangfuseBridge, _sanitize_text
+from agentforge.telemetry.outbound import (
+    _LangfuseBridge,
+    _observation_metadata,
+    _sanitize_text,
+)
 
 
 class _Response:
@@ -67,6 +72,80 @@ class _Langfuse:
 
     def shutdown(self) -> None:
         return None
+
+
+class _LangfuseObservation:
+    def __init__(self, metadata: dict[str, str], *, observation_id: str = "0001") -> None:
+        self.id = observation_id
+        self.end_time = "2026-01-01T00:00:00Z"
+        self.metadata = metadata
+
+
+class _LangfuseObservationsResponse:
+    def __init__(self, data: list[dict[str, str]]) -> None:
+        self.data = data
+        self.meta = {}
+
+
+class _LangfuseObservationClient:
+    def __init__(self, observations_by_trace: dict[str, list[_LangfuseObservation]]) -> None:
+        self.observations_by_trace = observations_by_trace
+
+    class _ObservationEndpoint:
+        def __init__(self, observations_by_trace: dict[str, list[_LangfuseObservation]]):
+            self._observations_by_trace = observations_by_trace
+
+        def get_many(self, **kwargs: object) -> _LangfuseObservationsResponse:
+            trace_id = str(kwargs.get("trace_id"))
+            return _LangfuseObservationsResponse(self._observations_by_trace.get(trace_id, []))
+
+    @property
+    def observations(self) -> "_LangfuseObservationClient._ObservationEndpoint":
+        return self._ObservationEndpoint(self.observations_by_trace)
+
+
+class _LangfuseOnlyGetClient:
+    def __init__(self, observations_by_trace: dict[str, list[_LangfuseObservation]]) -> None:
+        self.observations_by_trace = observations_by_trace
+        self.endpoint = self._ObservationEndpoint(observations_by_trace)
+
+    class _ObservationEndpoint:
+        def __init__(self, observations_by_trace: dict[str, list[_LangfuseObservation]]) -> None:
+            self._observations_by_trace = observations_by_trace
+            self.call_log: list[dict[str, object]] = []
+
+        def get(self, **kwargs: object) -> object:
+            self.call_log.append(kwargs)
+            trace_id = str(kwargs.get("trace_id"))
+            cursor = kwargs.get("cursor")
+            page_one = (
+                self._observations_by_trace.get(trace_id, [])[0:1]
+                if cursor is None
+                else self._observations_by_trace.get(trace_id, [])[1:2]
+            )
+            page_index = 0 if cursor is None else 1
+            return {
+                "data": page_one,
+                "meta": {"page": {"cursor": f"cursor-{page_index + 1}"}}
+                if page_index == 0
+                else {},
+            }
+
+    @property
+    def observations(self) -> "_LangfuseOnlyGetClient._ObservationEndpoint":
+        return self.endpoint
+
+
+class _LangfuseWithLegacyQuery(_Langfuse):
+    def __init__(self, observations_by_trace: dict[str, list[_LangfuseObservation]]) -> None:
+        super().__init__()
+        self.client = _LangfuseOnlyGetClient(observations_by_trace)
+
+
+class _LangfuseWithQuery(_Langfuse):
+    def __init__(self, observations_by_trace: dict[str, list[_LangfuseObservation]]) -> None:
+        super().__init__()
+        self.client = _LangfuseObservationClient(observations_by_trace)
 
 
 class _DisabledLangfuse(_Langfuse):
@@ -306,6 +385,105 @@ def test_many_requests_share_one_campaign_trace_and_reconcile_individually(
     assert all(row["langfuse_status"] == "queued" for row in rows)
     assert len(langfuse.started) == 2
     assert {item["trace_id"] for item in langfuse.started} == {rows[0]["trace_id"]}
+
+
+def test_queued_rows_are_marked_exported_once_langfuse_query_back_confirms(
+    migrated_db: Engine,
+) -> None:
+    organization_id, run_id = _seed_campaign(migrated_db, suffix="query-back-mark")
+    telemetry = OutboundHttpTelemetry(migrated_db, environment="staging")
+    langfuse = _Langfuse()
+    telemetry.langfuse = langfuse  # type: ignore[assignment]
+    adapter = OpenEmrAdapter(
+        base_url="https://target.example.test",
+        relative_path="chat",
+        payload_profile="copilot_chat",
+        credential=Secret("bounded-test-session"),
+        client=_Client(_Response('{"answer":"bounded response"}')),
+        telemetry=telemetry,
+    )
+    adapter.send(
+        TargetRequest(
+            turns=("reviewed adversarial prompt",),
+            metadata={
+                "organization_id": organization_id,
+                "campaign_run_id": run_id,
+                "attempt_id": "attempt-query-back-mark",
+            },
+        )
+    )
+
+    with migrated_db.connect() as connection:
+        row = (
+            connection.execute(
+                text(
+                    "SELECT request_id, trace_id, langfuse_status FROM outbound_http_requests "
+                    "WHERE campaign_run_id = :run_id"
+                ),
+                {"run_id": run_id},
+            )
+            .mappings()
+            .one()
+        )
+    request_id = str(row["request_id"])
+    trace_id = str(row["trace_id"])
+
+    telemetry.langfuse = _LangfuseWithQuery(
+        {
+            trace_id: [
+                _LangfuseObservation(
+                    {
+                        "request_id": request_id,
+                        "campaign_run_id": run_id,
+                        "organization_id": organization_id,
+                    }
+                )
+            ]
+        }
+    )
+
+    telemetry.flush()
+
+    with migrated_db.connect() as connection:
+        replayed = connection.execute(
+            text(
+                "SELECT langfuse_status, langfuse_verified_at FROM outbound_http_requests "
+                "WHERE request_id = :request_id"
+            ),
+            {"request_id": request_id},
+        ).mappings().one()
+    assert replayed["langfuse_status"] == "exported"
+    assert replayed["langfuse_verified_at"] is not None
+
+
+def test_query_observations_reconciles_with_legacy_langfuse_payload_shape(migrated_db: Engine) -> None:
+    telemetry = OutboundHttpTelemetry(migrated_db, environment="staging")
+    request_id = "request-legacy-0001"
+    trace_id = "legacy-trace-id"
+    observations = [
+        _LangfuseObservation(
+            {"request_id": request_id, "attempt_id": "attempt-legacy-0001"},
+            observation_id="legacy-obs-1",
+        ),
+        _LangfuseObservation(
+            {"request_id": "request-legacy-0002", "attempt_id": "attempt-legacy-0002"},
+            observation_id="legacy-obs-2",
+        ),
+    ]
+    for observation in observations:
+        observation.metadata = json.dumps(
+            {
+                "request_id": str(observation.metadata["request_id"]),
+                "attempt_id": "x",
+            }
+        )
+
+    telemetry.langfuse = _LangfuseWithLegacyQuery({trace_id: observations})
+
+    rows = telemetry._query_observations(trace_id)
+    assert len(rows) == 2
+    rows_meta = {_observation_metadata(row)["request_id"] for row in rows}
+    assert rows_meta == {request_id, "request-legacy-0002"}
 
 
 def test_target_observation_is_a_native_child_of_bound_red_team(

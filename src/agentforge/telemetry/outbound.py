@@ -41,6 +41,7 @@ _AUTHORIZATION_SECRET = re.compile(
 )
 _COOKIE_SECRET = re.compile(r"(?i)\b(?:cookie|set-cookie)\s*:\s*[^\r\n]*")
 _URL_USERINFO_SECRET = re.compile(r"(?i)https?://[^\s/@:]+:[^\s/@]+@")
+_OBSERVATION_FIELDS = "core,basic,io,metadata"
 _STATUS_VALUES = {
     "operational and evidenced",
     "adapter integrated, execution deferred",
@@ -134,6 +135,27 @@ def _sanitize(value: Any, redactions: tuple[str, ...]) -> Any:
     if value is None or isinstance(value, (bool, int, float)):
         return value
     return _sanitize_text(str(value), redactions)
+
+
+def _observation_field(value: Any, *names: str) -> Any:
+    """Read a field from either an API object or a mapping."""
+
+    for name in names:
+        if isinstance(value, dict):
+            if name in value:
+                return value[name]
+        if hasattr(value, name):
+            return getattr(value, name)
+    return None
+
+
+def _observation_metadata(observation: Any) -> dict[str, Any]:
+    metadata = _observation_field(observation, "metadata")
+    if isinstance(metadata, str):
+        with contextlib.suppress(json.JSONDecodeError, TypeError, ValueError):
+            parsed = json.loads(metadata)
+            metadata = parsed
+    return dict(metadata) if isinstance(metadata, dict) else {}
 
 
 class _LangfuseBridge:
@@ -580,6 +602,7 @@ class OutboundHttpTelemetry:
         self._agent_attempt_ids: dict[str, str | None] = {}
         self._agent_roles: dict[str, str] = {}
         self._last_connection_check = 0.0
+        self._last_langfuse_queryback = 0.0
 
     def begin(
         self,
@@ -1090,6 +1113,166 @@ class OutboundHttpTelemetry:
                 continue
             self._complete_agent_finish(handle=handle, pending=pending)
 
+    def _langfuse_observation_query_api(self) -> Any | None:
+        """Return the Langfuse API method for paged observation lookup if available."""
+
+        if not self.langfuse.configured():
+            return None
+
+        client = getattr(self.langfuse, "client", None)
+        if client is None:
+            getter = getattr(self.langfuse, "_client", None)
+            if not callable(getter):
+                return None
+            try:
+                client = getter()
+            except Exception:
+                return None
+        api = getattr(client, "api", None)
+        observations = getattr(api, "observations", None)
+        for candidate_name in ("get_many", "get"):
+            get_api = getattr(observations, candidate_name, None)
+            if callable(get_api):
+                return get_api
+        list_api = getattr(observations, "list", None)
+        return list_api if callable(list_api) else None
+
+    def _query_observations(self, trace_id: str) -> list[Any]:
+        query = self._langfuse_observation_query_api()
+        if query is None:
+            return []
+
+        observations: list[Any] = []
+        cursor = None
+        seen: set[str] = set()
+        for _page in range(100):
+            parameters: dict[str, Any] = {
+                "trace_id": trace_id,
+                "limit": 1000,
+                "fields": _OBSERVATION_FIELDS,
+            }
+            if cursor is not None:
+                parameters["cursor"] = cursor
+            response = query(**parameters)
+            data = _observation_field(response, "data")
+            if not isinstance(data, (list, tuple)):
+                raise RuntimeError("Langfuse observation payload missing data")
+            observations.extend(data)
+            meta = _observation_field(response, "meta")
+            next_cursor = _observation_field(meta, "cursor", "next", "after")
+            if next_cursor is None:
+                page = _observation_field(meta, "page")
+                if isinstance(page, dict):
+                    next_cursor = page.get("cursor")
+            if next_cursor is None:
+                return observations
+            if not isinstance(next_cursor, str) or not next_cursor:
+                raise RuntimeError("Langfuse observation pagination returned invalid cursor")
+            if next_cursor in seen:
+                raise RuntimeError("Langfuse observation pagination repeated a cursor")
+            seen.add(next_cursor)
+            cursor = next_cursor
+        raise RuntimeError("Langfuse observation pagination exceeded guard")
+
+    def _reconcile_langfuse_queue(self) -> None:
+        """Resolve queued rows to exported once they are query-visible in Langfuse."""
+
+        now = self.monotonic()
+        if now - self._last_langfuse_queryback < 5.0:
+            return
+        self._last_langfuse_queryback = now
+
+        query = self._langfuse_observation_query_api()
+        if query is None:
+            return
+
+        with self.engine.connect() as connection:
+            request_rows = connection.execute(
+                text(
+                    "SELECT request_id, trace_id "
+                    "FROM outbound_http_requests "
+                    "WHERE langfuse_status = 'queued' AND finished_at IS NOT NULL"
+                )
+            ).mappings().all()
+            agent_rows = connection.execute(
+                text(
+                    "SELECT execution_id, trace_id "
+                    "FROM agent_executions "
+                    "WHERE langfuse_status = 'queued' AND status <> 'running' "
+                    "AND finished_at IS NOT NULL"
+                )
+            ).mappings().all()
+
+        if not request_rows and not agent_rows:
+            return
+
+        request_ids: set[str] = {str(row["request_id"]) for row in request_rows}
+        agent_execution_ids: set[str] = {str(row["execution_id"]) for row in agent_rows}
+        trace_ids: set[str] = {
+            str(row["trace_id"]) for row in request_rows if row["trace_id"] is not None
+        } | {str(row["trace_id"]) for row in agent_rows if row["trace_id"] is not None}
+
+        observed_request_ids: set[str] = set()
+        observed_agent_ids: set[str] = set()
+        for trace_id in trace_ids:
+            try:
+                for observation in self._query_observations(trace_id):
+                    metadata = _observation_metadata(observation)
+                    if _observation_field(observation, "end_time", "endTime") is None:
+                        continue
+                    request_id = _observation_field(metadata, "request_id")
+                    if isinstance(request_id, str) and request_id in request_ids:
+                        observed_request_ids.add(request_id)
+                    agent_execution_id = _observation_field(metadata, "agent.execution_id")
+                    if isinstance(agent_execution_id, str) and agent_execution_id in agent_execution_ids:
+                        observed_agent_ids.add(agent_execution_id)
+            except Exception as exc:
+                _logger.warning(
+                    "Langfuse query-back failed for trace %s",
+                    trace_id,
+                )
+                _logger.debug("Langfuse query-back trace error: %s", exc, exc_info=True)
+
+        if not observed_request_ids and not observed_agent_ids:
+            return
+
+        try:
+            with self.engine.begin() as connection:
+                if observed_request_ids:
+                    connection.execute(
+                        text(
+                            "UPDATE outbound_http_requests SET langfuse_status = 'exported', "
+                            "langfuse_verified_at = COALESCE(langfuse_verified_at, clock_timestamp()) "
+                            "WHERE request_id = ANY(:request_ids) "
+                            "AND langfuse_status = 'queued'"
+                        ),
+                        {"request_ids": list(observed_request_ids)},
+                    )
+                if observed_agent_ids:
+                    connection.execute(
+                        text(
+                            "UPDATE agent_executions SET langfuse_status = 'exported', "
+                            "langfuse_verified_at = COALESCE(langfuse_verified_at, clock_timestamp()) "
+                            "WHERE execution_id = ANY(:execution_ids) "
+                            "AND langfuse_status = 'queued'"
+                        ),
+                        {"execution_ids": list(observed_agent_ids)},
+                    )
+        except Exception:
+            _logger.warning("Langfuse exported-state persistence failed during reconcile")
+            return
+
+        if observed_request_ids:
+            _logger.debug(
+                "Langfuse query-back reconciled %d target requests to exported",
+                len(observed_request_ids),
+            )
+        if observed_agent_ids:
+            _logger.debug(
+                "Langfuse query-back reconciled %d agent executions to exported",
+                len(observed_agent_ids),
+            )
+
     def release_campaign(self, campaign_run_id: str) -> None:
         """Release terminal parent-observation IDs after a campaign checkpoint is flushed."""
 
@@ -1105,43 +1288,44 @@ class OutboundHttpTelemetry:
         self._drain_pending_agent_finishes()
         request_ids = tuple(self._queued_request_ids)
         agent_execution_ids = tuple(self._queued_agent_execution_ids)
-        if not request_ids and not agent_execution_ids:
-            return
-        try:
-            self.langfuse.flush()
-        except Exception:
-            _logger.warning("Langfuse flush failed")
+        if request_ids or agent_execution_ids:
             try:
-                with self.engine.begin() as connection:
-                    if request_ids:
-                        connection.execute(
-                            text(
-                                "UPDATE outbound_http_requests SET langfuse_status = 'error' "
-                                "WHERE request_id = ANY(:request_ids) "
-                                "AND langfuse_status = 'queued'"
-                            ),
-                            {"request_ids": list(request_ids)},
-                        )
-                    if agent_execution_ids:
-                        connection.execute(
-                            text(
-                                "UPDATE agent_executions SET langfuse_status = 'error' "
-                                "WHERE execution_id = ANY(:execution_ids) "
-                                "AND langfuse_status = 'queued'"
-                            ),
-                            {"execution_ids": list(agent_execution_ids)},
-                        )
+                self.langfuse.flush()
             except Exception:
-                # Retain the identifiers until the durable failure state can be reconciled.
-                _logger.warning("Langfuse delivery failure persistence failed")
-                return
-        else:
-            # A non-raising SDK flush is only a local checkpoint. Langfuse/OTel can report
-            # exporter failures without raising here, so durable rows remain queued until the
-            # exact remote observations are queried back and recorded by the verifier.
-            _logger.debug("Langfuse flush completed; remote query-back verification is pending")
-        self._queued_request_ids.difference_update(request_ids)
-        self._queued_agent_execution_ids.difference_update(agent_execution_ids)
+                _logger.warning("Langfuse flush failed")
+                try:
+                    with self.engine.begin() as connection:
+                        if request_ids:
+                            connection.execute(
+                                text(
+                                    "UPDATE outbound_http_requests SET langfuse_status = 'error' "
+                                    "WHERE request_id = ANY(:request_ids) "
+                                    "AND langfuse_status = 'queued'"
+                                ),
+                                {"request_ids": list(request_ids)},
+                            )
+                        if agent_execution_ids:
+                            connection.execute(
+                                text(
+                                    "UPDATE agent_executions SET langfuse_status = 'error' "
+                                    "WHERE execution_id = ANY(:execution_ids) "
+                                    "AND langfuse_status = 'queued'"
+                                ),
+                                {"execution_ids": list(agent_execution_ids)},
+                            )
+                except Exception:
+                    # Retain the identifiers until the durable failure state can be reconciled.
+                    _logger.warning("Langfuse delivery failure persistence failed")
+                    return
+            else:
+                # A non-raising SDK flush is only a local checkpoint. Langfuse/OTel can report
+                # exporter failures without raising here, so durable rows remain queued until the
+                # exact remote observations are queried back and recorded by the verifier.
+                _logger.debug("Langfuse flush completed; remote query-back verification is pending")
+            self._queued_request_ids.difference_update(request_ids)
+            self._queued_agent_execution_ids.difference_update(agent_execution_ids)
+
+        self._reconcile_langfuse_queue()
 
     def heartbeat(self, *, force_connection_check: bool = False) -> None:
         now = self.monotonic()
