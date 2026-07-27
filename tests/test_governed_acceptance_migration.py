@@ -258,7 +258,8 @@ def _constraint_def(engine: Engine, name: str) -> str:
 
 def test_governed_migration_chain_has_one_prompt_snapshot_head() -> None:
     script = ScriptDirectory.from_config(_db.alembic_config(_db.admin_url()))
-    assert script.get_heads() == ["0028"]
+    assert script.get_heads() == ["0029"]
+    assert script.get_revision("0029").down_revision == "0028"
     assert script.get_revision("0028").down_revision == "0027"
     assert script.get_revision("0027").down_revision == "0026"
     assert script.get_revision("0026").down_revision == "0025"

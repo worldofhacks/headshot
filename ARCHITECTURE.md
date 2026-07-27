@@ -102,7 +102,8 @@ Only Web runs `alembic upgrade head` as a Railway pre-deploy command. Runner and
 unless the database is at the exact packaged head — the head compiled into the artifact being
 run, which is not necessarily the newest head in the repository. The canonical migration chain is
 `0025` reviewed workload provenance → `0026` campaign outcome breakdown → `0027` immutable prompt
-snapshots → `0028` physical provider response evidence. Candidate, packaged, and deployed heads are
+snapshots → `0028` physical provider response evidence → `0029` verdict evaluator rationale.
+Candidate, packaged, and deployed heads are
 distinct facts; the exact deployed state lives in `docs/CURRENT_STATE.md`.
 
 Staging currently has one policy-aligned service set. Production is reachable but release-skewed and
@@ -239,7 +240,12 @@ ordered provider messages, hashes, and bounded redaction metadata. Migration `00
 pair by recording the *received* side: expand-only, bounded (65,536-byte) `response_text`,
 `response_truncated`, and `response_sha256` columns on `provider_call_events`, written by the same
 append-only INSERT that settles the physical call. Absence is represented as `NULL`, never as an
-invented body, and the digest always covers exactly the bytes retained after truncation.
+invented body, and the digest always covers exactly the bytes retained after truncation. Migration
+`0029` extends the same principle to the adjudication: nullable `rationale` and `criteria_hits`
+columns on `verdict`, so the evaluator's own argument travels with the decision it produced instead
+of decaying to a typed reason code. A CHECK constraint confines a rationale to
+`confirmation_source = 'calibrated_model'`, so a deterministic oracle, canary or human confirmation
+can never carry model prose that would read as the reason it was confirmed.
 
 ## 7. Human identity and authorization
 
@@ -369,8 +375,9 @@ process; provider concurrency is one in the current configuration. Command mutat
 keys.
 
 Alembic applies an expand/contract history and rejects schema skew. The current sole repository
-head is `0028`: `0026` preserves the reviewed campaign-resilience outcome migration, `0027`
-adds immutable prompt snapshots, and `0028` adds bounded append-only provider response evidence.
+head is `0029`: `0026` preserves the reviewed campaign-resilience outcome migration, `0027`
+adds immutable prompt snapshots, `0028` adds bounded append-only provider response evidence, and
+`0029` records the evaluator rationale on the verdict it produced.
 Runner and Scheduler do not migrate.
 
 ## 12. Observability and Langfuse

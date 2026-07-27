@@ -30,8 +30,8 @@ Staging:
 - Web, Runner, and Scheduler are successful and share generation-policy digest `b83acb23…`;
 - their packaged `hosted_policy.py` SHA-256 is identical;
 - PostgreSQL must be verified by revision and schema shape: canonical `0026` adds campaign
-  outcomes, `0027` adds immutable prompt snapshots, and `0028` adds bounded provider response
-  evidence columns on `provider_call_events`;
+  outcomes, `0027` adds immutable prompt snapshots, `0028` adds bounded provider response
+  evidence columns on `provider_call_events`, and `0029` adds the evaluator rationale to `verdict`;
 - `/health` and `/ready` return 200; and
 - unauthenticated `/api/v1/principal` returns 401.
 
@@ -56,7 +56,8 @@ All services build `Dockerfile`. The runtime image contains:
 Only `railway/web.json` declares `alembic upgrade head`. Runner and Scheduler call an exact-head
 readiness check before consuming/enqueuing work. The canonical repository chain is `0025` reviewed
 workload provenance → `0026` campaign outcome breakdown → `0027` immutable prompt snapshots →
-`0028` physical provider response evidence. Never hard-code a revision into automation that should
+`0028` physical provider response evidence → `0029` verdict evaluator rationale. Never hard-code a
+revision into automation that should
 derive the packaged or deployed head.
 
 One release must be tested as an immutable artifact. Do not independently rebuild services from

@@ -7,7 +7,7 @@
 **Repository parity at the latest read-only check:** `origin/main == gitlab/main == d6136ff`
 (2026-07-27, immediately before this candidate was pushed)
 
-**Packaged schema:** sole Alembic head `0028`; the verified staging database is at canonical `0026`
+**Packaged schema:** sole Alembic head `0029`; the verified staging database is at canonical `0026`
 before this candidate is deployed
 
 **Canonical requirements:** [`Week_3_AgentForge.pdf`](../Week_3_AgentForge.pdf)
@@ -46,7 +46,7 @@ occurred.
 | Web | `SUCCESS` | deployment `74d39043-7ef8-410e-963d-e7aee107ec13` |
 | Runner | `SUCCESS` | deployment `0a6a2303-4bc2-4c20-b156-12ed34e545df` |
 | Scheduler | `SUCCESS` | deployment `6689fdf2-a92e-4af1-808b-6d8068f05ef2` |
-| PostgreSQL | ready | repository candidate head `0028`; deployed staging at canonical `0026` |
+| PostgreSQL | ready | repository candidate head `0029`; deployed staging at canonical `0026` |
 | Public Web | healthy | `/health` 200, `/ready` 200, unauthenticated `/api/v1/principal` 401 |
 
 This table is the pre-candidate baseline: these deployment IDs predate the provider-call
@@ -100,7 +100,7 @@ credential-generation, synthetic-fixture, canary, cap, lease, and two-person aut
 | Deployment | One Docker artifact; Railway Web, Runner, Scheduler, PostgreSQL; Web-only public ingress |
 | CI/release | GitHub Actions and GitLab CI must both pass; release refs must be identical |
 
-The repository package is now at Alembic `0028`. Migration `0026` adds durable campaign outcome
+The repository package is now at Alembic `0029`. Migration `0026` adds durable campaign outcome
 counts; migration `0027` adds immutable,
 organization-scoped prompt snapshots for logical agent executions. Runner can insert/select those
 rows; Web can only select them. Append-only triggers prevent update/delete and enforce run,
@@ -116,6 +116,42 @@ Check constraints force the digest to cover exactly the stored text and force te
 appear and vanish together. The columns are populated by the same single INSERT that records the
 call's terminal facts, under the append-only trigger from `0018`; the revision adds no mutation
 path.
+
+Migration `0029` keeps the evaluator's own argument with the verdict it produced. The hosted
+evaluator's output schema *requires* a `rationale` (1–4,000 characters) and reports the
+`criteria_hits` it believes fired, and both were discarded in transit: the verdict builder copied
+the criteria and dropped the rationale, the verdict contract had no member for either, and the
+`verdict` table had no column for them. A served verdict therefore decayed to
+`reason_codes = ['calibrated_positive']` — a security claim at confidence 0.90 with no recorded
+justification, unqueryable and unauditable. `0029` adds nullable `rationale` (bounded at the
+evaluator's own 4,000-character limit) and `criteria_hits`, expand-only, nothing backfilled. Two
+CHECK constraints carry the weight: the bound, and
+`rationale IS NULL OR confirmation_source = 'calibrated_model'` — so model prose can never be
+attached to an oracle, canary or human confirmation and read as the reason it was confirmed.
+Verdicts written before `0029` report the rationale as unavailable rather than acquiring an
+invented one.
+
+## Campaign fault isolation
+
+A campaign aborts only for governance, security or integrity failures, or an unknown target
+outcome. Two case-local provider faults are isolated instead:
+
+- `HostedStructuredOutputInvalid` (and its `HostedStructuredOutputTruncated` subclass) — a
+  proposal or adjudication that will not parse.
+- `HostedProviderUnavailable` — every authorized physical attempt failed to reach the provider.
+  This type is raised at exactly one site, the exhaustion of the retry loop, whose cause can only
+  be a timeout, a transport error, or a retryable status: the three faults recorded as
+  *unobserved*. It is a narrow subclass rather than `HostedProviderError` itself because that base
+  also covers budget, settlement and accounting failures, which must still abort — and because the
+  error *code* cannot discriminate either, since `HostedSettlementFailed`, `_PhysicalCallError`
+  and `_StructuredOutputAbsent` all report the identical `hosted-provider-unavailable`.
+
+The two phases differ deliberately. In the proposal phase no target turn ran, so there is no
+evidence and the pre-bound attempt is abandoned un-attacked rather than handed a verdict it did not
+earn. In the dispatch phase the target was already attacked and its evidence exists, so the case
+receives a contract-valid `ERROR` verdict. Neither can open a finding or trigger the Documentation
+agent. A *sustained* outage still aborts: a campaign that attacked nothing may never be reported as
+a campaign that found nothing.
 
 ## Operations-console candidate
 

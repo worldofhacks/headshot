@@ -13,7 +13,8 @@ PostgreSQL is a fourth private managed service.
 - Web alone runs `alembic upgrade head`.
 - Runner and Scheduler refuse work until PostgreSQL is at the exact packaged head.
 - The canonical chain is `0025` reviewed workload provenance → `0026` campaign outcome breakdown →
-  `0027` immutable prompt snapshots → `0028` bounded provider response evidence. Candidate,
+  `0027` immutable prompt snapshots → `0028` bounded provider response evidence → `0029` the
+  evaluator rationale carried on the verdict it produced. Candidate,
   packaged, and deployed heads are three different facts and are not interchangeable.
 - Web, Runner, and Scheduler must expose the same hosted generation-policy digest and packaged policy
   file hash before new campaign authorization is minted.
