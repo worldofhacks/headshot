@@ -95,4 +95,25 @@ describe("agent trace identity", () => {
       within(servedModel!).getByText("anthropic/claude-opus-4.8-20260724"),
     ).toBeTruthy();
   });
+
+  it("does not fabricate zero for partially observed token counts", async () => {
+    const client = {
+      read: vi.fn(async () => ({
+        state: "ready" as const,
+        data: [{
+          ...agentTrace,
+          input_tokens: 100,
+          output_tokens: null,
+          reasoning_tokens: null,
+        }],
+      })),
+      command: vi.fn(),
+    } as unknown as ApiClient;
+
+    render(<TracesScreen client={client} />);
+
+    const tokens = (await screen.findByText("Input / output / reasoning tokens")).parentElement;
+    expect(tokens).not.toBeNull();
+    expect(within(tokens!).getByText("100 / Unavailable / Unavailable")).toBeTruthy();
+  });
 });

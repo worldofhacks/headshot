@@ -123,7 +123,10 @@ Current behavior:
 
 - HTTP 429/502/503, transport errors, and timeouts are retryable only if configuration authorizes a
   retry.
-- Structured-output validation failures are never retried.
+- The repository candidate also classifies a fully attributable, usage-settled structured-output
+  validation failure as retryable, but only inside existing role/global retry and usage authority.
+- The deployed staging release predates that candidate and its exact configuration authorizes zero
+  retries, so no live retry is currently authorized.
 - One exhausted agent exception fails the entire batch.
 - Queue failure is persisted `retryable = false`.
 - A fresh run restarts at case 1; there is no campaign resume.
@@ -140,8 +143,8 @@ deterministic exploit was confirmed in those cases.
 
 Follow `PLAN.md`. The intended reliability behavior is:
 
-- retry only genuinely schema-invalid provider output, only within explicit per-role/global retry,
-  call, token, cost, and rate authority;
+- deploy and accept the candidate that retries only genuinely schema-invalid provider output and only
+  within explicit per-role/global retry, call, token, cost, and rate authority;
 - keep settlement/model/route/budget/evidence failures non-retryable;
 - after exhausted case-local provider flakiness, persist a contract-valid `ERROR` verdict and
   continue;

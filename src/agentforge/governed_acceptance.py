@@ -46,7 +46,7 @@ from typing import Any, Protocol
 from sqlalchemy import Engine, text
 
 from agentforge.agents.documentation import DocumentationInput, HostedReportWriter
-from agentforge.agents.hosted import HostedConfigurationSet
+from agentforge.agents.hosted import HostedConfigurationSet, resolve_hosted_prompt
 from agentforge.agents.hosted_runtime import (
     HostedCallBounds,
     HostedCompositionError,
@@ -66,6 +66,8 @@ from agentforge.agents.orchestrator import HostedPlanner
 from agentforge.agents.red_team.hosted_generation import (
     RedTeamRoleIdentity,
     TracedHostedRedTeamProvider,
+    build_generation_messages,
+    generation_input_payload,
     require_red_team_subcap,
 )
 from agentforge.agents.red_team.seed_replay import seed_to_attempt
@@ -296,6 +298,10 @@ class _GovernedAcceptanceLifecycle:
         role: str,
         parent_execution_id: str | None,
         input_payload: Mapping[str, Any],
+        system_prompt_version: str | None = None,
+        system_prompt_sha256: str | None = None,
+        system_prompt_content: str | None = None,
+        provider_messages: tuple[Mapping[str, str], ...] | None = None,
         provider: str,
         model: str,
         upstream_provider: str,
@@ -316,6 +322,10 @@ class _GovernedAcceptanceLifecycle:
             run_id=self._run_id,
             agent_role=role,
             input_payload=input_payload,
+            system_prompt_version=system_prompt_version,
+            system_prompt_sha256=system_prompt_sha256,
+            system_prompt_content=system_prompt_content,
+            provider_messages=provider_messages,
             provider=provider,
             model=model,
             upstream_provider=upstream_provider,
@@ -934,17 +944,28 @@ def _run_traced_red_team(
         parent_execution_id=planner.execution_id,
         parent_request_id=planner.provider_request_id,
     )
+    red_team_seed = dict(authorized_attempt)
+    red_team_input = generation_input_payload(
+        red_team_seed,
+        1,
+        reviewed.category,
+    )
+    red_team_messages = build_generation_messages(
+        red_team_seed,
+        1,
+        reviewed.category,
+        prompt_version=role.prompt_version,
+        prompt_sha256=role.prompt_sha256,
+    )
+    red_team_prompt = resolve_hosted_prompt("red_team", role.prompt_sha256)
     execution_id = lifecycle.start(
         role="red_team",
         parent_execution_id=planner.execution_id,
-        input_payload={
-            "seed_case_ref": reviewed.case_id,
-            "category": reviewed.category,
-            "reviewed_case_content_hash": reviewed.content_hash,
-            "generated_output_disposition": "generated_not_dispatched",
-            "dispatched_content_sha256": _digest(dict(authorized_attempt)),
-            "target_call_limit": GOVERNED_TARGET_CALL_LIMIT,
-        },
+        input_payload=red_team_input,
+        system_prompt_version=red_team_prompt.version,
+        system_prompt_sha256=red_team_prompt.sha256,
+        system_prompt_content=red_team_prompt.content,
+        provider_messages=red_team_messages,
         provider=role.provider,
         model=role.model_id,
         upstream_provider=role.upstream_provider,
@@ -960,7 +981,7 @@ def _run_traced_red_team(
             # ``case_id`` — passing it raw showed the model a null seed reference. The projection
             # is also exactly the bytes this run is authorized to replay, and carries no trusted
             # field (no expected_evidence, no severity, no oracle expectation).
-            dict(authorized_attempt),
+            red_team_seed,
             count=1,
             category=reviewed.category,
             execution_id=execution_id,

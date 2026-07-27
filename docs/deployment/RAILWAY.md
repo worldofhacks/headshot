@@ -29,8 +29,8 @@ Staging:
 
 - Web, Runner, and Scheduler are successful and share generation-policy digest `b83acb23…`;
 - their packaged `hosted_policy.py` SHA-256 is identical;
-- PostgreSQL is at the head packaged into the deployed artifact — `0025` for the currently
-  deployed staging release `456d6e5`, and `0026` for the repository candidate;
+- PostgreSQL must be verified by revision and schema shape: canonical `0026` adds campaign
+  outcomes and `0027` adds immutable prompt snapshots;
 - `/health` and `/ready` return 200; and
 - unauthenticated `/api/v1/principal` returns 401.
 
@@ -53,9 +53,9 @@ All services build `Dockerfile`. The runtime image contains:
 - the Langfuse campaign verifier.
 
 Only `railway/web.json` declares `alembic upgrade head`. Runner and Scheduler call an exact-head
-readiness check before consuming/enqueuing work. The current sole repository head is `0026` and
-deployed staging is at `0025`; never hard-code either
-value into automation that should derive the packaged head.
+readiness check before consuming/enqueuing work. The canonical repository chain is `0025` reviewed
+workload provenance → `0026` campaign outcome breakdown → `0027` immutable prompt snapshots. Never
+hard-code a revision into automation that should derive the packaged or deployed head.
 
 One release must be tested as an immutable artifact. Do not independently rebuild services from
 different source states.
@@ -151,6 +151,13 @@ Use this order for schema-affecting releases:
 
 For migrations whose constraints make old/new Runner overlap unsafe, scale the old Runner to zero
 after quiescence instead of relying on `overlapSeconds`.
+
+For the `0026` → `0027` release, keep the candidate Runner inert, quiesce and remove the old Runner
+before Web applies the migration, then verify both the campaign-summary outcome columns and the
+append-only `agent_prompt_snapshots` table, lineage trigger, and role grants before activating the
+candidate Runner. `0027` is a normal forward migration from the canonical campaign-outcome
+revision `0026`; do not rewrite or stamp migration history. Web has `SELECT` only; Runner has
+`SELECT`/`INSERT`; neither service role may update/delete.
 
 ## Hosted configuration and policy parity
 

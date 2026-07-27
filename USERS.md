@@ -49,7 +49,17 @@ hand: craft a prompt, try it, eyeball the response, maybe save the good ones in 
 - As a **different authenticated Approver**, independently authorize the operation and approve or deny
   publication of critical reports and remediation. The launcher can never approve their own operation.
 - **Read the posture over time**: which categories are covered, pass/fail trend, is the target
-  getting more or less resilient, what's open vs resolved, what it cost.
+  getting more or less resilient, what's open vs resolved, what it cost. The Runs workspace reads
+  one exact campaign through protected
+  `GET /api/v1/campaigns/{campaign_id}/operations`; the backend enforces the verified Organization
+  and `org:console:read` scope.
+- **Inspect one execution safely**: expand an attempt to retrieve the exact immutable system prompt
+  and ordered provider messages through protected
+  `GET /api/v1/agent-executions/{execution_id}/prompt-snapshot` only with evidence permission.
+  Prompt contents remain collapsed by default and never appear in list, event-stream, log, or
+  Langfuse payloads. Migration `0026` does not backfill historical executions; when no immutable
+  snapshot exists, the route returns HTTP 200 with an empty resource state and the console shows
+  `Unavailable`.
 
 **Pain today:** manual prompting doesn't scale, findings don't reproduce, fixes are validated once
 and silently regress, and coverage is invisible.

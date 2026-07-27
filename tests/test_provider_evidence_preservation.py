@@ -335,9 +335,13 @@ def test_duplicate_json_key_response_is_refused_and_terminalizes(
         "agent.started",
         "agent.failed",
     ]
-    # The duplicate-key response was still a real, billed call.
+    # The duplicate-key response remains a real, billed call, but ambiguity is a smuggling
+    # channel rather than a schema-formatting error. It terminalizes after that first measured
+    # call and must not consume the structured-output retry allowance.
     assert row["cost_measurement_state"] == "measured"
     assert Decimal(str(row["measured_cost"])) == Decimal("0.0007125")
+    assert row["physical_attempts"] == 1
+    assert row["error_code"] == "provider-structured-output-ambiguous"
 
 
 def test_dispatched_unbilled_500_records_not_observed_with_one_physical_attempt(

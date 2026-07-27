@@ -1,6 +1,6 @@
 # AgentForge architecture defense
 
-**Updated:** 2026-07-26
+**Updated:** 2026-07-27
 
 **Canonical requirements:** [`../../Week_3_AgentForge.pdf`](../../Week_3_AgentForge.pdf)
 
@@ -36,7 +36,8 @@ flowchart LR
 - React 18, TypeScript 5.9, Vite 7, Clerk.
 - One Docker artifact for Web, Runner, and Scheduler.
 - PostgreSQL durable queue with leases/`SKIP LOCKED`; no LangGraph dependency.
-- Alembic sole head `0025`.
+- Deployed staging PostgreSQL is at sole Alembic head `0025`; the repository candidate packages sole
+  head `0026` and is not deployed.
 - OpenRouter exact routes with fallback disabled.
 - Langfuse 4.14.1 as an external projection; PostgreSQL is authoritative.
 - Staging is release-aligned; production is currently release-skewed and blocked for campaigns.

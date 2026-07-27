@@ -13,6 +13,7 @@ import {
   decodeAttempts,
   decodeAuditHistory,
   decodeBirdseye,
+  decodeCampaignOperations,
   decodeCampaigns,
   decodeComponents,
   decodeConfiguration,
@@ -40,6 +41,8 @@ import {
   Timeline,
 } from "../components/Analytics";
 import { CommandButton } from "../components/CommandButton";
+import { ExpandableEvidence } from "../components/ExpandableEvidence";
+import { WorkspaceTabs } from "../components/WorkspaceTabs";
 import {
   RecordDetails,
   RecordTable,
@@ -62,10 +65,12 @@ import {
   type ApprovalReadModel,
   type ApprovalDetailReadModel,
   type AttemptReadModel,
+  type AuthorizationScopeReadModel,
   type AuditReadModel,
   type BirdseyeAttentionReadModel,
   type BirdseyeSnapshotReadModel,
   type CampaignReadModel,
+  type CampaignOperationsReadModel,
   type CampaignSuiteBatchReadModel,
   type CampaignSuiteTemplateReadModel,
   type ComponentReadModel,
@@ -74,7 +79,9 @@ import {
   type FindingDetailReadModel,
   type FindingReadModel,
   type FindingVerificationReadModel,
+  type HostedRunBindingReadModel,
   type ReportReadModel,
+  type SafetyCapsReadModel,
   type TargetCatalogEntryReadModel,
   type TargetReadModel,
 } from "../types";
@@ -144,12 +151,18 @@ const isPublished = (value: string) => {
 
 const unique = (values: string[]) => [...new Set(values)].sort();
 
-function MissingCommand({ label, dependency }: { label: string; dependency: string }) {
+function MissingCommand({
+  label,
+  operatorAction,
+}: {
+  label: string;
+  operatorAction: string;
+}) {
   return (
-    <div className="command-control">
-      <button className="button" type="button" disabled>{label}</button>
-      <span className="command-note">Requires: {dependency}</span>
-    </div>
+    <StateNotice
+      state="unavailable"
+      detail={`${label} is unavailable. Operator action: ${operatorAction}`}
+    />
   );
 }
 
@@ -457,7 +470,7 @@ export function LiveScreen({ client, principal, entityId, getToken }: ScreenProp
           ) : (
             <MissingCommand
               label="Request rerun authorization"
-              dependency="a current full-scan target template"
+              operatorAction="select a target with a current full-scan template, then request a fresh exact authorization."
             />
           )}
           {selectedCampaignId ? (
@@ -474,7 +487,10 @@ export function LiveScreen({ client, principal, entityId, getToken }: ScreenProp
               onAcknowledged={campaigns.refresh}
             />
           ) : (
-            <MissingCommand label="Abort selected campaign" dependency="a selected persisted campaign" />
+            <MissingCommand
+              label="Abort selected campaign"
+              operatorAction="select a persisted queued or running campaign before requesting an abort."
+            />
           )}
         </div>
       </Panel>
@@ -909,11 +925,13 @@ export function FindingsScreen({ client, principal, entityId }: ScreenProps) {
           refreshList={findings.refresh}
         />
       )}
-      <AgentActivityPanel
-        client={client}
-        campaignRunId={selectedFinding?.campaign_run_id}
-        title={selectedFinding ? "Finding verification agents" : "Recent finding agents"}
-      />
+      {selectedFinding && (
+        <AgentActivityPanel
+          client={client}
+          campaignRunId={selectedFinding.campaign_run_id}
+          title="Finding verification agents"
+        />
+      )}
     </div>
   );
 }
@@ -1001,6 +1019,7 @@ export function ApprovalsScreen({ client, principal, entityId }: ScreenProps) {
   const approved = selected?.status === "approved" && actionable;
   const canAuthorize =
     hasPermission(principal, PERMISSIONS.campaignAuthorize) && canApproveIdentity && pending;
+  const [approvalView, setApprovalView] = useState<"pending" | "active" | "history">("pending");
 
   return (
     <div className="screen-stack">
@@ -1010,34 +1029,45 @@ export function ApprovalsScreen({ client, principal, entityId }: ScreenProps) {
       />
       <ResourceView result={approvals.result} emptyLabel="No approval requests are pending or recorded.">
         {(data) => {
-          const pendingCount = data.filter((approval) => approval.status === "pending").length;
-          const decidedCount = data.length - pendingCount;
-          const totalBudget = data.reduce((total, approval) => total + approval.caps.budget_usd, 0);
-          const totalAttempts = data.reduce((total, approval) => total + approval.caps.max_attempts_per_run, 0);
+          const pendingRecords = data.filter(
+            (approval) => approval.status === "pending" && !approval.expired && !approval.consumed,
+          );
+          const activeRecords = data.filter(
+            (approval) => approval.status === "approved" && !approval.expired && !approval.consumed,
+          );
+          const historyRecords = data.filter(
+            (approval) => !pendingRecords.includes(approval) && !activeRecords.includes(approval),
+          );
+          const visibleRecords = approvalView === "pending"
+            ? pendingRecords
+            : approvalView === "active"
+              ? activeRecords
+              : historyRecords;
+          const activeBudget = activeRecords.reduce(
+            (total, approval) => total + approval.caps.budget_usd,
+            0,
+          );
           return (
             <>
               <MetricStrip label="Approval summary" values={[
-                { label: "Authorization scopes", value: count(data.length), note: `${unique(data.map((approval) => approval.target_id)).length} targets` },
-                { label: "Pending review", value: count(pendingCount), note: `${decidedCount} decided` },
-                { label: "Budget authorized", value: money(totalBudget), note: `${count(totalAttempts)} maximum attempts` },
+                { label: "Pending review", value: count(pendingRecords.length), note: "requires a distinct approver" },
+                { label: "Active grants", value: count(activeRecords.length), note: money(activeBudget) + " currently authorized" },
+                { label: "History", value: count(historyRecords.length), note: "expired, consumed, rejected or completed" },
+                { label: "Targets in scope", value: count(unique([...pendingRecords, ...activeRecords].map((approval) => approval.target_id)).length), note: "pending and active only" },
               ]} />
-              <div className="panel-grid analytical-grid">
-                <Panel title="Decision state" meta="human gate" eyebrow="AUTHORIZATION POSTURE">
-                  <DistributionBars rows={distribution(data.map((approval) => approval.status))} />
-                </Panel>
-                <Panel title="Bound safety caps" meta="all returned scopes" eyebrow="AUTHORIZATION POSTURE">
-                  <EvidenceGrid values={[
-                    { label: "Budget", value: money(totalBudget) },
-                    { label: "Maximum attempts", value: count(totalAttempts) },
-                    { label: "Peak request rate", value: `${Math.max(...data.map((approval) => approval.caps.target_requests_per_second))}/s` },
-                    { label: "Longest timeout", value: `${Math.max(...data.map((approval) => approval.caps.run_timeout_seconds))}s` },
-                  ]} />
-                  <p className="data-note">These are signed scope limits, not measured spend or execution counts.</p>
-                </Panel>
-              </div>
-              <Panel title="Pending and historical decisions" meta="select exact scope">
+              <WorkspaceTabs
+                label="Approval records"
+                active={approvalView}
+                onChange={setApprovalView}
+                tabs={[
+                  { id: "pending", label: "Pending", count: pendingRecords.length },
+                  { id: "active", label: "Active", count: activeRecords.length },
+                  { id: "history", label: "History", count: historyRecords.length },
+                ]}
+              />
+              <Panel title={`${approvalView[0].toUpperCase()}${approvalView.slice(1)} authorizations`} meta="select exact scope">
                 <RecordTable
-                  data={data}
+                  data={visibleRecords}
                   identityKeys={["request_id", "approval_id"]}
                   columns={[
                     { key: "request_id", label: "Request", mono: true },
@@ -1609,27 +1639,68 @@ interface SuiteBatchView {
 const newestFirst = <T extends { created_at: string }>(left: T, right: T) =>
   Date.parse(right.created_at) - Date.parse(left.created_at);
 
+const hostedRunBindingsMatch = (
+  scopeBinding: HostedRunBindingReadModel | null,
+  batchBinding: HostedRunBindingReadModel | null,
+): boolean => {
+  if (scopeBinding === null || batchBinding === null) {
+    return scopeBinding === batchBinding;
+  }
+  return (
+    scopeBinding.configuration_set_sha256 === batchBinding.configuration_set_sha256
+    && scopeBinding.generation_policy_sha256 === batchBinding.generation_policy_sha256
+    && scopeBinding.session_generation === batchBinding.session_generation
+    && scopeBinding.provider_model_call_limit === batchBinding.provider_model_call_limit
+    && scopeBinding.provider_model_spend_limit_usd
+      === batchBinding.provider_model_spend_limit_usd
+    && scopeBinding.provider_max_retries === batchBinding.provider_max_retries
+    && scopeBinding.provider_max_concurrency === batchBinding.provider_max_concurrency
+    && scopeBinding.provider_timeout_seconds === batchBinding.provider_timeout_seconds
+  );
+};
+
+const capsMatchSuiteBatch = (
+  scopeCaps: SafetyCapsReadModel,
+  maximumCaps: SafetyCapsReadModel,
+): boolean => (
+  scopeCaps.max_attempts_per_run === maximumCaps.max_attempts_per_run
+  && scopeCaps.logical_case_limit === maximumCaps.logical_case_limit
+  && scopeCaps.physical_request_limit === maximumCaps.physical_request_limit
+  && scopeCaps.target_retries_per_turn === maximumCaps.target_retries_per_turn
+  && scopeCaps.budget_usd > 0
+  && scopeCaps.budget_usd <= maximumCaps.budget_usd
+  && scopeCaps.target_requests_per_second > 0
+  && scopeCaps.target_requests_per_second <= maximumCaps.target_requests_per_second
+  && scopeCaps.run_timeout_seconds > 0
+  && scopeCaps.run_timeout_seconds <= maximumCaps.run_timeout_seconds
+);
+
+export const authorizationScopeMatchesSuiteBatch = (
+  scope: AuthorizationScopeReadModel,
+  batch: CampaignSuiteBatchReadModel,
+): boolean => (
+  scope.target_id === batch.target_id
+  && scope.target_version === batch.target_version
+  && scope.surface_id === batch.surface_id
+  && scope.surface_version === batch.surface_version
+  && scope.corpus_id === batch.corpus_id
+  && scope.corpus_hash === batch.corpus_hash
+  && scope.execution_profile === batch.execution_profile
+  && capsMatchSuiteBatch(scope.caps, batch.maximum_caps)
+  && hostedRunBindingsMatch(scope.hosted_run, batch.hosted_run)
+);
+
 export const buildSuiteBatchViews = (
   suite: CampaignSuiteTemplateReadModel,
   approvals: ApprovalReadModel[],
   campaigns: CampaignReadModel[],
 ): SuiteBatchView[] => suite.batches.map((batch) => {
   const matchingCampaigns = campaigns
-    .filter((campaign) => (
-      campaign.target_id === batch.target_id
-      && campaign.target_version === batch.target_version
-      && campaign.corpus_id === batch.corpus_id
-      && campaign.corpus_hash === batch.corpus_hash
-    ))
+    .filter((campaign) => authorizationScopeMatchesSuiteBatch(campaign, batch))
     .sort(newestFirst);
   const campaign = matchingCampaigns[0] ?? null;
   const approval = approvals
-    .filter((candidate) => (
-      candidate.target_id === batch.target_id
-      && candidate.target_version === batch.target_version
-      && candidate.corpus_id === batch.corpus_id
-      && candidate.corpus_hash === batch.corpus_hash
-    ))
+    .filter((candidate) => authorizationScopeMatchesSuiteBatch(candidate, batch))
     .sort(newestFirst)[0] ?? null;
   if (campaign?.state === "complete") {
     return {
@@ -1637,7 +1708,7 @@ export const buildSuiteBatchViews = (
       state: "completed",
       approval,
       campaign,
-      detail: `${batch.case_count} cases and ${batch.physical_request_count} requests recorded`,
+      detail: "Campaign state is complete; authoritative operation totals are shown below",
     };
   }
   if (campaign?.state === "queued" || campaign?.state === "running") {
@@ -1646,9 +1717,7 @@ export const buildSuiteBatchViews = (
       state: "running",
       approval,
       campaign,
-      detail: campaign.attempt_count === null
-        ? "Waiting for persisted attempt progress"
-        : `${Math.min(campaign.attempt_count, batch.case_count)}/${batch.case_count} cases recorded`,
+      detail: "Campaign is active; authoritative operation totals are shown below",
     };
   }
   if (campaign?.state === "failed" || campaign?.state === "aborted") {
@@ -1721,26 +1790,132 @@ export const buildSuiteBatchViews = (
 });
 
 export const summarizeSuiteProgress = (
-  suite: CampaignSuiteTemplateReadModel,
+  _suite: CampaignSuiteTemplateReadModel,
   views: SuiteBatchView[],
 ) => {
   const completed = views.filter((view) => view.state === "completed");
   return {
     completedBatches: completed.length,
-    completedCases: completed.reduce((total, view) => total + view.batch.case_count, 0),
-    completedRequests: completed.reduce(
-      (total, view) => total + view.batch.physical_request_count,
-      0,
-    ),
-    complete: completed.length === suite.batches.length
-      && completed.reduce((total, view) => total + view.batch.case_count, 0)
-        === suite.case_count
-      && completed.reduce(
-        (total, view) => total + view.batch.physical_request_count,
-        0,
-      ) === suite.physical_request_count,
+    complete: views.length > 0 && completed.length === views.length,
   };
 };
+
+const operationCount = (value: number | null): string =>
+  value === null ? "Unknown" : count(value);
+
+const measuredCost = (
+  value: number | null,
+  state: CampaignOperationsReadModel["costs"]["measurement_state"],
+): string => {
+  if (value === null) return state === "partial" ? "Partial" : "Unavailable";
+  return state === "partial" ? `${money(value)} known · Partial` : money(value);
+};
+
+function SuiteCampaignOperations({
+  client,
+  campaignId,
+  campaignState,
+  batchOrdinal,
+}: {
+  client: ApiClient;
+  campaignId: string;
+  campaignState: string;
+  batchOrdinal: number | null;
+}) {
+  const operations = useResource<CampaignOperationsReadModel>(
+    client,
+    RESOURCE_PATHS.campaignOperations(campaignId),
+    decodeCampaignOperations,
+    { pollIntervalMs: LIVE_RESOURCE_POLL_INTERVAL_MS },
+  );
+  return (
+    <div className="suite-next-action">
+      <div className="suite-next-copy">
+        <p className="field-label">Authoritative campaign operations</p>
+        <div className="suite-batch-head">
+          <div>
+            <strong>
+              {batchOrdinal === null ? "Selected campaign" : `Batch ${batchOrdinal}`}
+              {" · "}{campaignState}
+            </strong>
+            <p>Live control-plane projection; unknown values are never inferred from the suite template.</p>
+          </div>
+        </div>
+      </div>
+      <ResourceView
+        result={operations.result}
+        emptyLabel="No authoritative operations projection is available for this campaign."
+      >
+        {(data) => (
+          <div className="evidence-stack">
+            <EvidenceGrid values={[
+              { label: "Cases planned", value: operationCount(data.progress.planned) },
+              { label: "Started", value: count(data.progress.started) },
+              { label: "Running", value: count(data.progress.running) },
+              { label: "Completed", value: count(data.progress.completed) },
+              { label: "Failed", value: count(data.progress.failed), tone: data.progress.failed > 0 ? "failure" : undefined },
+              { label: "Skipped", value: operationCount(data.progress.skipped) },
+              { label: "Remaining", value: operationCount(data.progress.remaining) },
+            ]} />
+            <EvidenceGrid values={[
+              { label: "Logical attempts", value: count(data.executions.logical_attempts) },
+              { label: "Target requests", value: count(data.executions.physical_target_requests) },
+              { label: "Provider calls", value: count(data.executions.provider_calls) },
+              {
+                label: "Current stage",
+                value: data.current_work?.stage
+                  ?? (data.state === "queued" || data.state === "running" ? "Unavailable" : "Not active"),
+              },
+              {
+                label: "Current agent",
+                value: data.current_work?.agent_role
+                  ?? (data.state === "queued" || data.state === "running" ? "Unavailable" : "Not active"),
+              },
+              {
+                label: "Provider cost",
+                value: measuredCost(
+                  data.costs.provider_measured_usd,
+                  data.costs.provider_measurement_state,
+                ),
+              },
+              {
+                label: "Target cost",
+                value: measuredCost(
+                  data.costs.target_measured_usd,
+                  data.costs.target_measurement_state,
+                ),
+              },
+              {
+                label: "Total cost",
+                value: measuredCost(data.costs.total_measured_usd, data.costs.measurement_state),
+              },
+              {
+                label: "Cost state",
+                value: data.costs.measurement_state === "partial"
+                  ? "Partial"
+                  : data.costs.measurement_state,
+                tone: data.costs.measurement_state === "measured" ? "success" : "queued",
+              },
+              {
+                label: "Queue",
+                value: `${count(data.queue.queued_jobs)} queued · ${count(data.queue.leased_jobs)} leased`,
+              },
+              {
+                label: "Rate limit",
+                value: data.queue.rate_limit_active === null
+                  ? "Unknown"
+                  : data.queue.rate_limit_active
+                    ? "Active"
+                    : "Inactive",
+                tone: data.queue.rate_limit_active ? "queued" : undefined,
+              },
+            ]} />
+          </div>
+        )}
+      </ResourceView>
+    </div>
+  );
+}
 
 function SuiteBatchActions({
   client,
@@ -1909,26 +2084,27 @@ function FullCampaignSuite({
   principal,
   suite,
   target,
+  campaignId,
+  campaigns,
+  refreshCampaigns,
 }: {
   client: ApiClient;
   principal: Principal;
   suite: CampaignSuiteTemplateReadModel;
   target: TargetReadModel;
+  campaignId?: string | null;
+  campaigns: CampaignReadModel[];
+  refreshCampaigns: () => void;
 }) {
   const approvals = useResource<ApprovalReadModel[]>(
     client,
     RESOURCE_PATHS.approvals,
     decodeApprovals,
   );
-  const campaigns = useResource<CampaignReadModel[]>(
-    client,
-    RESOURCE_PATHS.campaigns,
-    decodeCampaigns,
-  );
   const views = buildSuiteBatchViews(
     suite,
     approvals.result.data ?? [],
-    campaigns.result.data ?? [],
+    campaigns,
   );
   const progress = summarizeSuiteProgress(suite, views);
   const currentView = views.find((view) => view.state === "running")
@@ -1936,9 +2112,32 @@ function FullCampaignSuite({
     ?? views.find((view) => view.state === "runnable")
     ?? views.find((view) => view.state !== "completed")
     ?? null;
+  const campaignViews = views
+    .filter((view): view is SuiteBatchView & { campaign: CampaignReadModel } => (
+      view.campaign !== null
+    ));
+  const latestOperationsView = [...campaignViews].sort((left, right) => {
+    const activeOrder = Number(right.state === "running") - Number(left.state === "running");
+    return activeOrder || newestFirst(left.campaign, right.campaign);
+  })[0] ?? null;
+  const selectedOperationsCampaign = campaignId
+    ? campaigns.find((campaign) => campaign.run_id === campaignId) ?? null
+    : null;
+  const selectedOperationsBatch = selectedOperationsCampaign
+    ? suite.batches.find((batch) => (
+        authorizationScopeMatchesSuiteBatch(selectedOperationsCampaign, batch)
+      )) ?? null
+    : null;
+  const operationsCampaignId = campaignId ?? latestOperationsView?.campaign.run_id ?? null;
+  const operationsCampaignState = campaignId
+    ? selectedOperationsCampaign?.state ?? "Unavailable"
+    : latestOperationsView?.campaign.state ?? "Unavailable";
+  const operationsBatchOrdinal = campaignId
+    ? selectedOperationsBatch?.ordinal ?? null
+    : latestOperationsView?.batch.ordinal ?? null;
   const refresh = () => {
     approvals.refresh();
-    campaigns.refresh();
+    refreshCampaigns();
   };
   return (
     <Panel
@@ -1946,21 +2145,21 @@ function FullCampaignSuite({
       meta={`${target.target_id}@${target.version}`}
       eyebrow="PILOT RUN"
     >
-      <MetricStrip label="Suite progress" values={[
+      <MetricStrip label="Governed suite" values={[
         {
-          label: "Cases complete",
-          value: `${progress.completedCases}/${suite.case_count}`,
-          note: `${suite.categories.length} security categories`,
+          label: "Batch scopes",
+          value: count(suite.batches.length),
+          note: "server-owned authorization units",
         },
         {
-          label: "Requests complete",
-          value: `${progress.completedRequests}/${suite.physical_request_count}`,
-          note: "persisted requests only",
+          label: "Categories",
+          value: count(suite.categories.length),
+          note: "mapped security categories",
         },
         {
-          label: "Batches complete",
-          value: `${progress.completedBatches}/${suite.batches.length}`,
-          note: "one guided action at a time",
+          label: "Completed records",
+          value: count(progress.completedBatches),
+          note: "campaign state only; not case progress",
         },
         {
           label: "Four-LLM runtime",
@@ -1968,7 +2167,7 @@ function FullCampaignSuite({
           note: "Orchestrator · Red Team · Judge · Documentation",
         },
       ]} />
-      <div className="suite-progress-rail" aria-label="Governed batch progress">
+      <div className="suite-progress-rail" aria-label="Governed batch state">
         {views.map((view) => (
           <div
             className={`suite-progress-step suite-progress-${view.state.replaceAll(" ", "-")}`}
@@ -1977,7 +2176,7 @@ function FullCampaignSuite({
             <span>{view.batch.ordinal}</span>
             <div>
               <strong>Batch {view.batch.ordinal}</strong>
-              <small>{view.batch.case_count} cases · {view.state}</small>
+              <small>Authorization scope · {view.state}</small>
             </div>
           </div>
         ))}
@@ -1985,7 +2184,7 @@ function FullCampaignSuite({
       {progress.complete ? (
         <StateNotice
           state="ready"
-          detail="The complete 100-case suite is recorded for this pilot."
+          detail="All batch campaign records report complete. Review the latest authoritative operations below."
         />
       ) : currentView ? (
         <div className="suite-next-action">
@@ -2009,6 +2208,14 @@ function FullCampaignSuite({
           />
         </div>
       ) : null}
+      {operationsCampaignId && (
+        <SuiteCampaignOperations
+          client={client}
+          campaignId={operationsCampaignId}
+          campaignState={operationsCampaignState}
+          batchOrdinal={operationsBatchOrdinal}
+        />
+      )}
       <details className="pilot-technical-details">
         <summary>Technical scope and batch evidence</summary>
         <div className="pilot-technical-body">
@@ -2034,11 +2241,20 @@ function FullCampaignSuite({
   );
 }
 
-export function TargetsScreen({ client, principal }: ScreenProps) {
+export function TargetsScreen({
+  client,
+  principal,
+  campaignId,
+}: ScreenProps & { campaignId?: string | null }) {
   const targets = useResource<TargetReadModel[]>(
     client,
     RESOURCE_PATHS.targets,
     decodeTargets,
+  );
+  const campaigns = useResource<CampaignReadModel[]>(
+    client,
+    RESOURCE_PATHS.campaigns,
+    decodeCampaigns,
   );
   const [selectedPilotKey, setSelectedPilotKey] = useState<string | null>(null);
   const records = targets.result.data ?? [];
@@ -2050,9 +2266,29 @@ export function TargetsScreen({ client, principal }: ScreenProps) {
       suite,
     }));
   });
-  const selectedPilot = pilots.find((pilot) => pilot.key === selectedPilotKey)
-    ?? pilots[0]
-    ?? null;
+  const campaignRecords = campaigns.result.data ?? [];
+  const scopedCampaign = campaignId
+    ? campaignRecords.find((campaign) => campaign.run_id === campaignId) ?? null
+    : null;
+  const scopedPilot = scopedCampaign
+    ? pilots.find((pilot) => (
+        pilot.suite.batches.some((batch) => (
+          authorizationScopeMatchesSuiteBatch(scopedCampaign, batch)
+        ))
+      )) ?? null
+    : null;
+  const selectedPilot = campaignId
+    ? scopedPilot
+    : pilots.find((pilot) => pilot.key === selectedPilotKey)
+      ?? pilots[0]
+      ?? null;
+  const displayedPilots = campaignId
+    ? (scopedPilot ? [scopedPilot] : [])
+    : pilots;
+  const showCampaignFallback = Boolean(campaignId)
+    && selectedPilot === null
+    && targets.result.state !== "loading"
+    && campaigns.result.state !== "loading";
 
   return (
     <div className="screen-stack pilot-runs-screen">
@@ -2066,13 +2302,13 @@ export function TargetsScreen({ client, principal }: ScreenProps) {
       >
         {() => pilots.length > 0 ? (
           <>
-            <Panel
+            {displayedPilots.length > 0 && <Panel
               title="Available pilots"
-              meta={`${pilots.length} ready`}
+              meta={`${displayedPilots.length} ready`}
               eyebrow="LIVE EVALUATION TARGETS"
             >
               <div className="pilot-picker" role="list" aria-label="Available pilot targets">
-                {pilots.map((pilot) => {
+                {displayedPilots.map((pilot) => {
                   const active = pilot.key === selectedPilot?.key;
                   return (
                     <button
@@ -2093,7 +2329,7 @@ export function TargetsScreen({ client, principal }: ScreenProps) {
                   );
                 })}
               </div>
-            </Panel>
+            </Panel>}
             {selectedPilot && (
               <FullCampaignSuite
                 key={selectedPilot.key}
@@ -2101,6 +2337,9 @@ export function TargetsScreen({ client, principal }: ScreenProps) {
                 principal={principal}
                 suite={selectedPilot.suite}
                 target={selectedPilot.target}
+                campaignId={campaignId}
+                campaigns={campaignRecords}
+                refreshCampaigns={campaigns.refresh}
               />
             )}
           </>
@@ -2111,6 +2350,24 @@ export function TargetsScreen({ client, principal }: ScreenProps) {
           />
         )}
       </ResourceView>
+      {campaignId && showCampaignFallback && (
+        <Panel
+          title="Selected campaign"
+          meta={shortId(campaignId)}
+          eyebrow="EXACT CAMPAIGN SCOPE"
+        >
+          <StateNotice
+            state="unavailable"
+            detail="The selected campaign is outside the bounded campaign list or does not map to a ready pilot. Its exact live operations remain available below without attributing them to a different target."
+          />
+          <SuiteCampaignOperations
+            client={client}
+            campaignId={campaignId}
+            campaignState={scopedCampaign?.state ?? "Unavailable"}
+            batchOrdinal={null}
+          />
+        </Panel>
+      )}
     </div>
   );
 }
@@ -2125,6 +2382,11 @@ export function LegacyTargetsScreen({ client, principal }: ScreenProps) {
     client,
     RESOURCE_PATHS.targets,
     decodeTargets,
+  );
+  const campaigns = useResource<CampaignReadModel[]>(
+    client,
+    RESOURCE_PATHS.campaigns,
+    decodeCampaigns,
   );
   const [selectedIdentity, setSelectedIdentity] = useState<string | null>(null);
   const [catalogIdentity, setCatalogIdentity] = useState("");
@@ -2156,6 +2418,8 @@ export function LegacyTargetsScreen({ client, principal }: ScreenProps) {
           principal={principal}
           suite={suite}
           target={target}
+          campaigns={campaigns.result.data ?? []}
+          refreshCampaigns={campaigns.refresh}
         />
       )))}
       <Panel
@@ -2352,12 +2616,6 @@ export function ConfigurationScreen({ client, principal }: ScreenProps) {
   const componentRecords = components.result.data ?? [];
   const operationalComponents = componentRecords.filter((component) => component.availability === "operational and evidenced").length;
   const configurationKeys = configRecord ? Object.keys(configRecord.configuration) : [];
-  const workbench = configRecord && isJsonRecord(configRecord.configuration.security_workbench)
-    ? configRecord.configuration.security_workbench
-    : null;
-  const workbenchCapabilities = workbench && Array.isArray(workbench.capabilities)
-    ? workbench.capabilities.filter(isJsonRecord)
-    : [];
   return (
     <div className="screen-stack">
       <ScreenHeading
@@ -2392,65 +2650,29 @@ export function ConfigurationScreen({ client, principal }: ScreenProps) {
           {componentRecords.length > 0 && <p className="data-note">{unique(componentRecords.map((component) => component.environment)).join(" · ")}</p>}
         </Panel>
       </div>
-      <Panel title="LLM security workbench" meta="Burp-style workflow · Headshot controls" eyebrow="GOVERNED TESTING">
-        {workbenchCapabilities.length > 0 ? (
-          <RecordTable
-            data={workbenchCapabilities}
-            identityKeys={["workflow"]}
-            columns={[
-              { key: "workflow", label: "Workflow" },
-              { key: "headshot_control", label: "Headshot control" },
-              { key: "state", label: "State" },
-              { key: "llm_focus", label: "LLM focus" },
-              { key: "safeguard", label: "Safety boundary" },
-              { key: "evidence", label: "Evidence" },
-            ]}
-          />
-        ) : (
-          <StateNotice state="empty" detail="No security-workbench capability map is published." />
-        )}
-        <p className="data-note">This is a governed LLM security workbench, not a claim that the commercial PortSwigger Burp Suite product is installed.</p>
-      </Panel>
-      <Panel title="Security engines" meta="native artifacts + runtime controls" eyebrow="EVIDENCED TOOLING">
-        {componentRecords.filter((component) => component.kind.startsWith("security-tool:")).length > 0 ? (
-          <RecordTable
-            data={componentRecords.filter((component) => component.kind.startsWith("security-tool:"))}
-            identityKeys={["component_id"]}
-            columns={[
-              { key: "name", label: "Tool" },
-              { key: "version", label: "Version", mono: true },
-              { key: "availability", label: "Availability" },
-              { key: "operational_scope", label: "Operational scope" },
-              { key: "adapter_only_scope", label: "Adapter-only scope" },
-              { key: "owasp_llm", label: "OWASP LLM" },
-              { key: "target_access", label: "Tool target access", mono: true },
-            ]}
-          />
-        ) : (
-          <ResourceView result={components.result} emptyLabel="No security-tool records are available.">{() => null}</ResourceView>
-        )}
-      </Panel>
       <Panel title="Effective runtime snapshot">
-        <ResourceView result={configuration.result} emptyLabel="No effective runtime snapshot is available.">
-          {(data) => (
-            <div className="evidence-stack">
-              <RecordDetails
-                data={data}
-                preferredKeys={[
-                  "snapshot_id",
-                  "version",
-                  "status",
-                  "published_at",
-                  "published_by",
-                ]}
-              />
-              <div>
-                <p className="field-label">Effective server state</p>
-                <AdversarialText>{JSON.stringify(data.configuration, null, 2)}</AdversarialText>
+        <ExpandableEvidence title="Open effective server state" meta="permission-gated raw JSON">
+          <ResourceView result={configuration.result} emptyLabel="No effective runtime snapshot is available.">
+            {(data) => (
+              <div className="evidence-stack">
+                <RecordDetails
+                  data={data}
+                  preferredKeys={[
+                    "snapshot_id",
+                    "version",
+                    "status",
+                    "published_at",
+                    "published_by",
+                  ]}
+                />
+                <div>
+                  <p className="field-label">Effective server state</p>
+                  <AdversarialText>{JSON.stringify(data.configuration, null, 2)}</AdversarialText>
+                </div>
               </div>
-            </div>
-          )}
-        </ResourceView>
+            )}
+          </ResourceView>
+        </ExpandableEvidence>
         <StateNotice
           state="unavailable"
           reason="frozen_application_configuration"
@@ -2459,7 +2681,9 @@ export function ConfigurationScreen({ client, principal }: ScreenProps) {
       </Panel>
       <Panel title="Append-only audit history">
         {hasPermission(principal, PERMISSIONS.auditRead) ? (
-          <AuditHistory client={client} />
+          <ExpandableEvidence title="Open audit history" meta="searchable durable evidence">
+            <AuditHistory client={client} />
+          </ExpandableEvidence>
         ) : (
           <StateNotice state="empty" detail={`Restricted to ${PERMISSIONS.auditRead}.`} />
         )}

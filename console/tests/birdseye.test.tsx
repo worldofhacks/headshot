@@ -105,6 +105,7 @@ const snapshot: BirdseyeSnapshotReadModel = {
       currency: null,
       input_tokens: null,
       output_tokens: null,
+      reasoning_tokens: null,
       token_observation_count: null,
       langfuse_not_attempted_count: null,
       langfuse_disabled_count: null,
@@ -139,6 +140,7 @@ const snapshot: BirdseyeSnapshotReadModel = {
       currency: null,
       input_tokens: null,
       output_tokens: null,
+      reasoning_tokens: null,
       token_observation_count: null,
       langfuse_not_attempted_count: null,
       langfuse_disabled_count: null,
@@ -173,6 +175,7 @@ const snapshot: BirdseyeSnapshotReadModel = {
       currency: "USD",
       input_tokens: 120,
       output_tokens: 36,
+      reasoning_tokens: 12,
       token_observation_count: 4,
       langfuse_not_attempted_count: 0,
       langfuse_disabled_count: 0,
@@ -247,7 +250,7 @@ describe("Birdseye", () => {
     fireEvent.click(redTeamNodes[redTeamNodes.length - 1]);
     expect(screen.getByText("125.0 ms / 280.0 ms")).toBeTruthy();
     expect(screen.getByText("$0.0400")).toBeTruthy();
-    expect(screen.getByText("120 / 36 · 4 observation(s)")).toBeTruthy();
+    expect(screen.getByText("120 / 36 / 12 · 4 observation(s)")).toBeTruthy();
     expect(screen.getByText("3 observed · 1 awaiting remote verification")).toBeTruthy();
     expect(screen.getByText("Last Langfuse query-back")).toBeTruthy();
 
@@ -266,6 +269,7 @@ describe("Birdseye", () => {
       accounting_status: "unavailable" as const,
       input_tokens: null,
       output_tokens: null,
+      reasoning_tokens: null,
       token_observation_count: 0,
     };
     render(
@@ -278,7 +282,49 @@ describe("Birdseye", () => {
 
     const unavailableRedTeamNodes = screen.getAllByRole("button", { name: /Red Team/ });
     fireEvent.click(unavailableRedTeamNodes[unavailableRedTeamNodes.length - 1]);
-    expect(screen.getByText("Unavailable")).toBeTruthy();
+    expect(screen.getAllByText("Unavailable").length).toBeGreaterThan(0);
     expect(screen.queryByText("$0.0000")).toBeNull();
+  });
+
+  it("preserves a reasoning-only token observation as partial", () => {
+    const agent = snapshot.nodes[2];
+    const reasoningOnly = {
+      ...agent,
+      input_tokens: null,
+      output_tokens: null,
+      reasoning_tokens: 12,
+      token_observation_count: 1,
+    };
+    render(
+      <Birdseye
+        snapshot={{ ...snapshot, nodes: [reasoningOnly] }}
+        stream={{ state: "ready", data: [], cursor: 9 }}
+        onOpenAttention={vi.fn()}
+      />,
+    );
+
+    const redTeamNodes = screen.getAllByRole("button", { name: /Red Team/ });
+    fireEvent.click(redTeamNodes[redTeamNodes.length - 1]);
+    expect(screen.getByText("Unavailable / Unavailable / 12 · Partial")).toBeTruthy();
+  });
+
+  it("marks complete token components partial when observations do not cover every execution", () => {
+    const agent = snapshot.nodes[2];
+    const partiallyObserved = {
+      ...agent,
+      token_observation_count: 3,
+    };
+    render(
+      <Birdseye
+        snapshot={{ ...snapshot, nodes: [partiallyObserved] }}
+        stream={{ state: "ready", data: [], cursor: 9 }}
+        onOpenAttention={vi.fn()}
+      />,
+    );
+
+    const redTeamNodes = screen.getAllByRole("button", { name: /Red Team/ });
+    fireEvent.click(redTeamNodes[redTeamNodes.length - 1]);
+    expect(screen.getByText("120 / 36 / 12 · Partial")).toBeTruthy();
+    expect(screen.queryByText("120 / 36 / 12 · 3 observation(s)")).toBeNull();
   });
 });

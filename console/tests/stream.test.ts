@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  affectedResourceRoots,
   applyOrderedEvent,
   buildStreamRequest,
   parseEventStream,
@@ -72,5 +73,23 @@ describe("authenticated console event stream", () => {
         data: { aggregate_id: "server-record" },
       }).kind,
     ).toBe("applied");
+  });
+
+  it("maps known event families and safely broadens unknown events", () => {
+    expect(affectedResourceRoots({
+      cursor: 1,
+      event: "campaign.started",
+      data: { aggregate_type: "campaign_run" },
+    })).toEqual(expect.arrayContaining(["campaigns", "attempts", "costs", "traces"]));
+    expect(affectedResourceRoots({
+      cursor: 2,
+      event: "finding.documented",
+      data: { aggregate_type: "finding" },
+    })).toEqual(expect.arrayContaining(["findings", "reports", "coverage"]));
+    expect(affectedResourceRoots({
+      cursor: 3,
+      event: "future_domain.changed",
+      data: { aggregate_type: "future_domain" },
+    })).toBeNull();
   });
 });

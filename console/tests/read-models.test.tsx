@@ -513,6 +513,7 @@ const validResources: Array<[string, (value: unknown) => unknown, unknown]> = [
         currency: null,
         input_tokens: null,
         output_tokens: null,
+        reasoning_tokens: null,
         token_observation_count: null,
         langfuse_not_attempted_count: null,
         langfuse_disabled_count: null,
@@ -906,12 +907,40 @@ describe("v1 read-model decoders", () => {
       budget_usd: null,
       budget_utilization: null,
     };
+    const reasoningOnly = {
+      ...unavailable,
+      reasoning_tokens: 12,
+      token_observation_count: 1,
+    };
 
     expect(decodeCosts([unavailable])).toEqual([unavailable]);
+    expect(decodeCosts([reasoningOnly])).toEqual([reasoningOnly]);
     expect(() => decodeCosts([{
       ...unavailable,
       average_cost_per_request: 0,
     }])).toThrow("Invalid cost read model");
+  });
+
+  it("accepts partial and unavailable campaign target accounting without inventing zero", () => {
+    const campaign = arrayFixtureRecord("costs");
+    const partial = {
+      ...campaign,
+      measured_cost: 0.25,
+      cost_measurement_state: "partial",
+      accounting_status: "partial",
+      average_cost_per_request: null,
+      budget_utilization: null,
+    };
+    const unavailable = {
+      ...campaign,
+      measured_cost: null,
+      cost_measurement_state: "not_observed",
+      accounting_status: "unavailable",
+      average_cost_per_request: null,
+      budget_utilization: null,
+    };
+
+    expect(decodeCosts([partial, unavailable])).toEqual([partial, unavailable]);
   });
 
   it("requires authoritative paired role latency only for completed agent costs", () => {
@@ -1134,6 +1163,13 @@ describe("v1 read-model decoders", () => {
       output_tokens: 30,
       token_observation_count: 1,
     };
+    const reasoningOnlyTokens = {
+      ...agent,
+      input_tokens: null,
+      output_tokens: null,
+      reasoning_tokens: 12,
+      token_observation_count: 1,
+    };
     const runningOnly = {
       ...agent,
       execution_count: 1,
@@ -1150,6 +1186,7 @@ describe("v1 read-model decoders", () => {
     };
 
     expect(decodeAgents([oneSidedTokens])).toEqual([oneSidedTokens]);
+    expect(decodeAgents([reasoningOnlyTokens])).toEqual([reasoningOnlyTokens]);
     expect(decodeAgents([runningOnly])).toEqual([runningOnly]);
     for (const malformed of [
       { ...agent, running_count: 1 },
@@ -1683,6 +1720,7 @@ describe("v1 read-model decoders", () => {
       currency: "USD",
       input_tokens: 25,
       output_tokens: null,
+      reasoning_tokens: null,
       token_observation_count: 1,
       langfuse_not_attempted_count: 0,
       langfuse_disabled_count: 0,
@@ -1705,6 +1743,7 @@ describe("v1 read-model decoders", () => {
       currency: null,
       input_tokens: null,
       output_tokens: null,
+      reasoning_tokens: null,
       token_observation_count: 0,
       langfuse_exported_count: 0,
       langfuse_verified_count: 0,
@@ -1745,6 +1784,19 @@ describe("v1 read-model decoders", () => {
     })).toEqual({
       ...snapshot,
       nodes: [unavailableAccountingAgentNode],
+    });
+    const reasoningOnlyAgentNode = {
+      ...agentNode,
+      input_tokens: null,
+      output_tokens: null,
+      reasoning_tokens: 7,
+    };
+    expect(decodeBirdseye({
+      ...snapshot,
+      nodes: [reasoningOnlyAgentNode],
+    })).toEqual({
+      ...snapshot,
+      nodes: [reasoningOnlyAgentNode],
     });
     for (const malformedNode of [
       { ...agentNode, execution_count: null },

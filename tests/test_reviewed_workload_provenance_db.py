@@ -169,9 +169,11 @@ def _insert_attempt(engine: Engine, run_id: str, *, ordinal: int = 0, **columns)
 # --------------------------------------------------------------------------------------
 
 
-def test_0025_is_the_single_head() -> None:
+def test_0025_precedes_campaign_outcome_and_prompt_snapshot_head() -> None:
     script = ScriptDirectory.from_config(_db.alembic_config(_db.admin_url()))
-    assert script.get_heads() == ["0026"]
+    assert script.get_heads() == ["0027"]
+    assert script.get_revision("0027").down_revision == "0026"
+    assert script.get_revision("0026").down_revision == "0025"
     assert script.get_revision("0025").down_revision == "0024"
 
 

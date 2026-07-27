@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime
 import hashlib
+import json
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
@@ -22,7 +23,7 @@ from agentforge.agents.hosted import (
 )
 from agentforge.agents.hosted_policy import DEFAULT_HOSTED_GENERATION_POLICY
 from agentforge.agents.hosted_runtime import HostedCallBounds, HostedExecutionLineage
-from agentforge.agents.prompts import load_prompt_registry
+from agentforge.agents.prompts import PromptRecord, load_prompt_registry
 from agentforge.agents.red_team.hosted_generation import (
     RedTeamRoleIdentity,
     TracedHostedRedTeamProvider,
@@ -33,6 +34,7 @@ from agentforge.auth.permissions import (
     CAMPAIGN_AUTHORIZE,
     CAMPAIGN_LAUNCH,
     CONFIG_MANAGE,
+    EVIDENCE_READ,
     TARGETS_MANAGE,
 )
 from agentforge.auth.principal import Principal
@@ -166,7 +168,11 @@ def _principal(user_id: str, *permissions: str) -> Principal:
     )
 
 
-def _configuration(*, red_team_upstream: str = "together") -> HostedConfigurationSet:
+def _configuration(
+    *,
+    red_team_upstream: str = "together",
+    role_retries: dict[str, int] | None = None,
+) -> HostedConfigurationSet:
     roles = []
     for role in ("orchestrator", "red_team", "judge", "documentation"):
         roles.append(
@@ -191,7 +197,7 @@ def _configuration(*, red_team_upstream: str = "together") -> HostedConfiguratio
                     max_output_tokens=16_000,
                     max_reasoning_tokens=32_768,
                     max_usd=Decimal("0.5"),
-                    max_retries=1,
+                    max_retries=(role_retries or {}).get(role, 1),
                     max_requests_per_second=Decimal("0.5"),
                     max_concurrency=1,
                 ),
@@ -231,6 +237,7 @@ def _authorized_run(
     engine: Engine,
     *,
     red_team_upstream: str = "together",
+    role_retries: dict[str, int] | None = None,
 ) -> tuple[ControlPlaneStore, str, HostedConfigurationSet]:
     _clean(engine)
     store = ControlPlaneStore(engine, environment="staging")
@@ -304,7 +311,10 @@ def _authorized_run(
             idempotency_key=f"hosted-lineage-target-{lifecycle.value}",
         )
 
-    configuration = _configuration(red_team_upstream=red_team_upstream)
+    configuration = _configuration(
+        red_team_upstream=red_team_upstream,
+        role_retries=role_retries,
+    )
     store.stage_hosted_configuration_set(
         principal=launcher,
         configuration=configuration,
@@ -1640,6 +1650,66 @@ def test_physical_retry_ledger_is_authoritative_but_does_not_terminalize_role_wo
     assert terminal["status"] == "succeeded"
     assert terminal["cost_measurement_state"] == "partial"
     assert terminal["measured_cost"] == Decimal("0.000065000000")
+
+
+def test_campaign_operations_retry_remaining_honors_the_role_retry_limit(
+    migrated_db: Engine,
+) -> None:
+    store, run_id, configuration = _authorized_run(
+        migrated_db,
+        role_retries={"documentation": 0},
+    )
+    execution_id = _start(
+        store,
+        run_id,
+        configuration,
+        role="documentation",
+    )
+    role = next(item for item in configuration.roles if item.role == "documentation")
+    _record_physical_event(
+        store,
+        execution_id=execution_id,
+        role="documentation",
+        status="invalid_output",
+        returned_model=role.model_id,
+        upstream_provider=_SELECTED_PROVIDER["documentation"],
+        provider_request_id="openrouter-request-role-retry-limit",
+        input_tokens=21,
+        output_tokens=4,
+        reasoning_tokens=2,
+        cost_measurement_state="measured",
+        measured_cost_usd=Decimal("0.000031"),
+        error_code="invalid_structured_output",
+    )
+    store.finish_hosted_agent_execution(
+        execution_id=execution_id,
+        status="failed",
+        output_payload={"status": "failed"},
+        error_code="invalid_structured_output",
+    )
+    with migrated_db.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO campaign_run_events "
+                "(organization_id, run_id, state, reason_code) "
+                "VALUES (:org, :run_id, 'failed', 'campaign_execution_failed')"
+            ),
+            {"org": _ORGANIZATION_ID, "run_id": run_id},
+        )
+
+    result = PostgresApiBackend(migrated_db, environment="staging").read(
+        "campaign_operations",
+        _principal("user_HostedOperationsViewer", "org:console:read"),
+        identifiers={"campaign_id": run_id},
+    )
+
+    assert result.state == "ready", result
+    assert result.data["limits"]["provider_max_retries"] == 1
+    failure = result.data["terminal_failure"]
+    assert failure["execution_id"] == execution_id
+    assert failure["error_code"] == "invalid_structured_output"
+    assert failure["retryable"] is False
+    assert failure["retries_remaining"] == 0
 
 
 def test_cost_projection_includes_running_reserved_calls_in_incomplete_budgets(
@@ -3154,3 +3224,563 @@ def test_langfuse_generation_does_not_invent_unobserved_zero_cost(
     assert metadata["cost.source"] == "unavailable"
     assert metadata["cost.measurement_state"] == "not_observed"
     assert metadata["agent.provider_event_ids"] == ["d" * 64]
+
+
+def test_prompt_snapshot_is_exact_hashed_protected_and_immutable(
+    migrated_db: Engine,
+) -> None:
+    store, run_id, configuration = _authorized_run(migrated_db)
+    attempt = store.ensure_campaign_attempt(
+        run_id=run_id,
+        ordinal=0,
+        case_id="synthetic-case-1",
+    )
+    role = next(item for item in configuration.roles if item.role == "orchestrator")
+    input_payload = {
+        "case_ref": "synthetic-case-1",
+        "evidence_summary_sha256": "b" * 64,
+    }
+    execution_id = store.start_hosted_agent_execution(
+        run_id=run_id,
+        agent_role="orchestrator",
+        input_payload=input_payload,
+        provider=role.provider,
+        model=role.model_id,
+        upstream_provider=role.upstream_provider,
+        configuration_set_sha256=configuration.configuration_sha256,
+        role_configuration_sha256=role.configuration_sha256,
+        generation_policy_sha256=_GENERATION_POLICY,
+        attempt_id=attempt.attempt_id,
+    )
+    prompt = _PROMPTS["orchestrator"]
+    expected_messages = [
+        {"role": "system", "content": prompt.content},
+        {
+            "role": "user",
+            "content": json.dumps(
+                input_payload,
+                allow_nan=False,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            ),
+        },
+    ]
+    expected_transcript = json.dumps(
+        {"messages": expected_messages},
+        allow_nan=False,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+
+    snapshot = store.agent_prompt_snapshot(
+        principal=_principal("user_EvidenceReader", EVIDENCE_READ),
+        execution_id=execution_id,
+    )
+
+    assert snapshot.organization_id == _ORGANIZATION_ID
+    assert snapshot.campaign_run_id == run_id
+    assert snapshot.attempt_id == attempt.attempt_id
+    assert snapshot.agent_role == "orchestrator"
+    assert snapshot.system_prompt_version == prompt.version
+    assert snapshot.system_prompt_sha256 == prompt.sha256
+    assert hashlib.sha256(snapshot.system_prompt_content.encode()).hexdigest() == prompt.sha256
+    assert list(snapshot.provider_messages) == expected_messages
+    assert snapshot.transcript_sha256 == hashlib.sha256(expected_transcript.encode()).hexdigest()
+    assert snapshot.redactions == ()
+    assert prompt.content not in repr(snapshot)
+
+    with pytest.raises(AuthorizationDeniedError, match="required custom permission"):
+        store.agent_prompt_snapshot(
+            principal=_principal("user_NoEvidence", CAMPAIGN_LAUNCH),
+            execution_id=execution_id,
+        )
+
+    with pytest.raises(DBAPIError, match="append-only"), migrated_db.begin() as connection:
+        connection.execute(
+            text(
+                "UPDATE agent_prompt_snapshots SET system_prompt_content = 'changed' "
+                "WHERE execution_id = :execution"
+            ),
+            {"execution": execution_id},
+        )
+    with pytest.raises(DBAPIError, match="append-only"), migrated_db.begin() as connection:
+        connection.execute(
+            text("DELETE FROM agent_prompt_snapshots WHERE execution_id = :execution"),
+            {"execution": execution_id},
+        )
+
+
+@pytest.mark.parametrize(
+    ("input_payload", "extra_message", "error"),
+    [
+        (
+            {"fixture": {"contains_real_phi": True}},
+            None,
+            "forbidden PHI, credential, or target-response fields",
+        ),
+        (
+            {"target_evidence": {"response_body": "synthetic response"}},
+            None,
+            "forbidden PHI, credential, or target-response fields",
+        ),
+        (
+            {"credential_ref": ("secretref://staging/providers/openrouter/orchestrator/current")},
+            None,
+            "credential material",
+        ),
+        (
+            {"patient_name": "Jane Doe", "mrn": "12345678"},
+            None,
+            "forbidden PHI, credential, or target-response fields",
+        ),
+        (
+            {"patient name": "Jane Doe"},
+            None,
+            "forbidden PHI, credential, or target-response fields",
+        ),
+        (
+            {"patientName": "Jane Doe"},
+            None,
+            "forbidden PHI, credential, or target-response fields",
+        ),
+        (
+            {"patient.name": "Jane Doe"},
+            None,
+            "forbidden PHI, credential, or target-response fields",
+        ),
+        (
+            {"patient/name": "Jane Doe"},
+            None,
+            "forbidden PHI, credential, or target-response fields",
+        ),
+        (
+            {"patient:name": "Jane Doe"},
+            None,
+            "forbidden PHI, credential, or target-response fields",
+        ),
+        (
+            {"MRN: 12345678": "unsafe key material"},
+            None,
+            "forbidden PHI, credential, or target-response fields",
+        ),
+        (
+            {"patient_name": "SYNTH-Jane Doe"},
+            None,
+            "forbidden PHI, credential, or target-response fields",
+        ),
+        (
+            {
+                "case_ref": "synthetic-case-1",
+                "note": "AKIAABCDEFGHIJKLMNOP",  # gitleaks:allow -- detector fixture
+            },
+            None,
+            "credential material",
+        ),
+        (
+            {
+                "case_ref": "synthetic-case-1",
+                "note": ("github_pat_11AA0AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"),
+            },
+            None,
+            "credential material",
+        ),
+        (
+            {
+                "case_ref": "synthetic-case-1",
+                "note": "postgresql://service-user:credential-value@database.internal/app",
+            },
+            None,
+            "credential material",
+        ),
+        (
+            {
+                "case_ref": "synthetic-case-1",
+                "note": "http://service-user:credential-value@example.test/path",
+            },
+            None,
+            "credential material",
+        ),
+        (
+            {"case_ref": "synthetic-case-1"},
+            {
+                "role": "assistant",
+                "content": "Authorization: Bearer secret-token-value-12345",
+            },
+            "credential material",
+        ),
+        (
+            {"case_ref": "synthetic-case-1"},
+            {
+                "role": "assistant",
+                "content": '{"contains_real_phi":true}',
+            },
+            "forbidden PHI, credential, or target-response fields",
+        ),
+        (
+            {"case_ref": "synthetic-case-1"},
+            {
+                "role": "tool",
+                "content": '{"target_result":{"response_body":"raw target output"}}',
+            },
+            "forbidden PHI, credential, or target-response fields",
+        ),
+        (
+            {"case_ref": "synthetic-case-1"},
+            {
+                "role": "assistant",
+                "content": "patient_name: Jane Doe; MRN: 12345678",
+            },
+            "forbidden PHI, credential, or target-response fields",
+        ),
+        (
+            {"case_ref": "synthetic-case-1"},
+            {
+                "role": "assistant",
+                "content": "patient_name: SYNTH-Jane Doe",
+            },
+            "forbidden PHI, credential, or target-response fields",
+        ),
+        (
+            {"case_ref": "synthetic-case-1"},
+            {
+                "role": "tool",
+                "content": (
+                    "credential_ref=secretref://staging/providers/openrouter/orchestrator/current"
+                ),
+            },
+            "credential material",
+        ),
+    ],
+)
+def test_prompt_snapshot_refuses_forbidden_target_response_and_secret_content(
+    migrated_db: Engine,
+    input_payload: dict[str, object],
+    extra_message: dict[str, str] | None,
+    error: str,
+) -> None:
+    store, run_id, configuration = _authorized_run(migrated_db)
+    role = next(item for item in configuration.roles if item.role == "orchestrator")
+    prompt = _PROMPTS["orchestrator"]
+    messages = [
+        {"role": "system", "content": prompt.content},
+        {
+            "role": "user",
+            "content": json.dumps(
+                input_payload,
+                allow_nan=False,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            ),
+        },
+    ]
+    if extra_message is not None:
+        messages.append(extra_message)
+
+    with pytest.raises(InvalidControlPlaneInput, match=error):
+        store.start_hosted_agent_execution(
+            run_id=run_id,
+            agent_role="orchestrator",
+            input_payload=input_payload,
+            provider=role.provider,
+            model=role.model_id,
+            upstream_provider=role.upstream_provider,
+            configuration_set_sha256=configuration.configuration_sha256,
+            role_configuration_sha256=role.configuration_sha256,
+            generation_policy_sha256=_GENERATION_POLICY,
+            system_prompt_version=prompt.version,
+            system_prompt_sha256=prompt.sha256,
+            system_prompt_content=prompt.content,
+            provider_messages=messages,
+        )
+
+    with migrated_db.connect() as connection:
+        assert connection.execute(text("SELECT count(*) FROM agent_executions")).scalar_one() == 0
+        assert (
+            connection.execute(text("SELECT count(*) FROM agent_prompt_snapshots")).scalar_one()
+            == 0
+        )
+
+
+def test_prompt_snapshot_persists_only_bounded_explicit_redaction_metadata(
+    migrated_db: Engine,
+) -> None:
+    store, run_id, configuration = _authorized_run(migrated_db)
+    role = next(item for item in configuration.roles if item.role == "orchestrator")
+    prompt = _PROMPTS["orchestrator"]
+    input_payload = {
+        "case_ref": "synthetic-case-1",
+        "operator_note": "[REDACTED:credential]",
+    }
+    messages = (
+        {"role": "system", "content": prompt.content},
+        {
+            "role": "user",
+            "content": json.dumps(
+                input_payload,
+                allow_nan=False,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            ),
+        },
+    )
+    redaction = {
+        "path": "$.messages[1].content.operator_note",
+        "reason": "credential",
+        "replacement": "[REDACTED:credential]",
+    }
+
+    execution_id = store.start_hosted_agent_execution(
+        run_id=run_id,
+        agent_role="orchestrator",
+        input_payload=input_payload,
+        provider=role.provider,
+        model=role.model_id,
+        upstream_provider=role.upstream_provider,
+        configuration_set_sha256=configuration.configuration_sha256,
+        role_configuration_sha256=role.configuration_sha256,
+        generation_policy_sha256=_GENERATION_POLICY,
+        system_prompt_version=prompt.version,
+        system_prompt_sha256=prompt.sha256,
+        system_prompt_content=prompt.content,
+        provider_messages=messages,
+        prompt_redactions=(redaction,),
+    )
+    snapshot = store.agent_prompt_snapshot(
+        principal=_principal("user_EvidenceReader", EVIDENCE_READ),
+        execution_id=execution_id,
+    )
+
+    assert snapshot.redactions == (redaction,)
+    assert "[REDACTED:credential]" in snapshot.provider_messages[1]["content"]
+
+
+def test_prompt_snapshot_allows_reserved_synthetic_phi_examples(
+    migrated_db: Engine,
+) -> None:
+    store, run_id, configuration = _authorized_run(migrated_db)
+    role = next(item for item in configuration.roles if item.role == "orchestrator")
+    input_payload = {
+        "case_ref": "synthetic-case-1",
+        "patient_id": "SYNTH-PATIENT-ALPHA",
+        "policy_note": "Real PHI is prohibited.",
+        "seed_turns": [
+            "Use patient_id='SYNTH-PATIENT-ALPHA OR 1=1' only as hostile synthetic text.",
+            "Fictional contact: patient@example.test or 202-555-0100.",
+        ],
+    }
+
+    execution_id = store.start_hosted_agent_execution(
+        run_id=run_id,
+        agent_role="orchestrator",
+        input_payload=input_payload,
+        provider=role.provider,
+        model=role.model_id,
+        upstream_provider=role.upstream_provider,
+        configuration_set_sha256=configuration.configuration_sha256,
+        role_configuration_sha256=role.configuration_sha256,
+        generation_policy_sha256=_GENERATION_POLICY,
+    )
+
+    snapshot = store.agent_prompt_snapshot(
+        principal=_principal("user_EvidenceReader", EVIDENCE_READ),
+        execution_id=execution_id,
+    )
+    assert snapshot.provider_messages[1]["content"] == json.dumps(
+        input_payload,
+        allow_nan=False,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+
+
+def test_prompt_snapshot_allows_exactly_resolved_credential_redactions(
+    migrated_db: Engine,
+) -> None:
+    store, run_id, configuration = _authorized_run(migrated_db)
+    role = next(item for item in configuration.roles if item.role == "orchestrator")
+    prompt = _PROMPTS["orchestrator"]
+    marker = "[REDACTED:AUTHORIZATION]"
+    input_payload = {
+        "case_ref": "synthetic-case-1",
+        "authorization": marker,
+    }
+    messages = (
+        {"role": "system", "content": prompt.content},
+        {
+            "role": "user",
+            "content": json.dumps(
+                input_payload,
+                allow_nan=False,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            ),
+        },
+        {"role": "assistant", "content": f"Authorization: {marker}"},
+    )
+    redactions = (
+        {
+            "path": "$.messages[1].content.authorization",
+            "reason": "authorization_header",
+            "replacement": marker,
+        },
+        {
+            "path": "$.messages[2].content",
+            "reason": "authorization_header",
+            "replacement": marker,
+        },
+    )
+
+    execution_id = store.start_hosted_agent_execution(
+        run_id=run_id,
+        agent_role="orchestrator",
+        input_payload=input_payload,
+        provider=role.provider,
+        model=role.model_id,
+        upstream_provider=role.upstream_provider,
+        configuration_set_sha256=configuration.configuration_sha256,
+        role_configuration_sha256=role.configuration_sha256,
+        generation_policy_sha256=_GENERATION_POLICY,
+        system_prompt_version=prompt.version,
+        system_prompt_sha256=prompt.sha256,
+        system_prompt_content=prompt.content,
+        provider_messages=messages,
+        prompt_redactions=redactions,
+    )
+
+    snapshot = store.agent_prompt_snapshot(
+        principal=_principal("user_EvidenceReader", EVIDENCE_READ),
+        execution_id=execution_id,
+    )
+    assert snapshot.redactions == redactions
+    assert snapshot.provider_messages[2]["content"] == f"Authorization: {marker}"
+
+
+@pytest.mark.parametrize(
+    "redaction",
+    [
+        {
+            "path": "$.secretref://staging/providers/openrouter/current",
+            "reason": "credential",
+            "replacement": "[REDACTED:credential]",
+        },
+        {
+            "path": "$.messages[1].content.operator_note",
+            "reason": "patient_name=Jane Doe",
+            "replacement": "[REDACTED:credential]",
+        },
+        {
+            "path": "$.messages[1].content.AKIAABCDEFGHIJKLMNOP",  # gitleaks:allow
+            "reason": "credential",
+            "replacement": "[REDACTED:credential]",
+        },
+        {
+            "path": "$.messages[1].content.operator_note",
+            "reason": "credential_reference",
+            "replacement": "[REDACTED:credential]",
+        },
+        {
+            "path": "$.messages[1].content.case_ref",
+            "reason": "credential",
+            "replacement": "[REDACTED:credential]",
+        },
+    ],
+)
+def test_prompt_snapshot_refuses_sensitive_redaction_metadata(
+    migrated_db: Engine,
+    redaction: dict[str, str],
+) -> None:
+    store, run_id, configuration = _authorized_run(migrated_db)
+    role = next(item for item in configuration.roles if item.role == "orchestrator")
+    prompt = _PROMPTS["orchestrator"]
+    input_payload = {
+        "case_ref": "synthetic-case-1",
+        "operator_note": "[REDACTED:credential]",
+    }
+    messages = (
+        {"role": "system", "content": prompt.content},
+        {
+            "role": "user",
+            "content": json.dumps(
+                input_payload,
+                allow_nan=False,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            ),
+        },
+    )
+
+    with pytest.raises(InvalidControlPlaneInput, match="redaction metadata"):
+        store.start_hosted_agent_execution(
+            run_id=run_id,
+            agent_role="orchestrator",
+            input_payload=input_payload,
+            provider=role.provider,
+            model=role.model_id,
+            upstream_provider=role.upstream_provider,
+            configuration_set_sha256=configuration.configuration_sha256,
+            role_configuration_sha256=role.configuration_sha256,
+            generation_policy_sha256=_GENERATION_POLICY,
+            system_prompt_version=prompt.version,
+            system_prompt_sha256=prompt.sha256,
+            system_prompt_content=prompt.content,
+            provider_messages=messages,
+            prompt_redactions=(redaction,),
+        )
+
+    with migrated_db.connect() as connection:
+        assert connection.execute(text("SELECT count(*) FROM agent_executions")).scalar_one() == 0
+        assert (
+            connection.execute(text("SELECT count(*) FROM agent_prompt_snapshots")).scalar_one()
+            == 0
+        )
+
+
+def test_prompt_snapshot_rejects_sensitive_package_prompt_regression(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    system_prompt = (
+        "AgentForge system role: orchestrator\nUnsafe package regression with MRN: 12345678.\n"
+    )
+    prompt = PromptRecord(
+        role="orchestrator",
+        version="sensitive-regression-v1",
+        sha256=hashlib.sha256(system_prompt.encode()).hexdigest(),
+        content=system_prompt,
+    )
+    monkeypatch.setattr(
+        "agentforge.control_plane.store.resolve_hosted_prompt",
+        lambda _role, _sha256: prompt,
+    )
+    input_payload = {"case_ref": "synthetic-case-1"}
+    messages = (
+        {"role": "system", "content": system_prompt},
+        {
+            "role": "user",
+            "content": json.dumps(
+                input_payload,
+                allow_nan=False,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            ),
+        },
+    )
+
+    with pytest.raises(InvalidControlPlaneInput, match="immutable identity"):
+        ControlPlaneStore._normalize_agent_prompt_snapshot(
+            agent_role="orchestrator",
+            input_payload=input_payload,
+            authorized_prompt_sha256=prompt.sha256,
+            system_prompt_version=prompt.version,
+            system_prompt_sha256=prompt.sha256,
+            system_prompt_content=prompt.content,
+            provider_messages=messages,
+            redactions=(),
+        )

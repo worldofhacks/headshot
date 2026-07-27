@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 
 import { defineConfig, type Plugin } from "vite";
@@ -43,6 +44,175 @@ const browserHostedRun = {
   provider_max_concurrency: 1,
   provider_timeout_seconds: 180,
 } as const;
+
+const browserOperationLimits = {
+  target_budget_usd: 1,
+  target_budget_remaining_usd: 0.94,
+  provider_budget_usd: 5,
+  provider_budget_remaining_usd: 4.97,
+  logical_case_limit: null,
+  physical_request_limit: null,
+  physical_requests_remaining: null,
+  provider_call_limit: 56,
+  provider_calls_remaining: 38,
+  target_requests_per_second: 1,
+  run_timeout_seconds: 900,
+  max_attempts_per_run: 9,
+  target_retries_per_turn: null,
+  provider_max_retries: 1,
+  provider_max_concurrency: 1,
+  provider_timeout_seconds: 180,
+} as const;
+
+const browserOperationsByCampaign = {
+  "browser-campaign-alpha": {
+    campaign_id: "browser-campaign-alpha",
+    state: "complete",
+    created_at: "2026-07-22T00:00:00Z",
+    progress: {
+      planned: 9,
+      started: 9,
+      running: 0,
+      completed: 9,
+      failed: 0,
+      skipped: 0,
+      remaining: 0,
+    },
+    executions: {
+      logical_attempts: 9,
+      physical_target_requests: 9,
+      provider_calls: 27,
+    },
+    current_work: null,
+    costs: {
+      provider_measured_usd: 0.04,
+      target_measured_usd: 0.05,
+      total_measured_usd: 0.09,
+      provider_measurement_state: "measured",
+      target_measurement_state: "measured",
+      measurement_state: "measured",
+      currency: "USD",
+    },
+    limits: {
+      ...browserOperationLimits,
+      target_budget_remaining_usd: 0.95,
+      provider_budget_remaining_usd: 4.96,
+      provider_calls_remaining: 29,
+    },
+    verdict_distribution: { blocked: 5, safe: 4 },
+    queue: {
+      queued_jobs: 0,
+      leased_jobs: 0,
+      dead_lettered_jobs: 0,
+      rate_limit_active: false,
+    },
+    terminal_failure: null,
+    as_of: "2026-07-22T00:24:05Z",
+    cursor: 68,
+  },
+  "browser-campaign-beta": {
+    campaign_id: "browser-campaign-beta",
+    state: "aborted",
+    created_at: "2026-07-22T00:07:00Z",
+    progress: {
+      planned: 9,
+      started: 4,
+      running: 0,
+      completed: 3,
+      failed: 1,
+      skipped: 0,
+      remaining: 5,
+    },
+    executions: {
+      logical_attempts: 4,
+      physical_target_requests: 4,
+      provider_calls: 12,
+    },
+    current_work: null,
+    costs: {
+      provider_measured_usd: 0.02,
+      target_measured_usd: 0.04,
+      total_measured_usd: 0.06,
+      provider_measurement_state: "measured",
+      target_measurement_state: "measured",
+      measurement_state: "measured",
+      currency: "USD",
+    },
+    limits: {
+      ...browserOperationLimits,
+      target_budget_remaining_usd: 0.96,
+      provider_budget_remaining_usd: 4.98,
+      provider_calls_remaining: 44,
+    },
+    verdict_distribution: { blocked: 2, safe: 1, failed: 1 },
+    queue: {
+      queued_jobs: 0,
+      leased_jobs: 0,
+      dead_lettered_jobs: 0,
+      rate_limit_active: false,
+    },
+    terminal_failure: null,
+    as_of: "2026-07-22T00:24:05Z",
+    cursor: 68,
+  },
+  "browser-campaign-gamma": {
+    campaign_id: "browser-campaign-gamma",
+    state: "running",
+    created_at: "2026-07-22T00:14:00Z",
+    progress: {
+      planned: 9,
+      started: 6,
+      running: 1,
+      completed: 5,
+      failed: 0,
+      skipped: 0,
+      remaining: 3,
+    },
+    executions: {
+      logical_attempts: 6,
+      physical_target_requests: 7,
+      provider_calls: 18,
+    },
+    current_work: {
+      stage: "coverage_governance",
+      agent_role: "orchestrator",
+      execution_id: "agent-execution-orchestrator",
+      attempt_id: "browser-attempt-2",
+      started_at: "2026-07-22T00:24:00Z",
+    },
+    costs: {
+      provider_measured_usd: 0.03,
+      target_measured_usd: 0.06,
+      total_measured_usd: 0.09,
+      provider_measurement_state: "measured",
+      target_measurement_state: "measured",
+      measurement_state: "measured",
+      currency: "USD",
+    },
+    limits: browserOperationLimits,
+    verdict_distribution: { blocked: 3, safe: 2, partial: 1 },
+    queue: {
+      queued_jobs: 2,
+      leased_jobs: 1,
+      dead_lettered_jobs: 0,
+      rate_limit_active: false,
+    },
+    terminal_failure: null,
+    as_of: "2026-07-22T00:24:05Z",
+    cursor: 68,
+  },
+} as const;
+
+const canonicalJson = (value: unknown): string => {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  const entries = Object.entries(value as Record<string, unknown>)
+    .sort(([left], [right]) => left.localeCompare(right));
+  return `{${entries.map(([key, item]) => `${JSON.stringify(key)}:${canonicalJson(item)}`).join(",")}}`;
+};
+
+const sha256 = (value: string): string =>
+  createHash("sha256").update(value, "utf8").digest("hex");
 
 const browserCampaignSuite = {
   suite_id: "browser-100-case-suite",
@@ -225,6 +395,7 @@ const browserBirdseye = {
       currency: null,
       input_tokens: null,
       output_tokens: null,
+      reasoning_tokens: null,
       token_observation_count: null,
       langfuse_not_attempted_count: null,
       langfuse_disabled_count: null,
@@ -259,6 +430,7 @@ const browserBirdseye = {
       currency: null,
       input_tokens: null,
       output_tokens: null,
+      reasoning_tokens: null,
       token_observation_count: null,
       langfuse_not_attempted_count: null,
       langfuse_disabled_count: null,
@@ -293,6 +465,7 @@ const browserBirdseye = {
       currency: null,
       input_tokens: null,
       output_tokens: null,
+      reasoning_tokens: null,
       token_observation_count: null,
       langfuse_not_attempted_count: null,
       langfuse_disabled_count: null,
@@ -332,6 +505,7 @@ const browserBirdseye = {
       currency: "USD",
       input_tokens: null,
       output_tokens: null,
+      reasoning_tokens: null,
       token_observation_count: 0,
       langfuse_not_attempted_count: 0,
       langfuse_disabled_count: 0,
@@ -948,6 +1122,19 @@ const browserFixture = (): Plugin => ({
         }));
         return;
       }
+      const operationsMatch = path.match(
+        /^\/api\/v1\/campaigns\/([^/]+)\/operations$/,
+      );
+      if (operationsMatch) {
+        const campaignId = decodeURIComponent(operationsMatch[1]);
+        const operations = browserOperationsByCampaign[
+          campaignId as keyof typeof browserOperationsByCampaign
+        ];
+        response.end(JSON.stringify(operations
+          ? { state: "ready", data: operations }
+          : { state: "empty", data: null }));
+        return;
+      }
       if (/^\/api\/v1\/campaigns\/[^/]+\/attempts$/.test(path)) {
         response.end(JSON.stringify({
           state: "ready",
@@ -965,6 +1152,47 @@ const browserFixture = (): Plugin => ({
             created_at: `2026-07-22T00:${String(15 + index).padStart(2, "0")}:00Z`,
           })),
         }));
+        return;
+      }
+      const evidenceMatch = path.match(
+        /^\/api\/v1\/attempts\/([^/]+)\/evidence$/,
+      );
+      if (evidenceMatch) {
+        const attemptId = decodeURIComponent(evidenceMatch[1]);
+        const attemptIndex = Number(attemptId.replace("browser-attempt-", ""));
+        response.end(JSON.stringify(Number.isSafeInteger(attemptIndex)
+          && attemptIndex >= 0
+          && attemptIndex < 6
+          ? {
+              state: "ready",
+              data: {
+                campaign_run_id: "browser-campaign-gamma",
+                attempt_id: attemptId,
+                target_id: "browser-target",
+                target_version: "v1",
+                surface_id: "chat",
+                surface_version: "v1",
+                attack_attempt: {
+                  schema_version: "1",
+                  input_sequence: ["Synthetic browser fixture attack turn."],
+                },
+                request_transcript: {
+                  method: "POST",
+                  relative_path: "/chat",
+                  body: { fixture: "synthetic" },
+                },
+                response_transcript: "{\"answer\":\"Synthetic fixture response.\"}",
+                policy_decision_id: `browser-policy-${attemptIndex}`,
+                executed_at: `2026-07-22T00:${String(15 + attemptIndex).padStart(2, "0")}:00Z`,
+                trace_id: String(attemptIndex + 1).padStart(32, "0"),
+                content_hash: sha256(`browser-attempt-${attemptIndex}`),
+                verdict: ["blocked", "blocked", "safe", "partial", "safe", "blocked"][attemptIndex],
+                confidence: 0.91,
+                execution_profile: "live",
+                evidence_provenance: "live_target",
+              },
+            }
+          : { state: "empty", data: null }));
         return;
       }
       if (path === "/api/v1/traces") {
@@ -1230,6 +1458,48 @@ const browserFixture = (): Plugin => ({
       }
       if (path === "/api/v1/agent-activity") {
         response.end(JSON.stringify({ state: "ready", data: browserAgentActivity }));
+        return;
+      }
+      const promptSnapshotMatch = path.match(
+        /^\/api\/v1\/agent-executions\/([^/]+)\/prompt-snapshot$/,
+      );
+      if (promptSnapshotMatch) {
+        const executionId = decodeURIComponent(promptSnapshotMatch[1]);
+        const execution = browserAgentActivity.find(
+          (candidate) => candidate.execution_id === executionId,
+        );
+        if (!execution || execution.execution_mode !== "hosted_advisory") {
+          response.end('{"state":"empty","data":null}');
+          return;
+        }
+        const systemPrompt = `Operate as the ${execution.agent_role} for a synthetic browser fixture. Enforce the approved target and safety scope.`;
+        const providerMessages = [
+          { role: "system", content: systemPrompt },
+          {
+            role: "user",
+            content: "{\"fixture_identifier\":\"[REDACTED:SYNTHETIC_IDENTIFIER]\",\"instruction\":\"Evaluate only the authorized synthetic case.\"}",
+          },
+        ];
+        response.end(JSON.stringify({
+          state: "ready",
+          data: {
+            execution_id: execution.execution_id,
+            campaign_run_id: execution.campaign_run_id,
+            attempt_id: execution.attempt_id,
+            agent_role: execution.agent_role,
+            system_prompt_version: "browser-fixture-v1",
+            system_prompt_sha256: sha256(systemPrompt),
+            system_prompt_content: systemPrompt,
+            provider_messages: providerMessages,
+            transcript_sha256: sha256(canonicalJson({ messages: providerMessages })),
+            redactions: [{
+              path: "$.messages[1].content.fixture_identifier",
+              reason: "synthetic_identifier",
+              replacement: "[REDACTED:SYNTHETIC_IDENTIFIER]",
+            }],
+            created_at: "2026-07-22T00:24:00Z",
+          },
+        }));
         return;
       }
       if (path === "/api/v1/tooling") {

@@ -1,9 +1,13 @@
 const segment = (value: string) => encodeURIComponent(value);
+const campaignScoped = (path: string, campaignId: string) =>
+  `${path}?campaign_id=${encodeURIComponent(campaignId)}`;
 
 export const RESOURCE_PATHS = {
   principal: "principal",
   campaigns: "campaigns",
   campaign: (campaignId: string) => `campaigns/${segment(campaignId)}`,
+  campaignOperations: (campaignId: string) =>
+    `campaigns/${segment(campaignId)}/operations`,
   attempts: (campaignId: string) => `campaigns/${segment(campaignId)}/attempts`,
   evidence: (attemptId: string) => `attempts/${segment(attemptId)}/evidence`,
   findings: "findings",
@@ -15,7 +19,9 @@ export const RESOURCE_PATHS = {
   coverage: "coverage",
   resilience: "resilience",
   traces: "traces",
+  campaignTraces: (campaignId: string) => campaignScoped("traces", campaignId),
   costs: "costs",
+  campaignCosts: (campaignId: string) => campaignScoped("costs", campaignId),
   targetCatalog: "target-catalog",
   targets: "targets",
   target: (targetId: string) => `targets/${segment(targetId)}`,
@@ -31,6 +37,10 @@ export const RESOURCE_PATHS = {
     `agent-prompts/${segment(agentRole)}/${segment(promptVersion)}/${segment(promptSha256)}`
     + `/${segment(configurationSha256)}`,
   agentActivity: "agent-activity",
+  campaignAgentActivity: (campaignId: string) =>
+    campaignScoped("agent-activity", campaignId),
+  agentPromptSnapshot: (executionId: string) =>
+    `agent-executions/${segment(executionId)}/prompt-snapshot`,
   tooling: "tooling",
   birdseye: "birdseye",
   audit: "audit",

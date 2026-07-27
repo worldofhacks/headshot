@@ -4,10 +4,12 @@ Authenticated React/Vite console for the AgentForge control plane. It preserves 
 titanium-and-ceramic visual system while replacing all sample state with protected same-origin
 `/api/v1` reads, commands, and ordered events.
 
-Status (updated 2026-07-26): **built, integrated, and deployed to Railway staging.** The public Web
-tier at `https://web-staging-8e30.up.railway.app` serves the console shell and protected same-origin
+Status (updated 2026-07-26): the existing console is deployed to Railway staging; this operations
+candidate is built and integrated but **not yet deployed**. The public Web tier at
+`https://web-staging-8e30.up.railway.app` serves the prior console shell and protected same-origin
 API; `/health` and `/ready` return `200`, and an unauthenticated protected API request returns `401`.
-Private Web/Runner/Scheduler code-policy hashes agree and PostgreSQL is at Alembic `0025`.
+Private Web/Runner/Scheduler code-policy hashes agree and staging PostgreSQL remains at Alembic
+`0025`; the candidate package has sole head `0026`.
 
 Governed campaigns now produce real hosted-agent and target records. The latest 34-case run stopped at
 case 12 on schema-invalid Judge output. Its 36 agent and 16 target rows remain `queued` for Langfuse
@@ -61,14 +63,33 @@ headers, cookies, or labels supplied by the browser have no authority.
 
 ## Routes
 
-The direct-route contract is:
+Primary navigation is exactly Runs, Findings, Coverage, Approvals, Observability, and System. Their
+workspace grouping is:
+
+- Runs: Operations, Targets.
+- Findings: Findings, Reports.
+- Observability: Traces, Costs.
+- System: Agents, Tool inventory, Configuration.
+
+The canonical and preserved deep-link route contract is:
 
 ```text
+/runs                  /runs/:campaign
+/findings              /findings/:finding
+/coverage              /approvals
+/observability         /observability/:campaign
+/system
+
+# preserved aliases/deep links
 /live                  /live/:attempt
 /findings/:finding     /approvals/:request
-/coverage              /resilience
-/traces                /costs
-/targets               /config
+/reports               /reports/:report
+/resilience
+/traces                /traces/:campaign
+/costs                 /costs/:campaign
+/targets               /targets/:campaign
+/agents
+/tooling               /config
 /sign-in
 /session-tasks/choose-organization
 /session-tasks/setup-mfa
@@ -105,11 +126,26 @@ must present a fresh request-time token and permission set.
 
 ## Observability views
 
-`/traces` visualizes the durable per-request ledger correlated to Langfuse: campaign, attempt,
-request and trace IDs; transport status; HTTP endpoint metadata; average and p95 latency; request and
-response volume; measured cost; and export state. `/costs` visualizes campaign spend, approved budget
-utilization, cost per request, run duration and reconciliation between campaign summaries and the
-physical request ledger.
+Runs opens the authoritative campaign operations view. It reports only backend facts for planned,
+started, running, completed, failed, skipped, and remaining cases; logical attempts; physical target
+requests; provider calls; current stage/agent/attempt; measured provider/target/total costs; exact
+limits; queue state; verdict distribution; and terminal failure/retryability. Missing values stay
+Unknown, Unavailable, or Partial. The same live operations projection backs Targets and active-run
+surfaces.
+
+Observability's Traces view visualizes the durable request ledger correlated to Langfuse: transport
+status, endpoint metadata, latency, volume, measured cost, and export state. Costs visualizes
+campaign spend, approved budget utilization, cost per request, duration, and reconciliation between
+campaign summaries and physical ledgers. Both receive the selected campaign explicitly so an older
+campaign is not lost outside a bounded global projection.
+
+The event feed invalidates affected cached projections after each authenticated event, reconnects
+with `Last-Event-ID`, and falls back to five-second polling when streaming is unavailable. Last valid
+data remains visible with freshness/staleness state.
+
+An expanded execution can fetch its immutable prompt snapshot only with `org:evidence:read`.
+System-prompt and ordered provider-message contents stay collapsed by default; no prompt is included
+in list, aggregate, SSE, log, or Langfuse payloads.
 
 PostgreSQL is authoritative and Langfuse is a fail-soft external projection. The console does not
 query Langfuse with browser credentials. Hosted provider token/cost facts come from provider responses

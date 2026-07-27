@@ -47,21 +47,34 @@ const accountingValue = (records: AgentActivityReadModel[]): string => {
 };
 
 const tokenValue = (records: AgentActivityReadModel[]): string => {
-  const observed = records.filter((row) =>
+  const hosted = records.filter((row) => row.execution_mode === "hosted_advisory");
+  if (hosted.length === 0) return "Not applicable";
+  const observed = hosted.filter((row) =>
     row.input_tokens !== null
     || row.output_tokens !== null
     || row.reasoning_tokens !== null
   );
-  if (observed.length === 0) return "Not reported";
-  const totals = observed.reduce(
-    (result, row) => ({
-      input: result.input + (row.input_tokens ?? 0),
-      output: result.output + (row.output_tokens ?? 0),
-      reasoning: result.reasoning + (row.reasoning_tokens ?? 0),
-    }),
-    { input: 0, output: 0, reasoning: 0 },
+  if (observed.length === 0) return "Unavailable · Partial";
+  const component = (
+    select: (row: AgentActivityReadModel) => number | null,
+  ): string => {
+    const known = observed
+      .map(select)
+      .filter((value): value is number => value !== null);
+    if (known.length === 0) return "Unavailable";
+    const total = count(known.reduce((sum, value) => sum + value, 0));
+    return known.length === observed.length ? total : `${total} known`;
+  };
+  const partial = observed.length < hosted.length || observed.some(
+    (row) =>
+      row.input_tokens === null
+      || row.output_tokens === null
+      || row.reasoning_tokens === null,
   );
-  return `${count(totals.input)} in · ${count(totals.output)} out · ${count(totals.reasoning)} reasoning`;
+  return `${component((row) => row.input_tokens)} in · `
+    + `${component((row) => row.output_tokens)} out · `
+    + `${component((row) => row.reasoning_tokens)} reasoning`
+    + (partial ? " · Partial" : "");
 };
 
 const rowAccountingValue = (row: AgentActivityReadModel): string =>

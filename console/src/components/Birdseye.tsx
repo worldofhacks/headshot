@@ -73,6 +73,18 @@ const agentSpend = (node: BirdseyeNodeReadModel) => {
   return money(node.measured_cost_usd);
 };
 
+const agentTokens = (node: BirdseyeNodeReadModel) => {
+  if (!node.token_observation_count) return "Unavailable";
+  const components = [node.input_tokens, node.output_tokens, node.reasoning_tokens];
+  const values = components.map((value) => value === null ? "Unavailable" : count(value));
+  const partial = components.some((value) => value === null)
+    || (node.execution_count !== null
+      && node.token_observation_count < node.execution_count);
+  return `${values.join(" / ")}${partial
+    ? " · Partial"
+    : ` · ${node.token_observation_count} observation(s)`}`;
+};
+
 const langfuseDelivery = (node: BirdseyeNodeReadModel) => {
   if (node.execution_count === null || node.execution_count === 0) return "No executions";
   const verified = node.langfuse_verified_count ?? 0;
@@ -544,12 +556,8 @@ function NodeInspector({ node }: { node: BirdseyeNodeReadModel | null }) {
             <div><dt>Campaign executions</dt><dd className="mono">{count(node.execution_count)}</dd></div>
             <div><dt>Campaign known spend</dt><dd className="mono">{agentSpend(node)}</dd></div>
             <div>
-              <dt>Input / output tokens</dt>
-              <dd className="mono">
-                {node.token_observation_count
-                  ? `${count(node.input_tokens ?? 0)} / ${count(node.output_tokens ?? 0)} · ${node.token_observation_count} observation(s)`
-                  : "Not reported"}
-              </dd>
+              <dt>Input / output / reasoning tokens</dt>
+              <dd className="mono">{agentTokens(node)}</dd>
             </div>
             <div>
               <dt>Langfuse delivery</dt>
