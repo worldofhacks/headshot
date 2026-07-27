@@ -133,6 +133,43 @@ Before any release:
 Deploying or restarting Runner invalidates heartbeat-based console readiness until a fresh heartbeat
 is recorded. Operators must not click Launch during the deployment window.
 
+### The liveness beacon
+
+Runner publishes two launch-gate rows into `runtime_component_status`: `runner` (bounded at 30s by
+the Web gate) and one row per hosted configuration hash (bounded at 90s). They are published from a
+dedicated daemon thread every `_HEARTBEAT_BEACON_SECONDS` (10s), deliberately *not* from the main
+work loop.
+
+The distinction is operationally load-bearing. Until 2026-07-27 both rows rode the main loop, whose
+iteration time is unbounded — about 50 minutes while a 34-case campaign runs, and roughly 56s even
+when idle because the loop performs Langfuse I/O. The beacon therefore lapsed and the launch gate
+reported a healthy Runner as unready. Operators saw two different errors from one cause:
+
+- `provider_credentials_runner_unverified` → "Runner has not verified all four hosted provider
+  bindings" (the 90s per-configuration row)
+- `runner_heartbeat_stale` → "The private Runner is not ready to accept this campaign" (the 30s
+  runner row)
+
+Neither indicated a credential, configuration or connectivity problem. Measured on staging the
+runner row oscillated 0 → 56s against its 30s bound, leaving Launch usable only about half the time
+and unusable for the entire duration of any run.
+
+If those errors reappear, read the row age directly before touching credentials or configuration:
+
+```sql
+SELECT component_id, name, availability,
+       extract(epoch FROM (clock_timestamp() - heartbeat_at)) AS age_seconds
+FROM runtime_component_status
+WHERE kind IN ('worker', 'model-runtime')
+ORDER BY age_seconds;
+```
+
+An age above its bound with `availability = 'operational and evidenced'` is a starved beacon, not an
+unready provider. The beacon suppresses every exception by design: it never takes the worker down,
+it simply stops publishing, which is exactly what a stale heartbeat should mean. It also performs no
+campaign-state mutation — `recover_interrupted_provider_calls` stays on the main loop so no
+reservation can be closed concurrently with the work that owns it.
+
 ## Deployment sequence
 
 Use this order for schema-affecting releases:

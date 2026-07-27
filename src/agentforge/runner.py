@@ -80,6 +80,7 @@ from agentforge.policy.scoped_credentials import (
 )
 from agentforge.providers.lineage import ProviderLogicalContextV1
 from agentforge.providers.openrouter import (
+    HostedProviderResponseUnusable,
     HostedProviderUnavailable,
     HostedStructuredOutputInvalid,
     HostedUsageLedger,
@@ -117,6 +118,11 @@ _DEFAULT_LEASE = datetime.timedelta(minutes=10)
 #: is down, and continuing would hammer an unhealthy system while banking unadjudicable work.
 _MAX_CONSECUTIVE_TARGET_FAILURES = 3
 _DEFAULT_POLL_SECONDS = 1.0
+# Liveness-beacon cadence. The Web launch gate bounds the runner row at 30s and each
+# per-configuration row at 90s; publish_runtime_status throttles the latter to 30s internally, so
+# a 10s beacon leaves 3x margin on the tighter gate and 3x on the looser one. It must stay well
+# under 30s: the gap between two publishes is what the gate actually measures.
+_HEARTBEAT_BEACON_SECONDS = 10.0
 _PROVIDER_RECOVERY_INTERVAL_SECONDS = 30.0
 _PROVIDER_RECOVERY_LIMIT = 32
 _PROVIDER_RECOVERY_STALE_AFTER_SECONDS = _DEFAULT_LEASE.total_seconds() + 60.0
@@ -1086,6 +1092,12 @@ class DurableCampaignRunner:
 
         if not _schema_is_current(self.engine):
             return
+        self.maintain_provider_recovery(force_connection_check=force_connection_check)
+        self.publish_runtime_status(force_connection_check=force_connection_check)
+
+    def maintain_provider_recovery(self, *, force_connection_check: bool = False) -> None:
+        """Close bounded crash reservations on an interval. Main-loop only, never the beacon."""
+
         now = time.monotonic()
         if (
             force_connection_check
@@ -1093,6 +1105,21 @@ class DurableCampaignRunner:
         ):
             self._last_provider_recovery_check = now
             self.recover_interrupted_provider_calls()
+
+    def publish_runtime_status(self, *, force_connection_check: bool = False) -> None:
+        """Publish the launch-gate liveness beacon: worker health plus per-configuration readiness.
+
+        Kept free of every campaign-state mutation so it can run on its own thread. The Web launch
+        gate reads these two rows with a 30s (runner) and 90s (per configuration) freshness bound,
+        so their publish cadence must not depend on how long a unit of work takes. It previously
+        rode the main loop, which meant a ~50-minute campaign — or merely a slow idle iteration —
+        starved the beacon and made the gate report unverified provider bindings for a Runner that
+        was perfectly healthy.
+        """
+
+        if not _schema_is_current(self.engine):
+            return
+        now = time.monotonic()
         self.telemetry.heartbeat(force_connection_check=force_connection_check)
         if not force_connection_check and now - self._last_hosted_readiness_check < 30.0:
             return
@@ -1969,7 +1996,7 @@ class DurableCampaignRunner:
                         attempt_id=prebound_attempt.attempt_id,
                         error_code=exc.code,
                     ) from exc
-                except HostedProviderUnavailable as exc:
+                except (HostedProviderUnavailable, HostedProviderResponseUnusable) as exc:
                     if prebound_case is None or prebound_attempt is None:
                         # Same fail-closed rule as the structured-output branch: with no attempt
                         # row there is nothing to abandon, so refuse rather than silently skip.
@@ -1990,8 +2017,16 @@ class DurableCampaignRunner:
                     # No target turn ran, so there is no evidence and no verdict is invented; the
                     # attempt is abandoned un-attacked on the same terms as an unparseable
                     # proposal. Budget-, settlement-, accounting-, identity- and route-failures are
-                    # different types and still abort, which is why the isolated type is the narrow
-                    # subclass rather than HostedProviderError itself.
+                    # different types and still abort, which is why the isolated types are the two
+                    # narrow subclasses rather than HostedProviderError itself.
+                    #
+                    # HostedProviderResponseUnusable joins it for the same reason on the opposite
+                    # exit: HostedProviderUnavailable can only come from retry EXHAUSTION, while a
+                    # response rejected for its own shape (terminal status, unparseable JSON, wrong
+                    # body type, unattributable usage) leaves the retry loop immediately and
+                    # untried. Both name one physical response rather than the run's authority.
+                    # Catching the shared parent instead would silently isolate the budget and
+                    # identity faults that must still end the run — the trap this pair avoids.
                     orchestration_cycle += 1
                     next_ordinal += 1
                     raise _AbandonedProposal(
@@ -2364,7 +2399,11 @@ class DurableCampaignRunner:
                     break
                 work = select_next_work()
                 continue
-            except (HostedStructuredOutputInvalid, HostedProviderUnavailable) as exc:
+            except (
+                HostedStructuredOutputInvalid,
+                HostedProviderUnavailable,
+                HostedProviderResponseUnusable,
+            ) as exc:
                 # HostedProviderUnavailable joins on the same terms: an evaluator the platform
                 # could not reach, after its authorized retry was exhausted, is case-local
                 # operational flakiness and not a statement about the run's authority. It cannot
@@ -2372,6 +2411,11 @@ class DurableCampaignRunner:
                 # sibling types that still propagate and abort here. Nor can it be an unknown
                 # TARGET outcome: target faults are DispatchUnavailable and friends, and this type
                 # is raised only by the provider transport.
+                #
+                # HostedProviderResponseUnusable is the same statement about the opposite exit: a
+                # response rejected for its own shape rather than for an unreachable provider. It
+                # is excluded from the identity/route siblings by TYPE, so isolating it here can
+                # never absorb a violated authority.
                 effective_verdict = self._record_operational_error_verdict(
                     run_id=authorized.run.run_id,
                     attempt_id=attempt.attempt_id,
@@ -2734,6 +2778,33 @@ def main(argv: list[str] | None = None) -> int:
     force_runtime_connection_check = True
     for signum in (signal.SIGTERM, signal.SIGINT):
         signal.signal(signum, lambda *_args: stop.set())
+
+    def _publish_liveness_beacon() -> None:
+        # The beacon must not share a thread with the work it reports on. Publishing it from the
+        # main loop bounded its cadence by one whole iteration -- a ~50-minute campaign, or an
+        # idle pass whose Langfuse I/O ran ~56s -- against launch gates of 30s and 90s. The result
+        # was a healthy Runner that intermittently refused new campaigns with "provider bindings
+        # unverified", including for the whole duration of every run.
+        #
+        # This publishes ONLY status rows: no queue claim, no lease, no campaign-state mutation,
+        # and explicitly not recover_interrupted_provider_calls(), which stays on the main loop so
+        # no reservation can be closed concurrently with the work that owns it. Every failure is
+        # suppressed, so a beacon that cannot reach the database never takes the worker down --
+        # it simply stops publishing, which is exactly the signal a stale heartbeat should carry.
+        force = True
+        while not stop.is_set():
+            with contextlib.suppress(Exception):
+                runner.publish_runtime_status(force_connection_check=force)
+                force = False
+            stop.wait(_HEARTBEAT_BEACON_SECONDS)
+
+    beacon = threading.Thread(
+        target=_publish_liveness_beacon,
+        name="agentforge-runtime-beacon",
+        daemon=True,
+    )
+    if not args.once:
+        beacon.start()
     try:
         while not stop.is_set():
             if not _schema_is_current(runner.engine):
@@ -2742,7 +2813,15 @@ def main(argv: list[str] | None = None) -> int:
                 stop.wait(_DEFAULT_POLL_SECONDS)
                 continue
             with contextlib.suppress(Exception):
-                runner.heartbeat_runtime(force_connection_check=force_runtime_connection_check)
+                if args.once:
+                    # --once never starts the beacon, so this path keeps publishing inline.
+                    runner.heartbeat_runtime(
+                        force_connection_check=force_runtime_connection_check,
+                    )
+                else:
+                    runner.maintain_provider_recovery(
+                        force_connection_check=force_runtime_connection_check,
+                    )
                 force_runtime_connection_check = False
             try:
                 worked = runner.run_once(worker_id=_worker_id())
@@ -2757,6 +2836,9 @@ def main(argv: list[str] | None = None) -> int:
                     runner.telemetry.flush()
                 stop.wait(_DEFAULT_POLL_SECONDS)
     finally:
+        stop.set()
+        if beacon.is_alive():
+            beacon.join(timeout=_HEARTBEAT_BEACON_SECONDS)
         with contextlib.suppress(Exception):
             runner.telemetry.shutdown()
     return 0

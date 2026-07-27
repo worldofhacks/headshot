@@ -80,6 +80,8 @@ from agentforge.policy.scoped_credentials import (
 )
 from agentforge.providers.openrouter import (
     HostedBudgetExceeded,
+    HostedProviderError,
+    HostedProviderResponseUnusable,
     HostedProviderUnavailable,
     HostedRetryAdmissionRefused,
     HostedSettlementAccountingInvalid,
@@ -131,6 +133,7 @@ class _RedTeamProvider:
         unauthorized_route_for_ordinals: frozenset[int] = frozenset(),
         substituted_model_for_ordinals: frozenset[int] = frozenset(),
         unavailable_for_ordinals: frozenset[int] = frozenset(),
+        invalid_json_for_ordinals: frozenset[int] = frozenset(),
     ) -> None:
         self._truncated = truncated_for_ordinals
         self._malformed = malformed_for_ordinals
@@ -138,6 +141,7 @@ class _RedTeamProvider:
         self._unauthorized_route = unauthorized_route_for_ordinals
         self._substituted_model = substituted_model_for_ordinals
         self._unavailable = unavailable_for_ordinals
+        self._invalid_json = invalid_json_for_ordinals
         self.requests: list[str] = []
         self._case_ordinal = 0
 
@@ -156,6 +160,12 @@ class _RedTeamProvider:
             # exhausts its authorized retry, and raises its own typed exhaustion — nothing about
             # the failure is stubbed above the socket.
             return httpx.Response(503, json={"error": {"message": "upstream unavailable"}})
+        if role == "red_team" and self._case_ordinal in self._invalid_json:
+            # The production shape of the 20:22 abort on run 94c141a2: HTTP 200 carrying a body
+            # that will not parse. Returned at the wire so the REAL transport raises the real
+            # JSONDecodeError and classifies it itself — before the fix this reached the campaign
+            # loop as a bare _PhysicalCallError and ended the run at 13 of 34 cases.
+            return httpx.Response(200, content=b'{"choices": [{"message": {"content": "')
 
         schema = body["response_format"]["json_schema"]["schema"]
         content: str | None = json.dumps(_conforming(schema))
@@ -293,6 +303,11 @@ def _verdicts(engine: Engine, run_id: str) -> dict[str, dict]:
         # and with max_retries=0 the first blip is also the last. Nothing was observed, so like a
         # proposal that would not parse it is a fact about ONE case, not about the run's authority.
         ("unavailable_for_ordinals", "hosted-provider-unavailable"),
+        # A response that will not parse isolates on identical terms. This is the 20:22 abort of
+        # run 94c141a2, which reached 13 of 34 authorized cases before one invalid-JSON body ended
+        # it. Unlike the unreachable case above it never entered the retry loop at all: it left the
+        # transport immediately as a SIBLING type, matched neither handler, and aborted the run.
+        ("invalid_json_for_ordinals", "hosted-provider-unavailable"),
     ],
 )
 def test_an_unparseable_proposal_isolates_one_case_and_the_campaign_continues(
@@ -643,6 +658,42 @@ def test_no_campaign_fatal_type_can_be_swallowed_by_the_proposal_isolation(
     # failures — budget exhaustion, settlement, accounting — are siblings under that same base.
     # Isolating the base would have swallowed every one of them.
     assert not issubclass(governance_type, HostedProviderUnavailable)
+    # The unusable-response type is the third isolated branch and needs the identical guard.
+    assert not issubclass(governance_type, HostedProviderResponseUnusable)
+
+
+def test_an_unusable_response_is_isolatable_but_an_authority_violation_is_not() -> None:
+    """Pins the defect that ended run 94c141a2 at 13 of 34 authorized cases.
+
+    An invalid-JSON body from OpenRouter was raised as a bare ``_PhysicalCallError``. That type is
+    a SIBLING of ``HostedProviderUnavailable`` rather than a subclass — both descend from
+    ``HostedProviderError`` — so it matched neither isolated handler and fell straight through to
+    the campaign-abort branch, discarding 21 still-authorized cases over one malformed response.
+
+    The fix splits the type rather than widening the catch. Responses rejected for their own shape
+    become ``HostedProviderResponseUnusable``; the identity and route branches stay bare
+    ``_PhysicalCallError`` because each names an authority the run has already observed to be
+    violated, and continuing to attack through a provider known to be the wrong one is not
+    isolation but negligence.
+    """
+
+    from agentforge.providers.openrouter import _PhysicalCallError  # noqa: PLC0415
+
+    # Isolatable: a response rejected for its own shape.
+    assert issubclass(HostedProviderResponseUnusable, _PhysicalCallError)
+
+    # NOT isolatable: the bare carrier, which is what identity_invalid and route_unauthorized
+    # still raise. This is the exact assertion that would have failed before the fix.
+    assert not issubclass(_PhysicalCallError, HostedProviderResponseUnusable)
+
+    # The two isolated provider types are siblings, not ancestors of one another: neither handler
+    # can silently start covering the other's failures.
+    assert not issubclass(HostedProviderResponseUnusable, HostedProviderUnavailable)
+    assert not issubclass(HostedProviderUnavailable, HostedProviderResponseUnusable)
+
+    # And the shared parent stays outside the isolatable set, so a future sibling is excluded by
+    # default rather than isolated by accident.
+    assert not issubclass(HostedProviderError, HostedProviderResponseUnusable)
 
 
 def test_an_abandoned_proposal_is_not_an_abort_and_carries_the_case_it_dropped() -> None:

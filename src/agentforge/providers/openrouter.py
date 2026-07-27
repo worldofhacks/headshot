@@ -800,6 +800,30 @@ class _PhysicalCallError(HostedProviderError):
         self.measured_cost_usd = measured_cost_usd
 
 
+class HostedProviderResponseUnusable(_PhysicalCallError):
+    """One physical response could not be used, with NO authority violation observed.
+
+    Raised at exactly the four sites where a response is rejected for its own shape — a terminal
+    HTTP status, a body that will not parse as JSON, a body that is not an object, and usage
+    accounting that is incomplete for no attributable reason. Those are statements about ONE
+    physical response, not about the run's authority.
+
+    Its siblings under ``_PhysicalCallError`` are deliberately excluded: identity_invalid and
+    route_unauthorized each carry a ``logical_error_code`` naming a violated authority, and a
+    caller that isolated them would keep attacking through a provider it has already observed to
+    be the wrong one. Discriminating on TYPE rather than on that code is what keeps the two
+    apart without a caller having to reason about codes.
+
+    ``code`` is deliberately inherited unchanged, exactly as ``HostedProviderUnavailable`` does,
+    so durable statuses, recorded error codes and console rendering are untouched; only the TYPE
+    is new, and only so callers can isolate one unit of work.
+
+    This is the fault that ended run 94c141a2 at 13 of 34 authorized cases: an invalid-JSON body
+    surfaced as a bare ``_PhysicalCallError``, which matched neither isolated type and fell to the
+    campaign-abort branch.
+    """
+
+
 class OpenRouterTransport:
     """Synchronous concurrency-one transport intended for the private Runner only."""
 
@@ -1409,19 +1433,19 @@ class OpenRouterTransport:
         if response.status_code in _RETRYABLE_STATUS:
             raise _RetryableResponse(self._retry_after(response))
         if response.status_code < 200 or response.status_code >= 300:
-            raise _PhysicalCallError(
+            raise HostedProviderResponseUnusable(
                 "OpenRouter returned a terminal HTTP error",
                 provider_event_status="terminal_failure",
             )
         try:
             payload = response.json()
         except (TypeError, ValueError) as exc:
-            raise _PhysicalCallError(
+            raise HostedProviderResponseUnusable(
                 "OpenRouter returned invalid JSON",
                 provider_event_status="invalid_output",
             ) from exc
         if not isinstance(payload, dict):
-            raise _PhysicalCallError(
+            raise HostedProviderResponseUnusable(
                 "OpenRouter response has an invalid shape",
                 provider_event_status="invalid_output",
             )
@@ -1476,6 +1500,10 @@ class OpenRouterTransport:
 
         usage_observation = self._usage(payload)
         if not usage_observation.complete:
+            # The TYPE is chosen in the same branch that names the violated authority, so the two
+            # can never disagree. Only the final branch — accounting incomplete with nothing
+            # attributable — is a statement about this one response and therefore isolatable.
+            unusable_response = False
             if model_substituted:
                 status = "model_mismatch"
                 logical_error_code = _ModelSubstituted.code
@@ -1488,7 +1516,11 @@ class OpenRouterTransport:
             else:
                 status = "invalid_usage"
                 logical_error_code = None
-            raise _PhysicalCallError(
+                unusable_response = True
+            physical_error = (
+                HostedProviderResponseUnusable if unusable_response else _PhysicalCallError
+            )
+            raise physical_error(
                 usage_observation.error_message
                 or "OpenRouter provider usage accounting is incomplete",
                 provider_event_status=status,
@@ -1891,6 +1923,7 @@ __all__ = [
     "HostedLedgerSnapshot",
     "HostedProviderError",
     "HostedProviderResponseError",
+    "HostedProviderResponseUnusable",
     "HostedProviderUnavailable",
     "HostedUsageEnvelope",
     "HostedUsageLedger",

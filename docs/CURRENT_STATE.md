@@ -146,7 +146,7 @@ invented one.
 ## Campaign fault isolation
 
 A campaign aborts only for governance, security or integrity failures, or a target the platform
-can no longer reason about. Three case-local faults are isolated instead — two provider-side, one
+can no longer reason about. Four case-local faults are isolated instead — three provider-side, one
 target-side:
 
 - `HostedStructuredOutputInvalid` (and its `HostedStructuredOutputTruncated` subclass) — a
@@ -158,6 +158,14 @@ target-side:
   also covers budget, settlement and accounting failures, which must still abort — and because the
   error *code* cannot discriminate either, since `HostedSettlementFailed`, `_PhysicalCallError`
   and `_StructuredOutputAbsent` all report the identical `hosted-provider-unavailable`.
+- `HostedProviderResponseUnusable` — one physical response was rejected for its own shape: a
+  terminal HTTP status, a body that will not parse as JSON, a body that is not an object, or usage
+  accounting incomplete for no attributable reason. It is the counterpart of the type above on the
+  opposite exit — that one requires retry *exhaustion*, while this one leaves the transport
+  immediately and untried. Its `_PhysicalCallError` siblings for `identity_invalid` and
+  `route_unauthorized` are deliberately excluded: each names an authority already observed to be
+  violated, and continuing to attack through a provider known to be the wrong one is not isolation.
+  The split is by type at the raise site, never by inspecting `logical_error_code`.
 
 - `IncompleteMultiTurnAttempt` — a sequential multi-turn sequence ended before every authorized
   turn was sent, because a turn returned a non-2xx status. Raised at one site in the Policy
@@ -165,7 +173,7 @@ target-side:
   rate, attempt and physical-request-cap breaches, which are facts about the run's authority and
   must always abort.
 
-The three differ deliberately in what they leave behind. In the proposal phase no target turn ran,
+They differ deliberately in what they leave behind. In the proposal phase no target turn ran,
 so there is no evidence and the pre-bound attempt is abandoned un-attacked rather than handed a
 verdict it did not earn. In the dispatch phase a *provider* fault leaves the target already
 attacked with its evidence recorded, so the case receives a contract-valid `ERROR` verdict. An
@@ -178,6 +186,16 @@ What remains unknown after a partial sequence is bounded and specific: whether t
 the turn that failed. That makes the attempt unadjudicable, not the campaign. Live example — run
 `2cf3773d` (2026-07-27) sent turn 1 successfully, took one HTTP 502 on turn 2 after 63.8 seconds,
 and discarded 33 authorized cases; the target answered healthily moments later.
+
+`HostedProviderResponseUnusable` has the same provenance. Run `94c141a2` (2026-07-27) reached 13 of
+34 authorized cases — two of them `EXPLOIT_LIKELY` — before one invalid-JSON body from OpenRouter
+ended it after 42 minutes, on the chain
+`CampaignAbort[red_team_proposal_failed] <- _PhysicalCallError <- JSONDecodeError`. The fault was
+already understood and already isolated in principle; it escaped because `_PhysicalCallError` is a
+*sibling* of `HostedProviderUnavailable` rather than a subclass, so it matched neither handler.
+That is the specific hazard the type algebra in `tests/test_red_team_proposal_isolation.py` now
+pins: a shared base is never the isolatable unit, and neither isolated type may become an ancestor
+of the other.
 
 Sustained failure still aborts, on both axes. Total proposal abandonment leaves
 `dispatched_case_count` at zero and raises, and three *consecutive* unfinished multi-turn attempts
