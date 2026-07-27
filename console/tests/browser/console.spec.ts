@@ -57,7 +57,7 @@ test("exact six primary groups preserve legacy routes and expose Run operations 
   })).toBeVisible();
 
   await page.goto("/targets");
-  await expect(page.getByRole("heading", { name: "Pilot runs", exact: true, level: 1 }))
+  await expect(page.getByRole("heading", { name: "Targets", exact: true, level: 1 }))
     .toBeVisible();
   await expect(page.getByRole("tab", { name: "Targets", exact: true }))
     .toHaveAttribute("aria-selected", "true");
@@ -118,8 +118,8 @@ test("390px grouped navigation has no overflow and supports keyboard tabs", asyn
   await expect(targets).toHaveAttribute("tabindex", "-1");
   await operations.focus();
   await page.keyboard.press("ArrowRight");
-  await expect(page).toHaveURL(/\/targets\/browser-campaign-gamma$/);
-  await expect(page.getByRole("heading", { name: "Pilot runs", exact: true }))
+  await expect(page).toHaveURL(/\/targets$/);
+  await expect(page.getByRole("heading", { name: "Targets", exact: true }))
     .toBeVisible();
   await expect(page.getByRole("tab", { name: "Targets", exact: true }))
     .toHaveAttribute("aria-selected", "true");
@@ -127,7 +127,7 @@ test("390px grouped navigation has no overflow and supports keyboard tabs", asyn
 
   await page.getByRole("tab", { name: "Targets", exact: true }).focus();
   await page.keyboard.press("ArrowLeft");
-  await expect(page).toHaveURL(/\/runs\/browser-campaign-gamma$/);
+  await expect(page).toHaveURL(/\/runs$/);
   await expect(page.getByRole("heading", { name: "Run operations", exact: true }))
     .toBeVisible();
 

@@ -298,7 +298,7 @@ function ConsoleShellContent({
               aria-current={workspace.screen === item.screen ? "page" : undefined}
               onClick={() => go({
                 screen: item.screen,
-                entityId: null,
+                entityId: item.screen === "observability" ? activeCampaignId : null,
               })}
             >
               <LineIcon path={item.icon} />
@@ -366,7 +366,7 @@ function ConsoleShellContent({
               className={workspace.screen === item.screen ? "active" : undefined}
               onClick={() => go({
                 screen: item.screen,
-                entityId: null,
+                entityId: item.screen === "observability" ? activeCampaignId : null,
               })}
             >
               {item.label}
