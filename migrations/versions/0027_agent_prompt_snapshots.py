@@ -27,6 +27,7 @@ down_revision: str | None = "0026"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
+
 def upgrade() -> None:
     op.create_table(
         "agent_prompt_snapshots",
