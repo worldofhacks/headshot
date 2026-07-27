@@ -396,6 +396,10 @@ class CampaignTemplateReadModel(_ReadModel):
     corpus_id: str
     corpus_hash: str
     case_count: int = Field(gt=0)
+    # Sigma(turns) for one full pass. Every template publishes it, not just the suite batches: the
+    # console needs it to request an exactly-sized physical_request_limit, and a scope without one
+    # is refused at the first physical work unit.
+    physical_request_count: int = Field(gt=0)
     tool_sources: tuple[str, ...]
     execution_profile: Literal["synthetic", "live"]
     maximum_caps: SafetyCapsReadModel
@@ -405,7 +409,6 @@ class CampaignTemplateReadModel(_ReadModel):
 class CampaignSuiteBatchReadModel(CampaignTemplateReadModel):
     ordinal: int = Field(gt=0)
     batch_id: str
-    physical_request_count: int = Field(gt=0)
 
 
 class CampaignSuiteTemplateReadModel(_ReadModel):

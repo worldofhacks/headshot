@@ -783,6 +783,7 @@ describe("v1 read-model decoders", () => {
       corpus_id: "m11-seed-corpus-v1",
       corpus_hash: "c".repeat(64),
       case_count: 2,
+      physical_request_count: 3,
       tool_sources: [],
       execution_profile: "live",
       maximum_caps: caps,

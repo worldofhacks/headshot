@@ -1402,14 +1402,31 @@ export function TargetManagement({
   const [timeoutSeconds, setTimeoutSeconds] = useState(
     () => template ? String(template.maximum_caps.run_timeout_seconds) : "",
   );
-  const parsedCaps = {
+  // The four operator-editable ceiling caps. These are the only ones a human types, and the only
+  // ones checked against the target's ceiling below.
+  const editableCaps = {
     budget_usd: Number(budgetUsd),
     max_attempts_per_run: Number(maxAttempts),
     target_requests_per_second: Number(requestsPerSecond),
     run_timeout_seconds: Number(timeoutSeconds),
   };
-  const capsValid = Object.values(parsedCaps).every((value) => Number.isFinite(value) && value > 0)
-    && Number.isSafeInteger(parsedCaps.max_attempts_per_run);
+  // The three exact execution caps are derived from the reviewed corpus, never typed. Omitting
+  // them produced a scope the control plane refuses at its first physical work unit — it requires
+  // a durable physical_request_limit and target_retries_per_turn — which surfaced only as a 403 at
+  // launch. target_retries_per_turn is 0 because a retried turn would replay a live attack against
+  // the target.
+  const parsedCaps = template
+    ? {
+        ...editableCaps,
+        logical_case_limit: template.case_count,
+        physical_request_limit: template.physical_request_count,
+        target_retries_per_turn: 0,
+      }
+    : editableCaps;
+  // Validated over the editable caps only: target_retries_per_turn is legitimately 0 and would
+  // fail a blanket "> 0" check.
+  const capsValid = Object.values(editableCaps).every((value) => Number.isFinite(value) && value > 0)
+    && Number.isSafeInteger(editableCaps.max_attempts_per_run);
   const fullScanFitsTarget = Boolean(
     template && template.maximum_caps.max_attempts_per_run >= template.case_count,
   );

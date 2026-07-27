@@ -559,6 +559,8 @@ export interface CampaignTemplateReadModel extends JsonRecord {
   corpus_id: string;
   corpus_hash: string;
   case_count: number;
+  // Sigma(turns) for one full pass — the exact physical_request_limit this workload needs.
+  physical_request_count: number;
   tool_sources: string[];
   execution_profile: "synthetic" | "live";
   maximum_caps: SafetyCapsReadModel;
@@ -568,7 +570,6 @@ export interface CampaignTemplateReadModel extends JsonRecord {
 export interface CampaignSuiteBatchReadModel extends CampaignTemplateReadModel {
   ordinal: number;
   batch_id: string;
-  physical_request_count: number;
 }
 
 export interface CampaignSuiteTemplateReadModel extends JsonRecord {
