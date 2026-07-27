@@ -12,7 +12,8 @@ PostgreSQL is a fourth private managed service.
 
 - Web alone runs `alembic upgrade head`.
 - Runner and Scheduler refuse work until PostgreSQL is at the exact packaged head.
-- The current sole packaged head is `0025`.
+- The current sole packaged head is `0026`; the last verified staging database remains at `0025`
+  until this candidate is deployed.
 - Web, Runner, and Scheduler must expose the same hosted generation-policy digest and packaged policy
   file hash before new campaign authorization is minted.
 - Staging currently satisfies that policy parity. Production does not; see

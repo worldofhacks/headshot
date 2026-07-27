@@ -94,7 +94,7 @@ def test_current_state_names_every_runtime_role_and_default_policy() -> None:
 def test_current_docs_name_the_packaged_alembic_head() -> None:
     config = Config(str(ROOT / "alembic.ini"))
     heads = ScriptDirectory.from_config(config).get_heads()
-    assert heads == ["0025"]
+    assert len(heads) == 1
 
     for path in (
         "README.md",

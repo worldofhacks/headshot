@@ -1,6 +1,6 @@
 # Headshot staging demo and acceptance script
 
-**Updated:** 2026-07-26
+**Updated:** 2026-07-27
 
 **Staging:** `https://web-staging-8e30.up.railway.app`
 
@@ -16,7 +16,8 @@ error.
 - Use synthetic test data only.
 - Never show Clerk tokens, target sessions, Railway variables, provider keys, or raw credentials.
 - Confirm Web, Runner, and Scheduler are on one release and policy digest.
-- Confirm PostgreSQL is at the packaged sole head (`0025` in the current release).
+- Confirm PostgreSQL is at deployed sole head `0025`. The repository candidate packages `0026` and
+  is not deployed.
 - Confirm `/health`, `/ready`, protected-route denial, and private worker heartbeats.
 - Confirm production remains out of scope while it is release-skewed.
 - For any live run, confirm the exact target/surface/version, workload, target-turn caps, hosted
@@ -25,7 +26,7 @@ error.
 
 ## 0:00 — Platform and trust boundaries
 
-Open **Overview/Live**.
+Open **Runs → Operations**.
 
 > “Headshot is a Railway-hosted multi-agent control plane for adversarially evaluating a live AI
 > system. React and FastAPI form the public authenticated Web service. PostgreSQL is the authority and
@@ -36,7 +37,7 @@ Point out that Clerk authenticates humans but does not itself authorize a live c
 
 ## 0:35 — Target and workload
 
-Open **Targets**, then **Coverage**.
+Open **Runs → Targets**, then **Coverage**.
 
 > “The target is the externally deployed OpenEMR Clinical Co-Pilot. This repository contains no
 > target code. The frozen suite has 100 reviewed cases and 121 target turns across six threat
@@ -67,7 +68,7 @@ claim this step is proven by a missing-token `401`.
 
 ## 2:00 — Multi-agent execution
 
-Open **Agents** and **Traces**.
+Open **System → Agents**, then **Observability → Traces**.
 
 > “For each case, the Orchestrator makes a bounded decision. The Runner creates the durable attempt
 > before the hosted Red Team selects from the exact approved corpus. The Policy Gateway sends the
@@ -80,7 +81,7 @@ require review and reauthorization.
 
 ## 2:45 — Latest run, without spin
 
-Open run `50da57b037d44b3c93a10e4c2edf61a8`.
+Open **Runs → Operations** and select run `50da57b037d44b3c93a10e4c2edf61a8`.
 
 > “This run proved the lineage repair: 12 attempts, 36 provider calls, and 16 target calls were
 > recorded without a post-hoc attempt-binding conflict. Eleven cases reached verdicts. One Gemini
@@ -93,7 +94,7 @@ application success.
 
 ## 3:25 — Evidence, Langfuse, and cost
 
-Open **Costs** and **Traces**.
+Open **Observability → Costs**, then **Traces**.
 
 > “PostgreSQL is the source of truth. The run measured `$0.60731395` across 36 provider calls and
 > recorded `$0.16` of configured target-call accounting. Provider cost is measured; the target figure

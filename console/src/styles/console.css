@@ -117,6 +117,10 @@
 .state-unavailable, .state-stale, .state-degraded { border-color: var(--warn-line); background: var(--warn-t); }
 .state-error { border-color: var(--v-conf); background: var(--v-conf-t); }
 .state-empty { border-style: dashed; }
+.run-failure-panel { align-items: flex-start; padding: 13px 14px; }
+.run-failure-panel > .evidence-stack { flex: 1 1 auto; min-width: 0; }
+.run-failure-panel > .evidence-stack > strong { color: var(--tx); font-size: var(--fs-md); }
+.run-failure-panel .detail-grid { width: 100%; }
 
 .table-scroll { max-width: 100%; overflow: auto; border: 1px solid var(--sep); border-radius: var(--r-sm); }
 .record-table { width: 100%; border-collapse: collapse; font-size: var(--fs-row); white-space: nowrap; }
@@ -130,6 +134,10 @@
 .detail-grid > div { min-width: 0; padding: 11px 12px; background: var(--bg-inset); }
 .detail-grid dt { margin-bottom: 4px; color: var(--tx3); font-size: var(--fs-2xs); text-transform: uppercase; letter-spacing: 0.04em; }
 .detail-grid dd { margin: 0; overflow: hidden; color: var(--tx); font-size: var(--fs-xs); text-overflow: ellipsis; white-space: nowrap; }
+.prompt-identity-grid .prompt-hash-value { display: flex; align-items: flex-start; gap: 8px; overflow: visible; text-overflow: clip; white-space: normal; }
+.prompt-hash-value code { min-width: 0; flex: 1; font: inherit; overflow-wrap: anywhere; user-select: all; }
+.prompt-hash-copy { min-height: 24px; flex: 0 0 auto; padding: 0 7px; border: 1px solid var(--bd); border-radius: var(--r-xs); background: var(--bg-raise); color: var(--tx2); font-size: var(--fs-2xs); font-weight: 600; }
+.prompt-hash-copy:hover { border-color: var(--bd-2); color: var(--tx); }
 
 .command-row { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 14px; }
 .command-control { display: flex; flex-direction: column; align-items: flex-start; gap: 5px; }
@@ -601,7 +609,7 @@
     inset: auto 0 0;
     z-index: 20;
     display: grid;
-    grid-template-columns: repeat(5, minmax(0, 1fr));
+    grid-template-columns: repeat(6, minmax(0, 1fr));
     min-height: calc(54px + env(safe-area-inset-bottom));
     padding: 4px 4px env(safe-area-inset-bottom);
     border-top: 1px solid var(--bd);

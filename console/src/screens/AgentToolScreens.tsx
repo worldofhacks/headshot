@@ -23,6 +23,7 @@ import {
   time,
   Timeline,
 } from "../components/Analytics";
+import { ExpandableEvidence } from "../components/ExpandableEvidence";
 import { RecordTable, ResourceView, StateNotice } from "../components/ResourceView";
 import {
   LIVE_RESOURCE_POLL_INTERVAL_MS,
@@ -116,6 +117,23 @@ const accountingValue = (agent: AgentReadModel) => {
   ) return agent.accounting_status.replaceAll("_", " ");
   if (agent.accounting_status === "partial") return `${money(agent.measured_cost)} known · partial`;
   return money(agent.measured_cost);
+};
+
+const agentTokenValue = (agent: AgentReadModel) => {
+  if (agent.token_observation_count === 0) {
+    return agent.hosted_execution_count > 0 ? "Unavailable · Partial" : "Not applicable";
+  }
+  const components = [
+    agent.input_tokens,
+    agent.output_tokens,
+    agent.reasoning_tokens,
+  ];
+  const values = components.map((value) => value === null ? "Unavailable" : count(value));
+  const partial = components.some((value) => value === null)
+    || agent.token_observation_count < agent.hosted_execution_count;
+  return `${values.join(" / ")}${partial
+    ? " · Partial"
+    : ` · ${agent.token_observation_count} observation(s)`}`;
 };
 
 const activityAccountingValue = (activity: AgentActivityReadModel) => {
@@ -254,7 +272,13 @@ export function AgentsScreen({
   const totals = useMemo(() => ({
     executions: records.reduce((sum, agent) => sum + agent.execution_count, 0),
     running: records.reduce((sum, agent) => sum + agent.running_count, 0),
+    hostedExecutions: records.reduce((sum, agent) => sum + agent.hosted_execution_count, 0),
     cost: records.reduce((sum, agent) => sum + (agent.measured_cost ?? 0), 0),
+    knownCostRoles: records.filter(
+      (agent) =>
+        agent.measured_cost !== null
+        && !["not_applicable", "unavailable"].includes(agent.accounting_status),
+    ).length,
     observedTokens: records.reduce(
       (sum, agent) =>
         sum
@@ -276,6 +300,22 @@ export function AgentsScreen({
       (agent) => agent.physical_call_count_state === "lower_bound",
     ).length,
     tokenObservations: records.reduce((sum, agent) => sum + agent.token_observation_count, 0),
+    knownTokenComponents: records.reduce(
+      (sum, agent) =>
+        sum
+        + [agent.input_tokens, agent.output_tokens, agent.reasoning_tokens]
+          .filter((value) => value !== null).length,
+      0,
+    ),
+    partialTokenRoles: records.filter(
+      (agent) =>
+        agent.hosted_execution_count > agent.token_observation_count
+        || (
+          agent.token_observation_count > 0
+          && [agent.input_tokens, agent.output_tokens, agent.reasoning_tokens]
+            .some((value) => value === null)
+        ),
+    ).length,
     incompleteAccounting: records.filter(
       (agent) => ["partial", "unavailable"].includes(agent.accounting_status),
     ).length,
@@ -302,10 +342,18 @@ export function AgentsScreen({
             { label: "Real executions", value: count(totals.executions), note: `${totals.running} currently running` },
             {
               label: "Known agent cost",
-              value: totals.incompleteAccounting > 0 ? `${money(totals.cost)} known` : money(totals.cost),
-              note: totals.incompleteAccounting > 0
-                ? `${totals.incompleteAccounting} role(s) have incomplete provider accounting`
-                : totals.unresolvedUsdExposure > 0 || totals.unresolvedPhysicalCalls > 0
+              value: totals.knownCostRoles === 0
+                ? "Unavailable"
+                : totals.incompleteAccounting > 0 || totals.knownCostRoles < records.length
+                  ? `${money(totals.cost)} known`
+                  : money(totals.cost),
+              note: totals.knownCostRoles === 0
+                ? "No measured provider cost is available for these roles"
+                : totals.incompleteAccounting > 0
+                  ? `${totals.incompleteAccounting} role(s) have incomplete provider accounting`
+                  : totals.knownCostRoles < records.length
+                    ? `${records.length - totals.knownCostRoles} role(s) have no measured provider cost`
+                    : totals.unresolvedUsdExposure > 0 || totals.unresolvedPhysicalCalls > 0
                   ? `${money(totals.unresolvedUsdExposure)} and ${count(totals.unresolvedPhysicalCalls)} call(s) unresolved`
                 : totals.incompleteCallCounts > 0
                   ? `${totals.physicalCalls} provider call(s) known · historical count incomplete`
@@ -313,9 +361,19 @@ export function AgentsScreen({
             },
             {
               label: "Token observations",
-              value: count(totals.observedTokens),
+              value: totals.tokenObservations === 0
+                ? totals.hostedExecutions === 0
+                  ? "Not applicable"
+                  : totals.partialTokenRoles > 0
+                    ? "Unavailable · Partial"
+                    : "Unavailable"
+                : totals.partialTokenRoles > 0
+                  ? totals.knownTokenComponents === 0
+                    ? "Partial"
+                    : `${count(totals.observedTokens)} known · Partial`
+                  : count(totals.observedTokens),
               note: totals.tokenObservations > 0
-                ? `${totals.tokenObservations} hosted observations · ${totals.physicalCalls} provider calls${totals.incompleteCallCounts > 0 ? " known (lower bound)" : ""}`
+                ? `${totals.tokenObservations} hosted observations${totals.partialTokenRoles > 0 ? ` · ${totals.partialTokenRoles} role(s) have incomplete token components` : ""} · ${totals.physicalCalls} provider calls${totals.incompleteCallCounts > 0 ? " known (lower bound)" : ""}`
                 : "No hosted provider token observations yet",
             },
           ]} />
@@ -404,7 +462,7 @@ export function AgentsScreen({
               <dl className="agent-ledger-summary">
                 <div><dt>Role-history p50 / p95 latency</dt><dd className="mono">{selected.p50_duration_ms === null || selected.p95_duration_ms === null ? "not yet executed" : `${selected.p50_duration_ms.toFixed(1)} / ${selected.p95_duration_ms.toFixed(1)} ms`}</dd></div>
                 <div><dt>Role-history cost</dt><dd className="mono">{accountingValue(selected)}</dd></div>
-                <div><dt>Input / output / reasoning tokens</dt><dd className="mono">{selected.token_observation_count > 0 ? `${count(selected.input_tokens ?? 0)} / ${count(selected.output_tokens ?? 0)} / ${count(selected.reasoning_tokens ?? 0)} · ${selected.token_observation_count} observation(s)` : "not reported"}</dd></div>
+                <div><dt>Input / output / reasoning tokens</dt><dd className="mono">{agentTokenValue(selected)}</dd></div>
                 <div><dt>Provider calls</dt><dd className="mono">{physicalCallValue(selected)}</dd></div>
                 <div><dt>Langfuse delivery</dt><dd className="mono">{langfuseDelivery(selected)}</dd></div>
                 <div><dt>Last Langfuse query-back</dt><dd className="mono">{selected.last_langfuse_verified_at ? time(selected.last_langfuse_verified_at) : "not yet observed remotely"}</dd></div>
@@ -556,47 +614,52 @@ export function AgentsScreen({
         )}
       </Panel>
 
-      <Panel title="All agent handoffs" meta="hashes, traces and parent links" eyebrow="OBSERVABILITY">
-        <ResourceView result={activity.result} emptyLabel="No agent activity has been recorded.">
-          {(data) => (
-            <RecordTable
-              data={data.map((row) => ({
-                ...row,
-                measured_cost_display: activityAccountingValue(row),
-                served_model_display: servedModel(row),
-                provider_lineage_display: activityProviderLineageValue(row),
-                langfuse_status: langfuseDeliveryState(row),
-              }))}
-              identityKeys={["execution_id"]}
-              columns={[
-                { key: "started_at", label: "Started", mono: true, timestamp: true },
-                { key: "agent_role", label: "Role" },
-                { key: "status", label: "Status" },
-                { key: "campaign_run_id", label: "Campaign", mono: true },
-                { key: "attempt_id", label: "Attempt", mono: true },
-                { key: "parent_execution_id", label: "Parent", mono: true },
-                { key: "model", label: "Engine", mono: true },
-                { key: "served_model_display", label: "Requested → served", mono: true },
-                { key: "provider_event_status", label: "Provider event", mono: true },
-                { key: "upstream_provider", label: "Upstream", mono: true },
-                { key: "duration_ms", label: "Latency ms", mono: true },
-                { key: "input_tokens", label: "Input tokens", mono: true },
-                { key: "output_tokens", label: "Output tokens", mono: true },
-                { key: "reasoning_tokens", label: "Reasoning tokens", mono: true },
-                { key: "physical_attempts", label: "Provider calls", mono: true },
-                { key: "provider_lineage_display", label: "Provider lineage" },
-                { key: "accounting_status", label: "Accounting" },
-                { key: "measured_cost_display", label: "Cost USD", mono: true },
-                { key: "trace_id", label: "Trace", mono: true },
-                { key: "judge_calibration_state", label: "Calibration" },
-                { key: "oracle_agreement", label: "Oracle agreement", mono: true },
-                { key: "decision_authority", label: "Authority" },
-                { key: "langfuse_status", label: "Langfuse", mono: true },
-                { key: "langfuse_verified_at", label: "Verified at", mono: true, timestamp: true },
-              ]}
-            />
-          )}
-        </ResourceView>
+      <Panel title="Advanced execution evidence" meta="hashes, traces and parent links" eyebrow="OBSERVABILITY">
+        <ExpandableEvidence
+          title="Open all-agent handoff ledger"
+          meta={`${activity.result.data?.length ?? 0} records`}
+        >
+          <ResourceView result={activity.result} emptyLabel="No agent activity has been recorded.">
+            {(data) => (
+              <RecordTable
+                data={data.map((row) => ({
+                  ...row,
+                  measured_cost_display: activityAccountingValue(row),
+                  served_model_display: servedModel(row),
+                  provider_lineage_display: activityProviderLineageValue(row),
+                  langfuse_status: langfuseDeliveryState(row),
+                }))}
+                identityKeys={["execution_id"]}
+                columns={[
+                  { key: "started_at", label: "Started", mono: true, timestamp: true },
+                  { key: "agent_role", label: "Role" },
+                  { key: "status", label: "Status" },
+                  { key: "campaign_run_id", label: "Campaign", mono: true },
+                  { key: "attempt_id", label: "Attempt", mono: true },
+                  { key: "parent_execution_id", label: "Parent", mono: true },
+                  { key: "model", label: "Engine", mono: true },
+                  { key: "served_model_display", label: "Requested → served", mono: true },
+                  { key: "provider_event_status", label: "Provider event", mono: true },
+                  { key: "upstream_provider", label: "Upstream", mono: true },
+                  { key: "duration_ms", label: "Latency ms", mono: true },
+                  { key: "input_tokens", label: "Input tokens", mono: true },
+                  { key: "output_tokens", label: "Output tokens", mono: true },
+                  { key: "reasoning_tokens", label: "Reasoning tokens", mono: true },
+                  { key: "physical_attempts", label: "Provider calls", mono: true },
+                  { key: "provider_lineage_display", label: "Provider lineage" },
+                  { key: "accounting_status", label: "Accounting" },
+                  { key: "measured_cost_display", label: "Cost USD", mono: true },
+                  { key: "trace_id", label: "Trace", mono: true },
+                  { key: "judge_calibration_state", label: "Calibration" },
+                  { key: "oracle_agreement", label: "Oracle agreement", mono: true },
+                  { key: "decision_authority", label: "Authority" },
+                  { key: "langfuse_status", label: "Langfuse", mono: true },
+                  { key: "langfuse_verified_at", label: "Verified at", mono: true, timestamp: true },
+                ]}
+              />
+            )}
+          </ResourceView>
+        </ExpandableEvidence>
       </Panel>
     </div>
   );
@@ -613,10 +676,12 @@ const applicabilityOrder: ToolScopeReadModel["applicability"][] = [
 export function ToolingScreen({ client }: { client: ApiClient }) {
   const tooling = useResource<ToolScopeReadModel[]>(client, RESOURCE_PATHS.tooling, decodeTooling);
   const records = tooling.result.data ?? [];
-  const scopes = [...new Set(records.map((row) => `${row.target_id}/${row.surface_id}`))];
+  const scopeIdentity = (row: ToolScopeReadModel) =>
+    `${row.target_id}/${row.target_version}/${row.surface_id}/${row.surface_version}`;
+  const scopes = [...new Set(records.map(scopeIdentity))];
   const [scope, setScope] = useState("");
   const effectiveScope = scope || scopes[0] || "";
-  const scoped = records.filter((row) => `${row.target_id}/${row.surface_id}` === effectiveScope);
+  const scoped = records.filter((row) => scopeIdentity(row) === effectiveScope);
   const executable = scoped.filter((row) => row.applicability !== "not_applicable");
   const evidenced = scoped.filter((row) => row.runtime_state === "evidenced");
   const errors = scoped.filter((row) => row.runtime_state === "error");
@@ -626,9 +691,9 @@ export function ToolingScreen({ client }: { client: ApiClient }) {
   return (
     <div className="screen-stack">
       <ScreenHeading
-        title="Security tooling"
-        eyebrow="TARGET-SCOPE PLANNER"
-        detail="Every capability is mapped to the selected target surface. Adapter availability and real execution evidence remain visibly distinct."
+        title="Tool inventory"
+        eyebrow="EXACT TARGET SCOPE"
+        detail="Available security engines and their durable execution evidence for one exact target and surface version."
       />
       {scopes.length > 1 && (
         <label className="form-field scope-picker">
@@ -653,7 +718,10 @@ export function ToolingScreen({ client }: { client: ApiClient }) {
                 scoped
                   .filter((row) => row.applicability === applicability)
                   .map((row) => (
-                    <article className={`tool-scope-card scope-${row.applicability}`} key={`${row.tool_id}:${row.surface_id}`}>
+                    <article
+                      className={`tool-scope-card scope-${row.applicability}`}
+                      key={`${row.tool_id}:${row.target_version}:${row.surface_id}:${row.surface_version}`}
+                    >
                       <header>
                         <div>
                           <p className="eyebrow">{row.kind.replace("-", " ")}</p>
@@ -690,31 +758,6 @@ export function ToolingScreen({ client }: { client: ApiClient }) {
             </div>
           )}
         </ResourceView>
-      </Panel>
-
-      <Panel title="Genuine execution compatibility" meta="configured scope + persisted evidence" eyebrow="TOOL LEDGER">
-        {scoped.length > 0 ? (
-          <RecordTable
-            data={scoped}
-            identityKeys={["tool_id", "target_id", "surface_id"]}
-            columns={[
-              { key: "name", label: "Tool" },
-              { key: "applicability", label: "Use on scope" },
-              { key: "execution_mode", label: "Execution path" },
-              { key: "runtime_state", label: "Runtime state" },
-              { key: "reviewed_candidate_count", label: "Candidates", mono: true },
-              { key: "executed_attempt_count", label: "Attempts", mono: true },
-              { key: "recorded_scan_count", label: "Scans", mono: true },
-              { key: "evidenced_finding_count", label: "Evidenced findings", mono: true },
-              { key: "last_error_code", label: "Last error", mono: true },
-              { key: "last_executed_at", label: "Last evidence", mono: true, timestamp: true },
-            ]}
-          />
-        ) : (
-          <ResourceView result={tooling.result} emptyLabel="No configured target surfaces are available.">
-            {() => null}
-          </ResourceView>
-        )}
       </Panel>
     </div>
   );

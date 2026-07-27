@@ -8,6 +8,7 @@ cannot be satisfied; they never manufacture placeholder rows.
 from __future__ import annotations
 
 import datetime
+import hashlib
 import re
 from typing import Any, Literal, Self
 
@@ -18,6 +19,7 @@ from agentforge.control_plane.finding_decisions import (
     FindingDecisionReasonCode,
     validate_finding_decision_reason_code,
 )
+from agentforge.control_plane.serialization import canonical_json
 
 _LANGFUSE_DELIVERY_STATES = (
     "not_attempted",
@@ -32,12 +34,14 @@ def _validate_token_observation(
     *,
     input_tokens: int | None,
     output_tokens: int | None,
+    reasoning_tokens: int | None,
     observation_count: int,
     label: str,
 ) -> None:
-    if observation_count == 0 and (input_tokens is not None or output_tokens is not None):
+    token_totals = (input_tokens, output_tokens, reasoning_tokens)
+    if observation_count == 0 and any(value is not None for value in token_totals):
         raise ValueError(f"{label} token totals require an observation")
-    if observation_count > 0 and input_tokens is None and output_tokens is None:
+    if observation_count > 0 and all(value is None for value in token_totals):
         raise ValueError(f"{label} token observation requires a reported total")
 
 
@@ -116,6 +120,201 @@ class CampaignReadModel(SafeAuthorizationScopeReadModel):
     state: Literal["queued", "running", "complete", "aborted", "failed"]
     attempt_count: int | None = Field(default=None, ge=0)
     created_at: datetime.datetime
+
+
+class CampaignOperationsCaseProgressReadModel(_ReadModel):
+    """Case-level progress, kept distinct from logical execution attempts."""
+
+    planned: int | None = Field(default=None, ge=0)
+    started: int = Field(ge=0)
+    running: int = Field(ge=0)
+    completed: int = Field(ge=0)
+    failed: int = Field(ge=0)
+    skipped: int | None = Field(default=None, ge=0)
+    remaining: int | None = Field(default=None, ge=0)
+
+    @model_validator(mode="after")
+    def reconcile_progress(self) -> Self:
+        classified = self.running + self.completed + self.failed
+        if self.skipped is not None:
+            classified += self.skipped
+        if classified > self.started:
+            raise ValueError("classified cases cannot exceed started cases")
+        if self.planned is None:
+            if self.remaining is not None:
+                raise ValueError("remaining cases require an authoritative plan")
+        else:
+            if self.started > self.planned:
+                raise ValueError("started cases cannot exceed the authorized plan")
+            if self.remaining != self.planned - self.started:
+                raise ValueError("remaining cases do not reconcile to the plan")
+        return self
+
+
+class CampaignOperationsExecutionCountsReadModel(_ReadModel):
+    logical_attempts: int = Field(ge=0)
+    physical_target_requests: int = Field(ge=0)
+    provider_calls: int = Field(ge=0)
+
+
+class CampaignOperationsCurrentWorkReadModel(_ReadModel):
+    stage: str = Field(min_length=1, max_length=64)
+    agent_role: Literal["orchestrator", "red_team", "judge", "documentation"] | None = None
+    execution_id: str | None = Field(default=None, min_length=1, max_length=64)
+    attempt_id: str | None = Field(default=None, min_length=1, max_length=64)
+    started_at: datetime.datetime
+
+
+class CampaignOperationsCostReadModel(_ReadModel):
+    provider_measured_usd: float | None = Field(default=None, ge=0)
+    provider_measurement_state: Literal["measured", "partial", "unavailable"]
+    target_measured_usd: float | None = Field(default=None, ge=0)
+    target_measurement_state: Literal["measured", "partial", "unavailable"]
+    total_measured_usd: float | None = Field(default=None, ge=0)
+    measurement_state: Literal["measured", "partial", "unavailable"]
+    currency: Literal["USD"]
+
+    @model_validator(mode="after")
+    def reconcile_costs(self) -> Self:
+        components = (
+            (
+                self.provider_measured_usd,
+                self.provider_measurement_state,
+                "provider",
+            ),
+            (
+                self.target_measured_usd,
+                self.target_measurement_state,
+                "target",
+            ),
+        )
+        for measured, state, label in components:
+            if (measured is None) != (state == "unavailable"):
+                raise ValueError(f"{label} cost and measurement state do not reconcile")
+
+        known = tuple(measured for measured, _state, _label in components if measured is not None)
+        expected_total = sum(known) if known else None
+        if expected_total is None:
+            if self.total_measured_usd is not None or self.measurement_state != "unavailable":
+                raise ValueError("unavailable component costs require an unavailable total")
+        elif (
+            self.total_measured_usd is None
+            or abs(self.total_measured_usd - expected_total) > 0.000001
+        ):
+            raise ValueError("total measured cost does not reconcile")
+        else:
+            expected_state = (
+                "measured"
+                if all(state == "measured" for _measured, state, _label in components)
+                else "partial"
+            )
+            if self.measurement_state != expected_state:
+                raise ValueError("total cost measurement state does not reconcile")
+        return self
+
+
+class CampaignOperationsLimitsReadModel(_ReadModel):
+    target_budget_usd: float | None = Field(default=None, ge=0)
+    target_budget_remaining_usd: float | None = Field(default=None, ge=0)
+    provider_budget_usd: float | None = Field(default=None, ge=0)
+    provider_budget_remaining_usd: float | None = Field(default=None, ge=0)
+    logical_case_limit: int | None = Field(default=None, gt=0)
+    physical_request_limit: int | None = Field(default=None, gt=0)
+    physical_requests_remaining: int | None = Field(default=None, ge=0)
+    provider_call_limit: int | None = Field(default=None, gt=0)
+    provider_calls_remaining: int | None = Field(default=None, ge=0)
+    max_attempts_per_run: int | None = Field(default=None, gt=0)
+    target_retries_per_turn: int | None = Field(default=None, ge=0)
+    target_requests_per_second: float | None = Field(default=None, gt=0)
+    run_timeout_seconds: float | None = Field(default=None, gt=0)
+    provider_max_retries: int | None = Field(default=None, ge=0)
+    provider_max_concurrency: int | None = Field(default=None, gt=0)
+    provider_timeout_seconds: float | None = Field(default=None, gt=0)
+
+    @model_validator(mode="after")
+    def require_caps_for_remaining_values(self) -> Self:
+        pairs = (
+            (self.target_budget_usd, self.target_budget_remaining_usd, "target budget"),
+            (self.provider_budget_usd, self.provider_budget_remaining_usd, "provider budget"),
+            (
+                self.physical_request_limit,
+                self.physical_requests_remaining,
+                "physical request limit",
+            ),
+            (self.provider_call_limit, self.provider_calls_remaining, "provider call limit"),
+        )
+        for cap, remaining, label in pairs:
+            if cap is None and remaining is not None:
+                raise ValueError(f"{label} remaining value requires its cap")
+        return self
+
+
+class CampaignOperationsQueueReadModel(_ReadModel):
+    queued_jobs: int = Field(ge=0)
+    leased_jobs: int = Field(ge=0)
+    dead_lettered_jobs: int = Field(ge=0)
+    rate_limit_active: bool | None = None
+
+
+class CampaignOperationsTerminalFailureReadModel(_ReadModel):
+    stage: str = Field(min_length=1, max_length=64)
+    error_code: str = Field(min_length=1, max_length=64)
+    attempt_id: str | None = Field(default=None, min_length=1, max_length=64)
+    execution_id: str | None = Field(default=None, min_length=1, max_length=64)
+    agent_role: Literal["orchestrator", "red_team", "judge", "documentation"] | None = None
+    provider: str | None = Field(default=None, min_length=1, max_length=64)
+    model: str | None = Field(default=None, min_length=1, max_length=192)
+    retryable: bool | None = None
+    retries_remaining: int | None = Field(default=None, ge=0)
+    occurred_at: datetime.datetime
+    operator_summary: str = Field(min_length=1, max_length=256)
+
+    @model_validator(mode="after")
+    def reconcile_retryability(self) -> Self:
+        if self.retryable is None and self.retries_remaining is not None:
+            raise ValueError("retry budget requires a known retry classification")
+        if self.retryable is False and self.retries_remaining not in {None, 0}:
+            raise ValueError("non-retryable failures cannot have retries remaining")
+        return self
+
+
+class CampaignOperationsReadModel(_ReadModel):
+    """One authoritative campaign-scoped operations projection."""
+
+    campaign_id: str
+    state: Literal["queued", "running", "complete", "aborted", "failed"]
+    created_at: datetime.datetime
+    progress: CampaignOperationsCaseProgressReadModel
+    executions: CampaignOperationsExecutionCountsReadModel
+    current_work: CampaignOperationsCurrentWorkReadModel | None = None
+    costs: CampaignOperationsCostReadModel
+    limits: CampaignOperationsLimitsReadModel
+    verdict_distribution: dict[str, int]
+    queue: CampaignOperationsQueueReadModel
+    terminal_failure: CampaignOperationsTerminalFailureReadModel | None = None
+    as_of: datetime.datetime
+    cursor: int = Field(ge=0)
+
+    @model_validator(mode="after")
+    def validate_operations_state(self) -> Self:
+        if any(
+            not isinstance(state, str)
+            or not state
+            or not isinstance(count, int)
+            or isinstance(count, bool)
+            or count < 0
+            for state, count in self.verdict_distribution.items()
+        ):
+            raise ValueError("verdict distribution is invalid")
+        if sum(self.verdict_distribution.values()) > self.executions.logical_attempts:
+            raise ValueError("verdicts cannot exceed logical attempts")
+        if self.state == "failed" and self.terminal_failure is None:
+            raise ValueError("failed campaigns require a typed terminal failure")
+        if self.state != "failed" and self.terminal_failure is not None:
+            raise ValueError("only failed campaigns expose a terminal failure")
+        if self.state != "running" and self.current_work is not None:
+            raise ValueError("only running campaigns expose current agent work")
+        return self
 
 
 class AttemptReadModel(_ReadModel):
@@ -894,6 +1093,7 @@ class CostReadModel(_ReadModel):
         _validate_token_observation(
             input_tokens=self.input_tokens,
             output_tokens=self.output_tokens,
+            reasoning_tokens=self.reasoning_tokens,
             observation_count=self.token_observation_count,
             label="cost",
         )
@@ -911,8 +1111,6 @@ class CostReadModel(_ReadModel):
                 raise ValueError("deterministic agent cost cannot claim provider calls")
         elif self.physical_call_count_state == "not_applicable":
             raise ValueError("hosted agent cost requires provider-call completeness")
-        if self.accounting_status in {"partial", "unavailable"} and self.record_kind != "agent":
-            raise ValueError("partial accounting states apply only to agent cost records")
         if self.accounting_status in {"measured", "partial"} and self.measured_cost is None:
             raise ValueError("observed cost accounting requires known measured cost")
         if self.accounting_status in {"not_applicable", "unavailable"} and (
@@ -1173,6 +1371,7 @@ class AgentReadModel(_ReadModel):
         _validate_token_observation(
             input_tokens=self.input_tokens,
             output_tokens=self.output_tokens,
+            reasoning_tokens=self.reasoning_tokens,
             observation_count=self.token_observation_count,
             label="agent",
         )
@@ -1223,6 +1422,78 @@ class AgentPromptReadModel(_ReadModel):
     prompt_version: str
     prompt_sha256: str
     system_prompt: str
+
+
+class AgentPromptSnapshotMessageReadModel(_ReadModel):
+    role: Literal["system", "user", "assistant", "tool"]
+    content: str
+
+    @model_validator(mode="after")
+    def reject_nul_content(self) -> Self:
+        if "\x00" in self.content:
+            raise ValueError("prompt snapshot message contains a NUL byte")
+        return self
+
+
+class AgentPromptSnapshotRedactionReadModel(_ReadModel):
+    path: str = Field(min_length=1, max_length=256)
+    reason: str = Field(min_length=1, max_length=64)
+    replacement: str = Field(min_length=12, max_length=128)
+
+    @model_validator(mode="after")
+    def validate_redaction_marker(self) -> Self:
+        if not self.path.startswith("$"):
+            raise ValueError("prompt redaction path must be rooted")
+        if not self.replacement.startswith("[REDACTED:") or not self.replacement.endswith("]"):
+            raise ValueError("prompt redaction replacement is invalid")
+        return self
+
+
+class AgentPromptSnapshotReadModel(_ReadModel):
+    """Exact immutable provider input for one evidence-authorized execution."""
+
+    execution_id: str = Field(min_length=1, max_length=64)
+    campaign_run_id: str = Field(min_length=1, max_length=64)
+    attempt_id: str | None = Field(default=None, min_length=1, max_length=64)
+    agent_role: Literal["orchestrator", "red_team", "judge", "documentation"]
+    system_prompt_version: str = Field(min_length=1, max_length=64)
+    system_prompt_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    system_prompt_content: str
+    provider_messages: tuple[AgentPromptSnapshotMessageReadModel, ...] = Field(
+        min_length=1,
+        max_length=64,
+    )
+    transcript_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    redactions: tuple[AgentPromptSnapshotRedactionReadModel, ...] = Field(max_length=64)
+    created_at: datetime.datetime
+
+    @model_validator(mode="after")
+    def validate_immutable_prompt_identity(self) -> Self:
+        prompt_bytes = self.system_prompt_content.encode("utf-8")
+        if not 1 <= len(prompt_bytes) <= 1_048_576:
+            raise ValueError("system prompt is outside its storage bound")
+        if hashlib.sha256(prompt_bytes).hexdigest() != self.system_prompt_sha256:
+            raise ValueError("system prompt hash does not match its content")
+
+        messages = [message.model_dump(mode="python") for message in self.provider_messages]
+        if messages[0] != {
+            "role": "system",
+            "content": self.system_prompt_content,
+        } or any(message["role"] == "system" for message in messages[1:]):
+            raise ValueError("provider transcript does not begin with its exact system prompt")
+        transcript_json = canonical_json({"messages": messages})
+        if len(transcript_json.encode("utf-8")) > 1_572_864:
+            raise ValueError("provider transcript exceeds its storage bound")
+        if hashlib.sha256(transcript_json.encode("utf-8")).hexdigest() != self.transcript_sha256:
+            raise ValueError("provider transcript hash does not match its messages")
+
+        redactions = [redaction.model_dump(mode="python") for redaction in self.redactions]
+        redactions_json = canonical_json({"redactions": redactions})
+        if len(redactions_json.encode("utf-8")) > 16_384:
+            raise ValueError("prompt redaction metadata exceeds its storage bound")
+        if any(redaction["replacement"] not in transcript_json for redaction in redactions):
+            raise ValueError("prompt redaction metadata does not identify persisted text")
+        return self
 
 
 class AgentActivityReadModel(_ReadModel):
@@ -1581,6 +1852,7 @@ class BirdseyeNodeReadModel(_ReadModel):
     currency: str | None = None
     input_tokens: int | None = Field(default=None, ge=0)
     output_tokens: int | None = Field(default=None, ge=0)
+    reasoning_tokens: int | None = Field(default=None, ge=0)
     token_observation_count: int | None = Field(default=None, ge=0)
     langfuse_not_attempted_count: int | None = Field(default=None, ge=0)
     langfuse_disabled_count: int | None = Field(default=None, ge=0)
@@ -1623,6 +1895,7 @@ class BirdseyeNodeReadModel(_ReadModel):
         _validate_token_observation(
             input_tokens=self.input_tokens,
             output_tokens=self.output_tokens,
+            reasoning_tokens=self.reasoning_tokens,
             observation_count=self.token_observation_count,
             label="agent node",
         )
@@ -1729,12 +2002,14 @@ _LIST_ADAPTERS = {
 _SINGLE_ADAPTERS = {
     "principal": TypeAdapter(PrincipalReadModel),
     "campaign": TypeAdapter(CampaignReadModel),
+    "campaign_operations": TypeAdapter(CampaignOperationsReadModel),
     "evidence": TypeAdapter(EvidenceReadModel),
     "target": TypeAdapter(TargetReadModel),
     "finding": TypeAdapter(FindingDetailReadModel),
     "approval": TypeAdapter(ApprovalDetailReadModel),
     "report": TypeAdapter(ReportReadModel),
     "agent_prompt": TypeAdapter(AgentPromptReadModel),
+    "agent_prompt_snapshot": TypeAdapter(AgentPromptSnapshotReadModel),
     "configuration": TypeAdapter(ConfigurationReadModel),
     "birdseye": TypeAdapter(BirdseyeSnapshotReadModel),
 }
@@ -1757,6 +2032,9 @@ __all__ = [
     "AgentAssignmentReadModel",
     "AgentBudgetReadModel",
     "AgentPromptReadModel",
+    "AgentPromptSnapshotMessageReadModel",
+    "AgentPromptSnapshotReadModel",
+    "AgentPromptSnapshotRedactionReadModel",
     "AgentReadModel",
     "AttemptReadModel",
     "AuditReadModel",
@@ -1771,6 +2049,14 @@ __all__ = [
     "BirdseyeSnapshotReadModel",
     "BirdseyeTimelineReadModel",
     "CampaignReadModel",
+    "CampaignOperationsCaseProgressReadModel",
+    "CampaignOperationsCostReadModel",
+    "CampaignOperationsCurrentWorkReadModel",
+    "CampaignOperationsExecutionCountsReadModel",
+    "CampaignOperationsLimitsReadModel",
+    "CampaignOperationsQueueReadModel",
+    "CampaignOperationsReadModel",
+    "CampaignOperationsTerminalFailureReadModel",
     "CampaignTemplateReadModel",
     "ComponentReadModel",
     "ConfigurationReadModel",

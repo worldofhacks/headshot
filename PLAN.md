@@ -37,7 +37,13 @@ without consulting chat history.
 
 ## P1 — Safe structured-output retry
 
-Implement a retry classification for a provider response that:
+**Repository candidate status:** the transport now separates settled usage/cost from structured
+parsing, records `invalid_structured_output`, preserves each physical attempt, and retries only within
+the minimum already-authorized per-role/global/ledger authority. This is not deployed or
+staging-accepted; the staged configuration remains `max_retries = 0`, and no cap/configuration
+widening is part of this candidate.
+
+The candidate classification applies only to a provider response that:
 
 1. reached an authorized endpoint;
 2. returned a fully attributable HTTP response;

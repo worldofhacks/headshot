@@ -36,6 +36,7 @@ from agentforge.auth.permissions import (
     CAMPAIGN_AUTHORIZE,
     CAMPAIGN_LAUNCH,
     CONFIG_MANAGE,
+    EVIDENCE_READ,
     FINDINGS_APPROVE,
     FINDINGS_RESOLVE,
     TARGETS_MANAGE,
@@ -58,6 +59,7 @@ from agentforge.control_plane.finding_decisions import (
     validate_finding_decision_reason_code,
 )
 from agentforge.control_plane.records import (
+    AgentPromptSnapshotRecord,
     AuditEventRecord,
     AuthorizationDecisionRecord,
     AuthorizationRequestRecord,
@@ -114,7 +116,20 @@ _LABELED_SECRET = re.compile(
     r"(?i)\b(?:api[_ -]?key|token|secret|password|authorization|credential)\b"
     r"\s*[:=]\s*[^\s;]+"
 )
-_URL_USERINFO_SECRET = re.compile(r"(?i)https://[^\s/@:]+:[^\s/@]+@")
+_URL_USERINFO_SECRET = re.compile(r"(?i)\b[a-z][a-z0-9+.-]*://[^\s/@:]+:[^\s/@]+@[^\s]+")
+_CREDENTIAL_REFERENCE_SECRET = re.compile(r"(?i)\bsecretref://[A-Za-z0-9._~/-]+")
+_AWS_ACCESS_KEY_SECRET = re.compile(r"\b(?:AKIA|ASIA)[A-Z0-9]{16}\b")
+_GOOGLE_API_KEY_SECRET = re.compile(r"\bAIza[A-Za-z0-9_-]{35}\b")
+_GITHUB_TOKEN_SECRET = re.compile(
+    r"\b(?:gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{20,})\b"
+)
+_GITLAB_TOKEN_SECRET = re.compile(r"\bglpat-[A-Za-z0-9_-]{20,}\b")
+_SLACK_TOKEN_SECRET = re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{20,}\b")
+_STRIPE_LIVE_KEY_SECRET = re.compile(r"\bsk_live_[A-Za-z0-9]{16,}\b")
+_PRIVATE_KEY_SECRET = re.compile(
+    r"-----BEGIN (?:EC |OPENSSH |RSA )?PRIVATE KEY-----",
+    re.IGNORECASE,
+)
 _RATIONALE_MAX_LENGTH = 2_000
 _MAX_AUTHORIZATION_LIFETIME = datetime.timedelta(hours=24)
 _CAMPAIGN_JOB_ATTEMPT_ID = "campaign"
@@ -176,6 +191,95 @@ _AGENT_ACCEPTANCE_ROLE_TOKEN_CAPS: Mapping[AgentRole, tuple[int, int, int]] = {
     "documentation": (32_768, 512, 1_024),
 }
 _AGENT_ACCEPTANCE_GLOBAL_TOKEN_CAPS = (131_072, 9_728, 11_264)
+_PROMPT_SNAPSHOT_MESSAGE_ROLES = frozenset({"system", "user", "assistant", "tool"})
+_PROMPT_SNAPSHOT_MAX_MESSAGES = 64
+_PROMPT_SNAPSHOT_MAX_TRANSCRIPT_BYTES = 1_572_864
+_PROMPT_SNAPSHOT_MAX_REDACTIONS = 64
+_PROMPT_SNAPSHOT_MAX_REDACTIONS_BYTES = 16_384
+_PROMPT_SNAPSHOT_SENSITIVE_KEY = re.compile(
+    r"(?i)(?:^|_)(?:sid|session_id|patient_id|patient_name|full_name|pid|mrn|"
+    r"medical_record_number|ssn|social_security_number|date_of_birth|birth_date|dob|"
+    r"address|email|phone|phone_number)(?:$|_)"
+)
+_PROMPT_SNAPSHOT_REDACTION_MARKER = re.compile(r"\A\[REDACTED:[A-Za-z0-9_:-]{1,110}\]\Z")
+_PROMPT_SNAPSHOT_REDACTED_SECRET_LINE = re.compile(
+    r"(?im)^[ \t]*(?:access[_ -]?token|api[_ -]?key|authorization|bearer|cookie|"
+    r"credential|password|refresh[_ -]?token|secret|session[_ -]?token|set-cookie)"
+    r"\s*[:=]\s*\[REDACTED:[A-Za-z0-9_:-]{1,110}\][ \t]*$"
+)
+_PROMPT_SNAPSHOT_SYNTHETIC_VALUE = re.compile(r"\ASYNTH-[A-Z0-9]+(?:-[A-Z0-9]+)*\Z")
+_PROMPT_SNAPSHOT_REDACTION_PATH = re.compile(
+    r"\A\$\.messages\[(?P<message_index>0|[1-9][0-9]?)\]\.content"
+    r"(?P<tail>(?:\.[A-Za-z_][A-Za-z0-9_]*|\[[0-9]+\])*)\Z"
+)
+_PROMPT_SNAPSHOT_REDACTION_PATH_TOKEN = re.compile(r"\.([A-Za-z_][A-Za-z0-9_]*)|\[([0-9]+)\]")
+_PROMPT_SNAPSHOT_REDACTION_REASONS = frozenset(
+    {
+        "access_token",
+        "authorization",
+        "authorization_header",
+        "cookie",
+        "credential",
+        "patient_identifier",
+        "phi",
+        "secret",
+        "session_identifier",
+        "synthetic_fixture",
+        "synthetic_identifier",
+        "target_response",
+    }
+)
+_PROMPT_SNAPSHOT_HIGH_CONFIDENCE_PHI = (
+    re.compile(r"\b\d{3}-\d{2}-\d{4}\b"),
+    re.compile(r"(?i)\b(?:mrn|medical\s+record(?:\s+number)?)\s*[:#=-]?\s*\d{6,}\b"),
+    re.compile(
+        r"(?i:\b(?:patient[_ -]?name|full[_ -]?name|patient[_ -]?id|"
+        r"date[_ -]?of[_ -]?birth|birth[_ -]?date|dob|address|email|"
+        r"phone(?:[_ -]?number)?)\b\s*[:=])"
+        r"(?!\s*[\"']?(?:\[REDACTED:[A-Za-z0-9_:-]{1,110}\]|"
+        r"SYNTH-[A-Z0-9]+(?:-[A-Z0-9]+)*)(?=[\s\"';,.)\]}]|$))"
+        r"\s*[\"']?[^\r\n;,]{2,}"
+    ),
+    re.compile(r"(?i)\b(?:mrn|ssn|patient[_ -]?id)[_.:-]?[0-9]{6,}\b"),
+)
+_PROMPT_SNAPSHOT_EMAIL = re.compile(r"(?i)\b[A-Z0-9._%+-]+@(?P<domain>[A-Z0-9.-]+\.[A-Z]{2,})\b")
+_PROMPT_SNAPSHOT_PHONE = re.compile(
+    r"(?<![A-Za-z0-9])(?:\+?1[-.\s]?)?(?:\(\d{3}\)|\d{3})[-.\s]"
+    r"(?P<exchange>\d{3})[-.\s](?P<line>\d{4})(?![A-Za-z0-9])"
+)
+_PROMPT_SNAPSHOT_FORBIDDEN_KEYS = frozenset(
+    {
+        "access_token",
+        "api_key",
+        "authorization",
+        "authorization_header",
+        "cookie",
+        "credential_ref",
+        "credential_reference",
+        "credentials",
+        "password",
+        "raw_target_response",
+        "refresh_token",
+        "response_body",
+        "response_headers",
+        "secret",
+        "session_token",
+        "set_cookie",
+        "target_response",
+    }
+)
+_PROMPT_SNAPSHOT_RAW_TARGET_EVIDENCE_KEYS = frozenset(
+    {
+        "assistant_text",
+        "body",
+        "content",
+        "headers",
+        "output",
+        "raw_body",
+        "response",
+        "text",
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -2433,11 +2537,17 @@ class ControlPlaneStore:
         attempt_id: str | None = None,
         parent_execution_id: str | None = None,
         detail: Mapping[str, Any] | None = None,
+        system_prompt_version: str | None = None,
+        system_prompt_sha256: str | None = None,
+        system_prompt_content: str | None = None,
+        provider_messages: Sequence[Mapping[str, Any]] | None = None,
+        prompt_redactions: Sequence[Mapping[str, Any]] = (),
     ) -> str:
         """Start one hosted call after re-resolving every identity from its approved run.
 
-        The input body is never stored. Only its content hash and a caller-provided bounded,
-        credential-free summary are durable.
+        The exact credential-free provider transcript is retained in a separate protected,
+        immutable snapshot. It is born in the same transaction as this logical execution and is
+        never projected into outbound telemetry.
         """
 
         if agent_role not in AGENT_ROLES:
@@ -2521,6 +2631,21 @@ class ControlPlaneStore:
                     "calibration_state": judge_calibration_state,
                 },
             )
+            self._insert_agent_prompt_snapshot(
+                connection,
+                organization_id=authority.organization_id,
+                execution_id=execution_id,
+                campaign_run_id=run_id,
+                attempt_id=attempt_id,
+                agent_role=role.role,
+                input_payload=input_payload,
+                authorized_prompt_sha256=role.prompt_sha256,
+                system_prompt_version=system_prompt_version,
+                system_prompt_sha256=system_prompt_sha256,
+                system_prompt_content=system_prompt_content,
+                provider_messages=provider_messages,
+                redactions=prompt_redactions,
+            )
             self._audit(
                 connection,
                 authority.organization_id,
@@ -2566,6 +2691,11 @@ class ControlPlaneStore:
         judge_calibration_state: str | None = None,
         parent_execution_id: str | None = None,
         detail: Mapping[str, Any] | None = None,
+        system_prompt_version: str | None = None,
+        system_prompt_sha256: str | None = None,
+        system_prompt_content: str | None = None,
+        provider_messages: Sequence[Mapping[str, Any]] | None = None,
+        prompt_redactions: Sequence[Mapping[str, Any]] = (),
     ) -> str:
         """Start one logical call under the zero-target acceptance authority."""
 
@@ -2683,6 +2813,21 @@ class ControlPlaneStore:
                     "calibration_id": judge_calibration_id,
                     "calibration_state": judge_calibration_state,
                 },
+            )
+            self._insert_agent_prompt_snapshot(
+                connection,
+                organization_id=authority.organization_id,
+                execution_id=execution_id,
+                campaign_run_id=run_id,
+                attempt_id=authority.acceptance_attempt_id,
+                agent_role=role.role,
+                input_payload=input_payload,
+                authorized_prompt_sha256=role.prompt_sha256,
+                system_prompt_version=system_prompt_version,
+                system_prompt_sha256=system_prompt_sha256,
+                system_prompt_content=system_prompt_content,
+                provider_messages=provider_messages,
+                redactions=prompt_redactions,
             )
             self._audit(
                 connection,
@@ -3203,6 +3348,11 @@ class ControlPlaneStore:
         judge_calibration_state: str | None = None,
         parent_execution_id: str | None = None,
         detail: Mapping[str, Any] | None = None,
+        system_prompt_version: str | None = None,
+        system_prompt_sha256: str | None = None,
+        system_prompt_content: str | None = None,
+        provider_messages: Sequence[Mapping[str, Any]] | None = None,
+        prompt_redactions: Sequence[Mapping[str, Any]] = (),
     ) -> str:
         """Start one governed four-role logical call — permits the one bounded target dispatch.
 
@@ -3324,6 +3474,21 @@ class ControlPlaneStore:
                     "calibration_id": judge_calibration_id,
                     "calibration_state": judge_calibration_state,
                 },
+            )
+            self._insert_agent_prompt_snapshot(
+                connection,
+                organization_id=authority.organization_id,
+                execution_id=execution_id,
+                campaign_run_id=run_id,
+                attempt_id=authority.acceptance_attempt_id,
+                agent_role=role.role,
+                input_payload=input_payload,
+                authorized_prompt_sha256=role.prompt_sha256,
+                system_prompt_version=system_prompt_version,
+                system_prompt_sha256=system_prompt_sha256,
+                system_prompt_content=system_prompt_content,
+                provider_messages=provider_messages,
+                redactions=prompt_redactions,
             )
             self._audit(
                 connection,
@@ -6577,6 +6742,157 @@ class ControlPlaneStore:
             for row in rows
         )
 
+    def agent_prompt_snapshot(
+        self,
+        *,
+        principal: Principal,
+        execution_id: str,
+    ) -> AgentPromptSnapshotRecord:
+        """Return one organization-scoped prompt transcript to an evidence-authorized human."""
+
+        self._require_permission(principal, EVIDENCE_READ)
+        if not isinstance(execution_id, str) or not execution_id or len(execution_id) > 64:
+            raise InvalidControlPlaneInput("agent execution identity is invalid")
+        with self._engine.connect() as connection:
+            row = (
+                connection.execute(
+                    text(
+                        "SELECT organization_id, execution_id, campaign_run_id, attempt_id, "
+                        "agent_role, system_prompt_version, system_prompt_sha256, "
+                        "system_prompt_content, provider_messages, transcript_sha256, "
+                        "redactions, created_at FROM agent_prompt_snapshots "
+                        "WHERE organization_id = :org AND execution_id = :execution"
+                    ),
+                    {
+                        "org": principal.organization_id,
+                        "execution": execution_id,
+                    },
+                )
+                .mappings()
+                .one_or_none()
+            )
+        if row is None:
+            raise RecordNotFoundError("agent prompt snapshot does not exist")
+        agent_role = str(row["agent_role"])
+        system_prompt_content = str(row["system_prompt_content"])
+        system_prompt_sha256 = str(row["system_prompt_sha256"])
+        try:
+            trusted_prompt = resolve_hosted_prompt(agent_role, system_prompt_sha256)
+        except ValueError as exc:
+            raise InvalidControlPlaneInput("persisted system prompt identity is invalid") from exc
+        if (
+            not 1 <= len(system_prompt_content.encode("utf-8")) <= 1_048_576
+            or hashlib.sha256(system_prompt_content.encode("utf-8")).hexdigest()
+            != system_prompt_sha256
+            or str(row["system_prompt_version"]) != trusted_prompt.version
+            or system_prompt_content != trusted_prompt.content
+            or self._prompt_snapshot_contains_sensitive_text(system_prompt_content)
+        ):
+            raise InvalidControlPlaneInput("persisted system prompt identity is invalid")
+
+        raw_messages = row["provider_messages"]
+        if not isinstance(raw_messages, list) or not 1 <= len(raw_messages) <= 64:
+            raise InvalidControlPlaneInput("persisted provider prompt transcript is invalid")
+        provider_messages: list[dict[str, str]] = []
+        for item in raw_messages:
+            if (
+                not isinstance(item, Mapping)
+                or set(item) != {"role", "content"}
+                or not isinstance(item["role"], str)
+                or item["role"] not in _PROMPT_SNAPSHOT_MESSAGE_ROLES
+                or not isinstance(item["content"], str)
+                or "\x00" in item["content"]
+            ):
+                raise InvalidControlPlaneInput("persisted provider prompt transcript is invalid")
+            content = item["content"]
+            if item["role"] != "system":
+                try:
+                    structured_content = json.loads(content)
+                except (TypeError, ValueError):
+                    structured_content = None
+                inspected_content = (
+                    structured_content if structured_content is not None else content
+                )
+                if self._prompt_snapshot_contains_forbidden_content(inspected_content):
+                    raise InvalidControlPlaneInput(
+                        "persisted provider prompt transcript is invalid"
+                    )
+            provider_messages.append(
+                {
+                    "role": str(item["role"]),
+                    "content": content,
+                }
+            )
+        if provider_messages[0] != {
+            "role": "system",
+            "content": system_prompt_content,
+        } or any(message["role"] == "system" for message in provider_messages[1:]):
+            raise InvalidControlPlaneInput("persisted provider prompt transcript is invalid")
+        transcript_json = canonical_json({"messages": provider_messages})
+        if (
+            len(transcript_json.encode("utf-8")) > _PROMPT_SNAPSHOT_MAX_TRANSCRIPT_BYTES
+            or hashlib.sha256(transcript_json.encode("utf-8")).hexdigest()
+            != str(row["transcript_sha256"])
+            or self._prompt_snapshot_contains_unredacted_secret(provider_messages)
+        ):
+            raise InvalidControlPlaneInput("persisted provider prompt identity is invalid")
+
+        raw_redactions = row["redactions"]
+        if not isinstance(raw_redactions, list) or len(raw_redactions) > 64:
+            raise InvalidControlPlaneInput("persisted prompt redaction metadata is invalid")
+        redactions: list[dict[str, str]] = []
+        for item in raw_redactions:
+            if (
+                not isinstance(item, Mapping)
+                or set(item) != {"path", "reason", "replacement"}
+                or not isinstance(item["path"], str)
+                or _PROMPT_SNAPSHOT_REDACTION_PATH.fullmatch(item["path"]) is None
+                or len(item["path"]) > 256
+                or not isinstance(item["reason"], str)
+                or item["reason"] not in _PROMPT_SNAPSHOT_REDACTION_REASONS
+                or not isinstance(item["replacement"], str)
+                or _PROMPT_SNAPSHOT_REDACTION_MARKER.fullmatch(item["replacement"]) is None
+                or len(item["replacement"]) > 128
+                or self._prompt_snapshot_contains_sensitive_text(item["path"])
+                or self._prompt_snapshot_contains_sensitive_text(item["reason"])
+            ):
+                raise InvalidControlPlaneInput("persisted prompt redaction metadata is invalid")
+            path_match = _PROMPT_SNAPSHOT_REDACTION_PATH.fullmatch(item["path"])
+            assert path_match is not None
+            redacted_value = self._prompt_snapshot_redaction_value(
+                path_match=path_match,
+                provider_messages=provider_messages,
+            )
+            if not self._prompt_snapshot_redaction_matches(redacted_value, item["replacement"]):
+                raise InvalidControlPlaneInput("persisted prompt redaction metadata is invalid")
+            redactions.append(
+                {
+                    "path": item["path"],
+                    "reason": item["reason"],
+                    "replacement": item["replacement"],
+                }
+            )
+        if (
+            len(canonical_json({"redactions": redactions}).encode("utf-8"))
+            > _PROMPT_SNAPSHOT_MAX_REDACTIONS_BYTES
+            or self._prompt_snapshot_contains_forbidden_content({"redactions": redactions})
+        ):
+            raise InvalidControlPlaneInput("persisted prompt redaction metadata is invalid")
+        return AgentPromptSnapshotRecord(
+            organization_id=str(row["organization_id"]),
+            execution_id=str(row["execution_id"]),
+            campaign_run_id=str(row["campaign_run_id"]),
+            attempt_id=(str(row["attempt_id"]) if row["attempt_id"] is not None else None),
+            agent_role=agent_role,
+            system_prompt_version=str(row["system_prompt_version"]),
+            system_prompt_sha256=system_prompt_sha256,
+            system_prompt_content=system_prompt_content,
+            provider_messages=tuple(provider_messages),
+            transcript_sha256=str(row["transcript_sha256"]),
+            redactions=tuple(redactions),
+            created_at=row["created_at"],
+        )
+
     # ------------------------------------------------------------------ internal validation / rows
 
     @staticmethod
@@ -6617,8 +6933,155 @@ class ControlPlaneStore:
                 _COOKIE_SECRET,
                 _LABELED_SECRET,
                 _URL_USERINFO_SECRET,
+                _CREDENTIAL_REFERENCE_SECRET,
+                _AWS_ACCESS_KEY_SECRET,
+                _GOOGLE_API_KEY_SECRET,
+                _GITHUB_TOKEN_SECRET,
+                _GITLAB_TOKEN_SECRET,
+                _SLACK_TOKEN_SECRET,
+                _STRIPE_LIVE_KEY_SECRET,
+                _PRIVATE_KEY_SECRET,
             )
         )
+
+    @staticmethod
+    def _prompt_snapshot_key(value: object) -> str:
+        text = str(value)
+        snake_case = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", text)
+        return re.sub(r"[^A-Za-z0-9]+", "_", snake_case).strip("_").lower()
+
+    @classmethod
+    def _prompt_snapshot_contains_unredacted_secret(cls, value: object) -> bool:
+        if isinstance(value, Mapping):
+            return any(
+                cls._prompt_snapshot_contains_unredacted_secret(key)
+                or cls._prompt_snapshot_contains_unredacted_secret(item)
+                for key, item in value.items()
+            )
+        if isinstance(value, (list, tuple)):
+            return any(cls._prompt_snapshot_contains_unredacted_secret(item) for item in value)
+        if not isinstance(value, str):
+            return False
+        inspected = _PROMPT_SNAPSHOT_REDACTED_SECRET_LINE.sub("", value)
+        return cls._contains_secret(inspected)
+
+    @classmethod
+    def _prompt_snapshot_contains_sensitive_text(cls, value: str) -> bool:
+        if cls._prompt_snapshot_contains_unredacted_secret(value):
+            return True
+        if any(
+            pattern.search(value) is not None for pattern in _PROMPT_SNAPSHOT_HIGH_CONFIDENCE_PHI
+        ):
+            return True
+        for match in _PROMPT_SNAPSHOT_EMAIL.finditer(value):
+            domain = match.group("domain").lower()
+            if not (
+                domain in {"example.com", "example.net", "example.org"}
+                or domain.endswith(".example")
+                or domain.endswith(".test")
+            ):
+                return True
+        for match in _PROMPT_SNAPSHOT_PHONE.finditer(value):
+            if not (match.group("exchange") == "555" and 100 <= int(match.group("line")) <= 199):
+                return True
+        return False
+
+    @classmethod
+    def _prompt_snapshot_contains_forbidden_content(
+        cls,
+        value: object,
+        *,
+        inside_target_evidence: bool = False,
+    ) -> bool:
+        def is_explicitly_safe_sensitive_value(item: object) -> bool:
+            if item is None:
+                return True
+            if isinstance(item, str):
+                normalized = item.strip()
+                return (
+                    not normalized
+                    or _PROMPT_SNAPSHOT_REDACTION_MARKER.fullmatch(normalized) is not None
+                    or _PROMPT_SNAPSHOT_SYNTHETIC_VALUE.fullmatch(normalized) is not None
+                )
+            if isinstance(item, (list, tuple)):
+                return all(is_explicitly_safe_sensitive_value(member) for member in item)
+            return False
+
+        if isinstance(value, Mapping):
+            for key, item in value.items():
+                raw_key = str(key)
+                normalized_key = cls._prompt_snapshot_key(raw_key)
+                if (
+                    cls._prompt_snapshot_contains_sensitive_text(raw_key)
+                    or (normalized_key == "contains_real_phi" and item is not False)
+                    or (normalized_key == "synthetic_data_only" and item is not True)
+                    or (
+                        normalized_key in _PROMPT_SNAPSHOT_FORBIDDEN_KEYS
+                        and not is_explicitly_safe_sensitive_value(item)
+                    )
+                    or (
+                        _PROMPT_SNAPSHOT_SENSITIVE_KEY.search(normalized_key) is not None
+                        and not is_explicitly_safe_sensitive_value(item)
+                    )
+                    or (
+                        inside_target_evidence
+                        and normalized_key in _PROMPT_SNAPSHOT_RAW_TARGET_EVIDENCE_KEYS
+                        and not is_explicitly_safe_sensitive_value(item)
+                    )
+                ):
+                    return True
+                if cls._prompt_snapshot_contains_forbidden_content(
+                    item,
+                    inside_target_evidence=(
+                        inside_target_evidence
+                        or normalized_key in {"target_evidence", "target_result"}
+                    ),
+                ):
+                    return True
+            return False
+        if isinstance(value, (list, tuple)):
+            return any(
+                cls._prompt_snapshot_contains_forbidden_content(
+                    item,
+                    inside_target_evidence=inside_target_evidence,
+                )
+                for item in value
+            )
+        if isinstance(value, str):
+            return cls._prompt_snapshot_contains_sensitive_text(value)
+        return False
+
+    @staticmethod
+    def _prompt_snapshot_redaction_value(
+        *,
+        path_match: re.Match[str],
+        provider_messages: Sequence[Mapping[str, str]],
+    ) -> object:
+        message_index = int(path_match.group("message_index"))
+        if message_index >= len(provider_messages):
+            raise InvalidControlPlaneInput("prompt redaction metadata is invalid")
+        value: object = provider_messages[message_index]["content"]
+        tail = path_match.group("tail")
+        if tail:
+            try:
+                value = json.loads(str(value))
+            except (TypeError, ValueError) as exc:
+                raise InvalidControlPlaneInput("prompt redaction metadata is invalid") from exc
+            for token in _PROMPT_SNAPSHOT_REDACTION_PATH_TOKEN.finditer(tail):
+                key, index = token.groups()
+                if key is not None and isinstance(value, Mapping) and key in value:
+                    value = value[key]
+                elif index is not None and isinstance(value, list) and int(index) < len(value):
+                    value = value[int(index)]
+                else:
+                    raise InvalidControlPlaneInput("prompt redaction metadata is invalid")
+        return value
+
+    @staticmethod
+    def _prompt_snapshot_redaction_matches(value: object, replacement: str) -> bool:
+        if isinstance(value, str):
+            return replacement in value
+        return value == replacement
 
     @classmethod
     def _bounded_agent_payload(
@@ -6638,7 +7101,7 @@ class ControlPlaneStore:
             raise InvalidControlPlaneInput(f"{label} must be canonical JSON") from exc
         if len(encoded.encode("utf-8")) > 16_384:
             raise InvalidControlPlaneInput(f"{label} exceeds 16 KiB")
-        if cls._contains_secret(encoded):
+        if cls._prompt_snapshot_contains_unredacted_secret(normalized):
             raise InvalidControlPlaneInput(f"{label} contains credential material")
         return normalized
 
@@ -6660,9 +7123,268 @@ class ControlPlaneStore:
         encoded_bytes = encoded.encode("utf-8")
         if len(encoded_bytes) > 262_144:
             raise InvalidControlPlaneInput(f"{label} exceeds 256 KiB")
-        if cls._contains_secret(encoded):
+        if cls._prompt_snapshot_contains_unredacted_secret(payload):
             raise InvalidControlPlaneInput(f"{label} contains credential material")
         return hashlib.sha256(encoded_bytes).hexdigest()
+
+    @classmethod
+    def _normalize_agent_prompt_snapshot(
+        cls,
+        *,
+        agent_role: AgentRole,
+        input_payload: Mapping[str, Any],
+        authorized_prompt_sha256: str,
+        system_prompt_version: str | None,
+        system_prompt_sha256: str | None,
+        system_prompt_content: str | None,
+        provider_messages: Sequence[Mapping[str, Any]] | None,
+        redactions: Sequence[Mapping[str, Any]],
+    ) -> tuple[str, str, str, list[dict[str, str]], str, list[dict[str, str]]]:
+        """Validate exact, bounded, package-owned prompt evidence before it becomes durable."""
+
+        if cls._prompt_snapshot_contains_forbidden_content(input_payload):
+            raise InvalidControlPlaneInput(
+                "prompt snapshot input contains forbidden PHI, credential, "
+                "or target-response fields"
+            )
+        try:
+            trusted_prompt = resolve_hosted_prompt(agent_role, authorized_prompt_sha256)
+        except ValueError as exc:
+            raise InvalidControlPlaneInput("prompt snapshot identity is not package-owned") from exc
+        supplied = (
+            system_prompt_version,
+            system_prompt_sha256,
+            system_prompt_content,
+            provider_messages,
+        )
+        if all(value is None for value in supplied):
+            system_prompt_version = trusted_prompt.version
+            system_prompt_sha256 = trusted_prompt.sha256
+            system_prompt_content = trusted_prompt.content
+            provider_messages = (
+                {"role": "system", "content": trusted_prompt.content},
+                {"role": "user", "content": canonical_json(dict(input_payload))},
+            )
+        elif any(value is None for value in supplied):
+            raise InvalidControlPlaneInput("prompt snapshot evidence is incomplete")
+        if (
+            not isinstance(system_prompt_version, str)
+            or system_prompt_version != trusted_prompt.version
+            or not isinstance(system_prompt_sha256, str)
+            or system_prompt_sha256 != authorized_prompt_sha256
+            or not isinstance(system_prompt_content, str)
+            or system_prompt_content != trusted_prompt.content
+            or hashlib.sha256(system_prompt_content.encode("utf-8")).hexdigest()
+            != system_prompt_sha256
+            or cls._prompt_snapshot_contains_sensitive_text(system_prompt_content)
+        ):
+            raise InvalidControlPlaneInput(
+                "prompt snapshot content differs from its immutable identity"
+            )
+        system_prompt_bytes = system_prompt_content.encode("utf-8")
+        if not 1 <= len(system_prompt_bytes) <= 1_048_576:
+            raise InvalidControlPlaneInput("system prompt is outside its storage bound")
+
+        if (
+            isinstance(provider_messages, (str, bytes))
+            or not isinstance(provider_messages, Sequence)
+            or not 1 <= len(provider_messages) <= _PROMPT_SNAPSHOT_MAX_MESSAGES
+        ):
+            raise InvalidControlPlaneInput("provider prompt transcript has invalid bounds")
+        normalized_messages: list[dict[str, str]] = []
+        for message in provider_messages:
+            if not isinstance(message, Mapping) or set(message) != {"role", "content"}:
+                raise InvalidControlPlaneInput(
+                    "provider prompt transcript message has invalid shape"
+                )
+            role = message["role"]
+            content = message["content"]
+            if (
+                not isinstance(role, str)
+                or role not in _PROMPT_SNAPSHOT_MESSAGE_ROLES
+                or not isinstance(content, str)
+                or "\x00" in content
+            ):
+                raise InvalidControlPlaneInput("provider prompt transcript message is unsafe")
+            if role != "system":
+                if cls._prompt_snapshot_contains_unredacted_secret(content):
+                    raise InvalidControlPlaneInput(
+                        "provider prompt transcript contains credential material"
+                    )
+                try:
+                    structured_content = json.loads(content)
+                except (TypeError, ValueError):
+                    structured_content = None
+                inspected_content = (
+                    structured_content if structured_content is not None else content
+                )
+                if cls._prompt_snapshot_contains_forbidden_content(inspected_content):
+                    raise InvalidControlPlaneInput(
+                        "provider prompt transcript contains forbidden PHI, credential, "
+                        "or target-response fields"
+                    )
+            normalized_messages.append({"role": role, "content": content})
+        if normalized_messages[0] != {
+            "role": "system",
+            "content": system_prompt_content,
+        } or any(message["role"] == "system" for message in normalized_messages[1:]):
+            raise InvalidControlPlaneInput(
+                "provider prompt transcript does not begin with its exact system prompt"
+            )
+        canonical_input = canonical_json(dict(input_payload))
+        if not any(
+            message["role"] == "user" and message["content"] == canonical_input
+            for message in normalized_messages
+        ):
+            raise InvalidControlPlaneInput(
+                "provider prompt transcript differs from the exact execution input"
+            )
+
+        if (
+            isinstance(redactions, (str, bytes))
+            or not isinstance(redactions, Sequence)
+            or len(redactions) > _PROMPT_SNAPSHOT_MAX_REDACTIONS
+        ):
+            raise InvalidControlPlaneInput("prompt redaction metadata has invalid bounds")
+        normalized_redactions: list[dict[str, str]] = []
+        for redaction in redactions:
+            if not isinstance(redaction, Mapping) or set(redaction) != {
+                "path",
+                "reason",
+                "replacement",
+            }:
+                raise InvalidControlPlaneInput("prompt redaction metadata has invalid shape")
+            path = redaction["path"]
+            reason = redaction["reason"]
+            replacement = redaction["replacement"]
+            path_match = (
+                _PROMPT_SNAPSHOT_REDACTION_PATH.fullmatch(path) if isinstance(path, str) else None
+            )
+            if (
+                path_match is None
+                or len(path) > 256
+                or not isinstance(reason, str)
+                or reason not in _PROMPT_SNAPSHOT_REDACTION_REASONS
+                or not isinstance(replacement, str)
+                or _PROMPT_SNAPSHOT_REDACTION_MARKER.fullmatch(replacement) is None
+                or len(replacement) > 128
+                or cls._prompt_snapshot_contains_sensitive_text(path)
+                or cls._prompt_snapshot_contains_sensitive_text(reason)
+            ):
+                raise InvalidControlPlaneInput("prompt redaction metadata is invalid")
+            redacted_value = cls._prompt_snapshot_redaction_value(
+                path_match=path_match,
+                provider_messages=normalized_messages,
+            )
+            if not cls._prompt_snapshot_redaction_matches(redacted_value, replacement):
+                raise InvalidControlPlaneInput("prompt redaction metadata is invalid")
+            normalized_redactions.append(
+                {
+                    "path": path,
+                    "reason": reason,
+                    "replacement": replacement,
+                }
+            )
+
+        transcript_json = canonical_json({"messages": normalized_messages})
+        redactions_json = canonical_json({"redactions": normalized_redactions})
+        if len(transcript_json.encode("utf-8")) > _PROMPT_SNAPSHOT_MAX_TRANSCRIPT_BYTES:
+            raise InvalidControlPlaneInput("provider prompt transcript exceeds 1.5 MiB")
+        if len(redactions_json.encode("utf-8")) > _PROMPT_SNAPSHOT_MAX_REDACTIONS_BYTES:
+            raise InvalidControlPlaneInput("prompt redaction metadata exceeds 16 KiB")
+        if cls._prompt_snapshot_contains_unredacted_secret(normalized_messages):
+            raise InvalidControlPlaneInput(
+                "provider prompt transcript contains credential material"
+            )
+        if cls._prompt_snapshot_contains_forbidden_content({"redactions": normalized_redactions}):
+            raise InvalidControlPlaneInput(
+                "prompt redaction metadata contains forbidden PHI or credential material"
+            )
+        for redaction in normalized_redactions:
+            if transcript_json.count(redaction["replacement"]) < 1:
+                raise InvalidControlPlaneInput(
+                    "prompt redaction metadata does not identify persisted text"
+                )
+        return (
+            system_prompt_version,
+            system_prompt_sha256,
+            system_prompt_content,
+            normalized_messages,
+            hashlib.sha256(transcript_json.encode("utf-8")).hexdigest(),
+            normalized_redactions,
+        )
+
+    @classmethod
+    def _insert_agent_prompt_snapshot(
+        cls,
+        connection: Connection,
+        *,
+        organization_id: str,
+        execution_id: str,
+        campaign_run_id: str,
+        attempt_id: str | None,
+        agent_role: AgentRole,
+        input_payload: Mapping[str, Any],
+        authorized_prompt_sha256: str,
+        system_prompt_version: str | None,
+        system_prompt_sha256: str | None,
+        system_prompt_content: str | None,
+        provider_messages: Sequence[Mapping[str, Any]] | None,
+        redactions: Sequence[Mapping[str, Any]],
+    ) -> None:
+        (
+            prompt_version,
+            prompt_sha256,
+            prompt_content,
+            messages,
+            transcript_sha256,
+            normalized_redactions,
+        ) = cls._normalize_agent_prompt_snapshot(
+            agent_role=agent_role,
+            input_payload=input_payload,
+            authorized_prompt_sha256=authorized_prompt_sha256,
+            system_prompt_version=system_prompt_version,
+            system_prompt_sha256=system_prompt_sha256,
+            system_prompt_content=system_prompt_content,
+            provider_messages=provider_messages,
+            redactions=redactions,
+        )
+        connection.execute(
+            text(
+                "INSERT INTO agent_prompt_snapshots "
+                "(organization_id, execution_id, campaign_run_id, attempt_id, agent_role, "
+                "system_prompt_version, system_prompt_sha256, system_prompt_content, "
+                "provider_messages, transcript_sha256, redactions) VALUES "
+                "(:org, :execution, :run, :attempt, :role, :prompt_version, :prompt_sha, "
+                ":prompt_content, CAST(:messages AS jsonb), :transcript_sha, "
+                "CAST(:redactions AS jsonb))"
+            ),
+            {
+                "org": organization_id,
+                "execution": execution_id,
+                "run": campaign_run_id,
+                "attempt": attempt_id,
+                "role": agent_role,
+                "prompt_version": prompt_version,
+                "prompt_sha": prompt_sha256,
+                "prompt_content": prompt_content,
+                "messages": json.dumps(
+                    messages,
+                    allow_nan=False,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                    sort_keys=True,
+                ),
+                "transcript_sha": transcript_sha256,
+                "redactions": json.dumps(
+                    normalized_redactions,
+                    allow_nan=False,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                    sort_keys=True,
+                ),
+            },
+        )
 
     @staticmethod
     def _validate_judge_calibration_lineage(

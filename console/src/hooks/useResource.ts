@@ -3,10 +3,21 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiClientError, type ApiClient } from "../api/client";
 import type { ResourceEnvelope, ResourceResult } from "../api/contracts";
 import type { ReadModelDecoder } from "../api/read-models";
+import {
+  useLiveDataContext,
+  type LiveConnectionState,
+} from "../live/LiveDataContext";
 
 export interface ResourceController<T> {
   result: ResourceResult<T>;
   refresh: () => void;
+  freshness: {
+    state: LiveConnectionState | "snapshot";
+    refreshing: boolean;
+    stale: boolean;
+    lastUpdatedAt: string | null;
+    lastEventAt: string | null;
+  };
 }
 
 export interface ResourceOptions {
@@ -34,19 +45,35 @@ export function useResource<T>(
 ): ResourceController<T> {
   const [revision, setRevision] = useState(0);
   const [result, setResult] = useState<ResourceResult<T>>({ state: "loading", data: null });
+  const [refreshing, setRefreshing] = useState(false);
+  const [lastUpdatedAt, setLastUpdatedAt] = useState<string | null>(null);
   const refresh = useCallback(() => setRevision((value) => value + 1), []);
-  const pollIntervalMs = options.pollIntervalMs;
+  const live = useLiveDataContext();
+  const fallbackPolling = live !== null
+    && (live.connectionState === "reconnecting" || live.connectionState === "stale");
+  const pollIntervalMs = live === null
+    ? options.pollIntervalMs
+    : fallbackPolling
+      ? LIVE_RESOURCE_POLL_INTERVAL_MS
+      : undefined;
   const resourceIdentity = useRef({ client, path });
+  const lastSuccessful = useRef<ResourceResult<T> | null>(null);
+  const identityChanged = resourceIdentity.current.client !== client
+    || resourceIdentity.current.path !== path;
+
+  useEffect(() => {
+    if (live === null) return;
+    return live.registerResource(path, refresh);
+  }, [live?.registerResource, path, refresh]);
 
   useEffect(() => {
     const controller = new AbortController();
     let active = true;
     let pollTimeout: number | null = null;
-    if (
-      resourceIdentity.current.client !== client
-      || resourceIdentity.current.path !== path
-    ) {
+    if (identityChanged) {
       resourceIdentity.current = { client, path };
+      lastSuccessful.current = null;
+      setLastUpdatedAt(null);
       setResult({ state: "loading", data: null });
     }
 
@@ -61,27 +88,63 @@ export function useResource<T>(
       }
     };
     const load = async () => {
+      setRefreshing(true);
       try {
         const envelope = await client.read<unknown>(path, controller.signal);
         if (!active) return;
         try {
-          setResult(decodeReadyData(envelope, decode));
+          const decoded = decodeReadyData(envelope, decode);
+          if (
+            decoded.state === "ready"
+            || decoded.state === "empty"
+            || (
+              (decoded.state === "stale" || decoded.state === "degraded")
+              && decoded.data !== null
+            )
+          ) {
+            lastSuccessful.current = decoded;
+            setLastUpdatedAt(decoded.as_of ?? new Date().toISOString());
+            setResult(decoded);
+          } else if (lastSuccessful.current !== null) {
+            setResult({
+              ...lastSuccessful.current,
+              state: decoded.state === "error" ? "stale" : decoded.state,
+              reason_code: decoded.reason_code,
+              detail: decoded.detail,
+            } as ResourceResult<T>);
+          } else {
+            setResult(decoded);
+          }
         } catch {
-          setResult({
-            state: "error",
-            data: null,
-            reason_code: "invalid_response_contract",
-          });
+          setResult(lastSuccessful.current === null
+            ? {
+                state: "error",
+                data: null,
+                reason_code: "invalid_response_contract",
+              }
+            : {
+                ...lastSuccessful.current,
+                state: "degraded",
+                reason_code: "invalid_response_contract",
+              } as ResourceResult<T>);
         }
       } catch (error: unknown) {
         if (active && !controller.signal.aborted) {
-          setResult({
-            state: "error",
-            data: null,
-            reason_code: error instanceof ApiClientError ? error.code : "request_failed",
-          });
+          const reasonCode = error instanceof ApiClientError ? error.code : "request_failed";
+          setResult(lastSuccessful.current === null
+            ? {
+                state: "error",
+                data: null,
+                reason_code: reasonCode,
+              }
+            : {
+                ...lastSuccessful.current,
+                state: "stale",
+                reason_code: reasonCode,
+              } as ResourceResult<T>);
         }
       } finally {
+        if (active) setRefreshing(false);
         schedulePoll();
       }
     };
@@ -94,5 +157,22 @@ export function useResource<T>(
     };
   }, [client, path, decode, pollIntervalMs, revision]);
 
-  return { result, refresh };
+  const freshnessState = refreshing && live !== null
+    ? "reconciling"
+    : live?.connectionState ?? "snapshot";
+  const visibleResult: ResourceResult<T> = identityChanged
+    ? { state: "loading", data: null }
+    : result;
+
+  return {
+    result: visibleResult,
+    refresh,
+    freshness: {
+      state: freshnessState,
+      refreshing,
+      stale: visibleResult.state === "stale" || freshnessState === "stale",
+      lastUpdatedAt: identityChanged ? null : lastUpdatedAt,
+      lastEventAt: live?.lastEventAt ?? null,
+    },
+  };
 }

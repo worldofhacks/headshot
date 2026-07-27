@@ -49,9 +49,11 @@ policy, token, timeout, retry, cost, rate, and concurrency authority are content
 
 The architecture is functional but not yet full-suite reliable. A 2026-07-26 staging campaign
 completed 12 target attempts before a schema-invalid Gemini Judge response failed the batch. The
-staged configuration authorized zero retries; structured-output failures are not retryable; terminal
-batches cannot resume; and the Langfuse verifier rejects failed campaigns. These are current design
-defects, not operator mistakes, and they define the remediation plan in `PLAN.md`.
+staged configuration authorized zero retries. The repository candidate can retry only a fully
+attributable, usage-settled structured-output failure and only when existing role/global authority
+permits it; that code is not deployed and grants nothing to the current zero-retry configuration.
+Terminal batches still cannot resume, and the Langfuse verifier rejects failed campaigns. These are
+current design defects, not operator mistakes, and they define the remediation plan in `PLAN.md`.
 
 ## 2. System context
 
@@ -97,7 +99,8 @@ All application services build the same Docker artifact:
 | PostgreSQL | private only | managed service | durable authority, evidence, queue, audit, read models |
 
 Only Web runs `alembic upgrade head` as a Railway pre-deploy command. Runner and Scheduler refuse work
-unless the database is at the exact packaged head. The current sole head is `0025`.
+unless the database is at the exact packaged head. The current sole packaged head is `0026`; the
+latest verified staging database remains at `0025`.
 
 Staging currently has one policy-aligned service set. Production is reachable but release-skewed and
 must not run campaigns until it is intentionally realigned. Dynamic deployment facts live in
@@ -220,12 +223,15 @@ organization
 campaign run
   -> logical agent execution
   -> physical provider invocation -> provider terminal event
+  -> immutable protected prompt snapshot
 ```
 
 `AttemptResult.content_hash` is the authoritative target-evidence identity. Provider usage and cost are
 recorded per physical event and aggregated into the logical agent execution. Source workload
 provenance added by migration `0025` records reviewed workload instance, review-record hash, and source
-generation hash separately from security-tool provenance.
+generation hash separately from security-tool provenance. Migration `0026` adds one append-only,
+organization-scoped prompt snapshot per logical execution with the exact package-owned system prompt,
+ordered provider messages, hashes, and bounded redaction metadata.
 
 ## 7. Human identity and authorization
 
@@ -246,6 +252,10 @@ Roles organize permissions but do not replace permission checks:
 
 Frontend controls are courtesy UX only. Server handlers derive identity and organization scope and
 enforce object ownership plus the two-person invariant.
+
+The single-execution prompt-snapshot route is part of the evidence boundary: it requires
+`org:console:read` plus `org:evidence:read`, scopes by verified Organization, and never joins prompt
+contents into list, aggregate, event-stream, logging, or Langfuse payloads.
 
 Authentication is never a target credential and never replaces Policy Gateway authorization.
 
@@ -316,9 +326,12 @@ OpenRouter requests:
 - record provider request/model/upstream identity; and
 - settle reported usage/cost against the durable ledger.
 
-The transport can retry timeouts, transport errors, and HTTP 429/502/503 only within explicit
-configuration authority. The current staged configuration sets `max_retries = 0`. A structured-output
-validation failure is currently observed and terminal, not retryable.
+The transport can retry timeouts, transport errors, HTTP 429/502/503, and one fully attributable
+schema-invalid response only within the minimum of the closed platform ceiling, per-role limit,
+global limit, and remaining durable ledger authority. A schema-invalid response with valid
+model/route/usage/cost facts settles and records its physical call before another reservation.
+Model/route drift, usage/cost failure, cap refusal, authorization failure, and unknown outcomes remain
+non-retryable. The current staged configuration sets `max_retries = 0`, so it authorizes no retry.
 
 ## 11. Storage, queue, and migrations
 
@@ -330,6 +343,7 @@ PostgreSQL stores:
 - agent configuration and hosted configuration sets;
 - logical agent executions;
 - physical provider invocations/events;
+- immutable evidence-permissioned agent prompt snapshots;
 - outbound target HTTP requests;
 - attempt results, verdicts, findings, decisions, reports, and regressions;
 - jobs, leases, retries, dead letters, idempotency, and audit events; and
@@ -339,8 +353,9 @@ The queue uses transactional claims and leases with `SKIP LOCKED`. Runner concur
 process; provider concurrency is one in the current configuration. Command mutations use idempotency
 keys.
 
-Alembic applies an expand/contract history and rejects schema skew. The current sole head is `0025`;
-Runner/Scheduler do not migrate.
+Alembic applies an expand/contract history and rejects schema skew. The current sole packaged head is
+`0026`; Runner/Scheduler do not migrate. The last verified staging database remains at `0025` until a
+reviewed deployment applies the append-only prompt-snapshot migration.
 
 ## 12. Observability and Langfuse
 
@@ -348,9 +363,16 @@ PostgreSQL is authoritative. It records exact IDs, parentage, hashes, timestamps
 status, provider identity, physical attempt sequence/status, tokens, measured provider cost, target
 accounting, calibration state, verdict authority, and Langfuse delivery state.
 
-The console reads organization-scoped PostgreSQL projections for Live, Agents, Traces, Costs,
-Coverage, Resilience, Findings, Targets, Config, and Approvals. It does not receive Langfuse or
-provider secrets.
+The console has exactly six primary workspaces: Runs, Findings, Coverage, Approvals, Observability,
+and System. Runs groups authoritative campaign Operations and Targets; Findings groups Findings and
+Reports; Observability groups campaign-scoped Traces and Costs; System groups Agents, Tool inventory,
+and Configuration. Legacy URLs remain deep-link aliases. Live operations use authenticated SSE with
+five-second polling fallback, preserve last-good data with freshness state, and render absent facts
+as unknown/partial rather than zero.
+
+Prompt contents are fetched only for one explicitly expanded execution through the protected
+evidence route and remain collapsed by default. The console does not receive Langfuse/provider
+secrets, and prompt content is absent from aggregate views and event streams.
 
 Langfuse currently projects:
 
@@ -396,9 +418,9 @@ Implemented:
 
 Open defects:
 
-1. Schema-invalid provider output is not retryable.
+1. Candidate schema-invalid-output retry classification is not deployed or accepted.
 2. Current staging authorizes zero provider retries.
-3. One case-local Judge format error fails the whole batch.
+3. One exhausted case-local Judge format error still fails the whole batch.
 4. Terminal/interrupted campaigns cannot resume from durable completed cases.
 5. Queue failure is non-retryable even when a safe state-aware resume would be possible.
 6. Failed campaigns cannot be Langfuse query-back verified.

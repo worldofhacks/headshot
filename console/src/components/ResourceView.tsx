@@ -1,4 +1,9 @@
-import type { ReactNode } from "react";
+import {
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type ReactNode,
+} from "react";
 
 import {
   displayValue,
@@ -85,13 +90,45 @@ export function RecordTable<T extends JsonRecord>({
   onSelect?: (record: T) => void;
 }) {
   const rows = data;
+  const [focusedRowIndex, setFocusedRowIndex] = useState(0);
+  const rowRefs = useRef<Array<HTMLTableRowElement | null>>([]);
   if (rows.length === 0) {
     return <StateNotice state="empty" detail="The server returned no records for this view." />;
   }
   const keyFor = (row: JsonRecord, index: number) =>
     identityKeys.map((key) => displayValue(row[key])).join(":") || `row-${index}`;
+  const rovingRowIndex = Math.min(focusedRowIndex, rows.length - 1);
+  const moveRowFocus = (index: number) => {
+    const boundedIndex = Math.max(0, Math.min(index, rows.length - 1));
+    setFocusedRowIndex(boundedIndex);
+    rowRefs.current[boundedIndex]?.focus();
+  };
+  const handleRowKeyDown = (
+    event: KeyboardEvent<HTMLTableRowElement>,
+    row: T,
+    index: number,
+  ) => {
+    if (!onSelect) return;
+    if (event.key === "Enter" || event.key === " " || event.key === "Spacebar") {
+      event.preventDefault();
+      onSelect(row);
+      return;
+    }
+    let nextIndex: number | null = null;
+    if (event.key === "ArrowDown") nextIndex = Math.min(index + 1, rows.length - 1);
+    if (event.key === "ArrowUp") nextIndex = Math.max(index - 1, 0);
+    if (event.key === "Home") nextIndex = 0;
+    if (event.key === "End") nextIndex = rows.length - 1;
+    if (nextIndex === null) return;
+    event.preventDefault();
+    moveRowFocus(nextIndex);
+  };
   return (
-    <div className="table-scroll" tabIndex={0} aria-label="Authoritative records">
+    <div
+      className="table-scroll"
+      tabIndex={onSelect ? undefined : 0}
+      aria-label="Authoritative records"
+    >
       <table className="record-table">
         <thead>
           <tr>{columns.map((column) => <th key={column.key}>{column.label}</th>)}</tr>
@@ -100,8 +137,16 @@ export function RecordTable<T extends JsonRecord>({
           {rows.map((row, index) => (
             <tr
               key={keyFor(row, index)}
+              ref={(node) => {
+                rowRefs.current[index] = node;
+              }}
               className={onSelect ? "selectable" : undefined}
+              tabIndex={onSelect ? (index === rovingRowIndex ? 0 : -1) : undefined}
               onClick={onSelect ? () => onSelect(row) : undefined}
+              onFocus={onSelect ? () => setFocusedRowIndex(index) : undefined}
+              onKeyDown={onSelect
+                ? (event) => handleRowKeyDown(event, row, index)
+                : undefined}
             >
               {columns.map((column) => (
                 <td key={column.key} className={column.mono ? "mono" : undefined}>

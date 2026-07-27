@@ -67,11 +67,6 @@ function CoverageEvidence({ data }: { data: CoverageReadModel[] }) {
     (total, record) => total + record.verified_attempt_count,
     0,
   );
-  const verifiedCases = data.reduce(
-    (total, record) =>
-      total + Math.min(record.verified_attempt_count, record.total_case_count),
-    0,
-  );
   const cases = data.reduce(
     (total, record) => total + record.total_case_count,
     0,
@@ -97,9 +92,9 @@ function CoverageEvidence({ data }: { data: CoverageReadModel[] }) {
             note: `${count(cases)} authorized cases`,
           },
           {
-            label: "Case execution ceiling",
-            value: cases ? percent(verifiedCases / cases) : "—",
-            note: "deduplicated case count cannot exceed denominator",
+            label: "Attempts per authorized case",
+            value: cases ? `${(verifiedAttempts / cases).toFixed(2)}×` : "—",
+            note: "can exceed 1× when cases are retried",
           },
           {
             label: "Covered versions",
@@ -118,7 +113,7 @@ function CoverageEvidence({ data }: { data: CoverageReadModel[] }) {
       <div className="panel-grid analytical-grid">
         <Panel
           title="Execution by target version"
-          meta="verified / total"
+          meta="verified attempts / authorized cases"
           eyebrow="COVERAGE POSTURE"
         >
           <DistributionBars rows={data.map((record) => ({

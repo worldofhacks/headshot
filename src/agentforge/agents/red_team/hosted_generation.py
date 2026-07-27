@@ -190,8 +190,27 @@ def build_generation_messages(
         raise TracedRedTeamGenerationError(
             "red_team prompt identity does not match the immutable prompt authority"
         ) from None
+    user = generation_input_payload(seed, count, category)
+    return (
+        {"role": "system", "content": prompt.content},
+        {
+            "role": "user",
+            "content": json.dumps(
+                user, allow_nan=False, ensure_ascii=False, separators=(",", ":"), sort_keys=True
+            ),
+        },
+    )
+
+
+def generation_input_payload(
+    seed: Mapping[str, Any],
+    count: int,
+    category: str,
+) -> dict[str, Any]:
+    """Return the exact JSON object serialized into the hosted Red Team user message."""
+
     seed_turns = [turn for turn in seed.get("input_sequence", []) if isinstance(turn, str)]
-    user = {
+    return {
         "category": category,
         "count": count,
         "output_contract": {
@@ -202,15 +221,6 @@ def build_generation_messages(
         "seed_case_ref": seed.get("case_ref"),
         "seed_turns": seed_turns,
     }
-    return (
-        {"role": "system", "content": prompt.content},
-        {
-            "role": "user",
-            "content": json.dumps(
-                user, allow_nan=False, ensure_ascii=False, separators=(",", ":"), sort_keys=True
-            ),
-        },
-    )
 
 
 class TracedHostedRedTeamProvider:
@@ -269,6 +279,7 @@ class TracedHostedRedTeamProvider:
         category: str,
         *,
         execution_id: str | None,
+        provider_messages: tuple[dict[str, str], ...] | None = None,
     ) -> Any:
         """Invoke qwen with the durable logical identity required by the physical recorder."""
 
@@ -293,15 +304,16 @@ class TracedHostedRedTeamProvider:
         )
         if not isinstance(provider_context, ProviderLogicalContextV1):
             raise TracedRedTeamGenerationError("red_team provider lineage context is invalid")
+        messages = provider_messages or build_generation_messages(
+            seed,
+            count,
+            category,
+            prompt_version=self._role.prompt_version,
+            prompt_sha256=self._role.prompt_sha256,
+        )
         return self._transport.invoke(
             role="red_team",
-            messages=build_generation_messages(
-                seed,
-                count,
-                category,
-                prompt_version=self._role.prompt_version,
-                prompt_sha256=self._role.prompt_sha256,
-            ),
+            messages=messages,
             output_schema=variants_output_schema(count),
             schema_name=_GENERATION_SCHEMA_NAME,
             generation_policy_sha256=self._generation_policy_sha256,
@@ -433,16 +445,32 @@ class TracedHostedRedTeamProvider:
         Drop-in for ``mutation.mutate(..., provider=...)``: it owns the start/invoke/finish steps
         and emits the identical :class:`HostedExecutionLineage`.
         """
+        try:
+            prompt = prompt_for_identity(
+                "red_team",
+                self._role.prompt_version,
+                self._role.prompt_sha256,
+            )
+        except PromptRegistryError:
+            raise TracedRedTeamGenerationError(
+                "red_team prompt identity does not match the immutable prompt authority"
+            ) from None
+        provider_messages = build_generation_messages(
+            seed,
+            count,
+            category,
+            prompt_version=prompt.version,
+            prompt_sha256=prompt.sha256,
+        )
+        input_payload = generation_input_payload(seed, count, category)
         execution_id = self._lifecycle.start(
             role="red_team",
             parent_execution_id=self._parent_execution_id,
-            input_payload={
-                "generation": {
-                    "category": category,
-                    "count": count,
-                    "seed_case_ref": seed.get("case_ref"),
-                }
-            },
+            input_payload=input_payload,
+            system_prompt_version=prompt.version,
+            system_prompt_sha256=prompt.sha256,
+            system_prompt_content=prompt.content,
+            provider_messages=provider_messages,
             provider=self._role.provider,
             model=self._role.model,
             upstream_provider=self._role.upstream_provider,
@@ -461,6 +489,7 @@ class TracedHostedRedTeamProvider:
                 count,
                 category,
                 execution_id=execution_id,
+                provider_messages=provider_messages,
             )
             # _collect_usable stays INSIDE the try: a short/exhausted generation raises
             # ProviderExhaustedError AFTER the (cost-incurring) transport call has already STARTED

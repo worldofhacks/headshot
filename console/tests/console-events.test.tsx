@@ -1,7 +1,10 @@
 import { renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { useConsoleEvents } from "../src/hooks/useConsoleEvents";
+import {
+  useConsoleEvents,
+  useStandaloneConsoleEvents,
+} from "../src/hooks/useConsoleEvents";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -98,5 +101,61 @@ describe("console stream control events", () => {
     );
     expect(result.current.state).toBe("ready");
     expect(result.current.reason_code).toBeUndefined();
+  });
+
+  it("reports disconnect and reconnect lifecycle without concurrent streams", async () => {
+    const connectionStates: string[] = [];
+    const getToken = vi.fn(async () => "fixture-session");
+    const fetchMock = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        new Response(
+          'id: 1\nevent: campaign.started\ndata: {"aggregate_type":"campaign"}\n\n',
+          { status: 200, headers: { "content-type": "text/event-stream" } },
+        ),
+      )
+      .mockImplementationOnce(() => new Promise<Response>(() => undefined));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { result, unmount } = renderHook(() =>
+      useStandaloneConsoleEvents(
+        getToken,
+        vi.fn(),
+        { onConnectionState: (state) => connectionStates.push(state) },
+      ),
+    );
+
+    await waitFor(() =>
+      expect("cursor" in result.current && result.current.cursor).toBe(1),
+    );
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2), { timeout: 3_000 });
+
+    expect(connectionStates).toEqual(expect.arrayContaining(["live", "reconnecting"]));
+    unmount();
+  });
+
+  it("announces an explicit cursor gap as reconciliation", async () => {
+    const connectionStates: string[] = [];
+    const reconcile = vi.fn();
+    const getToken = vi.fn(async () => "fixture-session");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>().mockResolvedValue(
+        new Response(
+          'id: 9\nevent: gap\ndata: {"earliest_cursor":9}\n\n',
+          { status: 200, headers: { "content-type": "text/event-stream" } },
+        ),
+      ),
+    );
+
+    renderHook(() =>
+      useStandaloneConsoleEvents(
+        getToken,
+        reconcile,
+        { onConnectionState: (state) => connectionStates.push(state) },
+      ),
+    );
+
+    await waitFor(() => expect(reconcile).toHaveBeenCalled());
+    await waitFor(() => expect(connectionStates).toContain("reconciling"));
   });
 });

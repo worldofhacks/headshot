@@ -100,6 +100,24 @@ class CampaignWorkUnitReservationRecord:
 
 
 @dataclass(frozen=True, slots=True)
+class AgentPromptSnapshotRecord:
+    """Protected prompt evidence; large untrusted text is deliberately absent from ``repr``."""
+
+    organization_id: str
+    execution_id: str
+    campaign_run_id: str
+    attempt_id: str | None
+    agent_role: str
+    system_prompt_version: str
+    system_prompt_sha256: str
+    system_prompt_content: str = field(repr=False)
+    provider_messages: tuple[dict[str, str], ...] = field(repr=False)
+    transcript_sha256: str
+    redactions: tuple[dict[str, str], ...] = field(repr=False)
+    created_at: datetime.datetime
+
+
+@dataclass(frozen=True, slots=True)
 class FindingDecisionRecord:
     decision_id: str
     organization_id: str

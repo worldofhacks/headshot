@@ -52,8 +52,9 @@ All services build `Dockerfile`. The runtime image contains:
 - the Langfuse campaign verifier.
 
 Only `railway/web.json` declares `alembic upgrade head`. Runner and Scheduler call an exact-head
-readiness check before consuming/enqueuing work. The current sole head is `0025`; never hard-code that
-value into automation that should derive the packaged head.
+readiness check before consuming/enqueuing work. The current sole packaged head is `0026`; the last
+verified staging database is still at `0025`. Never hard-code either value into automation that
+should derive the packaged or deployed head.
 
 One release must be tested as an immutable artifact. Do not independently rebuild services from
 different source states.
@@ -149,6 +150,11 @@ Use this order for schema-affecting releases:
 
 For migrations whose constraints make old/new Runner overlap unsafe, scale the old Runner to zero
 after quiescence instead of relying on `overlapSeconds`.
+
+For packaged migration `0026`, keep the candidate Runner inert at the old `0025` head, quiesce and
+remove the old Runner before Web applies the migration, then verify the append-only
+`agent_prompt_snapshots` table, lineage trigger, and role grants before activating the candidate
+Runner. Web has `SELECT` only; Runner has `SELECT`/`INSERT`; neither service role may update/delete.
 
 ## Hosted configuration and policy parity
 

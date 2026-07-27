@@ -110,6 +110,47 @@ def test_birdseye_is_registry_derived_and_omits_missing_components(
     assert "langfuse" not in component_ids
 
 
+def test_birdseye_observes_reasoning_only_agent_tokens(migrated_db: Engine) -> None:
+    organization_id = "org_BirdseyeReasoningOnly"
+    with migrated_db.begin() as connection:
+        connection.execute(text("SET LOCAL session_replication_role = replica"))
+        connection.execute(
+            text(
+                "INSERT INTO agent_executions "
+                "(execution_id, organization_id, campaign_run_id, agent_role, status, "
+                "provider, model, execution_mode, configuration_version, input_sha256, "
+                "output_sha256, input_tokens, output_tokens, reasoning_tokens, measured_cost, "
+                "cost_measurement_state, trace_id, langfuse_status, detail, started_at, "
+                "finished_at, duration_ms) VALUES "
+                "('birdseye-reasoning-only', :org, 'run-birdseye-reasoning-only', "
+                "'orchestrator', 'succeeded', 'headshot', 'orchestrator-engine-v1', "
+                "'deterministic', 1, :input_hash, :output_hash, NULL, NULL, 23, 0, "
+                "'measured', :trace, 'disabled', '{}', clock_timestamp() - INTERVAL '2 seconds', "
+                "clock_timestamp() - INTERVAL '1 second', 1000)"
+            ),
+            {
+                "org": organization_id,
+                "input_hash": "a" * 64,
+                "output_hash": "b" * 64,
+                "trace": "c" * 32,
+            },
+        )
+
+    result = PostgresApiBackend(migrated_db, environment="local").read(
+        "birdseye",
+        _principal(organization_id),
+    )
+
+    assert result.state == "ready", result.model_dump()
+    orchestrator = next(
+        node for node in result.data["nodes"] if node["component_id"] == "agent:orchestrator"
+    )
+    assert orchestrator["input_tokens"] is None
+    assert orchestrator["output_tokens"] is None
+    assert orchestrator["reasoning_tokens"] == 23
+    assert orchestrator["token_observation_count"] == 1
+
+
 def test_birdseye_projects_only_the_latest_hosted_runtime_configuration(
     migrated_db: Engine,
 ) -> None:

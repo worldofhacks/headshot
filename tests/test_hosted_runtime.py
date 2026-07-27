@@ -500,10 +500,12 @@ def test_confirmed_deterministic_exploit_cannot_be_laundered_safe_and_docs_stay_
 
 
 def test_runtime_sends_the_exact_registry_prompt_as_the_system_message() -> None:
+    lifecycle = _FakeExecutionLifecycle()
     runtime, transport = _runtime(
         outputs=_outputs(judge_state="EXPLOIT_LIKELY"),
         target=lambda _attempt: {"status_code": 200},
         recorded=[],
+        lifecycle=lifecycle,
     )
 
     runtime.run_attempt(authorized_case={"case_id": "case-1"})
@@ -520,6 +522,11 @@ def test_runtime_sends_the_exact_registry_prompt_as_the_system_message() -> None
         assert messages[1]["role"] == "user"
         configured = next(item for item in transport.configuration.roles if item.role == role)
         assert configured.prompt_sha256 == prompt.sha256
+        started = next(item for item in lifecycle.starts if item["role"] == role)
+        assert started["system_prompt_version"] == prompt.version
+        assert started["system_prompt_sha256"] == prompt.sha256
+        assert started["system_prompt_content"] == prompt.content
+        assert started["provider_messages"] == messages
 
 
 def test_deterministic_error_remains_error_and_skips_documentation() -> None:

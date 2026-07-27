@@ -333,6 +333,16 @@ class HostedUsageLedger:
     def configuration_sha256(self) -> str:
         return self._configuration.configuration_sha256
 
+    def authorized_retry_limit(self, role: AgentRole) -> int:
+        """Return the effective retry ceiling from the contained run envelope."""
+
+        if role not in self._roles:
+            raise HostedProviderError("hosted role is not configured")
+        return min(
+            self._role_limits[role].max_retries,
+            self._global_limits.max_retries,
+        )
+
     @property
     def snapshot(self) -> HostedLedgerSnapshot:
         with self._lock:
@@ -618,6 +628,22 @@ class HostedProviderResponseError(HostedProviderError):
         self.provider_event_status = provider_event_status
 
 
+class HostedStructuredOutputInvalid(HostedProviderResponseError):
+    """A measured, authorized provider response that failed the role's JSON schema.
+
+    This is the only observed provider-response failure that may consume the configured retry
+    allowance. Identity, route, settlement, and ambiguous-output failures remain terminal.
+    """
+
+    code = "invalid_structured_output"
+
+
+class _StructuredOutputAmbiguous(HostedProviderError):
+    """Structured output with repeated keys is ambiguous and must never be retried."""
+
+    code = "provider-structured-output-ambiguous"
+
+
 class _ModelSubstituted(HostedProviderError):
     """A measured response whose observed model differs from its authorization."""
 
@@ -777,6 +803,7 @@ class OpenRouterTransport:
             HOSTED_MAX_LOGICAL_RETRIES,
             configuration.limits.max_retries,
             self._configuration.global_limits.max_retries,
+            self._ledger.authorized_retry_limit(role),
         )
         last_error: Exception | None = None
         physical_attempts = 0
@@ -816,6 +843,12 @@ class OpenRouterTransport:
                         reasoning_tokens=max_reasoning_tokens,
                     )
                 except HostedProviderError as exc:
+                    # A retry re-enters the ledger. If its reservation is refused after a measured
+                    # schema failure, preserve that original typed failure and observation as the
+                    # terminal cause. The cap refusal remains chained, and no second send occurs.
+                    if isinstance(last_error, HostedStructuredOutputInvalid):
+                        last_error.account_physical_attempts(physical_attempts)
+                        raise last_error from exc
                     exc.account_physical_attempts(physical_attempts)
                     raise
                 try:
@@ -872,6 +905,12 @@ class OpenRouterTransport:
                                 "provider retry pacing failed",
                                 physical_attempts=physical_attempts,
                             ) from sleep_error
+                except HostedStructuredOutputInvalid as exc:
+                    self._record_observed_failure(invocation, exc)
+                    last_error = exc
+                    if attempt >= attempts:
+                        exc.account_physical_attempts(physical_attempts)
+                        raise
                 except HostedProviderResponseError as exc:
                     self._record_observed_failure(invocation, exc)
                     exc.account_physical_attempts(physical_attempts)
@@ -899,6 +938,9 @@ class OpenRouterTransport:
                 else:
                     self._record_success(invocation, result)
                     return result
+        if isinstance(last_error, HostedProviderError):
+            last_error.account_physical_attempts(physical_attempts)
+            raise last_error
         raise HostedProviderError(
             "OpenRouter request failed after the authorized retry",
             physical_attempts=physical_attempts,
@@ -1164,11 +1206,13 @@ class OpenRouterTransport:
             raise _PhysicalCallError(
                 "OpenRouter returned invalid JSON",
                 provider_event_status="invalid_output",
+                logical_error_code="invalid_structured_output",
             ) from exc
         if not isinstance(payload, dict):
             raise _PhysicalCallError(
                 "OpenRouter response has an invalid shape",
                 provider_event_status="invalid_output",
+                logical_error_code="invalid_structured_output",
             )
         requested_model = configuration.model_id
         returned_model, returned_model_valid = normalize_provider_observation(
@@ -1315,13 +1359,22 @@ class OpenRouterTransport:
                 provider_event_status="invalid_usage",
             ) from settle_error
 
+        # Identity, route, usage, and cost settlement have already succeeded. Only a schema
+        # formatting failure is retryable; ambiguous repeated keys remain a terminal refusal.
         try:
             output = self._structured_output(payload, output_schema)
-        except HostedProviderError as exc:
+        except _StructuredOutputAmbiguous as exc:
             raise HostedProviderResponseError(
                 "OpenRouter response failed after measured usage was observed",
                 observed_result=observed_result,
                 code=exc.code,
+                provider_event_status="invalid_output",
+            ) from exc
+        except HostedProviderError as exc:
+            raise HostedStructuredOutputInvalid(
+                "OpenRouter response failed after measured usage was observed",
+                observed_result=observed_result,
+                code=HostedStructuredOutputInvalid.code,
                 provider_event_status="invalid_output",
             ) from exc
         return replace(observed_result, output=output)
@@ -1496,7 +1549,7 @@ class OpenRouterTransport:
             Draft202012Validator.check_schema(dict(output_schema))
             Draft202012Validator(dict(output_schema)).validate(decoded)
         except _DuplicateStructuredKey as exc:
-            raise HostedProviderError(
+            raise _StructuredOutputAmbiguous(
                 "OpenRouter structured output repeated an object key"
             ) from exc
         except Exception as exc:
@@ -1583,6 +1636,7 @@ __all__ = [
     "HostedLedgerSnapshot",
     "HostedProviderError",
     "HostedProviderResponseError",
+    "HostedStructuredOutputInvalid",
     "HostedUsageEnvelope",
     "HostedUsageLedger",
     "OPENROUTER_CHAT_COMPLETIONS_URL",

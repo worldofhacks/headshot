@@ -135,6 +135,10 @@ class HostedExecutionLifecycle(Protocol):
         role: AgentRole,
         parent_execution_id: str | None,
         input_payload: Mapping[str, Any],
+        system_prompt_version: str,
+        system_prompt_sha256: str,
+        system_prompt_content: str,
+        provider_messages: tuple[Mapping[str, str], ...],
         provider: str,
         model: str,
         upstream_provider: str,
@@ -346,10 +350,27 @@ class HostedRoleRuntime:
         except (TypeError, ValueError) as exc:
             raise HostedCompositionError("hosted input is not canonical JSON") from exc
 
+        provider_messages = (
+            {"role": "system", "content": prompt.content},
+            {
+                "role": "user",
+                "content": json.dumps(
+                    canonical_input,
+                    allow_nan=False,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                    sort_keys=True,
+                ),
+            },
+        )
         execution_id = self._execution_lifecycle.start(
             role=role,
             parent_execution_id=parent_execution_id,
             input_payload=canonical_input,
+            system_prompt_version=prompt.version,
+            system_prompt_sha256=prompt.sha256,
+            system_prompt_content=prompt.content,
+            provider_messages=provider_messages,
             provider=configuration.provider,
             model=configuration.model_id,
             upstream_provider=configuration.upstream_provider,
@@ -373,19 +394,7 @@ class HostedRoleRuntime:
                 raise HostedCompositionError("hosted provider lineage context is invalid")
             result = self._transport.invoke(
                 role=role,
-                messages=(
-                    {"role": "system", "content": prompt.content},
-                    {
-                        "role": "user",
-                        "content": json.dumps(
-                            canonical_input,
-                            allow_nan=False,
-                            ensure_ascii=False,
-                            separators=(",", ":"),
-                            sort_keys=True,
-                        ),
-                    },
-                ),
+                messages=provider_messages,
                 output_schema=output_schema,
                 schema_name=schema_name,
                 generation_policy_sha256=self._authorization.generation_policy_sha256,

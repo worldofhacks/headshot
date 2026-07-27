@@ -10,7 +10,7 @@ from collections.abc import AsyncIterator, Mapping
 from typing import Annotated, Any, Literal
 from urllib.parse import urlsplit
 
-from fastapi import APIRouter, Depends, Header, Request
+from fastapi import APIRouter, Depends, Header, Query, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -338,6 +338,15 @@ def campaign(request: Request, campaign_id: str, principal: ConsolePrincipal) ->
     return _read(request, "campaign", principal, {"campaign_id": campaign_id})
 
 
+@router.get("/campaigns/{campaign_id}/operations")
+def campaign_operations(
+    request: Request,
+    campaign_id: str,
+    principal: ConsolePrincipal,
+) -> JSONResponse:
+    return _read(request, "campaign_operations", principal, {"campaign_id": campaign_id})
+
+
 @router.get("/campaigns/{campaign_id}/attempts")
 def attempts(request: Request, campaign_id: str, principal: ConsolePrincipal) -> JSONResponse:
     return _read(request, "attempts", principal, {"campaign_id": campaign_id})
@@ -346,6 +355,20 @@ def attempts(request: Request, campaign_id: str, principal: ConsolePrincipal) ->
 @router.get("/attempts/{attempt_id}/evidence")
 def evidence(request: Request, attempt_id: str, principal: EvidencePrincipal) -> JSONResponse:
     return _read(request, "evidence", principal, {"attempt_id": attempt_id})
+
+
+@router.get("/agent-executions/{execution_id}/prompt-snapshot")
+def agent_prompt_snapshot(
+    request: Request,
+    execution_id: str,
+    principal: EvidencePrincipal,
+) -> JSONResponse:
+    return _read(
+        request,
+        "agent_prompt_snapshot",
+        principal,
+        {"execution_id": execution_id},
+    )
 
 
 @router.get("/findings")
@@ -407,13 +430,23 @@ def resilience(request: Request, principal: FindingPrincipal) -> JSONResponse:
 
 
 @router.get("/traces")
-def traces(request: Request, principal: EvidencePrincipal) -> JSONResponse:
-    return _read(request, "traces", principal)
+def traces(
+    request: Request,
+    principal: EvidencePrincipal,
+    campaign_id: Annotated[str | None, Query(min_length=1, max_length=64)] = None,
+) -> JSONResponse:
+    identifiers = {"campaign_id": campaign_id} if campaign_id is not None else None
+    return _read(request, "traces", principal, identifiers)
 
 
 @router.get("/costs")
-def costs(request: Request, principal: ConsolePrincipal) -> JSONResponse:
-    return _read(request, "costs", principal)
+def costs(
+    request: Request,
+    principal: ConsolePrincipal,
+    campaign_id: Annotated[str | None, Query(min_length=1, max_length=64)] = None,
+) -> JSONResponse:
+    identifiers = {"campaign_id": campaign_id} if campaign_id is not None else None
+    return _read(request, "costs", principal, identifiers)
 
 
 @router.get("/targets")
@@ -500,8 +533,13 @@ def agent_prompt(
 
 
 @router.get("/agent-activity")
-def agent_activity(request: Request, principal: ConsolePrincipal) -> JSONResponse:
-    return _read(request, "agent_activity", principal)
+def agent_activity(
+    request: Request,
+    principal: ConsolePrincipal,
+    campaign_id: Annotated[str | None, Query(min_length=1, max_length=64)] = None,
+) -> JSONResponse:
+    identifiers = {"campaign_id": campaign_id} if campaign_id is not None else None
+    return _read(request, "agent_activity", principal, identifiers)
 
 
 @router.get("/tooling")

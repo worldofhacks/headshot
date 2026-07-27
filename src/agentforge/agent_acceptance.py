@@ -21,7 +21,7 @@ from typing import Any
 from sqlalchemy import Engine, text
 
 from agentforge.agents.documentation import DocumentationInput, HostedReportWriter
-from agentforge.agents.hosted import HostedConfigurationSet, HostedLimits
+from agentforge.agents.hosted import HostedConfigurationSet, HostedLimits, resolve_hosted_prompt
 from agentforge.agents.hosted_policy import HostedGenerationPolicy, HostedRoleCallPolicy
 from agentforge.agents.hosted_runtime import (
     HostedCallBounds,
@@ -35,6 +35,8 @@ from agentforge.agents.orchestrator import HostedPlanner
 from agentforge.agents.red_team.hosted_generation import (
     RedTeamRoleIdentity,
     TracedHostedRedTeamProvider,
+    build_generation_messages,
+    generation_input_payload,
     require_red_team_subcap,
 )
 from agentforge.control_plane.store import (
@@ -268,6 +270,10 @@ class _AcceptanceLifecycle:
         role: str,
         parent_execution_id: str | None,
         input_payload: Mapping[str, Any],
+        system_prompt_version: str | None = None,
+        system_prompt_sha256: str | None = None,
+        system_prompt_content: str | None = None,
+        provider_messages: tuple[Mapping[str, str], ...] | None = None,
         provider: str,
         model: str,
         upstream_provider: str,
@@ -283,6 +289,10 @@ class _AcceptanceLifecycle:
             run_id=self._run_id,
             agent_role=role,
             input_payload=input_payload,
+            system_prompt_version=system_prompt_version,
+            system_prompt_sha256=system_prompt_sha256,
+            system_prompt_content=system_prompt_content,
+            provider_messages=provider_messages,
             provider=provider,
             model=model,
             upstream_provider=upstream_provider,
@@ -632,16 +642,31 @@ def run_agent_acceptance(
             parent_execution_id=planner.execution_id,
             parent_request_id=planner.provider_request_id,
         )
+        red_team_seed = {
+            "case_ref": "synthetic-acceptance-seed",
+            "input_sequence": ["Synthetic acceptance seed; propose one test-only continuation."],
+        }
+        red_team_input = generation_input_payload(
+            red_team_seed,
+            1,
+            "prompt_injection",
+        )
+        red_team_messages = build_generation_messages(
+            red_team_seed,
+            1,
+            "prompt_injection",
+            prompt_version=red_team_role.prompt_version,
+            prompt_sha256=red_team_role.prompt_sha256,
+        )
+        red_team_prompt = resolve_hosted_prompt("red_team", red_team_role.prompt_sha256)
         red_team_execution_id = lifecycle.start(
             role="red_team",
             parent_execution_id=planner.execution_id,
-            input_payload={
-                "synthetic": True,
-                "seed_case_ref": "synthetic-acceptance-seed",
-                "category": "prompt_injection",
-                "generated_output_disposition": "quarantined_not_dispatched",
-                "target_call_limit": 0,
-            },
+            input_payload=red_team_input,
+            system_prompt_version=red_team_prompt.version,
+            system_prompt_sha256=red_team_prompt.sha256,
+            system_prompt_content=red_team_prompt.content,
+            provider_messages=red_team_messages,
             provider=red_team_role.provider,
             model=red_team_role.model_id,
             upstream_provider=red_team_role.upstream_provider,
@@ -652,12 +677,7 @@ def run_agent_acceptance(
         )
         try:
             red_team_generation = red_team_provider.generate_traced(
-                {
-                    "case_ref": "synthetic-acceptance-seed",
-                    "input_sequence": [
-                        "Synthetic acceptance seed; propose one test-only continuation."
-                    ],
-                },
+                red_team_seed,
                 count=1,
                 category="prompt_injection",
                 execution_id=red_team_execution_id,

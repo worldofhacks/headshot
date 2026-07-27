@@ -57,6 +57,96 @@ export interface CampaignReadModel extends AuthorizationScopeReadModel {
   created_at: string;
 }
 
+export interface CampaignOperationsCaseProgressReadModel extends JsonRecord {
+  planned: number | null;
+  started: number;
+  running: number;
+  completed: number;
+  failed: number;
+  skipped: number | null;
+  remaining: number | null;
+}
+
+export interface CampaignOperationsExecutionCountsReadModel extends JsonRecord {
+  logical_attempts: number;
+  physical_target_requests: number;
+  provider_calls: number;
+}
+
+export interface CampaignOperationsCurrentWorkReadModel extends JsonRecord {
+  stage: string;
+  agent_role: "orchestrator" | "red_team" | "judge" | "documentation" | null;
+  execution_id: string | null;
+  attempt_id: string | null;
+  started_at: string;
+}
+
+export interface CampaignOperationsCostReadModel extends JsonRecord {
+  provider_measured_usd: number | null;
+  target_measured_usd: number | null;
+  total_measured_usd: number | null;
+  provider_measurement_state: "measured" | "partial" | "unavailable";
+  target_measurement_state: "measured" | "partial" | "unavailable";
+  measurement_state: "measured" | "partial" | "unavailable";
+  currency: "USD";
+}
+
+export interface CampaignOperationsLimitsReadModel extends JsonRecord {
+  target_budget_usd: number | null;
+  target_budget_remaining_usd: number | null;
+  provider_budget_usd: number | null;
+  provider_budget_remaining_usd: number | null;
+  logical_case_limit: number | null;
+  physical_request_limit: number | null;
+  physical_requests_remaining: number | null;
+  provider_call_limit: number | null;
+  provider_calls_remaining: number | null;
+  target_requests_per_second: number | null;
+  run_timeout_seconds: number | null;
+  max_attempts_per_run: number | null;
+  target_retries_per_turn: number | null;
+  provider_max_retries: number | null;
+  provider_max_concurrency: number | null;
+  provider_timeout_seconds: number | null;
+}
+
+export interface CampaignOperationsQueueReadModel extends JsonRecord {
+  queued_jobs: number;
+  leased_jobs: number;
+  dead_lettered_jobs: number;
+  rate_limit_active: boolean | null;
+}
+
+export interface CampaignOperationsTerminalFailureReadModel extends JsonRecord {
+  stage: string;
+  error_code: string;
+  attempt_id: string | null;
+  execution_id: string | null;
+  agent_role: "orchestrator" | "red_team" | "judge" | "documentation" | null;
+  provider: string | null;
+  model: string | null;
+  retryable: boolean | null;
+  retries_remaining: number | null;
+  occurred_at: string;
+  operator_summary: string;
+}
+
+export interface CampaignOperationsReadModel extends JsonRecord {
+  campaign_id: string;
+  state: "queued" | "running" | "complete" | "aborted" | "failed";
+  created_at: string;
+  progress: CampaignOperationsCaseProgressReadModel;
+  executions: CampaignOperationsExecutionCountsReadModel;
+  current_work: CampaignOperationsCurrentWorkReadModel | null;
+  costs: CampaignOperationsCostReadModel;
+  limits: CampaignOperationsLimitsReadModel;
+  verdict_distribution: Record<string, number>;
+  queue: CampaignOperationsQueueReadModel;
+  terminal_failure: CampaignOperationsTerminalFailureReadModel | null;
+  as_of: string;
+  cursor: number;
+}
+
 export interface AttemptReadModel extends JsonRecord {
   attempt_id: string;
   ordinal: number;
@@ -696,6 +786,31 @@ export interface AgentActivityReadModel extends JsonRecord {
   duration_ms: number | null;
 }
 
+export interface AgentPromptSnapshotMessageReadModel extends JsonRecord {
+  role: "system" | "user" | "assistant" | "tool";
+  content: string;
+}
+
+export interface AgentPromptSnapshotRedactionReadModel extends JsonRecord {
+  path: string;
+  reason: string;
+  replacement: string;
+}
+
+export interface AgentPromptSnapshotReadModel extends JsonRecord {
+  execution_id: string;
+  campaign_run_id: string;
+  attempt_id: string | null;
+  agent_role: "orchestrator" | "red_team" | "judge" | "documentation";
+  system_prompt_version: string;
+  system_prompt_sha256: string;
+  system_prompt_content: string;
+  provider_messages: AgentPromptSnapshotMessageReadModel[];
+  transcript_sha256: string;
+  redactions: AgentPromptSnapshotRedactionReadModel[];
+  created_at: string;
+}
+
 export interface ToolScopeReadModel extends JsonRecord {
   tool_id: string;
   name: string;
@@ -849,6 +964,7 @@ export interface BirdseyeNodeReadModel extends JsonRecord {
   currency: string | null;
   input_tokens: number | null;
   output_tokens: number | null;
+  reasoning_tokens: number | null;
   token_observation_count: number | null;
   langfuse_not_attempted_count: number | null;
   langfuse_disabled_count: number | null;

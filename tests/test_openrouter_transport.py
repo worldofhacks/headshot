@@ -30,6 +30,7 @@ from agentforge.providers.openrouter import (
     HostedBudgetExceeded,
     HostedProviderError,
     HostedProviderResponseError,
+    HostedStructuredOutputInvalid,
     HostedUsageEnvelope,
     HostedUsageLedger,
     OpenRouterTransport,
@@ -1348,6 +1349,7 @@ def test_transport_requires_one_exact_selected_router_endpoint(
 def test_charged_invalid_output_exposes_exact_observed_usage() -> None:
     payload = _success().json()
     payload["choices"][0]["message"]["content"] = '{"unexpected":true}'
+    recorder = _ProviderRecorder()
     client = httpx.Client(
         transport=httpx.MockTransport(lambda _request: httpx.Response(200, json=payload))
     )
@@ -1356,7 +1358,7 @@ def test_charged_invalid_output_exposes_exact_observed_usage() -> None:
         configuration=configuration,
         credential_resolver=lambda _reference: Secret("test-provider-value"),
         client=client,
-        lineage_recorder=_ProviderRecorder(),
+        lineage_recorder=recorder,
     )
 
     with pytest.raises(
@@ -1389,8 +1391,244 @@ def test_charged_invalid_output_exposes_exact_observed_usage() -> None:
     assert observed.output_tokens == 5
     assert observed.reasoning_tokens == 5
     assert observed.measured_cost_usd == Decimal("0.000065")
-    assert observed.physical_attempts == 1
+    assert observed.physical_attempts == 2
+    assert raised.value.code == "invalid_structured_output"
+    assert raised.value.physical_attempts == 2
+    assert [event.status for event in recorder.events] == [
+        "invalid_output",
+        "invalid_output",
+    ]
+    assert [event.physical_sequence for event in recorder.events] == [1, 2]
+    assert all(event.error_code == "invalid_structured_output" for event in recorder.events)
+    assert transport.ledger.snapshot.physical_calls == 2
+    assert transport.ledger.snapshot.measured_usd == Decimal("0.000130")
+
+
+@pytest.mark.parametrize("response_kind", ("invalid-json", "non-object-json"))
+def test_unattributed_outer_response_is_not_retried(
+    response_kind: str,
+) -> None:
+    network_calls = 0
+
+    def send(_request: httpx.Request) -> httpx.Response:
+        nonlocal network_calls
+        network_calls += 1
+        if response_kind == "invalid-json":
+            return httpx.Response(
+                200,
+                content=b"{not-json",
+                headers={"Content-Type": "application/json"},
+            )
+        return httpx.Response(200, json=[])
+
+    configuration = _configuration()
+    recorder = _ProviderRecorder()
+    transport = OpenRouterTransport(
+        configuration=configuration,
+        credential_resolver=lambda _reference: Secret("test-provider-value"),
+        client=httpx.Client(transport=httpx.MockTransport(send)),
+        lineage_recorder=recorder,
+    )
+
+    with pytest.raises(HostedProviderError) as raised:
+        _invoke_judge(transport)
+
+    assert network_calls == 1
+    assert raised.value.code == "invalid_structured_output"
+    assert raised.value.physical_attempts == 1
+    assert len(recorder.invocations) == len(recorder.events) == 1
+    event = recorder.events[0]
+    assert event.status == "invalid_output"
+    assert event.error_code == "invalid_structured_output"
+    assert event.cost_measurement_state == "not_observed"
+    assert event.measured_cost_usd is None
+    assert (event.input_tokens, event.output_tokens, event.reasoning_tokens) == (
+        None,
+        None,
+        None,
+    )
+    assert transport.ledger.snapshot.physical_calls == 1
+    assert transport.ledger.snapshot.measured_usd == 0
+    assert transport.ledger.snapshot.unresolved_exposure_usd > 0
+
+
+def test_invalid_structured_output_retries_within_existing_role_budget() -> None:
+    invalid_payload = _success("gen-invalid").json()
+    invalid_payload["choices"][0]["message"]["content"] = '{"unexpected":true}'
+    responses = iter(
+        (
+            httpx.Response(200, json=invalid_payload),
+            _success("gen-valid"),
+        )
+    )
+    recorder = _ProviderRecorder()
+    configuration = _configuration()
+    transport = OpenRouterTransport(
+        configuration=configuration,
+        credential_resolver=lambda _reference: Secret("test-provider-value"),
+        client=httpx.Client(transport=httpx.MockTransport(lambda _request: next(responses))),
+        lineage_recorder=recorder,
+    )
+
+    result = transport.invoke(
+        role="judge",
+        messages=_messages(),
+        output_schema={
+            "type": "object",
+            "properties": {"verdict": {"type": "string"}},
+            "required": ["verdict"],
+            "additionalProperties": False,
+        },
+        schema_name="judge_verdict",
+        generation_policy_sha256=_digest("generation-policy"),
+        input_tokens_upper_bound=100,
+        max_output_tokens=50,
+        max_reasoning_tokens=20,
+        timeout_seconds=5,
+        provider_context=_provider_context(configuration),
+    )
+
+    assert result.output == {"verdict": "NO_EXPLOIT_OBSERVED"}
+    assert result.request_id == "gen-valid"
+    assert result.physical_attempts == 2
+    assert [event.status for event in recorder.events] == ["invalid_output", "succeeded"]
+    assert [event.physical_sequence for event in recorder.events] == [1, 2]
+    assert recorder.events[0].error_code == "invalid_structured_output"
+    assert transport.ledger.snapshot.physical_calls == 2
+    assert transport.ledger.snapshot.measured_usd == Decimal("0.000130")
+
+
+def test_retry_refused_by_call_cap_preserves_observed_structured_failure() -> None:
+    invalid_payload = _success("gen-invalid").json()
+    invalid_payload["choices"][0]["message"]["content"] = '{"unexpected":true}'
+    network_calls = 0
+
+    def send(_request: httpx.Request) -> httpx.Response:
+        nonlocal network_calls
+        network_calls += 1
+        return httpx.Response(200, json=invalid_payload)
+
+    base = _configuration()
+    configuration = replace(
+        base,
+        roles=tuple(replace(role, limits=replace(role.limits, max_calls=1)) for role in base.roles),
+        global_limits=replace(base.global_limits, max_calls=1),
+    )
+    recorder = _ProviderRecorder()
+    transport = OpenRouterTransport(
+        configuration=configuration,
+        credential_resolver=lambda _reference: Secret("test-provider-value"),
+        client=httpx.Client(transport=httpx.MockTransport(send)),
+        lineage_recorder=recorder,
+    )
+
+    with pytest.raises(HostedStructuredOutputInvalid) as raised:
+        transport.invoke(
+            role="judge",
+            messages=_messages(),
+            output_schema={
+                "type": "object",
+                "properties": {"verdict": {"type": "string"}},
+                "required": ["verdict"],
+                "additionalProperties": False,
+            },
+            schema_name="judge_verdict",
+            generation_policy_sha256=_digest("generation-policy"),
+            input_tokens_upper_bound=100,
+            max_output_tokens=50,
+            max_reasoning_tokens=20,
+            timeout_seconds=5,
+            provider_context=_provider_context(configuration),
+        )
+
+    assert network_calls == 1
+    assert raised.value.code == "invalid_structured_output"
+    assert raised.value.physical_attempts == 1
+    assert raised.value.observed_result.request_id == "gen-invalid"
+    assert raised.value.observed_result.measured_cost_usd == Decimal("0.000065")
+    assert isinstance(raised.value.__cause__, HostedBudgetExceeded)
+    assert [event.status for event in recorder.events] == ["invalid_output"]
+    assert transport.ledger.snapshot.physical_calls == 1
     assert transport.ledger.snapshot.measured_usd == Decimal("0.000065")
+
+
+def test_ambiguous_structured_output_is_terminal_without_retry() -> None:
+    payload = _success("gen-ambiguous").json()
+    payload["choices"][0]["message"]["content"] = (
+        '{"verdict":"NO_EXPLOIT_OBSERVED","verdict":"EXPLOIT_CONFIRMED"}'
+    )
+    network_calls = 0
+
+    def send(_request: httpx.Request) -> httpx.Response:
+        nonlocal network_calls
+        network_calls += 1
+        return httpx.Response(200, json=payload)
+
+    configuration = _configuration()
+    transport = OpenRouterTransport(
+        configuration=configuration,
+        credential_resolver=lambda _reference: Secret("test-provider-value"),
+        client=httpx.Client(transport=httpx.MockTransport(send)),
+        lineage_recorder=_ProviderRecorder(),
+    )
+
+    with pytest.raises(HostedProviderResponseError) as raised:
+        _invoke_judge(transport)
+
+    assert not isinstance(raised.value, HostedStructuredOutputInvalid)
+    assert raised.value.code == "provider-structured-output-ambiguous"
+    assert network_calls == 1
+
+
+def test_invalid_structured_output_does_not_expand_zero_retry_sub_envelope() -> None:
+    invalid_payload = _success("gen-invalid").json()
+    invalid_payload["choices"][0]["message"]["content"] = '{"unexpected":true}'
+    network_calls = 0
+
+    def send(_request: httpx.Request) -> httpx.Response:
+        nonlocal network_calls
+        network_calls += 1
+        return httpx.Response(200, json=invalid_payload)
+
+    configuration = _configuration()
+    envelope = HostedUsageEnvelope(
+        role_limits={
+            role.role: replace(role.limits, max_retries=0) for role in configuration.roles
+        },
+        global_limits=replace(configuration.global_limits, max_retries=0),
+    )
+    recorder = _ProviderRecorder()
+    transport = OpenRouterTransport(
+        configuration=configuration,
+        credential_resolver=lambda _reference: Secret("test-provider-value"),
+        client=httpx.Client(transport=httpx.MockTransport(send)),
+        ledger=HostedUsageLedger(configuration, envelope=envelope),
+        lineage_recorder=recorder,
+    )
+
+    with pytest.raises(HostedProviderResponseError) as raised:
+        transport.invoke(
+            role="judge",
+            messages=_messages(),
+            output_schema={
+                "type": "object",
+                "properties": {"verdict": {"type": "string"}},
+                "required": ["verdict"],
+                "additionalProperties": False,
+            },
+            schema_name="judge_verdict",
+            generation_policy_sha256=_digest("generation-policy"),
+            input_tokens_upper_bound=100,
+            max_output_tokens=50,
+            max_reasoning_tokens=20,
+            timeout_seconds=5,
+            provider_context=_provider_context(configuration),
+        )
+
+    assert network_calls == 1
+    assert raised.value.physical_attempts == 1
+    assert [event.status for event in recorder.events] == ["invalid_output"]
+    assert transport.ledger.snapshot.physical_calls == 1
 
 
 def test_transport_rejects_reasoning_outside_completion_total() -> None:

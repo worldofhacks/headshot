@@ -379,7 +379,7 @@ def _seed_attempt(store: ControlPlaneStore, run_id: str, *, ordinal: int = 0) ->
 def test_hosted_chronology_shares_one_attempt_id_across_every_lineage_table(
     migrated_db: Engine,
 ) -> None:
-    """agent_executions, provider_call_invocations and provider_call_events all agree.
+    """Execution, prompt, provider invocation, provider event, and attempt rows all agree.
 
     This is the exact order the Runner now uses on the hosted path. Nothing is bound after the
     fact, so no guard is challenged and the four tables cannot disagree.
@@ -428,6 +428,17 @@ def test_hosted_chronology_shares_one_attempt_id_across_every_lineage_table(
             text("SELECT status FROM provider_call_events WHERE invocation_id = :invocation"),
             {"invocation": invocation_id},
         ).scalar_one()
+        prompt_snapshot = (
+            connection.execute(
+                text(
+                    "SELECT attempt_id, system_prompt_sha256, transcript_sha256 "
+                    "FROM agent_prompt_snapshots WHERE execution_id = :execution"
+                ),
+                {"execution": execution_id},
+            )
+            .mappings()
+            .one()
+        )
         persisted_attempts = (
             connection.execute(
                 text("SELECT attempt_id FROM campaign_attempts WHERE run_id = :run"),
@@ -442,6 +453,9 @@ def test_hosted_chronology_shares_one_attempt_id_across_every_lineage_table(
     assert execution["status"] == "succeeded"
     # One attempt id, shared by every lineage row rather than reconciled afterwards.
     assert execution["attempt_id"] == attempt_id
+    assert prompt_snapshot["attempt_id"] == attempt_id
+    assert prompt_snapshot["system_prompt_sha256"] == _PROMPTS["red_team"].sha256
+    assert len(prompt_snapshot["transcript_sha256"]) == 64
     assert invocation_attempts == [attempt_id]
     assert persisted_attempts == [attempt_id]
     assert event_status == "succeeded"

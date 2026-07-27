@@ -10,6 +10,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { ApiClient } from "../src/api/client";
 import type { Principal } from "../src/api/contracts";
+import { AgentActivityPanel } from "../src/components/AgentActivityPanel";
 import {
   ApprovalsScreen,
   FindingsScreen,
@@ -1123,6 +1124,37 @@ describe("finding decision operability", () => {
 });
 
 describe("cost accounting labels", () => {
+  it("labels incomplete campaign budget utilization as partial instead of zero", async () => {
+    const partialCampaignCost = {
+      ...campaignCost,
+      measured_cost: 0.2,
+      cost_measurement_state: "partial" as const,
+      accounting_status: "partial" as const,
+      average_cost_per_request: null,
+      budget_utilization: null,
+    };
+    const client = {
+      read: vi.fn(async (path: string) => {
+        if (path === "costs") {
+          return {
+            state: "ready" as const,
+            data: [partialCampaignCost],
+          };
+        }
+        if (path === "traces") {
+          return { state: "ready" as const, data: [] };
+        }
+        throw new Error(`Unexpected read: ${path}`);
+      }),
+      command: vi.fn(),
+    } as unknown as ApiClient;
+
+    render(<CostsScreen client={client} />);
+
+    expect(await screen.findByText("Partial · $1.00 cap")).toBeTruthy();
+    expect(screen.queryByText(/0% of \$1\.00 cap/)).toBeNull();
+  });
+
   it("does not present target requests or campaign findings as agent metrics", async () => {
     const client = {
       read: vi.fn(async (path: string) => {
@@ -1164,6 +1196,70 @@ describe("cost accounting labels", () => {
     expect(judgeCells[14]?.textContent).toBe("$0.0200");
   });
 
+  it("marks incomplete token components as partial instead of fabricating zeroes", async () => {
+    const partialTokenCost = {
+      ...agentCost,
+      output_tokens: null,
+      reasoning_tokens: null,
+    };
+    const client = {
+      read: vi.fn(async (path: string) => {
+        if (path === "costs") {
+          return {
+            state: "ready" as const,
+            data: [partialTokenCost],
+          };
+        }
+        if (path === "traces") {
+          return { state: "ready" as const, data: [] };
+        }
+        throw new Error(`Unexpected read: ${path}`);
+      }),
+      command: vi.fn(),
+    } as unknown as ApiClient;
+
+    render(<CostsScreen client={client} />);
+
+    const table = await screen.findByRole("table", {
+      name: "Campaign and agent accounting records",
+    });
+    const judgeRow = within(table).getByRole("row", { name: /judge/ });
+    const judgeCells = within(judgeRow).getAllByRole("cell");
+    expect(judgeCells[8]?.textContent).toBe("100 known · Partial");
+    expect(judgeCells[9]?.textContent).toBe("Unavailable");
+  });
+
+  it("marks wholly unobserved hosted executions as partial token accounting", async () => {
+    const missingObservationCost = {
+      ...agentCost,
+      execution_count: 2,
+      token_observation_count: 1,
+    };
+    const client = {
+      read: vi.fn(async (path: string) => {
+        if (path === "costs") {
+          return {
+            state: "ready" as const,
+            data: [missingObservationCost],
+          };
+        }
+        if (path === "traces") {
+          return { state: "ready" as const, data: [] };
+        }
+        throw new Error(`Unexpected read: ${path}`);
+      }),
+      command: vi.fn(),
+    } as unknown as ApiClient;
+
+    render(<CostsScreen client={client} />);
+
+    const table = await screen.findByRole("table", {
+      name: "Campaign and agent accounting records",
+    });
+    const judgeRow = within(table).getByRole("row", { name: /judge/ });
+    expect(within(judgeRow).getByText("125 known · Partial")).toBeTruthy();
+  });
+
   it("labels partial activity cost and bounded budget remaining without inventing exact values", async () => {
     const client = {
       read: vi.fn(async (path: string) => {
@@ -1203,6 +1299,165 @@ describe("cost accounting labels", () => {
       "Global USD remaining$9.47 conservative / $10.00 · "
       + "≤ $9.97 known-spend bound",
     );
+  });
+
+  it("marks incomplete agent token summaries and role components as partial", async () => {
+    const partialTokenAgent = {
+      ...partiallyAccountedAgent,
+      output_tokens: null,
+      reasoning_tokens: null,
+    };
+    const client = {
+      read: vi.fn(async (path: string) => {
+        if (path === "agents") {
+          return {
+            state: "ready" as const,
+            data: [partialTokenAgent],
+          };
+        }
+        if (path === "agent-activity") {
+          return {
+            state: "ready" as const,
+            data: [],
+          };
+        }
+        throw new Error(`Unexpected read: ${path}`);
+      }),
+      command: vi.fn(),
+    } as unknown as ApiClient;
+
+    render(<AgentsScreen client={client} principal={principal} />);
+
+    expect(await screen.findByText("100 known · Partial")).toBeTruthy();
+    expect(screen.getByText("100 / Unavailable / Unavailable · Partial")).toBeTruthy();
+    expect(screen.getByText(/1 role\(s\) have incomplete token components/)).toBeTruthy();
+  });
+
+  it("marks a missing hosted token observation as partial even when known components are complete", async () => {
+    const missingObservationAgent = {
+      ...partiallyAccountedAgent,
+      execution_count: 2,
+      hosted_execution_count: 2,
+      succeeded_count: 2,
+      token_observation_count: 1,
+      langfuse_exported_count: 2,
+      langfuse_verified_count: 2,
+    };
+    const client = {
+      read: vi.fn(async (path: string) => {
+        if (path === "agents") {
+          return {
+            state: "ready" as const,
+            data: [missingObservationAgent],
+          };
+        }
+        if (path === "agent-activity") {
+          return {
+            state: "ready" as const,
+            data: [],
+          };
+        }
+        throw new Error(`Unexpected read: ${path}`);
+      }),
+      command: vi.fn(),
+    } as unknown as ApiClient;
+
+    render(<AgentsScreen client={client} principal={principal} />);
+
+    expect(await screen.findByText("130 known · Partial")).toBeTruthy();
+    expect(screen.getByText("100 / 20 / 10 · Partial")).toBeTruthy();
+  });
+
+  it("marks mixed-null activity token components as partial", async () => {
+    const partialTokenActivity = {
+      ...partiallyAccountedActivity,
+      status: "failed" as const,
+      output_tokens: null,
+      reasoning_tokens: null,
+      error_code: "invalid_structured_output",
+    };
+    const client = {
+      read: vi.fn(async (path: string) => {
+        if (path === "agent-activity") {
+          return {
+            state: "ready" as const,
+            data: [partialTokenActivity],
+          };
+        }
+        throw new Error(`Unexpected read: ${path}`);
+      }),
+      command: vi.fn(),
+    } as unknown as ApiClient;
+
+    render(<AgentActivityPanel client={client} />);
+
+    expect(await screen.findByText(
+      "100 in · Unavailable out · Unavailable reasoning · Partial",
+    )).toBeTruthy();
+  });
+
+  it("marks a wholly unobserved hosted activity row as partial", async () => {
+    const unobservedActivity = {
+      ...partiallyAccountedActivity,
+      execution_id: "execution-unobserved-tokens",
+      status: "failed" as const,
+      input_tokens: null,
+      output_tokens: null,
+      reasoning_tokens: null,
+      measured_cost: null,
+      cost_measurement_state: "not_observed" as const,
+      accounting_status: "unavailable" as const,
+      error_code: "provider_usage_unavailable",
+    };
+    const client = {
+      read: vi.fn(async (path: string) => {
+        if (path === "agent-activity") {
+          return {
+            state: "ready" as const,
+            data: [partiallyAccountedActivity, unobservedActivity],
+          };
+        }
+        throw new Error(`Unexpected read: ${path}`);
+      }),
+      command: vi.fn(),
+    } as unknown as ApiClient;
+
+    render(<AgentActivityPanel client={client} />);
+
+    expect(await screen.findByText("100 in · 20 out · 10 reasoning · Partial")).toBeTruthy();
+  });
+
+  it("renders agent cost as unavailable when every role cost is unknown", async () => {
+    const unavailableCostAgent = {
+      ...partiallyAccountedAgent,
+      measured_cost: null,
+      cost_measurement_state: "not_observed" as const,
+      accounting_status: "unavailable" as const,
+    };
+    const client = {
+      read: vi.fn(async (path: string) => {
+        if (path === "agents") {
+          return {
+            state: "ready" as const,
+            data: [unavailableCostAgent],
+          };
+        }
+        if (path === "agent-activity") {
+          return {
+            state: "ready" as const,
+            data: [],
+          };
+        }
+        throw new Error(`Unexpected read: ${path}`);
+      }),
+      command: vi.fn(),
+    } as unknown as ApiClient;
+
+    render(<AgentsScreen client={client} principal={principal} />);
+
+    const metric = (await screen.findByText("Known agent cost")).parentElement;
+    expect(metric?.textContent).toContain("Unavailable");
+    expect(metric?.textContent).not.toContain("$0.0000");
   });
 
   it("labels partial trace cost as a known amount in list and detail views", async () => {

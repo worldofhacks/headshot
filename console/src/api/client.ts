@@ -58,19 +58,33 @@ function normalizeOrigin(value: string): string {
 
 function apiUrl(origin: string, path: string): string {
   const normalized = path.startsWith("/") ? path.slice(1) : path;
+  const [pathname, query, extraQuery] = normalized.split("?");
   if (
-    normalized.length === 0 ||
-    normalized.startsWith("/") ||
-    normalized.includes("\\") ||
-    normalized.includes("?") ||
-    normalized.includes("#") ||
-    normalized.split("/").some((part) => part === "" || part === "." || part === "..") ||
-    /[\u0000-\u001f\u007f]/.test(normalized) ||
-    /^[a-z][a-z\d+.-]*:/i.test(normalized)
+    pathname.length === 0 ||
+    pathname.startsWith("/") ||
+    pathname.includes("\\") ||
+    pathname.includes("#") ||
+    extraQuery !== undefined ||
+    pathname.split("/").some((part) => part === "" || part === "." || part === "..") ||
+    /[\u0000-\u001f\u007f]/.test(pathname) ||
+    /^[a-z][a-z\d+.-]*:/i.test(pathname)
   ) {
     throw new ApiClientError("Invalid API path", "invalid_path");
   }
-  return `${origin}/api/v1/${normalized}`;
+  if (query === undefined) return `${origin}/api/v1/${pathname}`;
+
+  const params = new URLSearchParams(query);
+  const entries = [...params.entries()];
+  if (
+    entries.length !== 1 ||
+    entries[0]?.[0] !== "campaign_id" ||
+    entries[0][1].length === 0 ||
+    entries[0][1].length > 256 ||
+    /[\u0000-\u001f\u007f]/.test(entries[0][1])
+  ) {
+    throw new ApiClientError("Invalid API path", "invalid_path");
+  }
+  return `${origin}/api/v1/${pathname}?campaign_id=${encodeURIComponent(entries[0][1])}`;
 }
 
 function genericFailure(status: number): ApiClientError {

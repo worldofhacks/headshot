@@ -1911,6 +1911,78 @@ class AgentExecution(Base):
     )
 
 
+class AgentPromptSnapshot(Base):
+    """Immutable exact prompt evidence born atomically with one hosted logical execution."""
+
+    __tablename__ = "agent_prompt_snapshots"
+
+    organization_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    execution_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    campaign_run_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    attempt_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    agent_role: Mapped[str] = mapped_column(String(32), nullable=False)
+    system_prompt_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    system_prompt_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    system_prompt_content: Mapped[str] = mapped_column(Text, nullable=False)
+    provider_messages: Mapped[list] = mapped_column(JSONB, nullable=False)
+    transcript_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    redactions: Mapped[list] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[]'::jsonb")
+    )
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=text("clock_timestamp()")
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["organization_id", "execution_id"],
+            ["agent_executions.organization_id", "agent_executions.execution_id"],
+            name="fk_agent_prompt_snapshot_execution",
+        ),
+        ForeignKeyConstraint(
+            ["organization_id", "campaign_run_id", "attempt_id"],
+            [
+                "campaign_attempts.organization_id",
+                "campaign_attempts.run_id",
+                "campaign_attempts.attempt_id",
+            ],
+            name="fk_agent_prompt_snapshot_attempt",
+        ),
+        CheckConstraint(
+            "agent_role IN ('orchestrator','red_team','judge','documentation')",
+            name="agent_prompt_snapshot_role",
+        ),
+        CheckConstraint(
+            "system_prompt_sha256 ~ '^[0-9a-f]{64}$' AND transcript_sha256 ~ '^[0-9a-f]{64}$'",
+            name="agent_prompt_snapshot_hashes",
+        ),
+        CheckConstraint(
+            "octet_length(system_prompt_content) BETWEEN 1 AND 1048576",
+            name="agent_prompt_snapshot_system_prompt_bound",
+        ),
+        CheckConstraint(
+            "jsonb_typeof(provider_messages) = 'array' "
+            "AND jsonb_array_length(provider_messages) BETWEEN 1 AND 64 "
+            "AND octet_length(provider_messages::text) <= 1572864",
+            name="agent_prompt_snapshot_messages_bound",
+        ),
+        CheckConstraint(
+            "jsonb_typeof(redactions) = 'array' "
+            "AND jsonb_array_length(redactions) <= 64 "
+            "AND octet_length(redactions::text) <= 16384",
+            name="agent_prompt_snapshot_redactions_bound",
+        ),
+        Index(
+            "ix_agent_prompt_snapshots_campaign_attempt",
+            "organization_id",
+            "campaign_run_id",
+            "attempt_id",
+            "agent_role",
+            "created_at",
+        ),
+    )
+
+
 class ProviderCallInvocation(Base):
     """Immutable identity committed immediately before one physical provider send."""
 
