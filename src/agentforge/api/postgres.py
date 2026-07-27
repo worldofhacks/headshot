@@ -11,6 +11,7 @@ from collections.abc import Mapping
 from dataclasses import asdict, is_dataclass
 from decimal import Decimal
 from enum import Enum
+from functools import lru_cache
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -951,6 +952,15 @@ def _scope_projection(value: Any, *, target_base_url: Any = None) -> dict[str, A
     return projected
 
 
+@lru_cache(maxsize=len(LIVE_100_BATCH_IDS))
+def _resolved_live_suite_batch(batch_id: str) -> AuthoredCorpus:
+    """Resolve each immutable live-suite batch once per Web process."""
+
+    if batch_id not in LIVE_100_BATCH_IDS:
+        raise ValueError("live-suite batch identity is not trusted")
+    return resolve_workload(batch_id)
+
+
 class PostgresApiBackend(ApiBackend):
     """Organization-scoped projections over the integrated schema."""
 
@@ -973,6 +983,18 @@ class PostgresApiBackend(ApiBackend):
         self._hosted_provider_bindings_verified = hosted_provider_bindings_verified
         self._corpus = corpus
         self._target_catalog = target_catalog or TrustedTargetCatalog.from_environment(environment)
+        self._campaign_suite_batches = (
+            tuple(
+                (
+                    ordinal,
+                    batch_id,
+                    _resolved_live_suite_batch(batch_id),
+                )
+                for ordinal, batch_id in enumerate(LIVE_100_BATCH_IDS, start=1)
+            )
+            if corpus is not None and environment in {"staging", "production"}
+            else ()
+        )
 
     @staticmethod
     def _target_session_generation(target_payload: Mapping[str, Any]) -> str:
@@ -989,14 +1011,13 @@ class PostgresApiBackend(ApiBackend):
             raise ValueError("target credential generation is invalid")
         return segments[-1]
 
-    def _latest_hosted_run_binding(
-        self,
+    @staticmethod
+    def _latest_hosted_configuration(
         connection: Any,
         *,
         organization_id: str,
-        target_payload: Mapping[str, Any],
-    ) -> dict[str, object] | None:
-        """Project the latest atomic set into a secret-free, server-derived run binding."""
+    ) -> HostedConfigurationSet | None:
+        """Read and verify the latest atomic hosted set once per projection."""
 
         row = (
             connection.execute(
@@ -1015,6 +1036,18 @@ class PostgresApiBackend(ApiBackend):
         configuration = HostedConfigurationSet.from_payload(dict(row["payload"]))
         if configuration.configuration_sha256 != row["configuration_sha256"]:
             raise ValueError("hosted configuration-set integrity check failed")
+        return configuration
+
+    def _hosted_run_binding(
+        self,
+        configuration: HostedConfigurationSet | None,
+        *,
+        target_payload: Mapping[str, Any],
+    ) -> dict[str, object] | None:
+        """Bind one target generation to an already verified hosted set."""
+
+        if configuration is None:
+            return None
         policy = DEFAULT_HOSTED_GENERATION_POLICY
         binding = HostedRunBinding(
             configuration_set_sha256=configuration.configuration_sha256,
@@ -1029,6 +1062,23 @@ class PostgresApiBackend(ApiBackend):
             ),
         )
         return binding.canonical_payload()
+
+    def _latest_hosted_run_binding(
+        self,
+        connection: Any,
+        *,
+        organization_id: str,
+        target_payload: Mapping[str, Any],
+    ) -> dict[str, object] | None:
+        """Project the latest atomic set into a secret-free, server-derived run binding."""
+
+        return self._hosted_run_binding(
+            self._latest_hosted_configuration(
+                connection,
+                organization_id=organization_id,
+            ),
+            target_payload=target_payload,
+        )
 
     def _attack_case_evidence(self, source: Mapping[str, Any]) -> dict[str, Any]:
         case_id = str(source.get("case_id") or "unavailable")
@@ -4979,6 +5029,14 @@ class PostgresApiBackend(ApiBackend):
                         + " ORDER BY d.target_id, d.created_at DESC",
                         parameters,
                     )
+                    hosted_configuration = (
+                        self._latest_hosted_configuration(
+                            connection,
+                            organization_id=principal.organization_id,
+                        )
+                        if self._corpus is not None and rows
+                        else None
+                    )
                     for row in rows:
                         payload = dict(row.pop("payload"))
                         row.update(
@@ -5040,9 +5098,8 @@ class PostgresApiBackend(ApiBackend):
                                 ),
                                 row["surfaces"][0],
                             )
-                            hosted_run = self._latest_hosted_run_binding(
-                                connection,
-                                organization_id=principal.organization_id,
+                            hosted_run = self._hosted_run_binding(
+                                hosted_configuration,
                                 target_payload=payload,
                             )
                             row["campaign_template"] = {
@@ -5061,8 +5118,7 @@ class PostgresApiBackend(ApiBackend):
                                 "hosted_run": hosted_run,
                             }
                             suite_batches = []
-                            for ordinal, batch_id in enumerate(LIVE_100_BATCH_IDS, start=1):
-                                batch = resolve_workload(batch_id)
+                            for ordinal, batch_id, batch in self._campaign_suite_batches:
                                 spec = LIVE_100_BATCH_SPECS[batch_id]
                                 exact_caps = dict(row["safety_caps"])
                                 exact_caps.update(
