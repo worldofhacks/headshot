@@ -10,6 +10,7 @@ import {
   decodeCampaigns,
   decodeEvidence,
   decodeProviderCalls,
+  decodeTraces,
 } from "../api/read-models";
 import { COMMAND_PATHS, RESOURCE_PATHS } from "../api/paths";
 import {
@@ -32,6 +33,7 @@ import { CommandButton } from "../components/CommandButton";
 import { ResourceView, StateNotice } from "../components/ResourceView";
 import { RunFailurePanel } from "../components/RunFailurePanel";
 import { ProviderCallLedger } from "../components/ProviderCallLedger";
+import { isTargetCall, TargetCallEvidenceDisclosure } from "./ObservabilityScreens";
 import {
   LIVE_RESOURCE_POLL_INTERVAL_MS,
   useResource,
@@ -45,6 +47,7 @@ import type {
   CampaignReadModel,
   EvidenceReadModel,
   ProviderCallReadModel,
+  TraceReadModel,
 } from "../types";
 import { PERMISSIONS } from "../types";
 
@@ -736,6 +739,14 @@ function SelectedRunOperations({
     decodeProviderCalls,
     { pollIntervalMs: LIVE_RESOURCE_POLL_INTERVAL_MS },
   );
+  // Target calls arrive on the same traces resource the Observability screen reads; the rows are
+  // distinguished from agent rows by isTargetCall, not by a separate endpoint.
+  const targetCalls = useResource<TraceReadModel[]>(
+    client,
+    RESOURCE_PATHS.campaignTraces(campaignId),
+    decodeTraces,
+    { pollIntervalMs: LIVE_RESOURCE_POLL_INTERVAL_MS },
+  );
   return (
     <>
       <ResourceView
@@ -771,6 +782,47 @@ function SelectedRunOperations({
               principal={principal}
             />
           )}
+        </ResourceView>
+      </Panel>
+      {/* The OpenRouter ledger above answers "what did the platform say to its own models". It
+          cannot answer "what did we actually attack the target with", because a provider row and
+          a target row are different records: the attack payload lives on outbound_http_requests,
+          and the target disclosure is keyed on a trace whose agent_role is null. Operators looked
+          for the attack prompt inside the OpenRouter calls, found the same system prompt on every
+          row, and reasonably concluded the payload was missing. Give the target calls their own
+          panel, next to the provider calls, on the screen already being watched during a run. */}
+      <Panel
+        title="Live target calls"
+        meta="attack payload · target response · newest first"
+        eyebrow="TARGET OPERATIONS"
+      >
+        <ResourceView
+          result={targetCalls.result}
+          emptyLabel="No target calls have been made for this campaign."
+        >
+          {(data) => {
+            const rows = data.filter(isTargetCall).slice(0, 24);
+            if (rows.length === 0) {
+              return (
+                <StateNotice
+                  state="empty"
+                  detail="No target calls have been made for this campaign."
+                />
+              );
+            }
+            return (
+              <div className="event-stack">
+                {rows.map((trace) => (
+                  <TargetCallEvidenceDisclosure
+                    key={trace.request_id ?? trace.trace_id}
+                    trace={trace}
+                    client={client}
+                    principal={principal}
+                  />
+                ))}
+              </div>
+            );
+          }}
         </ResourceView>
       </Panel>
       <AttemptList

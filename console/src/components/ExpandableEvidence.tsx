@@ -112,6 +112,11 @@ export function PromptTranscript({
   messages: PromptMessageView[];
   redactions: PromptRedactionView[];
 }) {
+  // One source of truth for "is message 1 just the system prompt again", so the rendered
+  // disclosures and the character total cannot disagree about what was actually sent.
+  const duplicatesSystemPrompt = messages[0]?.role === "system"
+    && messages[0].content === systemPrompt;
+  const sentMessages = duplicatesSystemPrompt ? messages.slice(1) : messages;
   return (
     <div className="evidence-stack">
       <dl className="detail-grid prompt-identity-grid">
@@ -123,8 +128,13 @@ export function PromptTranscript({
           <dt>Sent payload</dt>
           <dd className="mono">
             {messages.length} message{messages.length === 1 ? "" : "s"} ·{" "}
-            {messages.reduce((total, message) => total + message.content.length, 0)
-              .toLocaleString()} characters
+            {/* Counted over the deduplicated view for the same reason the leading system message
+                is not rendered twice: message 1 IS the system prompt, so summing every message
+                reported the system prompt's characters twice and overstated the payload. */}
+            {sentMessages.reduce((total, message) => total + message.content.length, 0)
+              .toLocaleString()} characters sent{sentMessages.length !== messages.length
+              ? ` (excluding the system prompt, shown separately)`
+              : ""}
           </dd>
         </div>
         <div>
@@ -153,7 +163,7 @@ export function PromptTranscript({
             Ordinals still count from the real transcript position, so the surviving entries keep
             their true index and nothing about the recorded order is implied away. */}
         {messages.map((message, index) => {
-          if (index === 0 && message.role === "system" && message.content === systemPrompt) {
+          if (index === 0 && duplicatesSystemPrompt) {
             return null;
           }
           return (

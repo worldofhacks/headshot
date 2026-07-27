@@ -136,7 +136,7 @@ const agentObservations = (traces: TraceReadModel[]) =>
  * and response disclosure, and pairing a second one with them would misattribute an agent prompt
  * as an attack payload.
  */
-const isTargetCall = (trace: TraceReadModel): boolean => (
+export const isTargetCall = (trace: TraceReadModel): boolean => (
   trace.agent_role === null
   && trace.request_id !== null
   && trace.method !== null
