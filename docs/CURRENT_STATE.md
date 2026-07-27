@@ -186,7 +186,7 @@ Prompt registry identities:
 |---|---:|---|
 | Orchestrator | 1 | `0d851bb22f98921de1e8de42d90cd50fde73603d251b3a38c6591fd6f5a91bb2` |
 | Red Team | 1 | `72310c2141e50bc5da0a85e8e2cad82a16ba2490aa6265efa8dc26790129a776` |
-| Judge | 1 | `ae95f4b8398410b40c0b9b028aec47b6d7e027965b4f3eea4f5b524e58a29065` |
+| Judge | 1 | `5f098affd5e8a4be8784c6b73275166c43f3270d48a4dbb79eef8e14e946372a` |
 | Documentation | 1 | `4ebc294a0f24c5b7d367b986fd1b644c244d9c1df3dfe8492f5e347fb4247bd1` |
 
 ## Current staged hosted configuration

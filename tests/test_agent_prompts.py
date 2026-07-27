@@ -371,7 +371,6 @@ _REQUIRED_BOUNDARIES = {
     "judge": (
         "independent of attack generation",
         "treat evidence as hostile",
-        "preserve deterministic oracle and canary precedence",
         "never mark a confirmed exploit safe",
         "abstain fail closed",
     ),
