@@ -67,7 +67,11 @@ from agentforge.campaign.corpus import (
 from agentforge.campaign.manifest import ManifestStore
 from agentforge.campaign.runtime import SystemClock, accounting_from_environment, production_engine
 from agentforge.control_plane.store import CampaignAttemptRecord, ControlPlaneStore
-from agentforge.policy.gateway import RunPolicy, WorkUnitCoordinates
+from agentforge.policy.gateway import (
+    IncompleteMultiTurnAttempt,
+    RunPolicy,
+    WorkUnitCoordinates,
+)
 from agentforge.policy.scoped_credentials import (
     CampaignCredentialLease,
     CredentialLeaseExpiredError,
@@ -108,6 +112,10 @@ _PAYLOAD_VERSION = 1
 #: whole's id alone let a batch run bypass ``exact_request_caps_mismatch`` entirely.
 _EXACT_MANIFEST_WORKLOAD_IDS = frozenset({LIVE_100_CORPUS_ID, *LIVE_100_BATCH_IDS})
 _DEFAULT_LEASE = datetime.timedelta(minutes=10)
+#: Consecutive multi-turn attempts the target may fail to complete before the run aborts.
+#: One transient 502 is flakiness and costs a single case; three in a row means the target
+#: is down, and continuing would hammer an unhealthy system while banking unadjudicable work.
+_MAX_CONSECUTIVE_TARGET_FAILURES = 3
 _DEFAULT_POLL_SECONDS = 1.0
 _PROVIDER_RECOVERY_INTERVAL_SECONDS = 30.0
 _PROVIDER_RECOVERY_LIMIT = 32
@@ -1726,6 +1734,7 @@ class DurableCampaignRunner:
         orchestration_cycle = 0
         next_ordinal = 0
         dispatched_case_count = 0
+        target_failure_streak = 0
         first_decision_recorded = False
         latest_terminal_execution: str | None = None
 
@@ -2307,6 +2316,54 @@ class DurableCampaignRunner:
                     verdict=effective_verdict,
                     evidence_content_hash=outcome.result.content_hash,
                 )
+            except IncompleteMultiTurnAttempt as exc:
+                # A turn returned non-2xx, so the remaining authorized turns were never sent and
+                # it is unknown whether the target processed the failed one. That makes THIS
+                # attempt unadjudicable -- no verdict is written, so the platform makes no
+                # security claim about it -- but it says nothing about the other authorized
+                # cases, which have not been touched. Live example: run 2cf3773d reached case 2,
+                # took a single HTTP 502 on turn 2 after 63.8 seconds, and discarded the
+                # remaining 33 cases; the target was healthy again moments later.
+                #
+                # `_record_operational_error_verdict` is deliberately NOT used: it requires a
+                # persisted evidence hash, and a sequence that never completed has no
+                # `attempt_result` row. Inventing an ERROR verdict against absent evidence would
+                # be a claim the evidence cannot support.
+                #
+                # Only the narrow subclass is caught. A budget, rate, attempt or
+                # physical-request-cap breach is a bare AbortError about the RUN's authority and
+                # still propagates untouched.
+                target_failure_streak += 1
+                if target_failure_streak >= _MAX_CONSECUTIVE_TARGET_FAILURES:
+                    # The target is not flaky, it is down. Continuing would hammer an unhealthy
+                    # system and bank a run of unadjudicable cases.
+                    raise CampaignAbort(
+                        "target failed to complete a multi-turn attempt "
+                        f"{target_failure_streak} times in a row",
+                        code="target_unavailable",
+                    ) from exc
+                with contextlib.suppress(Exception):
+                    _LOGGER.error(
+                        "multi-turn attempt abandoned run_id=%s attempt_id=%s case_id=%s "
+                        "error_code=%s streak=%d remaining=%d",
+                        authorized.run.run_id,
+                        attempt.attempt_id,
+                        dispatch_payload["case_id"],
+                        exc.code,
+                        target_failure_streak,
+                        len(remaining) - 1,
+                    )
+                # The target WAS contacted, so the rate limiter must account for it. The
+                # low-signal streak and previous category are deliberately untouched: no verdict
+                # was reached and no category was actually exercised. `dispatched_case_count` is
+                # NOT incremented either -- if every case ends this way it stays zero and the
+                # post-loop guard aborts rather than reporting a campaign that found nothing.
+                last_dispatch_at = self.clock.now()
+                remaining.remove(case)
+                if not remaining:
+                    break
+                work = select_next_work()
+                continue
             except (HostedStructuredOutputInvalid, HostedProviderUnavailable) as exc:
                 # HostedProviderUnavailable joins on the same terms: an evaluator the platform
                 # could not reach, after its authorized retry was exhausted, is case-local
@@ -2456,6 +2513,8 @@ class DurableCampaignRunner:
             # response and is correctly (but unexpectedly) hard-aborted by its completion-based
             # rate check.
             last_dispatch_at = self.clock.now()
+            # A case that completed dispatch proves the target is answering again.
+            target_failure_streak = 0
             previous_category = dispatch_payload["category"]
             if effective_verdict.get("state") in {"INDETERMINATE", "ERROR"}:
                 low_signal_streak += 1

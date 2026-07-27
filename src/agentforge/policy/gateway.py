@@ -68,6 +68,28 @@ class AbortError(Exception):
         self.code = code
 
 
+class IncompleteMultiTurnAttempt(AbortError):
+    """A multi-turn sequence ended before every authorized turn was sent.
+
+    Raised at exactly one site: the sequential multi-turn dispatcher, when a turn returns a
+    non-2xx status and the remaining turns are therefore never sent. It is a narrow subclass
+    rather than a bare ``AbortError`` because that base also carries cap breaches — a budget,
+    rate, attempt or physical-request-cap violation — which are facts about the RUN's authority
+    and must always abort. This one is a fact about a single case.
+
+    What is unknown here is bounded and specific: whether the target processed the failed turn.
+    That makes the ATTEMPT unadjudicable — no verdict may be invented for it — but it says
+    nothing about the other authorized cases, which have not been touched. The caller may
+    therefore abandon this case and continue, provided it makes no security claim about it and
+    stops entirely if the target keeps failing.
+    """
+
+    code: str = "incomplete-multi-turn-attempt"
+
+    def __init__(self, message: str, *, code: str = "incomplete-multi-turn-attempt") -> None:
+        super().__init__(message, code=code)
+
+
 class _Clock(Protocol):
     def now(self) -> float: ...
 
@@ -497,10 +519,9 @@ class PolicyGateway:
                 break
 
         if len(responses) != total:
-            raise AbortError(
+            raise IncompleteMultiTurnAttempt(
                 "multi-turn sequence ended before every authorized turn was sent — "
-                "HARD ABORT without logical completion",
-                code="incomplete-multi-turn-attempt",
+                "the attempt is unadjudicable without logical completion"
             )
         final = responses[-1]
         transcript = {

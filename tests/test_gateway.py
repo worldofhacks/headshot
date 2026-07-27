@@ -31,15 +31,22 @@ import pytest
 from agentforge.config import EnvironmentIsolationError, Settings
 from agentforge.policy.allowlist import Allowlist, AllowlistEntry, OffAllowlistDenied
 from agentforge.policy.credentials import CredentialBinding
-from agentforge.policy.gateway import AbortError, PolicyGateway, RunPolicy, WorkUnitCoordinates
+from agentforge.policy.gateway import (
+    AbortError,
+    IncompleteMultiTurnAttempt,
+    PolicyGateway,
+    RunPolicy,
+    WorkUnitCoordinates,
+)
 from agentforge.secrets import Secret
 from agentforge.target.base import (
     RateLimitedError,
     TargetRequest,
+    TargetResponse,
     TargetSessionExpiredError,
     TargetUnreachableError,
 )
-from agentforge.target.fake_adapter import FakeTargetAdapter
+from agentforge.target.fake_adapter import FakeTargetAdapter, canonical_key
 
 # The only locally-allowlisted target is the deterministic P9 fake (no live URL is resolvable).
 FAKE_TARGET_ID = "fake"
@@ -724,3 +731,84 @@ def test_a_non_live_target_is_unaffected_in_any_environment() -> None:
     gateway = _gateway(settings=Settings(environment="staging"))
     result = gateway.execute(_attack_attempt(), _policy(), target_id=FAKE_TARGET_ID)
     assert result.target_id == FAKE_TARGET_ID
+
+
+# ---------------------------------------------------------------------------------------
+# A multi-turn sequence the target did not finish costs ONE case, not the whole campaign.
+#
+# Live incident, run 2cf3773d (2026-07-27): case 2 sent turn 1 successfully (HTTP 200, 16.9s),
+# took a single HTTP 502 on turn 2 after 63.8 seconds, and the run aborted — discarding the
+# remaining 33 authorized cases. The target answered healthily moments later.
+#
+# What is genuinely unknown is bounded: whether the target processed the failed turn. That makes
+# the ATTEMPT unadjudicable, so no verdict may be written for it. It says nothing about cases the
+# platform has not touched. The narrow type is what lets the runner tell those apart from a cap
+# breach, which is a fact about the run's authority and must still abort.
+# ---------------------------------------------------------------------------------------
+
+
+class _FailsOnTurn(FakeTargetAdapter):
+    """Answers the first turn, then returns a non-2xx exactly as the live 502 did."""
+
+    turn_delivery = "sequential"
+    #: 0-indexed. Must be a NON-final turn: the gateway appends the failing response before it
+    #: breaks, so a failure on the last turn still fills the sequence and is not "incomplete".
+    #: This mirrors the live incident, where turn 2 of the sequence 502'd and turn 3 never went.
+    fail_from_turn: int = 1
+
+    def send(self, request):  # type: ignore[override]
+        self.calls.append(canonical_key(request))
+        index = int(request.metadata.get("turn_index", 0))
+        if index >= self.fail_from_turn:
+            return TargetResponse(
+                output="upstream unavailable",
+                status=502,
+                metadata={"adapter": self.name, "turn_index": str(index)},
+            )
+        return TargetResponse(
+            output=f"turn-{index}-ok",
+            status=200,
+            metadata={"adapter": self.name, "turn_index": str(index)},
+        )
+
+
+def test_an_unfinished_multi_turn_sequence_raises_the_narrow_isolatable_type() -> None:
+    gateway = _gateway(adapter=_FailsOnTurn())
+
+    with pytest.raises(IncompleteMultiTurnAttempt) as caught:
+        gateway.execute(
+            _attack_attempt(("turn-one", "turn-two", "turn-three")),
+            _policy(budget_usd=100.0, physical_request_limit=3, target_retries_per_turn=0),
+            attempt_id="multi-attempt",
+        )
+    assert caught.value.code == "incomplete-multi-turn-attempt"
+    # Still an AbortError, so every existing handler that catches the base keeps working.
+    assert isinstance(caught.value, AbortError)
+
+
+def test_a_cap_breach_is_not_the_isolatable_type() -> None:
+    """The guard that keeps this isolation narrow.
+
+    ``AbortError`` also carries budget, rate, attempt and physical-request-cap breaches. Those are
+    facts about the RUN's authority and must never be skipped past, so none of them may be an
+    instance of the type the runner isolates.
+    """
+
+    gateway = _gateway(adapter=_FailsOnTurn())
+    with pytest.raises(AbortError) as caught:
+        gateway.execute(
+            _attack_attempt(("turn-one", "turn-two", "turn-three")),
+            # One physical request authorized against a three-turn attempt.
+            _policy(budget_usd=100.0, physical_request_limit=1, target_retries_per_turn=0),
+            attempt_id="cap-breach",
+        )
+    assert not isinstance(caught.value, IncompleteMultiTurnAttempt)
+    assert caught.value.code != "incomplete-multi-turn-attempt"
+
+
+def test_no_abort_code_other_than_the_multi_turn_one_uses_the_isolatable_type() -> None:
+    """Type-level restatement, so a future raise site cannot widen the isolation by accident."""
+
+    assert issubclass(IncompleteMultiTurnAttempt, AbortError)
+    assert not issubclass(AbortError, IncompleteMultiTurnAttempt)
+    assert IncompleteMultiTurnAttempt.code == "incomplete-multi-turn-attempt"
