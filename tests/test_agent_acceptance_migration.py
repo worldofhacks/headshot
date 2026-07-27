@@ -276,7 +276,7 @@ def _seed_authorized_campaign(engine: Engine, suffix: str) -> str:
     return run_id
 
 
-def test_agent_acceptance_migration_is_the_only_head() -> None:
+def test_agent_acceptance_migration_chain_has_one_prompt_snapshot_head() -> None:
     script = ScriptDirectory.from_config(_db.alembic_config(_db.admin_url()))
     # The point of this test is that there is exactly ONE head, not that the head is any
     # particular revision. Chain: ... -> 0022 (attempt_result.resource_measurements)
@@ -284,7 +284,9 @@ def test_agent_acceptance_migration_is_the_only_head() -> None:
     # -> 0024 (Chutes provider-lineage observation)
     # -> 0025 (six supported categories + reviewed-workload provenance)
     # -> 0026 (decisive / indeterminate / operational-error counts on the campaign summary).
-    assert script.get_heads() == ["0026"]
+    # -> 0027 (immutable hosted prompt snapshots).
+    assert script.get_heads() == ["0027"]
+    assert script.get_revision("0027").down_revision == "0026"
     assert script.get_revision("0026").down_revision == "0025"
     assert script.get_revision("0025").down_revision == "0024"
     assert script.get_revision("0024").down_revision == "0023"

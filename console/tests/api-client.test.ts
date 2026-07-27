@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { ApiClientError, createApiClient } from "../src/api/client";
+import { RESOURCE_PATHS } from "../src/api/paths";
 
 const jsonResponse = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), {
@@ -83,6 +84,28 @@ describe("same-origin API client", () => {
     await expect(client.read("https://attacker.invalid/collect")).rejects.toThrow(
       "Invalid API path",
     );
+  });
+
+  it("allows only the bounded campaign_id query used by scoped projections", async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
+      jsonResponse({ state: "ready", data: [] }),
+    );
+    const client = createApiClient({
+      origin: "https://headshot.test",
+      getToken: async () => "short-lived-token",
+      fetchImpl,
+    });
+
+    await client.read(RESOURCE_PATHS.campaignTraces("campaign/older run"));
+
+    expect(fetchImpl).toHaveBeenCalledWith(
+      "https://headshot.test/api/v1/traces?campaign_id=campaign%2Folder%20run",
+      expect.any(Object),
+    );
+    await expect(client.read("traces?campaign_id=one&organization_id=other"))
+      .rejects.toThrow("Invalid API path");
+    await expect(client.read("traces?redirect=https%3A%2F%2Fattacker.invalid"))
+      .rejects.toThrow("Invalid API path");
   });
 
   it("does not include bearer tokens or authorization headers in errors", async () => {

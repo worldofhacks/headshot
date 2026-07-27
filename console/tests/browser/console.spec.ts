@@ -1,85 +1,312 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 
-test("direct routes and browser history restore authoritative screens", async ({ page }) => {
-  await page.goto("/reports/browser-report-prompt-injection");
-  await expect(page.getByRole("heading", { name: "Reports", exact: true, level: 1 })).toBeVisible();
-  await expect(page.getByText("Validated drafts", { exact: true }).first()).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Vulnerability report", exact: true })).toBeVisible();
+const primaryLabels = [
+  "Runs",
+  "Findings",
+  "Coverage",
+  "Approvals",
+  "Observability",
+  "System",
+] as const;
 
-  await page.getByRole("button", { name: "Targets", exact: true }).click();
-  await expect(page).toHaveURL(/\/targets$/);
-  await expect(page.getByRole("heading", { name: "Pilot runs", exact: true, level: 1 })).toBeVisible();
+const expectNoPageOverflow = async (page: Page) => {
+  expect(await page.evaluate(
+    () => document.documentElement.scrollWidth <= window.innerWidth,
+  )).toBe(true);
+};
 
-  await page.goBack();
-  await expect(page).toHaveURL(/\/reports\/browser-report-prompt-injection$/);
-  await expect(page.getByRole("heading", { name: "Reports", exact: true, level: 1 })).toBeVisible();
-
-  await page.goto("/coverage");
+test("exact six primary groups preserve legacy routes and expose Run operations first", async ({
+  page,
+}) => {
+  await page.goto("/runs");
   await expect(page.getByRole("heading", {
-    name: "Coverage & Regression",
+    name: "Run operations",
     exact: true,
     level: 1,
   })).toBeVisible();
-  await expect(page.getByRole("button", {
-    name: "Coverage & Regression",
-    exact: true,
-  })).toHaveAttribute("aria-current", "page");
-  await expect(page.getByText("Verified attempts", { exact: true }).first()).toBeVisible();
-  await expect(page.getByText("Regression checks", { exact: true }).first()).toBeVisible();
-
-  await page.goto("/findings/server-record");
-  await expect(page.getByRole("heading", { name: "Findings", exact: true })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Risk distribution", exact: true })).toBeVisible();
-
-  await page.goto("/agents");
-  await expect(page.getByRole("heading", { name: "Agent operations", exact: true })).toBeVisible();
-  await expect(page.getByText("Hosted configured model", { exact: true })).toBeVisible();
-  await expect(page.getByText("Hosted configured provider", { exact: true })).toBeVisible();
-  await expect(page.getByText("Provider-served model", { exact: true })).toBeVisible();
-  await expect(page.getByText("unavailable — no hosted campaign execution recorded", { exact: true }).first()).toBeVisible();
+  await expect(page.getByRole("tab", { name: "Operations", exact: true }))
+    .toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("heading", { name: "Case progress", exact: true }))
+    .toBeVisible();
   await expect(page.getByRole("heading", {
-    name: "Hosted role assignment",
+    name: "Execution accounting",
     exact: true,
   })).toBeVisible();
-  await expect(page.getByRole("button", {
-    name: "Open four-role authorization",
-  })).toBeEnabled();
-  await expect(page.getByText(/There is no per-role or deterministic fallback/i)).toBeVisible();
+  await expect(page.getByText("Physical target requests", { exact: true })).toBeVisible();
+  await expect(page.getByText("Provider calls", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Abort selected campaign", exact: true }))
+    .toBeEnabled();
+
+  const primary = page.getByLabel("Primary navigation");
+  await expect(primary.getByRole("button")).toHaveCount(6);
+  expect(await primary.locator(".nav-item > span:not(.nav-badge)").allTextContents())
+    .toEqual(primaryLabels);
+  await expect(primary.getByRole("button", { name: "Runs", exact: true }))
+    .toHaveAttribute("aria-current", "page");
+
+  await page.goto("/reports/browser-report-prompt-injection");
+  await expect(page.getByRole("heading", { name: "Reports", exact: true, level: 1 }))
+    .toBeVisible();
+  await expect(page.getByRole("tab", { name: "Reports", exact: true }))
+    .toHaveAttribute("aria-selected", "true");
+  await expect(primary.getByRole("button", { name: "Findings", exact: true }))
+    .toHaveAttribute("aria-current", "page");
+  await expect(page.getByRole("heading", {
+    name: "Vulnerability report",
+    exact: true,
+  })).toBeVisible();
+
+  await page.goto("/targets");
+  await expect(page.getByRole("heading", { name: "Pilot runs", exact: true, level: 1 }))
+    .toBeVisible();
+  await expect(page.getByRole("tab", { name: "Targets", exact: true }))
+    .toHaveAttribute("aria-selected", "true");
+  await expect(primary.getByRole("button", { name: "Runs", exact: true }))
+    .toHaveAttribute("aria-current", "page");
+
+  await page.goto("/agents");
+  await expect(page.getByRole("heading", {
+    name: "Agent operations",
+    exact: true,
+    level: 1,
+  })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "Agents", exact: true }))
+    .toHaveAttribute("aria-selected", "true");
+  await expect(primary.getByRole("button", { name: "System", exact: true }))
+    .toHaveAttribute("aria-current", "page");
+
+  await page.goto("/tooling");
+  await expect(page.getByRole("heading", {
+    name: "Tool inventory",
+    exact: true,
+    level: 1,
+  })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "Tool inventory", exact: true }))
+    .toHaveAttribute("aria-selected", "true");
+
+  await page.goto("/config");
+  await expect(page.getByRole("heading", {
+    name: "Configuration",
+    exact: true,
+    level: 1,
+  })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "Configuration", exact: true }))
+    .toHaveAttribute("aria-selected", "true");
+
+  await page.goto("/live/browser-attempt-2");
+  await expect(page.getByRole("heading", {
+    name: "Run operations",
+    exact: true,
+    level: 1,
+  })).toBeVisible();
+  await expect(page).toHaveURL(/\/live\/browser-attempt-2$/);
+  await expect(page.locator("details[open]").filter({
+    has: page.getByText("Attempt 3", { exact: true }),
+  })).toHaveCount(1);
 });
 
-test("390px navigation exposes every screen without application overflow", async ({ page }) => {
+test("390px grouped navigation has no overflow and supports keyboard tabs", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.goto("/live");
-  await expect(page.getByRole("heading", { name: "Live operations" })).toBeVisible();
-  await expect(page.getByRole("tab", { name: "Birdseye" })).toHaveAttribute(
-    "aria-selected",
-    "true",
+  await page.goto("/runs");
+  await expect(page.getByRole("heading", { name: "Run operations", exact: true }))
+    .toBeVisible();
+  await expectNoPageOverflow(page);
+
+  const operations = page.getByRole("tab", { name: "Operations", exact: true });
+  const targets = page.getByRole("tab", { name: "Targets", exact: true });
+  await expect(operations).toHaveAttribute("tabindex", "0");
+  await expect(targets).toHaveAttribute("tabindex", "-1");
+  await operations.focus();
+  await page.keyboard.press("ArrowRight");
+  await expect(page).toHaveURL(/\/targets\/browser-campaign-gamma$/);
+  await expect(page.getByRole("heading", { name: "Pilot runs", exact: true }))
+    .toBeVisible();
+  await expect(page.getByRole("tab", { name: "Targets", exact: true }))
+    .toHaveAttribute("aria-selected", "true");
+  await expectNoPageOverflow(page);
+
+  await page.getByRole("tab", { name: "Targets", exact: true }).focus();
+  await page.keyboard.press("ArrowLeft");
+  await expect(page).toHaveURL(/\/runs\/browser-campaign-gamma$/);
+  await expect(page.getByRole("heading", { name: "Run operations", exact: true }))
+    .toBeVisible();
+
+  await page.getByRole("button", { name: "System", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Agent operations", exact: true }))
+    .toBeVisible();
+
+  const agents = page.getByRole("tab", { name: "Agents", exact: true });
+  await agents.focus();
+  await page.keyboard.press("End");
+  await expect(page).toHaveURL(/\/config$/);
+  await expect(page.getByRole("heading", { name: "Configuration", exact: true }))
+    .toBeVisible();
+  await expect(page.getByRole("tab", { name: "Configuration", exact: true }))
+    .toHaveAttribute("aria-selected", "true");
+  await expectNoPageOverflow(page);
+});
+
+test("attempt and prompt evidence are keyboard expandable and prompt loading is lazy", async ({
+  page,
+}) => {
+  const promptRequests: string[] = [];
+  page.on("request", (request) => {
+    if (/\/api\/v1\/agent-executions\/[^/]+\/prompt-snapshot$/.test(
+      new URL(request.url()).pathname,
+    )) {
+      promptRequests.push(request.url());
+    }
+  });
+
+  await page.goto("/runs");
+  await expect(page.getByRole("heading", { name: "Run operations", exact: true }))
+    .toBeVisible();
+  const attempt = page.locator("details.event-record").filter({
+    has: page.getByText("Attempt 4", { exact: true }),
+  }).first();
+  await expect(attempt).not.toHaveAttribute("open", "");
+  expect(promptRequests).toEqual([]);
+
+  const attemptSummary = attempt.locator(":scope > summary");
+  await attemptSummary.focus();
+  await page.keyboard.press("Enter");
+  await expect(attempt).toHaveAttribute("open", "");
+
+  const execution = attempt.locator("details.event-record").filter({
+    has: page.getByText("red team execution", { exact: true }),
+  }).first();
+  await expect(execution).not.toHaveAttribute("open", "");
+  await execution.locator(":scope > summary").focus();
+  await page.keyboard.press("Enter");
+  await expect(execution).toHaveAttribute("open", "");
+
+  const prompt = execution.locator("details.event-record").filter({
+    has: page.getByText("Immutable prompt snapshot", { exact: true }),
+  }).first();
+  await expect(prompt).not.toHaveAttribute("open", "");
+  expect(promptRequests).toEqual([]);
+
+  await prompt.locator(":scope > summary").focus();
+  await page.keyboard.press("Enter");
+  await expect(prompt).toHaveAttribute("open", "");
+  await expect(page.getByText("browser-fixture-v1", { exact: true })).toBeVisible();
+  await expect.poll(() => promptRequests.length).toBeGreaterThan(0);
+
+  const systemPromptText =
+    "Operate as the red_team for a synthetic browser fixture. Enforce the approved target and safety scope.";
+  const exactSystemPrompt = prompt.locator("details.event-record").filter({
+    has: page.getByText("Exact system prompt", { exact: true }),
+  }).first();
+  const exactSystemPromptContent = exactSystemPrompt.getByText(
+    systemPromptText,
+    { exact: true },
   );
-  await expect(page.getByText("Security posture", { exact: true })).toBeVisible();
+  await expect(exactSystemPromptContent).toHaveCount(1);
+  await expect(exactSystemPromptContent).toBeHidden();
+  await expect(exactSystemPrompt).not.toHaveAttribute("open", "");
+  await exactSystemPrompt.locator(":scope > summary").focus();
+  await page.keyboard.press("Enter");
+  await expect(exactSystemPromptContent).toBeVisible();
 
-  await page.getByRole("tab", { name: "Attempt stream" }).click();
-  await expect(page.getByRole("button", { name: "Request rerun authorization" })).toBeEnabled();
-  const firstEvent = page.locator(".event-record").first();
-  await expect(firstEvent).toBeVisible();
-  expect((await firstEvent.boundingBox())?.height).toBeGreaterThanOrEqual(36);
+  const orderedMessages = prompt.locator("details.event-record").filter({
+    has: page.getByText("Ordered provider messages", { exact: true }),
+  }).first();
+  await expect(orderedMessages).not.toHaveAttribute("open", "");
+  await expect(page.getByText("Bounded redaction metadata", { exact: true })).toBeVisible();
+  expect(promptRequests.length).toBeGreaterThan(0);
+});
 
-  await page.getByRole("button", { name: "Targets", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Pilot runs", exact: true })).toBeVisible();
-  await expect(page.getByText("1 ready", { exact: true })).toBeVisible();
-  await expect(page.getByRole("button", {
-    name: "Request approval for batch 1",
-  })).toBeEnabled();
-  await expect(page.getByText("Trusted target catalog", { exact: true })).toHaveCount(0);
-  await expect(page.getByText("Target registry", { exact: true })).toHaveCount(0);
+test("Traces and Costs use the selected campaign scope through grouped navigation", async ({
+  page,
+}) => {
+  await page.goto("/runs");
+  await expect(page.getByRole("heading", { name: "Run operations", exact: true }))
+    .toBeVisible();
 
-  await page.getByRole("button", { name: "More", exact: true }).click();
-  await page.getByRole("button", { name: "Configuration", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Configuration", exact: true })).toBeVisible();
+  const traceRequest = page.waitForRequest((request) => {
+    const url = new URL(request.url());
+    return url.pathname === "/api/v1/traces"
+      && url.searchParams.get("campaign_id") === "browser-campaign-gamma";
+  });
+  await page.getByLabel("Primary navigation")
+    .getByRole("button", { name: "Observability", exact: true })
+    .click();
+  await traceRequest;
+  await expect(page).toHaveURL(/\/observability\/browser-campaign-gamma$/);
+  await expect(page.getByRole("heading", { name: "Traces", exact: true, level: 1 }))
+    .toBeVisible();
+  await expect(page.getByRole("tab", { name: "Traces", exact: true }))
+    .toHaveAttribute("aria-selected", "true");
 
-  const hasOverflow = await page.evaluate(
-    () => document.documentElement.scrollWidth > window.innerWidth,
-  );
-  expect(hasOverflow).toBe(false);
+  const costRequest = page.waitForRequest((request) => {
+    const url = new URL(request.url());
+    return url.pathname === "/api/v1/costs"
+      && url.searchParams.get("campaign_id") === "browser-campaign-gamma";
+  });
+  await page.getByRole("tab", { name: "Costs", exact: true }).click();
+  await costRequest;
+  await expect(page).toHaveURL(/\/costs\/browser-campaign-gamma$/);
+  await expect(page.getByRole("heading", { name: "Costs", exact: true, level: 1 }))
+    .toBeVisible();
+  await expect(page.getByRole("tab", { name: "Costs", exact: true }))
+    .toHaveAttribute("aria-selected", "true");
+
+  await page.goto("/traces");
+  await expect(page.getByRole("heading", { name: "Traces", exact: true, level: 1 }))
+    .toBeVisible();
+  await page.goto("/costs");
+  await expect(page.getByRole("heading", { name: "Costs", exact: true, level: 1 }))
+    .toBeVisible();
+});
+
+test("an explicit campaign outside the bounded list remains the exact operations and observability scope", async ({
+  page,
+}) => {
+  const campaignId = "browser-campaign-outside-bounded-list";
+  const operationsRequest = page.waitForRequest((request) => (
+    new URL(request.url()).pathname
+      === `/api/v1/campaigns/${campaignId}/operations`
+  ));
+
+  await page.goto(`/runs/${campaignId}`);
+  await operationsRequest;
+  await expect(page.getByRole("heading", { name: "Run operations", exact: true }))
+    .toBeVisible();
+  await expect(page.getByText(
+    "Selected campaign metadata is unavailable in the bounded campaign list. Loading the exact campaign-scoped operations projection.",
+    { exact: true },
+  )).toBeVisible();
+  await expect(page.getByLabel("Campaign scope")).toHaveValue(campaignId);
+  await expect(page.getByText("browser-…list", { exact: true })).toBeVisible();
+  await expect(page.locator(".campaign-state")).toContainText("Unavailable");
+
+  const traceRequest = page.waitForRequest((request) => {
+    const url = new URL(request.url());
+    return url.pathname === "/api/v1/traces"
+      && url.searchParams.get("campaign_id") === campaignId;
+  });
+  await page.getByLabel("Primary navigation")
+    .getByRole("button", { name: "Observability", exact: true })
+    .click();
+  await traceRequest;
+
+  const costRequest = page.waitForRequest((request) => {
+    const url = new URL(request.url());
+    return url.pathname === "/api/v1/costs"
+      && url.searchParams.get("campaign_id") === campaignId;
+  });
+  await page.getByRole("tab", { name: "Costs", exact: true }).click();
+  await costRequest;
+  await expect(page).toHaveURL(new RegExp(`/costs/${campaignId}$`));
+
+  const reloadedCostRequest = page.waitForRequest((request) => {
+    const url = new URL(request.url());
+    return url.pathname === "/api/v1/costs"
+      && url.searchParams.get("campaign_id") === campaignId;
+  });
+  await page.reload();
+  await reloadedCostRequest;
+  await expect(page).toHaveURL(new RegExp(`/costs/${campaignId}$`));
 });
 
 test("browser boundary has no console errors or external asset requests", async ({ page }) => {
@@ -103,9 +330,11 @@ test("browser boundary has no console errors or external asset requests", async 
     if (request.resourceType() === "font") fontRequests.push(request.url());
   });
 
-  await page.goto("/live");
-  await expect(page.getByRole("heading", { name: "Live operations" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Security posture" })).toBeVisible();
+  await page.goto("/runs");
+  await expect(page.getByRole("heading", { name: "Run operations", exact: true }))
+    .toBeVisible();
+  await expect(page.getByRole("heading", { name: "Case progress", exact: true }))
+    .toBeVisible();
   await page.evaluate(() => document.fonts.ready);
 
   expect(errors).toEqual([]);
@@ -117,74 +346,4 @@ test("browser boundary has no console errors or external asset requests", async 
     const names = [...new URL(request.url).searchParams.keys()];
     expect(names.some((name) => /auth|bearer|jwt|session|token/i.test(name))).toBe(false);
   }
-});
-
-test("trace and cost screens visualize measured Langfuse-correlated telemetry", async ({ page }) => {
-  await page.goto("/live");
-  await page.getByRole("button", { name: /Orchestrator/ }).click();
-  await expect(page.getByText("Campaign p50 / p95", { exact: true })).toBeVisible();
-  await expect(page.getByText("4.6 ms / 6.2 ms", { exact: true })).toBeVisible();
-  await expect(page.getByText("Campaign known spend", { exact: true })).toBeVisible();
-  await expect(
-    page.getByText(
-      "4 observed · 2 awaiting remote verification",
-      { exact: true },
-    ),
-  ).toBeVisible();
-
-  await page.goto("/agents");
-  await expect(page.getByRole("heading", { name: "Agent operations", exact: true })).toBeVisible();
-  await expect(page.getByText("4.4 / 6.2 ms", { exact: true })).toBeVisible();
-  await expect(
-    page.getByText(
-      "4 observed · 2 awaiting remote verification",
-      { exact: true },
-    ),
-  ).toBeVisible();
-  await expect(page.getByText("Last Langfuse query-back", { exact: true })).toBeVisible();
-  const agentLedger = page.getByRole("table");
-  await expect(
-    agentLedger.getByRole("columnheader", { name: "Accounting", exact: true }),
-  ).toBeVisible();
-  await expect(agentLedger.getByText("unavailable", { exact: true }).first()).toBeVisible();
-
-  await page.goto("/traces");
-  await expect(page.getByRole("heading", { name: "Traces", exact: true, level: 1 })).toBeVisible();
-  await expect(page.getByRole("img", { name: "Target request latency over time" })).toBeVisible();
-  await expect(page.getByText("77%").first()).toBeVisible();
-  await expect(page.getByText("Langfuse observed", { exact: true })).toBeVisible();
-  await expect(page.getByText("Awaiting remote verification", { exact: true })).toBeVisible();
-  await expect(page.getByText("Black-box target requests", { exact: false })).toBeVisible();
-  await page.getByRole("listitem").filter({ hasText: "agent.red_team" }).click();
-  await expect(page.getByText("Campaign role p50 / p95", { exact: true })).toBeVisible();
-  await expect(page.getByText("6 ms / 8 ms", { exact: true })).toBeVisible();
-  await page.getByRole("listitem").nth(7).click();
-  await expect(page.getByText("Transport error: upstream_unavailable")).toBeVisible();
-
-  await page.getByRole("button", { name: "Costs", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Costs", exact: true, level: 1 })).toBeVisible();
-  await expect(page.getByText("Known measured spend", { exact: true })).toBeVisible();
-  await expect(page.getByText("$0.0900").first()).toBeVisible();
-  const accounting = page.getByRole("table", {
-    name: "Campaign and agent accounting records",
-  });
-  await expect(accounting).toBeVisible();
-  await expect(
-    accounting.getByRole("columnheader", { name: "Campaign findings", exact: true }),
-  ).toBeVisible();
-  await expect(
-    accounting.getByRole("columnheader", { name: "Role p50", exact: true }),
-  ).toBeVisible();
-  await expect(
-    accounting.getByRole("columnheader", { name: "Role p95", exact: true }),
-  ).toBeVisible();
-  const redTeamAccounting = accounting.getByRole("row").filter({ hasText: "red team" });
-  await expect(redTeamAccounting).toContainText("6 ms");
-  await expect(redTeamAccounting).toContainText("8 ms");
-  await expect(redTeamAccounting).toContainText("$0.0000");
-
-  const hasOverflow = await page.evaluate(
-    () => document.documentElement.scrollWidth > window.innerWidth,
-  );
-  expect(hasOverflow).toBe(false);
 });

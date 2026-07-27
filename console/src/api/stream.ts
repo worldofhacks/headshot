@@ -12,6 +12,51 @@ export interface OrderedEventState {
   events: ConsoleEvent[];
 }
 
+const campaignResources = [
+  "campaigns",
+  "attempts",
+  "birdseye",
+  "components",
+  "costs",
+  "coverage",
+  "resilience",
+  "traces",
+  "targets",
+  "agent-activity",
+] as const;
+
+const eventResourceRoots: Record<string, readonly string[]> = {
+  agent: ["agents", "agent-activity", ...campaignResources, "audit"],
+  agent_acceptance: ["agents", "agent-activity", ...campaignResources, "audit"],
+  attempt: ["attempts", ...campaignResources, "audit"],
+  campaign: [...campaignResources, "approvals", "audit"],
+  configuration: ["configuration", "components", "agents", "tooling", "birdseye", "audit"],
+  finding: ["findings", "reports", "coverage", "resilience", "birdseye", "audit"],
+  governed_acceptance: ["agents", "agent-activity", ...campaignResources, "audit"],
+  hosted_configuration_set: [
+    "configuration",
+    "components",
+    "agents",
+    "tooling",
+    "birdseye",
+    "audit",
+  ],
+  report: ["reports", "findings", "audit"],
+  surface: ["targets", "target-catalog", "tooling", "configuration", "audit"],
+  target: ["targets", "target-catalog", "tooling", "configuration", "audit"],
+  telemetry: ["birdseye", "components", "traces", "agents", "agent-activity", "audit"],
+  tooling: ["tooling", "configuration", "components", "audit"],
+};
+
+export function affectedResourceRoots(event: ConsoleEvent): readonly string[] | null {
+  if (event.event === "gap" || event.event === "snapshot") return null;
+  const family = event.event.split(".", 1)[0] ?? "";
+  const aggregateType = typeof event.data?.aggregate_type === "string"
+    ? event.data.aggregate_type.split("_", 1)[0] ?? ""
+    : "";
+  return eventResourceRoots[family] ?? eventResourceRoots[aggregateType] ?? null;
+}
+
 export type OrderedEventResult =
   | ({ kind: "applied" | "duplicate" } & OrderedEventState)
   | ({ kind: "gap"; expectedCursor: number } & OrderedEventState);
@@ -143,6 +188,7 @@ export function applyOrderedEvent(
 export async function readEventStream(
   response: Response,
   onEvent: (event: ConsoleEvent) => void,
+  onActivity?: () => void,
 ): Promise<void> {
   if (!response.ok || !response.body) {
     throw new ApiClientError("Event stream unavailable", "stream_unavailable", response.status);
@@ -153,6 +199,7 @@ export async function readEventStream(
   const maximumPendingBytes = 262_144;
   while (true) {
     const { done, value } = await reader.read();
+    if (value && value.byteLength > 0) onActivity?.();
     pending += decoder.decode(value, { stream: !done });
     if (pending.length > maximumPendingBytes) {
       await reader.cancel();

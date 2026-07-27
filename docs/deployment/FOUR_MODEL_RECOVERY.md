@@ -1,6 +1,6 @@
 # Hosted four-role recovery
 
-**Reconciled:** 2026-07-26
+**Reconciled:** 2026-07-27
 
 **Detailed state:** [`../CURRENT_STATE.md`](../CURRENT_STATE.md)
 
@@ -33,28 +33,39 @@ stored in PostgreSQL, not environment variables, and its digest and limits are r
 
 1. Choose one reviewed commit. Confirm `origin/main` and `gitlab/main` resolve to that same commit and
    run the required checks; a green check never substitutes for reviewing the release delta.
-2. Build one immutable image and use it for Web, Runner, and Scheduler.
-3. Make Runner inert, deploy Web, and allow Web's pre-deploy Alembic step to reach the packaged sole
-   head.
-4. Deploy Runner and Scheduler from the identical artifact.
-5. Verify database head, service health/readiness, Runner/Scheduler heartbeats, unauthorized denial,
+2. Build one immutable candidate image and freeze its digest for Web, Runner, and Scheduler.
+3. Quiesce the deployed workers, prove that no work or lease is active, and bring up the candidate
+   Runner artifact inert while PostgreSQL remains at deployed head `0025`. It must not claim work or
+   make provider/target calls in this state.
+4. Deploy Web from the identical candidate artifact and allow Web's pre-deploy Alembic step to move
+   PostgreSQL from `0025` to the packaged sole head `0026`.
+5. Verify the sole database head and Web health/readiness, then activate the candidate Runner from
+   that same frozen artifact.
+6. Deploy Scheduler last from the identical artifact.
+7. Verify database head, service health/readiness, Runner/Scheduler heartbeats, unauthorized denial,
    and exact generation-policy parity across all three services.
-6. Perform the signed-in Clerk acceptance flow with real staging users.
-7. Validate the exact live target/surface catalog, synthetic-only fixtures, credential-generation
+8. Perform the signed-in Clerk acceptance flow with real staging users.
+9. Validate the exact live target/surface catalog, synthetic-only fixtures, credential-generation
    reference, credential lease, campaign authorization, physical-call limits, target-turn limits,
    spend limits, and abort conditions.
-8. Create a fresh request and obtain approval from a different Headshot user after the deployment.
+10. Create a fresh request and obtain approval from a different Headshot user after the deployment.
    Authorizations minted against another policy/configuration digest are intentionally invalid.
-9. Launch once, then monitor PostgreSQL as the source of truth. Langfuse is a fail-soft projection and
+11. Launch once, then monitor PostgreSQL as the source of truth. Langfuse is a fail-soft projection and
    must be reconciled, not trusted as the campaign ledger.
 
 ## Current blockers to a reliable full suite
 
-The `456d6e5` staging release fixed execution-lineage conflicts and completed eleven full role/target/
-Judge cycles. It then aborted the whole campaign when one Judge call returned HTTP `200` with
-schema-invalid output. The current hosted configuration authorizes zero logical retries, the transport
-only retries selected transport/HTTP failures, a structured-output failure is not retried, and an
-attempt error fails the campaign. There is no resume path.
+The deployed `456d6e5` staging release fixed execution-lineage conflicts and completed eleven full
+role/target/Judge cycles. It then aborted the whole campaign when one Judge call returned HTTP `200`
+with schema-invalid output. That deployed configuration authorizes zero logical retries, so
+structured-output failure is not retried and an attempt error fails the campaign. There is no resume
+path.
+
+The repository candidate is not deployed. It classifies only fully attributable, usage-settled
+schema-invalid provider output as retryable within the already-authorized per-role/global retry
+budget; it does not enlarge provider-call, token, cost, rate, target-retry, or campaign authority.
+Malformed outer provider responses whose usage/cost facts are not settled remain terminal after one
+physical call.
 
 Do not call this configuration full-suite reliable until the accepted `PLAN.md` work lands:
 

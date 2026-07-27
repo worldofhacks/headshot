@@ -6,7 +6,8 @@
 > missing-token request to `/api/v1/principal` returns `401`. These machine checks do not prove a
 > signed-in user journey. Exact-Organization membership, custom permissions, MFA, cross-Organization
 > denial, two-distinct-user approval, and production sign-in still require human acceptance evidence.
-> Production is currently release-skewed and must not be used for a campaign. See
+> The repository candidate adds protected prompt snapshots at packaged head `0026`; it is not yet
+> deployed. Production is currently release-skewed and must not be used for a campaign. See
 > [`../CURRENT_STATE.md`](../CURRENT_STATE.md).
 
 This document is the security contract for human access to the Headshot console and API. It does not
@@ -219,6 +220,16 @@ dependencies are:
 - findings/coverage/resilience: `org:console:read` plus `org:findings:read`;
 - evidence/traces: `org:console:read` plus `org:evidence:read`; and
 - audit: `org:console:read` plus `org:audit:read`.
+
+`GET /api/v1/campaigns/{campaign_id}/operations` is a `org:console:read` projection scoped by
+verified Organization and campaign.
+`GET /api/v1/agent-executions/{execution_id}/prompt-snapshot` is an evidence read and requires both
+`org:console:read` and `org:evidence:read`. The backend repeats permission and Organization checks in
+the control-plane store. Prompt contents never enter execution lists, campaign aggregates, SSE,
+logs, or Langfuse. Migration `0026` intentionally performs no historical prompt backfill. An
+execution without a persisted immutable snapshot receives HTTP 200 with an empty resource state
+(`Unavailable` if validation or storage fails), and the console presents `Unavailable`; neither
+layer reconstructs the prompt from mutable configuration or unrelated evidence.
 
 Mutation dependencies are exact: campaign request/launch `org:campaign:launch`, campaign decision
 `org:campaign:authorize`, abort `org:campaign:abort`, finding decision

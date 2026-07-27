@@ -234,6 +234,20 @@ def _rows(connection, statement: str, parameters: Mapping[str, Any]) -> list[dic
     return [dict(row) for row in connection.execute(text(statement), parameters).mappings().all()]
 
 
+def _optional_campaign_id(identifiers: Mapping[str, str]) -> str | None:
+    campaign_id = identifiers.get("campaign_id")
+    if campaign_id is None:
+        return None
+    if (
+        not isinstance(campaign_id, str)
+        or not campaign_id
+        or len(campaign_id) > 64
+        or campaign_id != campaign_id.strip()
+    ):
+        raise ValueError("campaign identity is invalid")
+    return campaign_id
+
+
 def _aggregate_cost_measurement_state(
     *,
     measured: int,
@@ -1315,6 +1329,921 @@ class PostgresApiBackend(ApiBackend):
             )
         return result
 
+    @staticmethod
+    def _campaign_operations_number(
+        value: Any,
+        *,
+        integer: bool = False,
+    ) -> int | float | None:
+        """Decode an optional positive authority value without inventing a default."""
+
+        if value is None:
+            return None
+        if isinstance(value, bool):
+            raise ValueError("campaign operations authority value is invalid")
+        if integer:
+            if not isinstance(value, int) or value <= 0:
+                raise ValueError("campaign operations integer authority is invalid")
+            return value
+        try:
+            number = float(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("campaign operations numeric authority is invalid") from exc
+        if number <= 0:
+            raise ValueError("campaign operations numeric authority is invalid")
+        return number
+
+    @staticmethod
+    def _campaign_provider_retry_capacity(
+        connection: Any,
+        *,
+        organization_id: str,
+        run_id: str,
+        execution_id: str,
+        attempt_id: str | None,
+        configuration: HostedConfigurationSet,
+        configuration_set_sha256: str,
+        generation_policy_sha256: str,
+        authorized_generation_policy_sha256: str,
+        agent_role: str,
+        physical_sequence: int,
+        retry_limit: int,
+        campaign_call_limit: int,
+        campaign_spend_limit_usd: Decimal,
+    ) -> int | None:
+        """Return physical retries that could still enter the durable hosted ledger.
+
+        A retry count is operator-facing authority, not merely a transport preference.  Reproduce
+        the already-authorized reservation bounds against fully observed durable usage so the
+        projection never advertises a retry that the Runner's next ledger reservation must refuse.
+        Incomplete physical usage remains unknown rather than being treated as zero.
+        """
+
+        role_configuration = next(
+            (role for role in configuration.roles if role.role == agent_role),
+            None,
+        )
+        if role_configuration is None:
+            return None
+
+        usage = (
+            connection.execute(
+                text(
+                    "SELECT count(i.invocation_id) AS campaign_calls, "
+                    "count(i.invocation_id) FILTER "
+                    "(WHERE i.configuration_set_sha256 = :configuration) AS global_calls, "
+                    "count(i.invocation_id) FILTER "
+                    "(WHERE i.configuration_set_sha256 = :configuration "
+                    "AND i.agent_role = :role) AS role_calls, "
+                    "count(i.invocation_id) FILTER (WHERE e.event_id IS NULL OR "
+                    "e.cost_measurement_state <> 'measured' OR "
+                    "e.measured_cost_usd IS NULL OR e.input_tokens IS NULL OR "
+                    "e.output_tokens IS NULL OR e.reasoning_tokens IS NULL) "
+                    "AS incomplete_calls, "
+                    "coalesce(sum(e.measured_cost_usd), 0) AS campaign_cost, "
+                    "coalesce(sum(e.measured_cost_usd) FILTER "
+                    "(WHERE i.configuration_set_sha256 = :configuration), 0) AS global_cost, "
+                    "coalesce(sum(e.measured_cost_usd) FILTER "
+                    "(WHERE i.configuration_set_sha256 = :configuration "
+                    "AND i.agent_role = :role), 0) AS role_cost, "
+                    "coalesce(sum(e.input_tokens) FILTER "
+                    "(WHERE i.configuration_set_sha256 = :configuration), 0) "
+                    "AS global_input_tokens, "
+                    "coalesce(sum(e.output_tokens + e.reasoning_tokens) FILTER "
+                    "(WHERE i.configuration_set_sha256 = :configuration), 0) "
+                    "AS global_completion_tokens, "
+                    "coalesce(sum(e.input_tokens) FILTER "
+                    "(WHERE i.configuration_set_sha256 = :configuration "
+                    "AND i.agent_role = :role), 0) AS role_input_tokens, "
+                    "coalesce(sum(e.output_tokens + e.reasoning_tokens) FILTER "
+                    "(WHERE i.configuration_set_sha256 = :configuration "
+                    "AND i.agent_role = :role), 0) AS role_completion_tokens "
+                    "FROM provider_call_invocations i "
+                    "LEFT JOIN provider_call_events e "
+                    "ON e.organization_id = i.organization_id "
+                    "AND e.invocation_id = i.invocation_id "
+                    "WHERE i.organization_id = :org AND i.campaign_run_id = :run_id"
+                ),
+                {
+                    "org": organization_id,
+                    "run_id": run_id,
+                    "configuration": configuration_set_sha256,
+                    "role": agent_role,
+                },
+            )
+            .mappings()
+            .one()
+        )
+        retries_used = max(0, physical_sequence - 1)
+        configured_remaining = max(0, retry_limit - retries_used)
+        call_capacities = [
+            configured_remaining,
+            max(0, campaign_call_limit - int(usage["campaign_calls"])),
+            max(0, configuration.global_limits.max_calls - int(usage["global_calls"])),
+            max(0, role_configuration.limits.max_calls - int(usage["role_calls"])),
+        ]
+        if min(call_capacities) == 0:
+            return 0
+        if generation_policy_sha256 != authorized_generation_policy_sha256:
+            return None
+        try:
+            policy = resolve_hosted_generation_policy(generation_policy_sha256)
+            bounds = policy.call_bounds[role_configuration.role]
+        except (HostedGenerationPolicyError, KeyError):
+            return None
+        if int(usage["incomplete_calls"]) != 0:
+            return None
+
+        snapshot = (
+            connection.execute(
+                text(
+                    "SELECT campaign_run_id, attempt_id, agent_role, system_prompt_version, "
+                    "system_prompt_sha256, system_prompt_content, provider_messages, "
+                    "transcript_sha256 FROM agent_prompt_snapshots "
+                    "WHERE organization_id = :org AND execution_id = :execution"
+                ),
+                {"org": organization_id, "execution": execution_id},
+            )
+            .mappings()
+            .one_or_none()
+        )
+        if snapshot is None:
+            return None
+        try:
+            trusted_prompt = resolve_hosted_prompt(
+                role_configuration.role,
+                role_configuration.prompt_sha256,
+            )
+        except ValueError:
+            return None
+        provider_messages = snapshot["provider_messages"]
+        if (
+            snapshot["campaign_run_id"] != run_id
+            or snapshot["attempt_id"] != attempt_id
+            or snapshot["agent_role"] != agent_role
+            or snapshot["system_prompt_version"] != trusted_prompt.version
+            or snapshot["system_prompt_sha256"] != trusted_prompt.sha256
+            or snapshot["system_prompt_content"] != trusted_prompt.content
+            or hashlib.sha256(str(snapshot["system_prompt_content"]).encode("utf-8")).hexdigest()
+            != trusted_prompt.sha256
+            or not isinstance(provider_messages, list)
+            or not 1 <= len(provider_messages) <= 64
+        ):
+            return None
+        normalized_messages: list[dict[str, str]] = []
+        for message in provider_messages:
+            if (
+                not isinstance(message, Mapping)
+                or set(message) != {"role", "content"}
+                or not isinstance(message["role"], str)
+                or message["role"] not in {"system", "user", "assistant", "tool"}
+                or not isinstance(message["content"], str)
+            ):
+                return None
+            normalized_messages.append(
+                {
+                    "role": message["role"],
+                    "content": message["content"],
+                }
+            )
+        if normalized_messages[0] != {
+            "role": "system",
+            "content": trusted_prompt.content,
+        } or any(message["role"] == "system" for message in normalized_messages[1:]):
+            return None
+        transcript_json = json.dumps(
+            {"messages": normalized_messages},
+            allow_nan=False,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+        if (
+            hashlib.sha256(transcript_json.encode("utf-8")).hexdigest()
+            != snapshot["transcript_sha256"]
+        ):
+            return None
+        conservative_input_bound = (
+            sum(
+                len(message["role"].encode("utf-8")) + len(message["content"].encode("utf-8"))
+                for message in normalized_messages
+            )
+            + (64 * len(normalized_messages))
+            + 4096
+        )
+        effective_input_bound = max(bounds.input_tokens, conservative_input_bound)
+        maximum_cost = (
+            role_configuration.prices.input_usd_per_million_tokens * effective_input_bound
+            + role_configuration.prices.output_usd_per_million_tokens * bounds.output_tokens
+            + max(
+                role_configuration.prices.output_usd_per_million_tokens,
+                role_configuration.prices.reasoning_usd_per_million_tokens,
+            )
+            * bounds.reasoning_tokens
+        ) / Decimal(1_000_000)
+
+        capacities = [
+            *call_capacities,
+            max(
+                0,
+                (configuration.global_limits.max_input_tokens - int(usage["global_input_tokens"]))
+                // effective_input_bound,
+            ),
+            max(
+                0,
+                (role_configuration.limits.max_input_tokens - int(usage["role_input_tokens"]))
+                // effective_input_bound,
+            ),
+            max(
+                0,
+                (
+                    configuration.global_limits.max_output_tokens
+                    + configuration.global_limits.max_reasoning_tokens
+                    - int(usage["global_completion_tokens"])
+                )
+                // (bounds.output_tokens + bounds.reasoning_tokens),
+            ),
+            max(
+                0,
+                (
+                    role_configuration.limits.max_output_tokens
+                    + role_configuration.limits.max_reasoning_tokens
+                    - int(usage["role_completion_tokens"])
+                )
+                // (bounds.output_tokens + bounds.reasoning_tokens),
+            ),
+        ]
+        if maximum_cost > 0:
+            campaign_cost = Decimal(str(usage["campaign_cost"]))
+            global_cost = Decimal(str(usage["global_cost"]))
+            role_cost = Decimal(str(usage["role_cost"]))
+            capacities.extend(
+                (
+                    max(
+                        0,
+                        int((campaign_spend_limit_usd - campaign_cost) // maximum_cost),
+                    ),
+                    max(
+                        0,
+                        int((configuration.global_limits.max_usd - global_cost) // maximum_cost),
+                    ),
+                    max(
+                        0,
+                        int((role_configuration.limits.max_usd - role_cost) // maximum_cost),
+                    ),
+                )
+            )
+        return min(capacities)
+
+    def _campaign_operations_projection(
+        self,
+        connection: Any,
+        *,
+        organization_id: str,
+        run_id: str,
+    ) -> dict[str, Any] | None:
+        """Build one campaign-scoped operations view exclusively from durable authority."""
+
+        source = (
+            connection.execute(
+                text(
+                    "SELECT r.run_id, r.created_at, q.scope_payload, "
+                    "event.id AS event_id, event.state, event.reason_code, "
+                    "event.created_at AS state_changed_at "
+                    "FROM campaign_runs r "
+                    "JOIN campaign_authorization_requests q "
+                    "ON q.organization_id = r.organization_id "
+                    "AND q.request_id = r.authorization_request_id "
+                    "JOIN LATERAL ("
+                    " SELECT e.id, e.state, e.reason_code, e.created_at "
+                    " FROM campaign_run_events e "
+                    " WHERE e.organization_id = r.organization_id AND e.run_id = r.run_id "
+                    " ORDER BY e.id DESC LIMIT 1"
+                    ") event ON true "
+                    "WHERE r.organization_id = :org AND r.run_id = :run_id "
+                    "AND r.run_kind = 'campaign'"
+                ),
+                {"org": organization_id, "run_id": run_id},
+            )
+            .mappings()
+            .one_or_none()
+        )
+        if source is None:
+            return None
+        scope_payload = source["scope_payload"]
+        if not isinstance(scope_payload, Mapping):
+            raise ValueError("campaign operations authorization scope is invalid")
+        caps = scope_payload.get("caps")
+        if not isinstance(caps, Mapping):
+            raise ValueError("campaign operations caps are unavailable")
+        hosted_run = scope_payload.get("hosted_run")
+        if hosted_run is not None and not isinstance(hosted_run, Mapping):
+            raise ValueError("campaign operations hosted authority is invalid")
+
+        logical_case_limit = self._campaign_operations_number(
+            caps.get("logical_case_limit"),
+            integer=True,
+        )
+        physical_request_limit = self._campaign_operations_number(
+            caps.get("physical_request_limit"),
+            integer=True,
+        )
+        target_budget_usd = self._campaign_operations_number(caps.get("budget_usd"))
+        max_attempts_per_run = self._campaign_operations_number(
+            caps.get("max_attempts_per_run"),
+            integer=True,
+        )
+        target_retries_per_turn_raw = caps.get("target_retries_per_turn")
+        if target_retries_per_turn_raw is None:
+            target_retries_per_turn = None
+        elif (
+            isinstance(target_retries_per_turn_raw, bool)
+            or not isinstance(target_retries_per_turn_raw, int)
+            or target_retries_per_turn_raw < 0
+        ):
+            raise ValueError("campaign target retry authority is invalid")
+        else:
+            target_retries_per_turn = target_retries_per_turn_raw
+        target_requests_per_second = self._campaign_operations_number(
+            caps.get("target_requests_per_second")
+        )
+        run_timeout_seconds = self._campaign_operations_number(caps.get("run_timeout_seconds"))
+        provider_budget_usd = (
+            self._campaign_operations_number(hosted_run.get("provider_model_spend_limit_usd"))
+            if hosted_run is not None
+            else None
+        )
+        provider_call_limit = (
+            self._campaign_operations_number(
+                hosted_run.get("provider_model_call_limit"),
+                integer=True,
+            )
+            if hosted_run is not None
+            else None
+        )
+        provider_max_retries = (
+            self._campaign_operations_number(
+                hosted_run.get("provider_max_retries"),
+                integer=True,
+            )
+            if hosted_run is not None and hosted_run.get("provider_max_retries") != 0
+            else (
+                0
+                if hosted_run is not None and hosted_run.get("provider_max_retries") == 0
+                else None
+            )
+        )
+        provider_max_concurrency = (
+            self._campaign_operations_number(
+                hosted_run.get("provider_max_concurrency"),
+                integer=True,
+            )
+            if hosted_run is not None
+            else None
+        )
+        provider_timeout_seconds = (
+            self._campaign_operations_number(hosted_run.get("provider_timeout_seconds"))
+            if hosted_run is not None
+            else None
+        )
+        provider_role_retry_limits: dict[str, int] = {}
+        hosted_configuration: HostedConfigurationSet | None = None
+        configuration_set_sha256 = (
+            hosted_run.get("configuration_set_sha256") if hosted_run is not None else None
+        )
+        authorized_generation_policy_sha256 = (
+            hosted_run.get("generation_policy_sha256") if hosted_run is not None else None
+        )
+        if authorized_generation_policy_sha256 is not None and (
+            not isinstance(authorized_generation_policy_sha256, str)
+            or re.fullmatch(r"[0-9a-f]{64}", authorized_generation_policy_sha256) is None
+        ):
+            raise ValueError("campaign hosted generation-policy identity is invalid")
+        if configuration_set_sha256 is not None:
+            if (
+                not isinstance(configuration_set_sha256, str)
+                or re.fullmatch(r"[0-9a-f]{64}", configuration_set_sha256) is None
+            ):
+                raise ValueError("campaign hosted configuration identity is invalid")
+            configuration_row = (
+                connection.execute(
+                    text(
+                        "SELECT payload FROM hosted_configuration_sets "
+                        "WHERE organization_id = :org AND configuration_sha256 = :configuration"
+                    ),
+                    {
+                        "org": organization_id,
+                        "configuration": configuration_set_sha256,
+                    },
+                )
+                .mappings()
+                .one_or_none()
+            )
+            if configuration_row is None:
+                raise ValueError("campaign hosted configuration is unavailable")
+            try:
+                hosted_configuration = HostedConfigurationSet.from_payload(
+                    dict(configuration_row["payload"])
+                )
+            except (TypeError, ValueError) as exc:
+                raise ValueError("campaign hosted configuration is invalid") from exc
+            if hosted_configuration.configuration_sha256 != configuration_set_sha256:
+                raise ValueError("campaign hosted configuration integrity check failed")
+            if provider_max_retries is not None:
+                provider_role_retry_limits = {
+                    role.role: min(
+                        int(provider_max_retries),
+                        hosted_configuration.global_limits.max_retries,
+                        role.limits.max_retries,
+                    )
+                    for role in hosted_configuration.roles
+                }
+
+        progress = (
+            connection.execute(
+                text(
+                    "WITH attempt_flags AS ("
+                    " SELECT a.case_id, "
+                    " EXISTS (SELECT 1 FROM verdict v "
+                    "  WHERE v.organization_id = a.organization_id "
+                    "  AND v.campaign_run_id = a.run_id "
+                    "  AND v.attempt_id = a.attempt_id) AS completed, "
+                    " EXISTS (SELECT 1 FROM agent_executions e "
+                    "  WHERE e.organization_id = a.organization_id "
+                    "  AND e.campaign_run_id = a.run_id "
+                    "  AND e.attempt_id = a.attempt_id AND e.status = 'running') "
+                    " OR EXISTS (SELECT 1 FROM outbound_http_requests h "
+                    "  WHERE h.organization_id = a.organization_id "
+                    "  AND h.campaign_run_id = a.run_id "
+                    "  AND h.attempt_id = a.attempt_id AND h.status = 'in_flight') "
+                    " AS active, "
+                    " EXISTS (SELECT 1 FROM agent_executions e "
+                    "  WHERE e.organization_id = a.organization_id "
+                    "  AND e.campaign_run_id = a.run_id "
+                    "  AND e.attempt_id = a.attempt_id AND e.status = 'failed') "
+                    " OR EXISTS (SELECT 1 FROM jobs j "
+                    "  WHERE j.campaign_run_id = a.run_id "
+                    "  AND j.attempt_id = a.attempt_id AND j.status = 'dead_letter') "
+                    " AS failed "
+                    " FROM campaign_attempts a "
+                    " WHERE a.organization_id = :org AND a.run_id = :run_id"
+                    "), case_flags AS ("
+                    " SELECT case_id, bool_or(completed) AS completed, "
+                    " bool_or(active) AS active, bool_or(failed) AS failed "
+                    " FROM attempt_flags GROUP BY case_id"
+                    ") "
+                    "SELECT count(*) AS started, "
+                    "count(*) FILTER (WHERE completed) AS completed, "
+                    "count(*) FILTER (WHERE NOT completed AND active) AS running, "
+                    "count(*) FILTER (WHERE NOT completed AND NOT active AND failed) AS failed "
+                    "FROM case_flags"
+                ),
+                {"org": organization_id, "run_id": run_id},
+            )
+            .mappings()
+            .one()
+        )
+        started_cases = int(progress["started"])
+        planned_cases = int(logical_case_limit) if logical_case_limit is not None else None
+        remaining_cases = planned_cases - started_cases if planned_cases is not None else None
+
+        execution_counts = (
+            connection.execute(
+                text(
+                    "SELECT "
+                    "(SELECT count(*) FROM campaign_attempts a "
+                    " WHERE a.organization_id = :org AND a.run_id = :run_id) "
+                    "AS logical_attempts, "
+                    "(SELECT count(*) FROM outbound_http_requests h "
+                    " WHERE h.organization_id = :org AND h.campaign_run_id = :run_id) "
+                    "AS physical_target_requests, "
+                    "(SELECT count(*) FROM provider_call_invocations i "
+                    " WHERE i.organization_id = :org AND i.campaign_run_id = :run_id) "
+                    "AS provider_calls"
+                ),
+                {"org": organization_id, "run_id": run_id},
+            )
+            .mappings()
+            .one()
+        )
+        logical_attempts = int(execution_counts["logical_attempts"])
+        physical_target_requests = int(execution_counts["physical_target_requests"])
+        provider_calls = int(execution_counts["provider_calls"])
+
+        target_cost = (
+            connection.execute(
+                text(
+                    "SELECT count(*) AS requests, "
+                    "count(*) FILTER (WHERE status <> 'in_flight') AS terminal_requests, "
+                    "coalesce(sum(measured_cost) FILTER "
+                    "(WHERE status <> 'in_flight'), 0) AS measured_cost, "
+                    "count(DISTINCT currency) AS currencies, min(currency) AS currency "
+                    "FROM outbound_http_requests "
+                    "WHERE organization_id = :org AND campaign_run_id = :run_id"
+                ),
+                {"org": organization_id, "run_id": run_id},
+            )
+            .mappings()
+            .one()
+        )
+        if int(target_cost["currencies"]) > 1 or (
+            target_cost["currency"] is not None and target_cost["currency"] != "USD"
+        ):
+            raise ValueError("campaign target cost currency is inconsistent")
+        target_requests = int(target_cost["requests"])
+        target_terminal_requests = int(target_cost["terminal_requests"])
+        if target_requests == 0:
+            target_measured_usd: float | None = 0.0
+            target_measurement_state = "measured"
+        elif target_terminal_requests == 0:
+            target_measured_usd = None
+            target_measurement_state = "unavailable"
+        else:
+            target_measured_usd = float(target_cost["measured_cost"])
+            target_measurement_state = (
+                "measured" if target_terminal_requests == target_requests else "partial"
+            )
+
+        provider_cost = (
+            connection.execute(
+                text(
+                    "SELECT count(i.invocation_id) AS calls, "
+                    "count(e.event_id) AS terminal_events, "
+                    "count(e.event_id) FILTER (WHERE e.measured_cost_usd IS NOT NULL "
+                    " AND e.cost_measurement_state IN ('measured','partial')) AS cost_events, "
+                    "count(e.event_id) FILTER "
+                    "(WHERE e.cost_measurement_state = 'measured') AS measured_events, "
+                    "coalesce(sum(e.measured_cost_usd) FILTER "
+                    "(WHERE e.cost_measurement_state IN ('measured','partial')), 0) "
+                    "AS measured_cost "
+                    "FROM provider_call_invocations i "
+                    "LEFT JOIN provider_call_events e "
+                    "ON e.organization_id = i.organization_id "
+                    "AND e.invocation_id = i.invocation_id "
+                    "WHERE i.organization_id = :org AND i.campaign_run_id = :run_id"
+                ),
+                {"org": organization_id, "run_id": run_id},
+            )
+            .mappings()
+            .one()
+        )
+        if int(provider_cost["calls"]) != provider_calls:
+            raise ValueError("campaign provider call projection is inconsistent")
+        terminal_events = int(provider_cost["terminal_events"])
+        cost_events = int(provider_cost["cost_events"])
+        measured_events = int(provider_cost["measured_events"])
+        if provider_calls == 0:
+            provider_measured_usd: float | None = 0.0
+            provider_measurement_state = "measured"
+        elif cost_events == 0:
+            provider_measured_usd = None
+            provider_measurement_state = "unavailable"
+        else:
+            provider_measured_usd = float(provider_cost["measured_cost"])
+            provider_measurement_state = (
+                "measured"
+                if terminal_events == provider_calls and measured_events == provider_calls
+                else "partial"
+            )
+        known_costs = tuple(
+            value for value in (target_measured_usd, provider_measured_usd) if value is not None
+        )
+        total_measured_usd = sum(known_costs) if known_costs else None
+        if total_measured_usd is None:
+            cost_measurement_state = "unavailable"
+        elif target_measurement_state == "measured" and provider_measurement_state == "measured":
+            cost_measurement_state = "measured"
+        else:
+            cost_measurement_state = "partial"
+
+        verdict_rows = _rows(
+            connection,
+            "SELECT v.state, count(*) AS count FROM verdict v "
+            "WHERE v.organization_id = :org AND v.campaign_run_id = :run_id "
+            "GROUP BY v.state ORDER BY v.state",
+            {"org": organization_id, "run_id": run_id},
+        )
+        verdict_distribution = {str(row["state"]): int(row["count"]) for row in verdict_rows}
+
+        queue = (
+            connection.execute(
+                text(
+                    "SELECT count(*) FILTER (WHERE status = 'queued') AS queued, "
+                    "count(*) FILTER (WHERE status = 'leased') AS leased, "
+                    "count(*) FILTER (WHERE status = 'dead_letter') AS dead_lettered "
+                    "FROM jobs WHERE campaign_run_id = :run_id"
+                ),
+                {"run_id": run_id},
+            )
+            .mappings()
+            .one()
+        )
+
+        current_work = None
+        if source["state"] == "running":
+            current = (
+                connection.execute(
+                    text(
+                        "SELECT execution_id, attempt_id, agent_role, started_at, detail "
+                        "FROM agent_executions WHERE organization_id = :org "
+                        "AND campaign_run_id = :run_id AND status = 'running' "
+                        "ORDER BY started_at DESC, id DESC LIMIT 1"
+                    ),
+                    {"org": organization_id, "run_id": run_id},
+                )
+                .mappings()
+                .one_or_none()
+            )
+            if current is not None:
+                detail = current["detail"]
+                phase = detail.get("phase") if isinstance(detail, Mapping) else None
+                stage = (
+                    phase
+                    if isinstance(phase, str) and 0 < len(phase) <= 64
+                    else str(current["agent_role"])
+                )
+                current_work = {
+                    "stage": stage,
+                    "agent_role": current["agent_role"],
+                    "execution_id": current["execution_id"],
+                    "attempt_id": current["attempt_id"],
+                    "started_at": current["started_at"],
+                }
+            else:
+                target_dispatch = (
+                    connection.execute(
+                        text(
+                            "SELECT attempt_id, started_at FROM outbound_http_requests "
+                            "WHERE organization_id = :org AND campaign_run_id = :run_id "
+                            "AND status = 'in_flight' "
+                            "ORDER BY started_at DESC, request_id DESC LIMIT 1"
+                        ),
+                        {"org": organization_id, "run_id": run_id},
+                    )
+                    .mappings()
+                    .one_or_none()
+                )
+                if target_dispatch is not None:
+                    current_work = {
+                        "stage": "target_dispatch",
+                        "agent_role": None,
+                        "execution_id": None,
+                        "attempt_id": target_dispatch["attempt_id"],
+                        "started_at": target_dispatch["started_at"],
+                    }
+                else:
+                    leased_job = (
+                        connection.execute(
+                            text(
+                                "SELECT attempt_id, leased_at FROM jobs "
+                                "WHERE campaign_run_id = :run_id AND status = 'leased' "
+                                "ORDER BY leased_at DESC, id DESC LIMIT 1"
+                            ),
+                            {"run_id": run_id},
+                        )
+                        .mappings()
+                        .one_or_none()
+                    )
+                    if leased_job is not None:
+                        current_work = {
+                            "stage": "queue_lease",
+                            "agent_role": None,
+                            "execution_id": None,
+                            "attempt_id": leased_job["attempt_id"],
+                            "started_at": leased_job["leased_at"],
+                        }
+
+        terminal_failure = None
+        if source["state"] == "failed":
+            failure = (
+                connection.execute(
+                    text(
+                        "SELECT e.execution_id, e.attempt_id, e.agent_role, e.provider, e.model, "
+                        "e.configuration_set_sha256, e.generation_policy_sha256, e.error_code, "
+                        "e.provider_event_status, e.detail, e.finished_at, "
+                        "provider.status AS physical_status, "
+                        "provider.error_code AS physical_error_code, "
+                        "provider.cost_measurement_state AS physical_cost_measurement_state, "
+                        "provider.physical_sequence "
+                        "FROM agent_executions e "
+                        "LEFT JOIN LATERAL ("
+                        " SELECT p.status, p.error_code, p.cost_measurement_state, "
+                        " p.physical_sequence "
+                        " FROM provider_call_events p "
+                        " WHERE p.organization_id = e.organization_id "
+                        " AND p.logical_execution_id = e.execution_id "
+                        " ORDER BY p.physical_sequence DESC LIMIT 1"
+                        ") provider ON true "
+                        "WHERE e.organization_id = :org AND e.campaign_run_id = :run_id "
+                        "AND e.status = 'failed' "
+                        "ORDER BY e.finished_at DESC, e.id DESC LIMIT 1"
+                    ),
+                    {"org": organization_id, "run_id": run_id},
+                )
+                .mappings()
+                .one_or_none()
+            )
+            if failure is not None:
+                detail = failure["detail"]
+                phase = detail.get("phase") if isinstance(detail, Mapping) else None
+                stage = (
+                    phase
+                    if isinstance(phase, str) and 0 < len(phase) <= 64
+                    else str(failure["agent_role"])
+                )
+                provider_status = failure["physical_status"] or failure["provider_event_status"]
+                logical_error_code = failure["error_code"]
+                error_code = (
+                    failure["physical_error_code"]
+                    if (
+                        provider_status == "invalid_output"
+                        and failure["physical_error_code"] is not None
+                        and logical_error_code
+                        in {None, "hosted-agent-failed", "hosted-provider-unavailable"}
+                    )
+                    else (
+                        logical_error_code
+                        or failure["physical_error_code"]
+                        or source["reason_code"]
+                        or "campaign_execution_failed"
+                    )
+                )
+                if provider_status is None:
+                    retryable = None
+                elif provider_status == "invalid_output":
+                    # Only a fully attributed, usage-settled structured-output failure may consume
+                    # configured retry authority. An HTTP 200 body that cannot be decoded far enough
+                    # to observe exact provider usage and an ambiguous repeated-key response remain
+                    # terminal.
+                    retryable = (
+                        error_code == "invalid_structured_output"
+                        and failure["physical_cost_measurement_state"] == "measured"
+                    )
+                else:
+                    retryable = provider_status in {"retryable_failure", "timeout"}
+                retries_remaining = None
+                if retryable is False:
+                    retries_remaining = 0
+                elif retryable is True:
+                    if (
+                        hosted_configuration is not None
+                        and isinstance(configuration_set_sha256, str)
+                        and authorized_generation_policy_sha256 is not None
+                        and provider_call_limit is not None
+                        and provider_budget_usd is not None
+                        and failure["physical_sequence"] is not None
+                        and failure["generation_policy_sha256"] is not None
+                        and failure["agent_role"] in provider_role_retry_limits
+                        and failure["configuration_set_sha256"] == configuration_set_sha256
+                    ):
+                        retries_remaining = self._campaign_provider_retry_capacity(
+                            connection,
+                            organization_id=organization_id,
+                            run_id=run_id,
+                            execution_id=str(failure["execution_id"]),
+                            attempt_id=failure["attempt_id"],
+                            configuration=hosted_configuration,
+                            configuration_set_sha256=configuration_set_sha256,
+                            generation_policy_sha256=str(failure["generation_policy_sha256"]),
+                            authorized_generation_policy_sha256=(
+                                authorized_generation_policy_sha256
+                            ),
+                            agent_role=str(failure["agent_role"]),
+                            physical_sequence=int(failure["physical_sequence"]),
+                            retry_limit=provider_role_retry_limits[str(failure["agent_role"])],
+                            campaign_call_limit=int(provider_call_limit),
+                            campaign_spend_limit_usd=Decimal(str(provider_budget_usd)),
+                        )
+                    if retries_remaining is None:
+                        retryable = None
+                    elif retries_remaining == 0:
+                        retryable = False
+                role_label = str(failure["agent_role"]).replace("_", " ").title()
+                terminal_failure = {
+                    "stage": stage,
+                    "error_code": error_code,
+                    "attempt_id": failure["attempt_id"],
+                    "execution_id": failure["execution_id"],
+                    "agent_role": failure["agent_role"],
+                    "provider": failure["provider"],
+                    "model": failure["model"],
+                    "retryable": retryable,
+                    "retries_remaining": retries_remaining,
+                    "occurred_at": failure["finished_at"],
+                    "operator_summary": (
+                        f"{role_label} stopped during {stage.replace('_', ' ')}: "
+                        f"{str(error_code).replace('_', ' ')}."
+                    )[:256],
+                }
+            else:
+                error_code = source["reason_code"] or "campaign_execution_failed"
+                terminal_failure = {
+                    "stage": "campaign",
+                    "error_code": error_code,
+                    "attempt_id": None,
+                    "execution_id": None,
+                    "agent_role": None,
+                    "provider": None,
+                    "model": None,
+                    "retryable": None,
+                    "retries_remaining": None,
+                    "occurred_at": source["state_changed_at"],
+                    "operator_summary": (f"Campaign stopped: {str(error_code).replace('_', ' ')}.")[
+                        :256
+                    ],
+                }
+
+        as_of = connection.execute(text("SELECT clock_timestamp()")).scalar_one()
+        cursor = int(
+            connection.execute(
+                text(
+                    "SELECT coalesce(max(cursor), 0) FROM audit_events WHERE organization_id = :org"
+                ),
+                {"org": organization_id},
+            ).scalar_one()
+        )
+        provider_budget_remaining_usd = (
+            max(0.0, float(provider_budget_usd) - provider_measured_usd)
+            if provider_budget_usd is not None
+            and provider_measured_usd is not None
+            and provider_measurement_state == "measured"
+            else None
+        )
+
+        return {
+            "campaign_id": source["run_id"],
+            "state": source["state"],
+            "created_at": source["created_at"],
+            "progress": {
+                "planned": planned_cases,
+                "started": started_cases,
+                "running": int(progress["running"]),
+                "completed": int(progress["completed"]),
+                "failed": int(progress["failed"]),
+                # There is no durable campaign-case skip record in the current schema.
+                "skipped": None,
+                "remaining": remaining_cases,
+            },
+            "executions": {
+                "logical_attempts": logical_attempts,
+                "physical_target_requests": physical_target_requests,
+                "provider_calls": provider_calls,
+            },
+            "current_work": current_work,
+            "costs": {
+                "provider_measured_usd": provider_measured_usd,
+                "provider_measurement_state": provider_measurement_state,
+                "target_measured_usd": target_measured_usd,
+                "target_measurement_state": target_measurement_state,
+                "total_measured_usd": total_measured_usd,
+                "measurement_state": cost_measurement_state,
+                "currency": "USD",
+            },
+            "limits": {
+                "target_budget_usd": target_budget_usd,
+                "target_budget_remaining_usd": (
+                    max(0.0, float(target_budget_usd) - target_measured_usd)
+                    if target_budget_usd is not None
+                    and target_measured_usd is not None
+                    and target_measurement_state == "measured"
+                    else None
+                ),
+                "provider_budget_usd": provider_budget_usd,
+                "provider_budget_remaining_usd": provider_budget_remaining_usd,
+                "logical_case_limit": logical_case_limit,
+                "physical_request_limit": physical_request_limit,
+                "physical_requests_remaining": (
+                    max(0, int(physical_request_limit) - physical_target_requests)
+                    if physical_request_limit is not None
+                    else None
+                ),
+                "provider_call_limit": provider_call_limit,
+                "provider_calls_remaining": (
+                    max(0, int(provider_call_limit) - provider_calls)
+                    if provider_call_limit is not None
+                    else None
+                ),
+                "max_attempts_per_run": max_attempts_per_run,
+                "target_retries_per_turn": target_retries_per_turn,
+                "target_requests_per_second": target_requests_per_second,
+                "run_timeout_seconds": run_timeout_seconds,
+                "provider_max_retries": provider_max_retries,
+                "provider_max_concurrency": provider_max_concurrency,
+                "provider_timeout_seconds": provider_timeout_seconds,
+            },
+            "verdict_distribution": verdict_distribution,
+            "queue": {
+                "queued_jobs": int(queue["queued"]),
+                "leased_jobs": int(queue["leased"]),
+                "dead_lettered_jobs": int(queue["dead_lettered"]),
+                # The schema persists the rate cap, but not a reliable current throttle state.
+                "rate_limit_active": None,
+            },
+            "terminal_failure": terminal_failure,
+            "as_of": as_of,
+            "cursor": cursor,
+        }
+
     def read(self, resource, principal, *, identifiers=None):
         identifiers = dict(identifiers or {})
         if resource == "principal":
@@ -1597,7 +2526,8 @@ class PostgresApiBackend(ApiBackend):
                         "AS invalid_cost_count, "
                         "array_agg(provider_event_ids ORDER BY id) AS provider_event_id_sets, "
                         "count(*) FILTER (WHERE input_tokens IS NOT NULL "
-                        "OR output_tokens IS NOT NULL) AS token_observation_count, "
+                        "OR output_tokens IS NOT NULL OR reasoning_tokens IS NOT NULL) "
+                        "AS token_observation_count, "
                         "count(*) FILTER (WHERE execution_mode = 'hosted_advisory') "
                         "AS hosted_execution_count, "
                         "avg(duration_ms) FILTER (WHERE duration_ms IS NOT NULL) "
@@ -2165,7 +3095,39 @@ class PostgresApiBackend(ApiBackend):
                                 "target_calls_performed": 0,
                             }
                         rows = [projection]
+                elif resource == "agent_prompt_snapshot":
+                    try:
+                        snapshot = self._store.agent_prompt_snapshot(
+                            principal=principal,
+                            execution_id=identifiers.get("execution_id", ""),
+                        )
+                    except RecordNotFoundError:
+                        rows = []
+                    else:
+                        rows = [
+                            {
+                                "execution_id": snapshot.execution_id,
+                                "campaign_run_id": snapshot.campaign_run_id,
+                                "attempt_id": snapshot.attempt_id,
+                                "agent_role": snapshot.agent_role,
+                                "system_prompt_version": snapshot.system_prompt_version,
+                                "system_prompt_sha256": snapshot.system_prompt_sha256,
+                                "system_prompt_content": snapshot.system_prompt_content,
+                                "provider_messages": list(snapshot.provider_messages),
+                                "transcript_sha256": snapshot.transcript_sha256,
+                                "redactions": list(snapshot.redactions),
+                                "created_at": snapshot.created_at,
+                            }
+                        ]
                 elif resource == "agent_activity":
+                    campaign_id = _optional_campaign_id(identifiers)
+                    activity_parameters = {"org": principal.organization_id}
+                    activity_scope = ""
+                    activity_limit = " LIMIT 1000"
+                    if campaign_id is not None:
+                        activity_parameters["campaign_id"] = campaign_id
+                        activity_scope = " AND campaign_run_id = :campaign_id"
+                        activity_limit = ""
                     rows = _rows(
                         connection,
                         "SELECT execution_id, campaign_run_id, attempt_id, parent_execution_id, "
@@ -2181,8 +3143,11 @@ class PostgresApiBackend(ApiBackend):
                         "oracle_agreement, decision_authority, error_code, "
                         "provider_event_status, "
                         "started_at, finished_at, duration_ms FROM agent_executions "
-                        "WHERE organization_id = :org ORDER BY id DESC LIMIT 1000",
-                        {"org": principal.organization_id},
+                        "WHERE organization_id = :org"
+                        + activity_scope
+                        + " ORDER BY id DESC"
+                        + activity_limit,
+                        activity_parameters,
                     )
                     for row in rows:
                         row["model_substituted"] = row["provider_event_status"] == "model_mismatch"
@@ -2524,6 +3489,13 @@ class PostgresApiBackend(ApiBackend):
                             "run_id": identifiers.get("campaign_id"),
                         },
                     )
+                elif resource == "campaign_operations":
+                    operations = self._campaign_operations_projection(
+                        connection,
+                        organization_id=principal.organization_id,
+                        run_id=identifiers.get("campaign_id", ""),
+                    )
+                    rows = [operations] if operations is not None else []
                 elif resource == "attempts":
                     rows = _rows(
                         connection,
@@ -3053,28 +4025,135 @@ class PostgresApiBackend(ApiBackend):
                             }
                         )
                 elif resource == "costs":
-                    source_rows = _rows(
-                        connection,
-                        "SELECT s.run_id AS accounting_id, s.run_id AS campaign_id, "
-                        "s.provenance AS provider, s.measured_cost, s.currency, s.request_count, "
-                        "s.attempt_count, s.confirmed_finding_count, s.execution_profile, "
-                        "s.started_at, s.ended_at, "
-                        "extract(epoch FROM (s.ended_at - s.started_at)) * 1000 AS duration_ms, "
-                        "s.created_at AS recorded_at, "
-                        "CASE WHEN jsonb_typeof(q.scope_payload->'caps'->'budget_usd') = 'number' "
-                        "THEN (q.scope_payload->'caps'->>'budget_usd')::double precision "
-                        "ELSE NULL END AS budget_usd "
-                        "FROM campaign_run_summaries s LEFT JOIN campaign_runs r "
-                        "ON r.organization_id = s.organization_id AND r.run_id = s.run_id "
-                        "LEFT JOIN campaign_authorization_requests q "
-                        "ON q.organization_id = r.organization_id "
-                        "AND q.request_id = r.authorization_request_id "
-                        "WHERE s.organization_id = :org ORDER BY s.created_at DESC LIMIT 200",
-                        {"org": principal.organization_id},
-                    )
+                    campaign_id = _optional_campaign_id(identifiers)
+                    cost_parameters = {"org": principal.organization_id}
+                    cost_role_scope = ""
+                    cost_agent_scope = ""
+                    cost_usage_scope = ""
+                    campaign_summary_limit = " LIMIT 200"
+                    agent_cost_limit = " LIMIT 400"
+                    if campaign_id is not None:
+                        cost_parameters["campaign_id"] = campaign_id
+                        cost_role_scope = "AND campaign_run_id = :campaign_id "
+                        cost_agent_scope = "AND e.campaign_run_id = :campaign_id "
+                        cost_usage_scope = "AND campaign_run_id = :campaign_id "
+                        campaign_summary_limit = ""
+                        agent_cost_limit = ""
+                    if campaign_id is None:
+                        source_rows = _rows(
+                            connection,
+                            "SELECT s.run_id AS accounting_id, s.run_id AS campaign_id, "
+                            "s.provenance AS provider, s.measured_cost, s.currency, "
+                            "s.request_count, s.attempt_count, s.confirmed_finding_count, "
+                            "s.execution_profile, s.started_at, s.ended_at, "
+                            "extract(epoch FROM (s.ended_at - s.started_at)) * 1000 "
+                            "AS duration_ms, s.created_at AS recorded_at, "
+                            "CASE WHEN jsonb_typeof("
+                            "q.scope_payload->'caps'->'budget_usd') = 'number' "
+                            "THEN (q.scope_payload->'caps'->>'budget_usd')::double precision "
+                            "ELSE NULL END AS budget_usd, 1 AS currency_count "
+                            "FROM campaign_run_summaries s LEFT JOIN campaign_runs r "
+                            "ON r.organization_id = s.organization_id AND r.run_id = s.run_id "
+                            "LEFT JOIN campaign_authorization_requests q "
+                            "ON q.organization_id = r.organization_id "
+                            "AND q.request_id = r.authorization_request_id "
+                            "WHERE s.organization_id = :org ORDER BY s.created_at DESC"
+                            + campaign_summary_limit,
+                            cost_parameters,
+                        )
+                    else:
+                        # A completion summary is intentionally append-only and therefore absent
+                        # for queued, running, failed, and aborted campaigns.  A selected campaign
+                        # must still expose its durable target-request accounting, including known
+                        # partial spend while requests remain in flight.  The bounded global view
+                        # above stays summary-based; this exact campaign view bypasses that limit.
+                        source_rows = _rows(
+                            connection,
+                            "WITH target_cost AS ("
+                            " SELECT campaign_run_id, count(*) AS request_count, "
+                            " count(*) FILTER (WHERE status <> 'in_flight') "
+                            " AS terminal_request_count, "
+                            " coalesce(sum(measured_cost) FILTER "
+                            " (WHERE status <> 'in_flight'), 0) AS measured_cost, "
+                            " count(DISTINCT currency) AS currency_count, "
+                            " min(currency) AS currency "
+                            " FROM outbound_http_requests "
+                            " WHERE organization_id = :org "
+                            " AND campaign_run_id = :campaign_id "
+                            " GROUP BY campaign_run_id"
+                            "), attempt_totals AS ("
+                            " SELECT run_id, count(DISTINCT attempt_id) AS attempt_count "
+                            " FROM campaign_attempts WHERE organization_id = :org "
+                            " AND run_id = :campaign_id GROUP BY run_id"
+                            "), finding_totals AS ("
+                            " SELECT campaign_run_id, count(*) AS confirmed_finding_count "
+                            " FROM finding_evidence_links WHERE organization_id = :org "
+                            " AND campaign_run_id = :campaign_id GROUP BY campaign_run_id"
+                            ") "
+                            "SELECT r.run_id AS accounting_id, r.run_id AS campaign_id, "
+                            "coalesce(s.provenance, CASE "
+                            " WHEN q.scope_payload->>'execution_profile' = 'synthetic' "
+                            " THEN 'synthetic_offline' ELSE 'live_target' END) AS provider, "
+                            "CASE WHEN s.run_id IS NOT NULL THEN s.measured_cost "
+                            " WHEN coalesce(t.request_count, 0) = 0 THEN 0 "
+                            " WHEN coalesce(t.terminal_request_count, 0) = 0 THEN NULL "
+                            " ELSE t.measured_cost END AS measured_cost, "
+                            "CASE WHEN s.run_id IS NOT NULL THEN 'measured' "
+                            " WHEN coalesce(t.request_count, 0) = 0 THEN 'measured' "
+                            " WHEN coalesce(t.terminal_request_count, 0) = 0 "
+                            " THEN 'not_observed' "
+                            " WHEN t.terminal_request_count < t.request_count THEN 'partial' "
+                            " ELSE 'measured' END AS cost_measurement_state, "
+                            "coalesce(s.currency, t.currency, 'USD') AS currency, "
+                            "CASE WHEN s.run_id IS NOT NULL THEN 1 "
+                            " ELSE coalesce(t.currency_count, 0) END AS currency_count, "
+                            "coalesce(s.request_count, t.request_count, 0) AS request_count, "
+                            "coalesce(s.attempt_count, a.attempt_count, 0) AS attempt_count, "
+                            "coalesce(s.confirmed_finding_count, f.confirmed_finding_count, 0) "
+                            "AS confirmed_finding_count, "
+                            "coalesce(s.execution_profile, "
+                            "q.scope_payload->>'execution_profile') AS execution_profile, "
+                            "coalesce(s.started_at, r.created_at) AS started_at, "
+                            "coalesce(s.ended_at, CASE WHEN run_state.state "
+                            " IN ('complete','aborted','failed') "
+                            " THEN run_state.created_at ELSE NULL END) AS ended_at, "
+                            "extract(epoch FROM (coalesce(s.ended_at, CASE WHEN run_state.state "
+                            " IN ('complete','aborted','failed') THEN run_state.created_at "
+                            " ELSE statement_timestamp() END) - "
+                            "coalesce(s.started_at, r.created_at))) * 1000 AS duration_ms, "
+                            "coalesce(s.created_at, statement_timestamp()) AS recorded_at, "
+                            "CASE WHEN jsonb_typeof("
+                            "q.scope_payload->'caps'->'budget_usd') = 'number' "
+                            "THEN (q.scope_payload->'caps'->>'budget_usd')::double precision "
+                            "ELSE NULL END AS budget_usd "
+                            "FROM campaign_runs r "
+                            "JOIN campaign_authorization_requests q "
+                            "ON q.organization_id = r.organization_id "
+                            "AND q.request_id = r.authorization_request_id "
+                            "LEFT JOIN campaign_run_summaries s "
+                            "ON s.organization_id = r.organization_id AND s.run_id = r.run_id "
+                            "LEFT JOIN target_cost t ON t.campaign_run_id = r.run_id "
+                            "LEFT JOIN attempt_totals a ON a.run_id = r.run_id "
+                            "LEFT JOIN finding_totals f ON f.campaign_run_id = r.run_id "
+                            "LEFT JOIN LATERAL ("
+                            " SELECT state, created_at FROM campaign_run_events event "
+                            " WHERE event.organization_id = r.organization_id "
+                            " AND event.run_id = r.run_id ORDER BY event.id DESC LIMIT 1"
+                            ") run_state ON true "
+                            "WHERE r.organization_id = :org AND r.run_id = :campaign_id "
+                            "AND r.run_kind = 'campaign'",
+                            cost_parameters,
+                        )
                     rows = []
                     for source in source_rows:
                         cost = source["measured_cost"]
+                        cost_measurement_state = str(
+                            source.get("cost_measurement_state") or "measured"
+                        )
+                        accounting_status = _accounting_status(cost_measurement_state)
+                        request_count = int(source["request_count"])
+                        if int(source["currency_count"] or 0) > 1:
+                            raise ValueError("campaign target cost currency is inconsistent")
                         rows.append(
                             {
                                 "accounting_id": source["accounting_id"],
@@ -3087,17 +4166,19 @@ class PostgresApiBackend(ApiBackend):
                                 # contract requires a JSON number, so coerce it to float here rather
                                 # than letting _safe stringify the Decimal.
                                 "measured_cost": float(cost) if cost is not None else None,
-                                "cost_measurement_state": "measured",
-                                "accounting_status": "measured",
+                                "cost_measurement_state": cost_measurement_state,
+                                "accounting_status": accounting_status,
                                 "provider_event_ids": [],
                                 "currency": source["currency"],
-                                "request_count": source["request_count"],
+                                "request_count": request_count,
                                 "execution_count": 0,
                                 "attempt_count": source["attempt_count"],
                                 "confirmed_finding_count": source["confirmed_finding_count"],
                                 "average_cost_per_request": (
-                                    float(cost) / source["request_count"]
-                                    if cost is not None and source["request_count"]
+                                    float(cost) / request_count
+                                    if accounting_status == "measured"
+                                    and cost is not None
+                                    and request_count
                                     else None
                                 ),
                                 "input_tokens": None,
@@ -3112,7 +4193,9 @@ class PostgresApiBackend(ApiBackend):
                                 "budget_usd": source["budget_usd"],
                                 "budget_utilization": (
                                     float(cost) / source["budget_usd"]
-                                    if cost is not None and source["budget_usd"]
+                                    if accounting_status == "measured"
+                                    and cost is not None
+                                    and source["budget_usd"]
                                     else None
                                 ),
                                 "duration_ms": float(source["duration_ms"] or 0.0),
@@ -3131,7 +4214,8 @@ class PostgresApiBackend(ApiBackend):
                         "percentile_cont(0.95) WITHIN GROUP (ORDER BY duration_ms) "
                         "AS p95_duration_ms "
                         "FROM agent_executions WHERE organization_id = :org "
-                        "AND status <> 'running' AND duration_ms IS NOT NULL "
+                        + cost_role_scope
+                        + "AND status <> 'running' AND duration_ms IS NOT NULL "
                         "GROUP BY organization_id, campaign_run_id, agent_role"
                         ") "
                         "SELECT e.campaign_run_id, e.agent_role, e.provider, e.model, "
@@ -3157,7 +4241,8 @@ class PostgresApiBackend(ApiBackend):
                         "AS provider_event_id_sets, "
                         "e.configuration_set_sha256, "
                         "count(*) FILTER (WHERE e.input_tokens IS NOT NULL "
-                        "OR e.output_tokens IS NOT NULL) AS token_observation_count, "
+                        "OR e.output_tokens IS NOT NULL OR e.reasoning_tokens IS NOT NULL) "
+                        "AS token_observation_count, "
                         "max(m.p50_duration_ms) AS p50_duration_ms, "
                         "max(m.p95_duration_ms) AS p95_duration_ms, "
                         "min(e.started_at) AS started_at, max(e.finished_at) AS ended_at, "
@@ -3189,14 +4274,15 @@ class PostgresApiBackend(ApiBackend):
                         "AND event.run_id = e.campaign_run_id "
                         "ORDER BY event.id DESC LIMIT 1) run_state ON true "
                         "WHERE e.organization_id = :org "
-                        "AND (e.status <> 'running' "
+                        + cost_agent_scope
+                        + "AND (e.status <> 'running' "
                         "OR e.configuration_set_sha256 IS NOT NULL) "
                         "GROUP BY e.campaign_run_id, e.agent_role, e.provider, e.model, "
                         "e.currency, e.execution_mode, e.configuration_set_sha256, "
                         "q.scope_payload, r.run_kind, r.acceptance_limits, run_state.state "
                         "ORDER BY max(coalesce(e.finished_at, statement_timestamp())) DESC "
-                        "LIMIT 400",
-                        {"org": principal.organization_id},
+                        + agent_cost_limit,
+                        cost_parameters,
                     )
                     cost_configuration_rows = _rows(
                         connection,
@@ -3226,8 +4312,9 @@ class PostgresApiBackend(ApiBackend):
                         "provider_request_id, input_tokens, output_tokens, reasoning_tokens "
                         "FROM agent_executions "
                         "WHERE organization_id = :org "
-                        "AND configuration_set_sha256 IS NOT NULL",
-                        {"org": principal.organization_id},
+                        + cost_usage_scope
+                        + "AND configuration_set_sha256 IS NOT NULL",
+                        cost_parameters,
                     )
                     (
                         cost_usage_by_run_role,
@@ -3388,6 +4475,24 @@ class PostgresApiBackend(ApiBackend):
                             }
                         )
                 elif resource == "traces":
+                    campaign_id = _optional_campaign_id(identifiers)
+                    trace_parameters = {"org": principal.organization_id}
+                    trace_request_scope = ""
+                    trace_legacy_scope = ""
+                    trace_summary_scope = ""
+                    trace_role_scope = ""
+                    trace_agent_scope = ""
+                    trace_row_limit = " LIMIT 200"
+                    trace_agent_limit = " LIMIT 1000"
+                    if campaign_id is not None:
+                        trace_parameters["campaign_id"] = campaign_id
+                        trace_request_scope = "AND campaign_run_id = :campaign_id "
+                        trace_legacy_scope = "AND ar.campaign_run_id = :campaign_id "
+                        trace_summary_scope = "AND run_id = :campaign_id "
+                        trace_role_scope = "AND campaign_run_id = :campaign_id "
+                        trace_agent_scope = "AND e.campaign_run_id = :campaign_id "
+                        trace_row_limit = ""
+                        trace_agent_limit = ""
                     request_rows = _rows(
                         connection,
                         "SELECT request_id, trace_id, campaign_run_id AS campaign_id, attempt_id, "
@@ -3396,8 +4501,10 @@ class PostgresApiBackend(ApiBackend):
                         "request_bytes, response_bytes, measured_cost, currency, langfuse_status, "
                         "langfuse_verified_at, request_payload, response_payload "
                         "FROM outbound_http_requests WHERE organization_id = :org "
-                        "AND finished_at IS NOT NULL ORDER BY started_at DESC LIMIT 200",
-                        {"org": principal.organization_id},
+                        + trace_request_scope
+                        + "AND finished_at IS NOT NULL ORDER BY started_at DESC"
+                        + trace_row_limit,
+                        trace_parameters,
                     )
                     rows = []
                     for source in request_rows:
@@ -3462,11 +4569,12 @@ class PostgresApiBackend(ApiBackend):
                         "AND v.campaign_run_id = ar.campaign_run_id "
                         "AND v.attempt_id = ar.attempt_id "
                         "WHERE ar.organization_id = :org AND ar.trace_id IS NOT NULL "
-                        "AND NOT EXISTS (SELECT 1 FROM outbound_http_requests o "
+                        + trace_legacy_scope
+                        + "AND NOT EXISTS (SELECT 1 FROM outbound_http_requests o "
                         "WHERE o.organization_id = ar.organization_id "
                         "AND o.trace_id = ar.trace_id) "
-                        "ORDER BY ar.executed_at DESC NULLS LAST LIMIT 200",
-                        {"org": principal.organization_id},
+                        "ORDER BY ar.executed_at DESC NULLS LAST" + trace_row_limit,
+                        trace_parameters,
                     )
                     for source in legacy_rows:
                         started_at = source["executed_at"] or source["created_at"]
@@ -3540,8 +4648,10 @@ class PostgresApiBackend(ApiBackend):
                         "SELECT run_id, execution_profile, provenance, request_count, "
                         "measured_cost, currency, started_at, ended_at "
                         "FROM campaign_run_summaries WHERE organization_id = :org "
-                        "ORDER BY started_at DESC LIMIT 200",
-                        {"org": principal.organization_id},
+                        + trace_summary_scope
+                        + "ORDER BY started_at DESC"
+                        + trace_row_limit,
+                        trace_parameters,
                     )
                     for source in summary_rows:
                         rows.append(
@@ -3620,7 +4730,8 @@ class PostgresApiBackend(ApiBackend):
                         "percentile_cont(0.95) WITHIN GROUP (ORDER BY duration_ms) "
                         "AS p95_duration_ms "
                         "FROM agent_executions WHERE organization_id = :org "
-                        "AND status <> 'running' AND duration_ms IS NOT NULL "
+                        + trace_role_scope
+                        + "AND status <> 'running' AND duration_ms IS NOT NULL "
                         "GROUP BY organization_id, campaign_run_id, agent_role"
                         ") "
                         "SELECT e.execution_id, e.parent_execution_id, e.trace_id, "
@@ -3643,8 +4754,10 @@ class PostgresApiBackend(ApiBackend):
                         "AND m.campaign_run_id = e.campaign_run_id "
                         "AND m.agent_role = e.agent_role "
                         "WHERE e.organization_id = :org "
-                        "ORDER BY e.started_at DESC LIMIT 1000",
-                        {"org": principal.organization_id},
+                        + trace_agent_scope
+                        + "ORDER BY e.started_at DESC"
+                        + trace_agent_limit,
+                        trace_parameters,
                     )
                     for source in agent_rows:
                         rows.append(
@@ -4033,15 +5146,20 @@ class PostgresApiBackend(ApiBackend):
             except EvidenceIntegrityError:
                 return ResourceResult.unavailable("authorization_scope_endpoint_unavailable")
 
-        sanitized = _safe(rows)
+        # Prompt snapshots have already passed the protected store's credential/PHI checks and
+        # hash recomputation. Generic display redaction would change the exact provider input, so
+        # the strict prompt decoder is the only serialization boundary for this resource.
+        sanitized = rows if resource == "agent_prompt_snapshot" else _safe(rows)
         if resource in {
             "campaign",
+            "campaign_operations",
             "evidence",
             "target",
             "finding",
             "approval",
             "report",
             "agent_prompt",
+            "agent_prompt_snapshot",
             "configuration",
             "birdseye",
             "hosted_configuration_set",
@@ -4051,6 +5169,12 @@ class PostgresApiBackend(ApiBackend):
                 return ResourceResult.empty()
             try:
                 data = validate_ready_data(resource, sanitized[0])
+                if resource == "campaign_operations":
+                    return ResourceResult.ready(
+                        data,
+                        as_of=str(data["as_of"]),
+                        cursor=int(data["cursor"]),
+                    )
                 if resource == "hosted_configuration_preflight":
                     if not self._hosted_runtime_available:
                         return ResourceResult.degraded(

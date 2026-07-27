@@ -6,6 +6,9 @@ import type {
   AgentActivityReadModel,
   AgentAssignmentReadModel,
   AgentBudgetReadModel,
+  AgentPromptSnapshotMessageReadModel,
+  AgentPromptSnapshotReadModel,
+  AgentPromptSnapshotRedactionReadModel,
   AgentPromptReadModel,
   AgentReadModel,
   AttackCaseEvidenceReadModel,
@@ -22,6 +25,14 @@ import type {
   BirdseyeSecurityPostureReadModel,
   BirdseyeSnapshotReadModel,
   BirdseyeTimelineReadModel,
+  CampaignOperationsCaseProgressReadModel,
+  CampaignOperationsCostReadModel,
+  CampaignOperationsCurrentWorkReadModel,
+  CampaignOperationsExecutionCountsReadModel,
+  CampaignOperationsLimitsReadModel,
+  CampaignOperationsQueueReadModel,
+  CampaignOperationsReadModel,
+  CampaignOperationsTerminalFailureReadModel,
   CampaignReadModel,
   CampaignSuiteBatchReadModel,
   CampaignSuiteTemplateReadModel,
@@ -135,12 +146,21 @@ const nullableNonnegativeInteger = (
 const validateTokenObservation = (
   inputTokens: number | null,
   outputTokens: number | null,
+  reasoningTokens: number | null,
   observationCount: number,
   name: string,
 ): void => {
   if (
-    (observationCount === 0 && (inputTokens !== null || outputTokens !== null)) ||
-    (observationCount > 0 && inputTokens === null && outputTokens === null)
+    (
+      observationCount === 0
+      && (inputTokens !== null || outputTokens !== null || reasoningTokens !== null)
+    ) ||
+    (
+      observationCount > 0
+      && inputTokens === null
+      && outputTokens === null
+      && reasoningTokens === null
+    )
   ) {
     invalid(name);
   }
@@ -394,6 +414,343 @@ const decodeCampaign = (value: unknown): CampaignReadModel => {
 
 export const decodeCampaigns: ReadModelDecoder<CampaignReadModel[]> = (value) =>
   records(value, "campaigns", decodeCampaign);
+
+const decodeCampaignOperationsProgress = (
+  value: unknown,
+): CampaignOperationsCaseProgressReadModel => {
+  const name = "campaign operations progress";
+  const result = record(value, name);
+  exactKeys(result, [
+    "planned",
+    "started",
+    "running",
+    "completed",
+    "failed",
+    "skipped",
+    "remaining",
+  ], name);
+  const planned = nullableNonnegativeInteger(result, "planned", name);
+  const started = number(result, "started", name, { integer: true, minimum: 0 });
+  const running = number(result, "running", name, { integer: true, minimum: 0 });
+  const completed = number(result, "completed", name, { integer: true, minimum: 0 });
+  const failed = number(result, "failed", name, { integer: true, minimum: 0 });
+  const skipped = nullableNonnegativeInteger(result, "skipped", name);
+  const remaining = nullableNonnegativeInteger(result, "remaining", name);
+  const classified = running + completed + failed + (skipped ?? 0);
+  if (classified > started) invalid(name);
+  if (planned === null) {
+    if (remaining !== null) invalid(name);
+  } else if (started > planned || remaining !== planned - started) {
+    invalid(name);
+  }
+  return result as CampaignOperationsCaseProgressReadModel;
+};
+
+const decodeCampaignOperationsExecutions = (
+  value: unknown,
+): CampaignOperationsExecutionCountsReadModel => {
+  const name = "campaign operations executions";
+  const result = record(value, name);
+  exactKeys(result, [
+    "logical_attempts",
+    "physical_target_requests",
+    "provider_calls",
+  ], name);
+  for (const key of [
+    "logical_attempts",
+    "physical_target_requests",
+    "provider_calls",
+  ]) {
+    number(result, key, name, { integer: true, minimum: 0 });
+  }
+  return result as CampaignOperationsExecutionCountsReadModel;
+};
+
+const decodeCampaignOperationsCurrentWork = (
+  value: unknown,
+): CampaignOperationsCurrentWorkReadModel => {
+  const name = "campaign operations current work";
+  const result = record(value, name);
+  exactKeys(result, [
+    "stage",
+    "agent_role",
+    "execution_id",
+    "attempt_id",
+    "started_at",
+  ], name);
+  string(result, "stage", name);
+  const agentRole = nullableLiteral(result, "agent_role", [
+    "orchestrator",
+    "red_team",
+    "judge",
+    "documentation",
+  ], name);
+  const executionId = nullableString(result, "execution_id", name);
+  if ((agentRole === null) !== (executionId === null)) invalid(name);
+  nullableString(result, "attempt_id", name);
+  timestamp(result, "started_at", name);
+  return result as CampaignOperationsCurrentWorkReadModel;
+};
+
+const decodeCampaignOperationsCosts = (
+  value: unknown,
+): CampaignOperationsCostReadModel => {
+  const name = "campaign operations costs";
+  const result = record(value, name);
+  exactKeys(result, [
+    "provider_measured_usd",
+    "target_measured_usd",
+    "total_measured_usd",
+    "provider_measurement_state",
+    "target_measurement_state",
+    "measurement_state",
+    "currency",
+  ], name);
+  const provider = nullableNumber(result, "provider_measured_usd", name);
+  const target = nullableNumber(result, "target_measured_usd", name);
+  const total = nullableNumber(result, "total_measured_usd", name);
+  if (provider !== null && provider < 0) invalid(name);
+  if (target !== null && target < 0) invalid(name);
+  if (total !== null && total < 0) invalid(name);
+  const providerState = literal(
+    result,
+    "provider_measurement_state",
+    ["measured", "partial", "unavailable"],
+    name,
+  );
+  const targetState = literal(
+    result,
+    "target_measurement_state",
+    ["measured", "partial", "unavailable"],
+    name,
+  );
+  const measurementState = literal(
+    result,
+    "measurement_state",
+    ["measured", "partial", "unavailable"],
+    name,
+  );
+  literal(result, "currency", ["USD"], name);
+  if (
+    (provider === null) !== (providerState === "unavailable")
+    || (target === null) !== (targetState === "unavailable")
+  ) {
+    invalid(name);
+  }
+  const knownComponents = [provider, target].filter(
+    (candidate): candidate is number => candidate !== null,
+  );
+  const expectedTotal = knownComponents.length === 0
+    ? null
+    : knownComponents.reduce((sum, candidate) => sum + candidate, 0);
+  const expectedState = providerState === "measured" && targetState === "measured"
+    ? "measured"
+    : expectedTotal === null
+      ? "unavailable"
+      : "partial";
+  if (
+    (expectedTotal === null && total !== null)
+    || (expectedTotal !== null && (total === null || Math.abs(total - expectedTotal) > 0.000001))
+    || measurementState !== expectedState
+  ) invalid(name);
+  return result as CampaignOperationsCostReadModel;
+};
+
+const decodeCampaignOperationsLimits = (
+  value: unknown,
+): CampaignOperationsLimitsReadModel => {
+  const name = "campaign operations limits";
+  const result = record(value, name);
+  exactKeys(result, [
+    "target_budget_usd",
+    "target_budget_remaining_usd",
+    "provider_budget_usd",
+    "provider_budget_remaining_usd",
+    "logical_case_limit",
+    "physical_request_limit",
+    "physical_requests_remaining",
+    "provider_call_limit",
+    "provider_calls_remaining",
+    "target_requests_per_second",
+    "run_timeout_seconds",
+    "max_attempts_per_run",
+    "target_retries_per_turn",
+    "provider_max_retries",
+    "provider_max_concurrency",
+    "provider_timeout_seconds",
+  ], name);
+  for (const key of [
+    "target_budget_usd",
+    "target_budget_remaining_usd",
+    "provider_budget_usd",
+    "provider_budget_remaining_usd",
+  ]) {
+    const candidate = nullableNumber(result, key, name);
+    if (candidate !== null && candidate < 0) invalid(name);
+  }
+  for (const key of [
+    "logical_case_limit",
+    "physical_request_limit",
+    "provider_call_limit",
+    "max_attempts_per_run",
+    "provider_max_concurrency",
+  ]) {
+    const candidate = nullableNonnegativeInteger(result, key, name);
+    if (candidate === 0) invalid(name);
+  }
+  for (const key of [
+    "physical_requests_remaining",
+    "provider_calls_remaining",
+    "target_retries_per_turn",
+    "provider_max_retries",
+  ]) {
+    nullableNonnegativeInteger(result, key, name);
+  }
+  for (const key of [
+    "target_requests_per_second",
+    "run_timeout_seconds",
+    "provider_timeout_seconds",
+  ]) {
+    const candidate = nullableNumber(result, key, name);
+    if (candidate !== null && candidate <= 0) invalid(name);
+  }
+  const requiredCaps = [
+    ["target_budget_usd", "target_budget_remaining_usd"],
+    ["provider_budget_usd", "provider_budget_remaining_usd"],
+    ["physical_request_limit", "physical_requests_remaining"],
+    ["provider_call_limit", "provider_calls_remaining"],
+  ] as const;
+  for (const [cap, remaining] of requiredCaps) {
+    if (result[cap] === null && result[remaining] !== null) invalid(name);
+  }
+  return result as CampaignOperationsLimitsReadModel;
+};
+
+const decodeCampaignOperationsQueue = (
+  value: unknown,
+): CampaignOperationsQueueReadModel => {
+  const name = "campaign operations queue";
+  const result = record(value, name);
+  exactKeys(result, [
+    "queued_jobs",
+    "leased_jobs",
+    "dead_lettered_jobs",
+    "rate_limit_active",
+  ], name);
+  for (const key of ["queued_jobs", "leased_jobs", "dead_lettered_jobs"]) {
+    number(result, key, name, { integer: true, minimum: 0 });
+  }
+  nullableBoolean(result, "rate_limit_active", name);
+  return result as CampaignOperationsQueueReadModel;
+};
+
+const decodeCampaignOperationsFailure = (
+  value: unknown,
+): CampaignOperationsTerminalFailureReadModel => {
+  const name = "campaign operations terminal failure";
+  const result = record(value, name);
+  exactKeys(result, [
+    "stage",
+    "error_code",
+    "attempt_id",
+    "execution_id",
+    "agent_role",
+    "provider",
+    "model",
+    "retryable",
+    "retries_remaining",
+    "occurred_at",
+    "operator_summary",
+  ], name);
+  for (const key of ["stage", "error_code", "operator_summary"]) string(result, key, name);
+  for (const key of ["attempt_id", "execution_id", "provider", "model"]) {
+    nullableString(result, key, name);
+  }
+  nullableLiteral(result, "agent_role", [
+    "orchestrator",
+    "red_team",
+    "judge",
+    "documentation",
+  ], name);
+  const retryable = nullableBoolean(result, "retryable", name);
+  const retriesRemaining = nullableNonnegativeInteger(result, "retries_remaining", name);
+  if (
+    (retryable === null && retriesRemaining !== null)
+    || (retryable === false && retriesRemaining !== null && retriesRemaining !== 0)
+  ) {
+    invalid(name);
+  }
+  timestamp(result, "occurred_at", name);
+  return result as CampaignOperationsTerminalFailureReadModel;
+};
+
+export const decodeCampaignOperations: ReadModelDecoder<CampaignOperationsReadModel> = (
+  value,
+) => {
+  const name = "campaign operations";
+  const result = record(value, name);
+  exactKeys(result, [
+    "campaign_id",
+    "state",
+    "created_at",
+    "progress",
+    "executions",
+    "current_work",
+    "costs",
+    "limits",
+    "verdict_distribution",
+    "queue",
+    "terminal_failure",
+    "as_of",
+    "cursor",
+  ], name);
+  string(result, "campaign_id", name);
+  const state = literal(
+    result,
+    "state",
+    ["queued", "running", "complete", "aborted", "failed"],
+    name,
+  );
+  timestamp(result, "created_at", name);
+  result.progress = decodeCampaignOperationsProgress(result.progress);
+  const executions = decodeCampaignOperationsExecutions(result.executions);
+  result.executions = executions;
+  result.current_work = result.current_work === null
+    ? null
+    : decodeCampaignOperationsCurrentWork(result.current_work);
+  result.costs = decodeCampaignOperationsCosts(result.costs);
+  result.limits = decodeCampaignOperationsLimits(result.limits);
+  const distribution = record(result.verdict_distribution, name);
+  let verdictTotal = 0;
+  for (const [verdict, countValue] of Object.entries(distribution)) {
+    if (
+      verdict.length === 0
+      || typeof countValue !== "number"
+      || !Number.isSafeInteger(countValue)
+      || countValue < 0
+    ) {
+      invalid(name);
+    }
+    verdictTotal += countValue as number;
+  }
+  if (verdictTotal > executions.logical_attempts) {
+    invalid(name);
+  }
+  result.queue = decodeCampaignOperationsQueue(result.queue);
+  result.terminal_failure = result.terminal_failure === null
+    ? null
+    : decodeCampaignOperationsFailure(result.terminal_failure);
+  timestamp(result, "as_of", name);
+  number(result, "cursor", name, { integer: true, minimum: 0 });
+  if (
+    (state === "failed" && result.terminal_failure === null)
+    || (state !== "failed" && result.terminal_failure !== null)
+    || (state !== "running" && result.current_work !== null)
+  ) {
+    invalid(name);
+  }
+  return result as CampaignOperationsReadModel;
+};
 
 const decodeAttempt = (value: unknown): AttemptReadModel => {
   const name = "attempt";
@@ -1668,7 +2025,13 @@ const decodeCost = (value: unknown): CostReadModel => {
     name,
     { integer: true, minimum: 0 },
   );
-  validateTokenObservation(inputTokens, outputTokens, tokenObservationCount, name);
+  validateTokenObservation(
+    inputTokens,
+    outputTokens,
+    reasoningTokens,
+    tokenObservationCount,
+    name,
+  );
   const physicalCallCount = number(
     result,
     "physical_call_count",
@@ -1717,12 +2080,6 @@ const decodeCost = (value: unknown): CostReadModel => {
         (executionCount > 0 &&
           (p50Duration === null || p95Duration === null)))) ||
     (p50Duration !== null && p95Duration !== null && p50Duration > p95Duration)
-  ) {
-    invalid(name);
-  }
-  if (
-    ["partial", "unavailable"].includes(accountingStatus) &&
-    result.record_kind !== "agent"
   ) {
     invalid(name);
   }
@@ -2344,6 +2701,7 @@ const decodeAgent = (value: unknown): AgentReadModel => {
   validateTokenObservation(
     inputTokens,
     outputTokens,
+    reasoningTokens,
     counters.token_observation_count,
     name,
   );
@@ -2378,6 +2736,103 @@ export const decodeAgentPrompt: ReadModelDecoder<AgentPromptReadModel> = (value)
     string(result, key, name);
   }
   return result as AgentPromptReadModel;
+};
+
+const utf8Length = (value: string): number => new TextEncoder().encode(value).byteLength;
+
+const decodeAgentPromptSnapshotMessage = (
+  value: unknown,
+): AgentPromptSnapshotMessageReadModel => {
+  const name = "agent prompt snapshot message";
+  const result = record(value, name);
+  exactKeys(result, ["role", "content"], name);
+  literal(result, "role", ["system", "user", "assistant", "tool"], name);
+  const content = result.content;
+  if (typeof content !== "string" || content.includes("\u0000")) invalid(name);
+  return result as AgentPromptSnapshotMessageReadModel;
+};
+
+const decodeAgentPromptSnapshotRedaction = (
+  value: unknown,
+): AgentPromptSnapshotRedactionReadModel => {
+  const name = "agent prompt snapshot redaction";
+  const result = record(value, name);
+  exactKeys(result, ["path", "reason", "replacement"], name);
+  const path = string(result, "path", name);
+  const reason = string(result, "reason", name);
+  const replacement = string(result, "replacement", name);
+  if (
+    !path.startsWith("$")
+    || path.length > 256
+    || path.includes("\u0000")
+    || reason.length > 64
+    || reason.includes("\u0000")
+    || replacement.length > 128
+    || replacement.includes("\u0000")
+    || !replacement.startsWith("[REDACTED:")
+    || !replacement.endsWith("]")
+  ) {
+    invalid(name);
+  }
+  return result as AgentPromptSnapshotRedactionReadModel;
+};
+
+export const decodeAgentPromptSnapshot: ReadModelDecoder<AgentPromptSnapshotReadModel> = (
+  value,
+) => {
+  const name = "agent prompt snapshot";
+  const result = record(value, name);
+  exactKeys(result, [
+    "execution_id",
+    "campaign_run_id",
+    "attempt_id",
+    "agent_role",
+    "system_prompt_version",
+    "system_prompt_sha256",
+    "system_prompt_content",
+    "provider_messages",
+    "transcript_sha256",
+    "redactions",
+    "created_at",
+  ], name);
+  for (const key of ["execution_id", "campaign_run_id"]) string(result, key, name);
+  nullableString(result, "attempt_id", name);
+  literal(result, "agent_role", agentRoles, name);
+  const promptVersion = string(result, "system_prompt_version", name);
+  if (promptVersion.length > 64 || promptVersion.includes("\u0000")) invalid(name);
+  sha256(result, "system_prompt_sha256", name);
+  sha256(result, "transcript_sha256", name);
+  const systemPrompt = string(result, "system_prompt_content", name);
+  if (
+    systemPrompt.includes("\u0000")
+    || utf8Length(systemPrompt) > 1_048_576
+  ) invalid(name);
+  const messages = records(
+    result.provider_messages,
+    name,
+    decodeAgentPromptSnapshotMessage,
+  );
+  if (
+    messages.length === 0
+    || messages.length > 64
+    || messages[0]?.role !== "system"
+    || messages[0].content !== systemPrompt
+    || messages.slice(1).some((message) => message.role === "system")
+    || utf8Length(JSON.stringify(messages)) > 1_572_864
+  ) invalid(name);
+  result.provider_messages = messages;
+  const redactions = records(
+    result.redactions,
+    name,
+    decodeAgentPromptSnapshotRedaction,
+  );
+  if (
+    redactions.length > 64
+    || utf8Length(JSON.stringify(redactions)) > 16_384
+  ) invalid(name);
+  result.redactions = redactions;
+  timestamp(result, "created_at", name);
+  return result as AgentPromptSnapshotReadModel;
 };
 
 const decodeAgentActivityRecord = (value: unknown): AgentActivityReadModel => {
@@ -2985,6 +3440,7 @@ const decodeBirdseyeNode = (value: unknown): BirdseyeNodeReadModel => {
     "currency",
     "input_tokens",
     "output_tokens",
+    "reasoning_tokens",
     "token_observation_count",
     "langfuse_not_attempted_count",
     "langfuse_disabled_count",
@@ -3054,6 +3510,7 @@ const decodeBirdseyeNode = (value: unknown): BirdseyeNodeReadModel => {
   const currency = nullableString(result, "currency", name);
   const inputTokens = nullableNonnegativeInteger(result, "input_tokens", name);
   const outputTokens = nullableNonnegativeInteger(result, "output_tokens", name);
+  const reasoningTokens = nullableNonnegativeInteger(result, "reasoning_tokens", name);
   const tokenObservationCount = nullableNonnegativeInteger(
     result,
     "token_observation_count",
@@ -3092,6 +3549,7 @@ const decodeBirdseyeNode = (value: unknown): BirdseyeNodeReadModel => {
         currency,
         inputTokens,
         outputTokens,
+        reasoningTokens,
         tokenObservationCount,
         ...deliveryCounts,
         langfuseVerifiedCount,
@@ -3130,6 +3588,7 @@ const decodeBirdseyeNode = (value: unknown): BirdseyeNodeReadModel => {
     validateTokenObservation(
       inputTokens,
       outputTokens,
+      reasoningTokens,
       agentTokenObservationCount,
       name,
     );

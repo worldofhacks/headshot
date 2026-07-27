@@ -738,7 +738,9 @@ def build_birdseye_snapshot(
         "SELECT agent_role, count(*) AS execution_count, "
         "coalesce(sum(measured_cost), 0) AS measured_cost, "
         "sum(input_tokens) AS input_tokens, sum(output_tokens) AS output_tokens, "
-        "count(*) FILTER (WHERE input_tokens IS NOT NULL OR output_tokens IS NOT NULL) "
+        "sum(reasoning_tokens) AS reasoning_tokens, "
+        "count(*) FILTER (WHERE input_tokens IS NOT NULL OR output_tokens IS NOT NULL "
+        "OR reasoning_tokens IS NOT NULL) "
         "AS token_observation_count, "
         "count(*) FILTER (WHERE execution_mode = 'hosted_advisory') "
         "AS hosted_execution_count, "
@@ -868,6 +870,7 @@ def build_birdseye_snapshot(
                 "agent_accounting_status": accounting_status,
                 "agent_input_tokens": metrics.get("input_tokens"),
                 "agent_output_tokens": metrics.get("output_tokens"),
+                "agent_reasoning_tokens": metrics.get("reasoning_tokens"),
                 "agent_token_observation_count": int(metrics.get("token_observation_count", 0)),
                 "agent_p50_ms": metrics.get("p50_ms"),
                 "agent_p95_ms": metrics.get("p95_ms"),
@@ -999,6 +1002,12 @@ def build_birdseye_snapshot(
                     int(component["agent_output_tokens"])
                     if component.get("agent_role")
                     and component.get("agent_output_tokens") is not None
+                    else None
+                ),
+                "reasoning_tokens": (
+                    int(component["agent_reasoning_tokens"])
+                    if component.get("agent_role")
+                    and component.get("agent_reasoning_tokens") is not None
                     else None
                 ),
                 "token_observation_count": (

@@ -19,39 +19,41 @@ import {
   decodePrincipal,
 } from "./api/read-models";
 import {
-  LIVE_RESOURCE_POLL_INTERVAL_MS,
   useResource,
 } from "./hooks/useResource";
-import { parseConsoleRoute, routePath, type ConsoleRoute, type ScreenName } from "./router";
+import { shortId } from "./components/Analytics";
+import { FreshnessBadge } from "./components/FreshnessBadge";
+import { LiveDataProvider } from "./live/LiveDataProvider";
 import {
-  ApprovalsScreen,
-  ConfigurationScreen,
-  FindingsScreen,
-  LiveScreen,
-  ReportsScreen,
-  SimpleResourceScreen,
-  TargetsScreen,
-} from "./screens/ConsoleScreens";
-import { AgentsScreen, ToolingScreen } from "./screens/AgentToolScreens";
+  isCampaignScopedScreen,
+  parseConsoleRoute,
+  routePath,
+  workspaceRoute,
+  type ConsoleRoute,
+  type PrimaryScreen,
+} from "./router";
+import { ApprovalsScreen } from "./screens/ConsoleScreens";
 import { CoverageRegressionScreen } from "./screens/CoverageRegressionScreen";
+import {
+  FindingsWorkspace,
+  ObservabilityWorkspace,
+  RunsWorkspace,
+  SystemWorkspace,
+} from "./screens/Workspaces";
 import type {
   ApprovalReadModel,
   BirdseyeSnapshotReadModel,
   CampaignReadModel,
 } from "./types";
+import { PERMISSIONS } from "./types";
 
-const navigation: Array<{ screen: ScreenName; label: string; icon: string }> = [
-  { screen: "live", label: "Live", icon: "M3 12h3.5l2.5 7 4.5-14 2.5 7H21" },
+const navigation: Array<{ screen: PrimaryScreen; label: string; icon: string }> = [
+  { screen: "runs", label: "Runs", icon: "M3 12h3.5l2.5 7 4.5-14 2.5 7H21" },
   { screen: "findings", label: "Findings", icon: "M12 3l7 2.5v5.5c0 4.3-3 7.4-7 8.5-4-1.1-7-4.2-7-8.5V5.5L12 3z M9 12l2 2 4-4" },
+  { screen: "coverage", label: "Coverage", icon: "M4 4h7v7H4z M13 4h7v7h-7z M4 13h7v7H4z M13 13h7v7h-7z" },
   { screen: "approvals", label: "Approvals", icon: "M4 6.5A2.5 2.5 0 0 1 6.5 4h11A2.5 2.5 0 0 1 20 6.5v11a2.5 2.5 0 0 1-2.5 2.5h-11A2.5 2.5 0 0 1 4 17.5z M8.5 12l2.5 2.5 5-5" },
-  { screen: "reports", label: "Reports", icon: "M6 3h9l4 4v14H6z M14 3v5h5 M9 12h7 M9 16h7" },
-  { screen: "coverage", label: "Coverage & Regression", icon: "M4 4h7v7H4z M13 4h7v7h-7z M4 13h7v7H4z M13 13h7v7h-7z" },
-  { screen: "agents", label: "Agents", icon: "M5 7h5 M14 7h5 M7.5 7v5 M16.5 7v5 M7.5 12h9 M12 12v5 M9 20h6 M7.5 12a2 2 0 1 0 0 4 2 2 0 0 0 0-4 M16.5 12a2 2 0 1 0 0 4 2 2 0 0 0 0-4" },
-  { screen: "tooling", label: "Tooling", icon: "M14.5 5.5a4 4 0 0 0-5 5L4 16l4 4 5.5-5.5a4 4 0 0 0 5-5l-3 3-3-3z" },
-  { screen: "traces", label: "Traces", icon: "M4 6h11 M4 12h15 M4 18h8" },
-  { screen: "costs", label: "Costs", icon: "M12 3v18 M16 7.5c0-1.7-1.8-3-4-3s-4 1.3-4 3 1.8 2.6 4 3 4 1.3 4 3-1.8 3-4 3-4-1.3-4-3" },
-  { screen: "targets", label: "Targets", icon: "M12 3l8.5 4.5L12 12 3.5 7.5 12 3z M4 12l8 4.5 8-4.5 M4 16.5l8 4.5 8-4.5" },
-  { screen: "config", label: "Configuration", icon: "M6 4v5 M6 13v7 M12 4v3 M12 11v9 M18 4v9 M18 17v3 M3 11h6 M9 7h6 M15 13h6" },
+  { screen: "observability", label: "Observability", icon: "M4 6h11 M4 12h15 M4 18h8" },
+  { screen: "system", label: "System", icon: "M6 4v5 M6 13v7 M12 4v3 M12 11v9 M18 4v9 M18 17v3 M3 11h6 M9 7h6 M15 13h6" },
 ];
 
 function LineIcon({ path, size = 17 }: { path: string; size?: number }) {
@@ -76,13 +78,6 @@ function HeadshotMark() {
   );
 }
 
-const mobilePrimaryNavigation = navigation.filter((item) =>
-  (["live", "findings", "approvals", "targets"] as ScreenName[]).includes(item.screen),
-);
-const mobileMoreNavigation = navigation.filter(
-  (item) => !mobilePrimaryNavigation.some((primary) => primary.screen === item.screen),
-);
-
 function SecurityState({ state, detail }: { state: string; detail: string }) {
   return (
     <main className="security-shell">
@@ -100,11 +95,11 @@ function SessionTaskRoute({ path }: { path: string }) {
   return (
     <main className="security-shell">
       {path === "/session-tasks/choose-organization" && (
-        <TaskChooseOrganization redirectUrlComplete="/live" />
+        <TaskChooseOrganization redirectUrlComplete="/runs" />
       )}
-      {path === "/session-tasks/setup-mfa" && <TaskSetupMFA redirectUrlComplete="/live" />}
+      {path === "/session-tasks/setup-mfa" && <TaskSetupMFA redirectUrlComplete="/runs" />}
       {path === "/session-tasks/reset-password" && (
-        <TaskResetPassword redirectUrlComplete="/live" />
+        <TaskResetPassword redirectUrlComplete="/runs" />
       )}
     </main>
   );
@@ -135,30 +130,65 @@ function ConsoleShell({
   getToken: () => Promise<string | null>;
 }) {
   const [route, navigate] = useBrowserRoute();
+  const scopeKey = `${route.screen}:${route.entityId ?? ""}`;
+
+  return (
+    <LiveDataProvider getToken={getToken} scopeKey={scopeKey}>
+      <ConsoleShellContent
+        principal={principal}
+        client={client}
+        getToken={getToken}
+        route={route}
+        navigate={navigate}
+      />
+    </LiveDataProvider>
+  );
+}
+
+function ConsoleShellContent({
+  principal,
+  client,
+  getToken,
+  route,
+  navigate,
+}: {
+  principal: Principal;
+  client: ReturnType<typeof createApiClient>;
+  getToken: () => Promise<string | null>;
+  route: ConsoleRoute;
+  navigate: (route: ConsoleRoute) => void;
+}) {
   const [theme, setTheme] = useState<"dark" | "light">("dark");
-  const [mobileMore, setMobileMore] = useState(false);
+  const [selectedCampaignId, setSelectedCampaignId] = useState<string | null>(
+    isCampaignScopedScreen(route.screen) ? route.entityId : null,
+  );
   const campaigns = useResource<CampaignReadModel[]>(
     client,
     RESOURCE_PATHS.campaigns,
     decodeCampaigns,
-    { pollIntervalMs: LIVE_RESOURCE_POLL_INTERVAL_MS },
   );
   const approvals = useResource<ApprovalReadModel[]>(
     client,
     RESOURCE_PATHS.approvals,
     decodeApprovals,
-    { pollIntervalMs: LIVE_RESOURCE_POLL_INTERVAL_MS },
   );
   const birdseye = useResource<BirdseyeSnapshotReadModel>(
     client,
     RESOURCE_PATHS.birdseye,
     decodeBirdseye,
-    { pollIntervalMs: LIVE_RESOURCE_POLL_INTERVAL_MS },
   );
-  const activeCampaign = campaigns.result.data?.find((campaign) => campaign.state === "running")
-    ?? campaigns.result.data?.find((campaign) => campaign.state === "queued")
-    ?? campaigns.result.data?.[0]
-    ?? null;
+  const campaignData = campaigns.result.data ?? [];
+  const routedCampaignId = isCampaignScopedScreen(route.screen) ? route.entityId : null;
+  const explicitCampaignId = routedCampaignId ?? selectedCampaignId;
+  const selectedCampaign = explicitCampaignId === null
+    ? campaignData.find((campaign) => campaign.state === "running")
+      ?? campaignData.find((campaign) => campaign.state === "queued")
+      ?? [...campaignData].sort(
+        (left, right) => Date.parse(right.created_at) - Date.parse(left.created_at),
+      )[0]
+      ?? null
+    : campaignData.find((campaign) => campaign.run_id === explicitCampaignId) ?? null;
+  const activeCampaignId = explicitCampaignId ?? selectedCampaign?.run_id ?? null;
   const pendingApprovals = approvals.result.data?.filter((approval) => approval.status === "pending").length ?? 0;
   const systemState = birdseye.result.data?.instrumentation.system_state ?? birdseye.result.state;
   const serverStatus = birdseye.result.data
@@ -169,46 +199,96 @@ function ConsoleShell({
       }).format(new Date(birdseye.result.data.as_of))}`
     : systemState;
   const go = (next: ConsoleRoute) => {
-    setMobileMore(false);
     navigate(next);
   };
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
   }, [theme]);
+  useEffect(() => {
+    if (isCampaignScopedScreen(route.screen) && route.entityId !== null) {
+      setSelectedCampaignId(route.entityId);
+    }
+  }, [route.screen, route.entityId]);
+  useEffect(() => {
+    if (selectedCampaign !== null && selectedCampaignId === null) {
+      setSelectedCampaignId(selectedCampaign.run_id);
+    }
+  }, [selectedCampaign?.run_id, selectedCampaignId]);
   const common = { client, principal, entityId: route.entityId, getToken };
+  const workspace = workspaceRoute(route.screen);
 
   let screen: React.ReactNode;
-  switch (route.screen) {
-    case "live":
-      screen = <LiveScreen {...common} />;
+  switch (workspace.screen) {
+    case "runs":
+      screen = (
+        <RunsWorkspace
+          {...common}
+          entityId={workspace.view === "targets" ? null : route.entityId}
+          view={workspace.view}
+          campaignId={activeCampaignId}
+          expandedAttemptId={route.screen === "live" ? route.entityId : null}
+          onCampaignSelect={(campaignId) => {
+            setSelectedCampaignId(campaignId);
+            go({ screen: "runs", entityId: campaignId });
+          }}
+          onCampaignResolved={setSelectedCampaignId}
+          onAttemptSelect={principal.organization_permissions.includes(PERMISSIONS.evidenceRead)
+            ? (attemptId) => go({ screen: "live", entityId: attemptId })
+            : undefined}
+          onViewChange={(view) => go({
+            screen: view === "operations" ? "runs" : "targets",
+            entityId: activeCampaignId,
+          })}
+        />
+      );
       break;
     case "findings":
-      screen = <FindingsScreen {...common} />;
+      screen = (
+        <FindingsWorkspace
+          {...common}
+          view={workspace.view}
+          onViewChange={(view) => go({
+            screen: view === "findings" ? "findings" : "reports",
+            entityId: null,
+          })}
+        />
+      );
       break;
     case "approvals":
       screen = <ApprovalsScreen {...common} />;
       break;
-    case "reports":
-      screen = <ReportsScreen {...common} />;
-      break;
     case "coverage":
       screen = <CoverageRegressionScreen client={client} />;
       break;
-    case "traces":
-    case "costs":
-      screen = <SimpleResourceScreen client={client} resource={route.screen} />;
+    case "observability":
+      screen = (
+        <ObservabilityWorkspace
+          client={client}
+          campaignId={activeCampaignId}
+          view={workspace.view}
+          onViewChange={(view) => go({
+            screen: view === "traces" ? "observability" : "costs",
+            entityId: activeCampaignId,
+          })}
+        />
+      );
       break;
-    case "agents":
-      screen = <AgentsScreen client={client} principal={principal} />;
-      break;
-    case "tooling":
-      screen = <ToolingScreen client={client} />;
-      break;
-    case "targets":
-      screen = <TargetsScreen {...common} />;
-      break;
-    case "config":
-      screen = <ConfigurationScreen {...common} />;
+    case "system":
+      screen = (
+        <SystemWorkspace
+          {...common}
+          entityId={null}
+          view={workspace.view}
+          onViewChange={(view) => go({
+            screen: view === "agents"
+              ? "system"
+              : view === "tools"
+                ? "tooling"
+                : "config",
+            entityId: null,
+          })}
+        />
+      );
       break;
   }
 
@@ -224,9 +304,14 @@ function ConsoleShell({
             <button
               type="button"
               key={item.screen}
-              className={route.screen === item.screen ? "nav-item active" : "nav-item"}
-              aria-current={route.screen === item.screen ? "page" : undefined}
-              onClick={() => go({ screen: item.screen, entityId: null })}
+              className={workspace.screen === item.screen ? "nav-item active" : "nav-item"}
+              aria-current={workspace.screen === item.screen ? "page" : undefined}
+              onClick={() => go({
+                screen: item.screen,
+                entityId: item.screen === "runs" || item.screen === "observability"
+                  ? activeCampaignId
+                  : null,
+              })}
             >
               <LineIcon path={item.icon} />
               <span>{item.label}</span>
@@ -240,7 +325,7 @@ function ConsoleShell({
           <UserButton />
           <span className="identity-copy">
             <strong>{(principal.organization_role ?? "member").replace("org:", "")}</strong>
-            <span className="mono">{principal.user_id}</span>
+            <span className="mono">{shortId(principal.user_id)}</span>
           </span>
         </div>
       </aside>
@@ -248,19 +333,23 @@ function ConsoleShell({
         <header className="topbar">
           <div className="campaign-context">
             <span className="campaign-chip">
-              <span className={`status-dot ${activeCampaign?.state === "running" ? "live" : "idle"}`} />
-              <span className="mono campaign-run">{activeCampaign?.run_id ?? "No active run"}</span>
-              {activeCampaign && <><span className="campaign-sep">·</span><span>{activeCampaign.target_id}</span><span className="mono campaign-version">{activeCampaign.target_version}</span></>}
+              <span className={`status-dot ${selectedCampaign?.state === "running" ? "live" : "idle"}`} />
+              <span className="mono campaign-run">
+                {selectedCampaign
+                  ? shortId(selectedCampaign.run_id)
+                  : activeCampaignId
+                    ? shortId(activeCampaignId)
+                    : "No selected run"}
+              </span>
+              {selectedCampaign && <><span className="campaign-sep">·</span><span className="mono campaign-version">{selectedCampaign.target_version}</span></>}
             </span>
-            <span className={`campaign-state ${activeCampaign?.state === "running" ? "live" : "idle"}`}>
-              <span className="status-dot" />{activeCampaign?.state ?? "ready"}
+            <span className={`campaign-state ${selectedCampaign?.state === "running" ? "live" : "idle"}`}>
+              <span className="status-dot" />
+              {selectedCampaign?.state ?? (activeCampaignId ? "Unavailable" : "ready")}
             </span>
           </div>
           <div className="topbar-actions">
-            <span className={`connection-chip connection-${systemState}`}>
-              <span className={`status-dot ${systemState === "nominal" ? "live" : "idle"}`} />
-              Server snapshot · {serverStatus}
-            </span>
+            <FreshnessBadge serverStatus={serverStatus} systemState={systemState} />
             <button
               type="button"
               className="icon-button approval-shortcut"
@@ -282,38 +371,21 @@ function ConsoleShell({
         </header>
         <main className="screen">{screen}</main>
         <nav className="mobile-nav" aria-label="Mobile navigation">
-          {mobilePrimaryNavigation.map((item) => (
+          {navigation.map((item) => (
             <button
               type="button"
               key={item.screen}
-              className={route.screen === item.screen ? "active" : undefined}
-              onClick={() => go({ screen: item.screen, entityId: null })}
+              className={workspace.screen === item.screen ? "active" : undefined}
+              onClick={() => go({
+                screen: item.screen,
+                entityId: item.screen === "runs" || item.screen === "observability"
+                  ? activeCampaignId
+                  : null,
+              })}
             >
               {item.label}
             </button>
           ))}
-          <button
-            type="button"
-            className={mobileMoreNavigation.some((item) => item.screen === route.screen) ? "active" : undefined}
-            aria-expanded={mobileMore}
-            onClick={() => setMobileMore((value) => !value)}
-          >
-            More
-          </button>
-          {mobileMore && (
-            <div className="mobile-more-menu">
-              {mobileMoreNavigation.map((item) => (
-                <button
-                  type="button"
-                  key={item.screen}
-                  className={route.screen === item.screen ? "active" : undefined}
-                  onClick={() => go({ screen: item.screen, entityId: null })}
-                >
-                  {item.label}
-                </button>
-              ))}
-            </div>
-          )}
         </nav>
       </div>
     </div>
@@ -365,8 +437,8 @@ export function App() {
             routing="path"
             path="/sign-in"
             withSignUp={false}
-            forceRedirectUrl="/live"
-            fallbackRedirectUrl="/live"
+            forceRedirectUrl="/runs"
+            fallbackRedirectUrl="/runs"
           />
         </div>
       </main>
@@ -380,7 +452,7 @@ export function App() {
       <main className="security-shell">
         <div className="sign-in-frame">
           <p className="eyebrow">ORGANIZATION REQUIRED</p>
-          <TaskChooseOrganization redirectUrlComplete="/live" />
+          <TaskChooseOrganization redirectUrlComplete="/runs" />
         </div>
       </main>
     );

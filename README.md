@@ -9,20 +9,23 @@ authorized live URL; target code does not live in this repository.
 As of 2026-07-26, the platform has:
 
 - an authenticated React/Clerk operator console and protected FastAPI API;
-- a PostgreSQL control plane, queue, audit/evidence store, at repository candidate Alembic
-  head `0026` (staging is deployed at release `456d6e5`, whose database is still at `0025`);
+- a PostgreSQL control plane, queue, audit/evidence store, and canonical Alembic chain through
+  `0026` campaign outcomes and `0027` immutable prompt snapshots;
 - private Railway Runner and Scheduler services;
 - exact-scope two-person campaign authorization;
 - hosted Orchestrator, Red Team, Judge, and Documentation roles through OpenRouter;
 - exact reviewed-workload target dispatch through the Policy Gateway;
 - durable logical-agent and physical-provider lineage;
+- authoritative live campaign operations plus protected immutable prompt snapshots;
 - independent deterministic Judge precedence; and
 - PostgreSQL-authoritative telemetry with a fail-soft Langfuse projection.
 
 It is **not yet full-suite reliable**. The latest staging campaign ran 12 of 34 cases, then a
-schema-invalid Gemini Judge response failed the whole batch. The current staged configuration
-authorizes zero provider retries, the Runner cannot resume a terminal batch, and failed campaigns
-cannot be remotely query-back verified by the current Langfuse verifier.
+schema-invalid Gemini Judge response failed the whole batch. The repository transport now classifies
+settled schema-invalid output for retry only inside existing role/global authority, but that candidate
+is not deployed and the current staged configuration authorizes zero provider retries. The Runner
+still cannot resume a terminal batch, and failed campaigns cannot be remotely query-back verified by
+the current Langfuse verifier.
 
 Read [`docs/CURRENT_STATE.md`](docs/CURRENT_STATE.md) for exact deployment IDs, role models/upstreams,
 caps, policy/configuration hashes, the latest run analysis, and open defects. Read
@@ -111,7 +114,7 @@ and fresh authorization.
 | `src/agentforge/telemetry/` | PostgreSQL/Langfuse projection |
 | `src/agentforge/contracts/v1/` | packaged JSON Schema contracts |
 | `evals/` | synthetic fixtures, reviewed workloads, calibration/evidence artifacts |
-| `migrations/` | Alembic history; sole repository head is `0026`; deployed staging is at `0025` |
+| `migrations/` | Alembic history; sole repository head is `0027`; deployed state is tracked separately |
 | `console/` | React/Vite operator console |
 | `railway/` | Web/Runner/Scheduler service manifests |
 | `docs/` | current runbooks plus dated evidence/history |
@@ -182,6 +185,19 @@ Public routes are limited to:
 All `/api/v1` data and mutations default to protected. Missing or invalid authentication returns a
 generic 401. An authenticated principal without the exact Organization/permission or distinct-person
 condition receives 403. Broken verifier/security configuration fails closed.
+
+The protected live read models are:
+
+- `GET /api/v1/campaigns/{campaign_id}/operations`, gated by `org:console:read` and exact
+  Organization/campaign scope; and
+- `GET /api/v1/agent-executions/{execution_id}/prompt-snapshot`, additionally gated by
+  `org:evidence:read` and exact Organization/execution scope.
+
+Prompt contents are fetched only for one expanded execution and are excluded from list, aggregate,
+event-stream, logging, and Langfuse payloads. Migration `0027` intentionally has no prompt-snapshot
+backfill: executions created before the migration have no immutable snapshot, so the protected
+endpoint returns HTTP 200 with an empty resource state (or `Unavailable` if validation/storage is
+unavailable), and the console renders `Unavailable` rather than reconstructing a prompt.
 
 ## Campaign authorization
 

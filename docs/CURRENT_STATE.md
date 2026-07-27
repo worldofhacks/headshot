@@ -2,9 +2,11 @@
 
 **Snapshot:** 2026-07-26
 
-**Repository base:** `456d6e57c72b71a90ee8b5be7e0788c3f15f9731`
+**Repository base before the operations candidate:** `29166688f2d3e3ec9744689907ac0e04ab5e044e`
 
-**Repository parity:** `origin/main == gitlab/main == 456d6e5`
+**Repository parity at the latest read-only check:** `origin/main == gitlab/main == 2916668`
+
+**Packaged schema:** sole Alembic head `0026`; the verified staging database remains at `0025`
 
 **Canonical requirements:** [`Week_3_AgentForge.pdf`](../Week_3_AgentForge.pdf)
 
@@ -22,9 +24,12 @@ Langfuse projection.
 
 The platform is **not yet full-suite reliable**. The latest staging campaign executed 12 of 34 cases
 and then failed because Gemini returned HTTP 200 with schema-invalid Judge output. The deployed
-configuration authorized zero provider retries, the transport does not retry structured-output
-validation failures, and the Runner treats the resulting exception as a terminal whole-campaign
-failure. A fresh run would restart at case 1.
+configuration authorized zero provider retries, and the Runner treats the resulting exhausted
+exception as a terminal whole-campaign failure. The repository candidate now classifies fully
+attributable, usage-settled schema-invalid output as retryable only inside the already-authorized
+per-role/global retry and call/token/cost/rate envelopes. That behavior is not deployed, does not
+grant a retry to the zero-retry staged configuration, and does not implement campaign resume. A fresh
+run would still restart at case 1.
 
 The latest run also proves that the prior hosted Red Team attempt-lineage defect is fixed: all 12
 attempts were created before their Red Team provider calls, and no post-hoc lineage binding conflict
@@ -86,6 +91,30 @@ credential-generation, synthetic-fixture, canary, cap, lease, and two-person aut
 | Observability | PostgreSQL source of truth plus Langfuse 4.14.1 external projection |
 | Deployment | One Docker artifact; Railway Web, Runner, Scheduler, PostgreSQL; Web-only public ingress |
 | CI/release | GitHub Actions and GitLab CI must both pass; release refs must be identical |
+
+The repository package is now at Alembic `0026`. Migration `0026` adds immutable,
+organization-scoped prompt snapshots for logical agent executions. Runner can insert/select those
+rows; Web can only select them. Append-only triggers prevent update/delete and enforce run,
+attempt, role, and organization lineage.
+
+## Operations-console candidate
+
+The current source candidate consolidates primary navigation to exactly Runs, Findings, Coverage,
+Approvals, Observability, and System while preserving legacy URLs as aliases. Runs opens the
+authoritative campaign operations view; Traces and Costs accept an explicit selected campaign so old
+runs are not hidden by bounded global projections.
+
+`GET /api/v1/campaigns/{campaign_id}/operations` returns organization-scoped progress, current work,
+logical and physical call counts, measured/partial cost, configured limits, queue state, verdict
+distribution, and terminal failure facts. Unknown or incomplete facts remain null/partial rather
+than becoming zero. The console consumes authenticated SSE with last-event reconnection and a
+five-second polling fallback while preserving the last valid snapshot with freshness state.
+
+`GET /api/v1/agent-executions/{execution_id}/prompt-snapshot` requires both
+`org:console:read` and `org:evidence:read`. It returns one exact package-owned system prompt and the
+ordered provider role/content transcript only after organization scoping, hash verification,
+secret/PHI rejection, and bounded redaction validation. Prompt contents are collapsed by default and
+are excluded from aggregate/list/SSE/log/Langfuse payloads.
 
 ## Hosted role set and per-call policy
 
@@ -214,9 +243,10 @@ Do not equate SDK `flush()` with remote delivery. Only authenticated exact query
 
 ## Current reliability gaps
 
-1. Structured-output validation failure is not retried.
-2. The deployed hosted configuration authorizes zero retries.
-3. One provider-format failure aborts the entire batch.
+1. The candidate structured-output retry classification is not deployed or staging-accepted.
+2. The deployed hosted configuration authorizes zero retries, so the candidate cannot retry under
+   current authority.
+3. One exhausted provider-format failure still aborts the entire batch.
 4. A terminal batch cannot resume from its durable completed attempts.
 5. Langfuse query-back rejects failed/aborted campaigns.
 6. Physical provider attempts are not first-class Langfuse observations.
@@ -230,7 +260,8 @@ Do not equate SDK `flush()` with remote delivery. Only authenticated exact query
 
 The current implementation plan is [`../PLAN.md`](../PLAN.md). In short:
 
-1. make schema-invalid provider output safely retryable only within explicit Judge retry authority;
+1. deploy and accept the candidate schema-invalid-output classification, then stage only the exact
+   separately reviewed retry authority required for the Judge;
 2. isolate exhausted per-case provider failures and continue with a contract-valid `ERROR` verdict;
 3. resume terminal/interrupted batches from durable checkpoints without repeating observed target work;
 4. add automatic, exact Langfuse query-back for complete, failed, and aborted runs, including physical

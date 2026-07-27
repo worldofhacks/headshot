@@ -2518,6 +2518,59 @@ def test_agent_observability_reconciles_agents_costs_and_traces(
     assert red_team_trace["langfuse_status"] == "queued"
 
 
+def test_reasoning_only_tokens_are_observed_in_agent_and_cost_aggregates(
+    migrated_db: Engine,
+) -> None:
+    org_id = "org_M1dReasoningOnlyTokens"
+    run_id = "run-reasoning-only-tokens-0001"
+    _seed_run_summary(migrated_db, org_id, run_id)
+    with migrated_db.begin() as connection:
+        connection.execute(text("SET LOCAL session_replication_role = replica"))
+        connection.execute(
+            text(
+                "INSERT INTO agent_executions "
+                "(execution_id, organization_id, campaign_run_id, agent_role, status, "
+                "provider, model, execution_mode, configuration_version, input_sha256, "
+                "output_sha256, input_tokens, output_tokens, reasoning_tokens, measured_cost, "
+                "cost_measurement_state, trace_id, langfuse_status, detail, started_at, "
+                "finished_at, duration_ms) VALUES "
+                "('reasoning-only-execution', :org, :run, 'orchestrator', 'succeeded', "
+                "'headshot', 'orchestrator-engine-v1', 'deterministic', 1, :input_hash, "
+                ":output_hash, NULL, NULL, 17, 0, 'measured', :trace, 'disabled', "
+                "'{}'::jsonb, TIMESTAMPTZ '2026-07-21 10:00:00+00', "
+                "TIMESTAMPTZ '2026-07-21 10:00:00.025+00', 25)"
+            ),
+            {
+                "org": org_id,
+                "run": run_id,
+                "input_hash": "a" * 64,
+                "output_hash": "b" * 64,
+                "trace": "c" * 32,
+            },
+        )
+
+    client = TestClient(_app_for(migrated_db, _reader(org_id)))
+    agents = client.get("/api/v1/agents").json()
+    costs = client.get("/api/v1/costs").json()
+
+    assert agents["state"] == costs["state"] == "ready"
+    orchestrator = next(row for row in agents["data"] if row["role"] == "orchestrator")
+    assert orchestrator["input_tokens"] is None
+    assert orchestrator["output_tokens"] is None
+    assert orchestrator["reasoning_tokens"] == 17
+    assert orchestrator["token_observation_count"] == 1
+
+    orchestrator_cost = next(
+        row
+        for row in costs["data"]
+        if row["record_kind"] == "agent" and row["agent_role"] == "orchestrator"
+    )
+    assert orchestrator_cost["input_tokens"] is None
+    assert orchestrator_cost["output_tokens"] is None
+    assert orchestrator_cost["reasoning_tokens"] == 17
+    assert orchestrator_cost["token_observation_count"] == 1
+
+
 def test_agent_role_percentiles_use_full_tenant_campaign_ledger_before_trace_limit(
     migrated_db: Engine,
 ) -> None:
