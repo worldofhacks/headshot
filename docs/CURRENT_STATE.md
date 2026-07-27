@@ -1,12 +1,12 @@
 # AgentForge current state
 
-**Snapshot:** 2026-07-26
+**Snapshot:** 2026-07-27
 
-**Repository base before the operations candidate:** `29166688f2d3e3ec9744689907ac0e04ab5e044e`
+**Repository base before the operations candidate:** `cf18e119dc1592d72aa6a707d280ad65062dd093`
 
-**Repository parity at the latest read-only check:** `origin/main == gitlab/main == 2916668`
+**Repository parity at the latest read-only check:** `origin/main == gitlab/main == cf18e11`
 
-**Packaged schema:** sole Alembic head `0026`; the verified staging database remains at `0025`
+**Packaged schema:** sole Alembic head `0027`; the verified staging database is at canonical `0026`
 
 **Canonical requirements:** [`Week_3_AgentForge.pdf`](../Week_3_AgentForge.pdf)
 
@@ -41,16 +41,15 @@ occurred.
 
 | Component | State | Evidence |
 |---|---|---|
-| Web | `SUCCESS` | deployment `ae2505f2-798b-4d96-98d9-7619e104feb0` |
-| Runner | `SUCCESS` | deployment `ce2eeb34-95b-4ac0-999b-df3de4ea659a` |
-| Scheduler | `SUCCESS` | deployment `4c2e38a4-6b10-4d0f-96ab-d51b2d8f63b9` |
-| PostgreSQL | ready | repository candidate head `0026`; deployed staging at `0025` (release `456d6e5`) |
+| Web | `SUCCESS` | deployment `74d39043-7ef8-410e-963d-e7aee107ec13` |
+| Runner | `SUCCESS` | deployment `0a6a2303-4bc2-4c20-b156-12ed34e545df` |
+| Scheduler | `SUCCESS` | deployment `6689fdf2-a92e-4af1-808b-6d8068f05ef2` |
+| PostgreSQL | ready | repository candidate head `0027`; deployed staging at canonical `0026` |
 | Public Web | healthy | `/health` 200, `/ready` 200, unauthenticated `/api/v1/principal` 401 |
 
-Web, Runner, and Scheduler all report generation-policy digest
-`b83acb23122de9b4911032738bce136f214a34328357b457935ad821b44b0b18` and the same packaged
-`hosted_policy.py` SHA-256,
-`358c798924adaa50b8321e059d88975856c6e55f19e44faf88b95c5957b47305`.
+These deployments predate the integrated operations candidate. Their exact source commit is not
+authoritatively represented in Railway's local-upload metadata, so service parity must be
+re-established by deploying one reviewed candidate SHA to all three services.
 
 Staging URL: `https://web-staging-8e30.up.railway.app`
 
@@ -92,7 +91,8 @@ credential-generation, synthetic-fixture, canary, cap, lease, and two-person aut
 | Deployment | One Docker artifact; Railway Web, Runner, Scheduler, PostgreSQL; Web-only public ingress |
 | CI/release | GitHub Actions and GitLab CI must both pass; release refs must be identical |
 
-The repository package is now at Alembic `0026`. Migration `0026` adds immutable,
+The repository package is now at Alembic `0027`. Migration `0026` adds durable campaign outcome
+counts; migration `0027` adds immutable,
 organization-scoped prompt snapshots for logical agent executions. Runner can insert/select those
 rows; Web can only select them. Append-only triggers prevent update/delete and enforce run,
 attempt, role, and organization lineage.
