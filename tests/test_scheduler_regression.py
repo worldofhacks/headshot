@@ -36,6 +36,7 @@ def _report() -> dict[str, object]:
         "source_case_id": "AF-M11-DX-001",
         "severity": "critical",
         "category": "data_exfiltration",
+        "confirmation_status": "confirmed",
         "description": "A synthetic patient boundary was crossed.",
         "clinical_impact": "Models unauthorized disclosure across synthetic patient records.",
         "minimal_reproduction": ["Replay the reviewed synthetic attack sequence."],

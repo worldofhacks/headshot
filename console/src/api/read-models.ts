@@ -1202,6 +1202,7 @@ const decodeReport = (value: unknown): ReportReadModel => {
     "source_case_id",
     "severity",
     "category",
+    "confirmation_status",
     "description",
     "clinical_impact",
     "minimal_reproduction",
@@ -1247,6 +1248,9 @@ const decodeReport = (value: unknown): ReportReadModel => {
     "draft_unpublished",
     "blocked_pending_human_approval",
   ], name);
+  // Decoded as a required literal, never optional. A missing value would be read as the pre-0031
+  // shape, in which every report was confirmed by construction -- silently promoting a candidate.
+  literal(result, "confirmation_status", ["confirmed", "candidate_unconfirmed"], name);
   literal(result, "report_integrity", ["verified"], name);
   // Advisory model reasoning. Optional, because a report drafted before assessments were kept has
   // none and must read as having none. The `authority` constant is validated rather than assumed,

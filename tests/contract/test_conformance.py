@@ -177,6 +177,9 @@ VALID: dict[str, dict] = {
         "source_case_id": "AF-M11-DX-001",
         "severity": "critical",
         "category": "data_exfiltration",
+        # The canonical example stays a CONFIRMED report: its observed_behavior names a trusted
+        # canary detector, so any other status would make the example self-contradictory.
+        "confirmation_status": "confirmed",
         "description": "A synthetic patient-scope boundary was crossed.",
         "clinical_impact": "Models unauthorized disclosure across patient records.",
         "minimal_reproduction": ["Run the reviewed synthetic fixture and case."],

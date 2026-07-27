@@ -5736,8 +5736,29 @@ class ControlPlaneStore:
                     raise RecordConflictError("attempt verdict is immutable")
                 verdict_id = existing["id"]
 
+            # A finding is opened for the two states that assert something happened. They are NOT
+            # equal, and the difference is carried by finding.state rather than by presence:
+            #
+            #   EXPLOIT_CONFIRMED -> 'judged'    a deterministic oracle or canary hit. Confirmed.
+            #   EXPLOIT_LIKELY    -> 'candidate' the model's opinion, corroborated by nothing.
+            #
+            # Opening candidates is what makes the human review loop reachable at all. Until this
+            # existed, EXPLOIT_LIKELY produced a verdict row and nothing else: no finding, so the
+            # Findings page was empty, the Documentation agent never ran, and no report existed for
+            # a reviewer to approve. Since EXPLOIT_CONFIRMED requires an oracle hit and no oracle
+            # has ever fired, that meant the entire review-then-approve path was unreachable in
+            # practice -- 20 findings across every run to date, none of them reviewable.
+            #
+            # 'candidate' is the first state of the finding lifecycle and was already defined in
+            # the enum for exactly this purpose. Promotion to 'judged' is a HUMAN decision made
+            # after reading the drafted report; nothing here promotes itself, and migration 0031
+            # forbids a candidate from ever reaching published.
+            finding_state = {
+                "EXPLOIT_CONFIRMED": "judged",
+                "EXPLOIT_LIKELY": "candidate",
+            }.get(state)
             finding_id: str | None = None
-            if state == "EXPLOIT_CONFIRMED":
+            if finding_state is not None:
                 finding_id = hashlib.sha256(
                     f"finding:v1\0{row['organization_id']}\0{run_id}\0{attempt_id}".encode()
                 ).hexdigest()
@@ -5746,12 +5767,14 @@ class ControlPlaneStore:
                         "INSERT INTO finding "
                         "(finding_id, state, severity, category, target_version, "
                         "organization_id, source_kind, execution_profile, published) VALUES "
-                        "(:finding, 'judged'::finding_state, CAST(:severity AS finding_severity), "
+                        "(:finding, CAST(:finding_state AS finding_state), "
+                        "CAST(:severity AS finding_severity), "
                         ":category, :target_version, :org, 'campaign', :profile, false) "
                         "ON CONFLICT (finding_id) DO NOTHING"
                     ),
                     {
                         "finding": finding_id,
+                        "finding_state": finding_state,
                         "severity": row["severity"],
                         "category": row["category"],
                         "target_version": row["target_version"],
@@ -5789,6 +5812,7 @@ class ControlPlaneStore:
                     "verdict": state,
                     "evidence_content_hash": evidence_content_hash,
                     "finding_id": finding_id,
+                    "finding_state": finding_state,
                     "publication_state": "unpublished",
                 },
             )
@@ -6282,9 +6306,10 @@ class ControlPlaneStore:
                     text(
                         "INSERT INTO vuln_reports "
                         "(organization_id, report_id, finding_id, campaign_run_id, attempt_id, "
-                        "reproduction_sha256, status, publication_state, contract_payload) VALUES "
+                        "reproduction_sha256, status, publication_state, confirmation_status, "
+                        "contract_payload) VALUES "
                         "(:org, :report, :finding, :run_id, :attempt_id, :reproduction, :status, "
-                        ":publication, CAST(:payload AS jsonb))"
+                        ":publication, :confirmation_status, CAST(:payload AS jsonb))"
                     ),
                     {
                         "org": organization_id,
@@ -6295,6 +6320,11 @@ class ControlPlaneStore:
                         "reproduction": report_payload["reproduction_sha256"],
                         "status": report_payload["status"],
                         "publication": report_payload["publication_state"],
+                        # Projected from the payload the Documentation agent derived from the
+                        # verdict, never chosen here. Migration 0031 asserts the two agree, so a
+                        # divergence fails the write rather than storing a report whose column and
+                        # payload disagree about whether it is confirmed.
+                        "confirmation_status": report_payload["confirmation_status"],
                         "payload": canonical_json(report_payload),
                     },
                 )

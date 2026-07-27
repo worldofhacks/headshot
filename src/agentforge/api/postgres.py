@@ -730,12 +730,41 @@ def _validated_verdict(row: Mapping[str, Any]) -> dict[str, Any] | None:
 
 
 def _trusted_report_verdict(row: Mapping[str, Any]) -> dict[str, Any]:
-    """Require the durable deterministic Judge basis used by Documentation."""
+    """Require the durable basis a report is entitled to claim, per its verdict state.
+
+    A CONFIRMED report keeps every requirement it always had: a deterministic oracle or canary
+    source, plus durable configured references proving that basis exists. Nothing about that path
+    is relaxed here.
+
+    A CANDIDATE report asserts the opposite — that nothing deterministic corroborates it — so
+    demanding oracle references would be incoherent: there are none, and their absence is the fact
+    the report exists to communicate. What is verified instead is that it claims no more than it
+    earned: the model source, and a payload whose stored ``confirmation_status`` agrees with the
+    verdict state. A candidate that reached this projection labelled ``confirmed`` is an integrity
+    failure, not a rendering detail.
+    """
 
     verdict = _validated_verdict(row)
-    if verdict is None or verdict["state"] != "EXPLOIT_CONFIRMED":
-        raise EvidenceIntegrityError("report requires a confirmed verdict")
+    if verdict is None:
+        raise EvidenceIntegrityError("report requires a verdict")
+    state = verdict["state"]
     confirmation_source = verdict.get("confirmation_source")
+    payload = row.get("report_payload")
+    declared = payload.get("confirmation_status") if isinstance(payload, Mapping) else None
+
+    if state == "EXPLOIT_LIKELY":
+        if confirmation_source != "calibrated_model":
+            raise EvidenceIntegrityError("candidate report source is not the model evaluator")
+        if declared != "candidate_unconfirmed":
+            raise EvidenceIntegrityError("candidate report does not declare itself unconfirmed")
+        if row.get("confirmation_status") != "candidate_unconfirmed":
+            raise EvidenceIntegrityError("candidate report column and payload disagree")
+        return verdict
+
+    if state != "EXPLOIT_CONFIRMED":
+        raise EvidenceIntegrityError("report requires a confirmed or candidate verdict")
+    if declared is not None and declared != "confirmed":
+        raise EvidenceIntegrityError("confirmed report declares a conflicting status")
     if confirmation_source not in {"oracle", "canary"}:
         raise EvidenceIntegrityError("report verdict source is not deterministic")
     reference_key = (
@@ -755,8 +784,13 @@ def _validated_finding_lineage(row: Mapping[str, Any]) -> dict[str, Any]:
     """Reconcile a campaign finding with its attempt, case, evidence, and Judge record."""
 
     verdict = _validated_verdict(row)
-    if verdict is None or verdict["state"] != "EXPLOIT_CONFIRMED":
-        raise EvidenceIntegrityError("finding requires a confirmed verdict")
+    # A candidate finding is admitted so a reviewer can see it at all -- an EXPLOIT_LIKELY that
+    # never reaches the Findings page cannot be reviewed, and review must precede approval. The
+    # lineage bindings below are unchanged and apply identically to both: a candidate is held to
+    # the same evidence-correlation standard as a confirmed finding, and differs only in what it
+    # is permitted to CLAIM, which finding.state carries.
+    if verdict is None or verdict["state"] not in {"EXPLOIT_CONFIRMED", "EXPLOIT_LIKELY"}:
+        raise EvidenceIntegrityError("finding requires a confirmed or candidate verdict")
     if row.get("finding_source_kind") != "campaign":
         raise EvidenceIntegrityError("finding source kind differs from campaign lineage")
     bindings = (
@@ -3899,6 +3933,7 @@ class PostgresApiBackend(ApiBackend):
                         "v.criteria_hits AS verdict_criteria_hits, "
                         "v.error_code AS verdict_error_code, "
                         "vr.report_id AS vuln_report_id, vr.contract_payload AS report_payload, "
+                        "vr.confirmation_status AS confirmation_status, "
                         "rd.contract_payload AS regression_payload, "
                         "l.evidence_content_hash, l.provenance AS linked_provenance "
                         "FROM finding f JOIN finding_evidence_links l "
@@ -4112,6 +4147,7 @@ class PostgresApiBackend(ApiBackend):
                         "v.criteria_hits AS verdict_criteria_hits, "
                         "v.error_code AS verdict_error_code, "
                         "vr.report_id AS vuln_report_id, vr.contract_payload AS report_payload, "
+                        "vr.confirmation_status AS confirmation_status, "
                         "vr.created_at AS report_created_at, "
                         "rd.contract_payload AS regression_payload, "
                         "l.evidence_content_hash, l.provenance AS linked_provenance "

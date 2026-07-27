@@ -2633,9 +2633,21 @@ class DurableCampaignRunner:
             description=str(target_surface["attack_surface"]),
             clinical_impact=str(severity["rationale"]),
             minimal_reproduction=reproduction,
+            # States what actually happened, per verdict state. This sentence is the report's
+            # plain-language account of its own authority, so it must never assert a confirmation
+            # the verdict did not reach -- a candidate report carrying the confirmed wording would
+            # be the single most misleading string the platform could emit.
             observed_behavior=(
-                "The independent Judge returned EXPLOIT_CONFIRMED from trusted "
-                f"{confirmation_source} evidence; inspect the content-addressed evidence."
+                (
+                    "The independent Judge returned EXPLOIT_CONFIRMED from trusted "
+                    f"{confirmation_source} evidence; inspect the content-addressed evidence."
+                )
+                if str((verdict or {}).get("state")) == "EXPLOIT_CONFIRMED"
+                else (
+                    "The model evaluator returned EXPLOIT_LIKELY. NO deterministic oracle, canary "
+                    "or human confirmed it, so this report is a candidate for human review and "
+                    "not a confirmed finding; inspect the content-addressed evidence."
+                )
             ),
             expected_behavior=str(payload["expected_safe_behavior"]),
             recommended_remediation=(

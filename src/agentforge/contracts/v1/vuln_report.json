@@ -3,7 +3,7 @@
   "$id": "agentforge/contracts/v1/vuln_report",
   "title": "VulnReport",
   "version": "1",
-  "description": "Documentation Agent draft output. It is generated only from a schema-valid EXPLOIT_CONFIRMED Verdict plus approved sanitized evidence references. This contract is intentionally draft-only; publication is a separate human-authorized boundary.",
+  "description": "Documentation Agent draft output. It is generated from a schema-valid EXPLOIT_CONFIRMED or EXPLOIT_LIKELY Verdict plus approved sanitized evidence references, and confirmation_status states which. A report exists so a human can READ the evidence before deciding; it is not itself a claim that the finding is confirmed. This contract is intentionally draft-only; publication is a separate human-authorized boundary, and a candidate_unconfirmed report can never be published at all.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -15,6 +15,7 @@
     "source_case_id",
     "severity",
     "category",
+    "confirmation_status",
     "description",
     "clinical_impact",
     "minimal_reproduction",
@@ -36,6 +37,10 @@
     "source_case_id": { "type": "string", "minLength": 1, "maxLength": 120 },
     "severity": { "enum": ["low", "medium", "high", "critical"] },
     "category": { "type": "string", "minLength": 1, "maxLength": 120 },
+    "confirmation_status": {
+      "enum": ["confirmed", "candidate_unconfirmed"],
+      "description": "Whether a deterministic oracle, canary or human confirmed this finding, or whether it rests solely on the model evaluator's opinion. 'confirmed' corresponds to an EXPLOIT_CONFIRMED verdict and a finding in state 'judged'. 'candidate_unconfirmed' corresponds to EXPLOIT_LIKELY and a finding in state 'candidate' — it means a reviewer has NOT yet accepted it and no deterministic signal corroborates it. Required, and duplicated into the stored column so the database constrains it: a candidate_unconfirmed report is permanently blocked_pending_human_approval and can never be published."
+    },
     "description": { "type": "string", "minLength": 1, "maxLength": 4000 },
     "clinical_impact": { "type": "string", "minLength": 1, "maxLength": 4000 },
     "minimal_reproduction": {
@@ -100,6 +105,19 @@
         "properties": {
           "publication_state": { "const": "blocked_pending_human_approval" }
         }
+      }
+    },
+    {
+      "if": {
+        "properties": { "confirmation_status": { "const": "candidate_unconfirmed" } },
+        "required": ["confirmation_status"]
+      },
+      "then": {
+        "properties": {
+          "publication_state": { "const": "blocked_pending_human_approval" },
+          "status": { "const": "draft" }
+        },
+        "required": ["model_assessment"]
       }
     }
   ],

@@ -15,8 +15,8 @@ PostgreSQL is a fourth private managed service.
 - The canonical chain is `0025` reviewed workload provenance → `0026` campaign outcome breakdown →
   `0027` immutable prompt snapshots → `0028` bounded provider response evidence → `0029` the
   evaluator rationale carried on the verdict it produced → `0030` that reasoning reaching
-  vulnerability reports. Candidate,
-  packaged, and deployed heads are three different facts and are not interchangeable.
+  vulnerability reports → `0031` a reviewable report for an unconfirmed candidate finding.
+  Candidate, packaged, and deployed heads are three different facts and are not interchangeable.
 - Web, Runner, and Scheduler must expose the same hosted generation-policy digest and packaged policy
   file hash before new campaign authorization is minted.
 - Staging currently satisfies that policy parity. Production does not; see

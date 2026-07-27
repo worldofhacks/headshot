@@ -103,6 +103,7 @@ class DocumentationAgent:
 
         report_id = self._report_id(report_input.finding_id)
         report_key = (report_input.organization_id, report_id)
+        confirmation_status = self._confirmation_status(verdict)
         report: dict[str, Any] = {
             "schema_version": "1",
             "report_id": report_id,
@@ -112,6 +113,7 @@ class DocumentationAgent:
             "source_case_id": report_input.source_case_id,
             "severity": report_input.severity,
             "category": report_input.category,
+            "confirmation_status": confirmation_status,
             "description": report_input.description,
             "clinical_impact": report_input.clinical_impact,
             "minimal_reproduction": list(steps),
@@ -127,9 +129,13 @@ class DocumentationAgent:
                 "evidence_references": [],
             },
             "evidence_references": list(report_input.evidence_references),
+            # An unconfirmed candidate is blocked regardless of severity: nothing corroborates it,
+            # so there is no severity at which it may be publishable. The critical-severity rule is
+            # unchanged and still applies independently to confirmed reports.
             "publication_state": (
                 "blocked_pending_human_approval"
-                if report_input.severity == "critical"
+                if confirmation_status == "candidate_unconfirmed"
+                or report_input.severity == "critical"
                 else "draft_unpublished"
             ),
         }
@@ -168,8 +174,21 @@ class DocumentationAgent:
         ):
             raise DocumentationInputError("verdict/report correlation mismatch; refusing to draft")
 
-    @staticmethod
-    def _validate_verdict(verdict: Mapping[str, Any]) -> None:
+    # Which verdict states may be documented, and what a report drafted from each is ALLOWED to
+    # claim. The mapping is the single place the two are tied together, so a report can never
+    # assert a confirmation its verdict did not earn.
+    #
+    # EXPLOIT_LIKELY is admitted because a reviewer cannot approve what they cannot read. It is NOT
+    # admitted as an equal: it must carry a calibrated_model source and is stamped
+    # candidate_unconfirmed, which the contract and migration 0031 both bind to a permanently
+    # unpublishable report.
+    _DOCUMENTABLE_STATES: dict[str, tuple[frozenset[str], str]] = {
+        "EXPLOIT_CONFIRMED": (frozenset({"oracle", "canary", "human"}), "confirmed"),
+        "EXPLOIT_LIKELY": (frozenset({"calibrated_model"}), "candidate_unconfirmed"),
+    }
+
+    @classmethod
+    def _validate_verdict(cls, verdict: Mapping[str, Any]) -> None:
         try:
             candidate = dict(verdict)
             validate("verdict", candidate)
@@ -177,10 +196,32 @@ class DocumentationAgent:
             raise DocumentationInputError(
                 f"input fails the verdict contract; refusing to draft: {exc}"
             ) from exc
-        if candidate["state"] != "EXPLOIT_CONFIRMED":
-            raise DocumentationInputError("only a confirmed exploit may enter Documentation")
-        if candidate.get("confirmation_source") not in {"oracle", "canary", "human"}:
-            raise DocumentationInputError("confirmed verdict lacks a trusted confirmation source")
+        state = candidate["state"]
+        allowed = cls._DOCUMENTABLE_STATES.get(state)
+        if allowed is None:
+            raise DocumentationInputError(
+                "only a confirmed or likely exploit may enter Documentation"
+            )
+        trusted_sources, _status = allowed
+        if candidate.get("confirmation_source") not in trusted_sources:
+            # Cross-checked per state rather than globally: a confirmed verdict claiming
+            # calibrated_model, or a likely one claiming oracle, is a mislabelled authority and
+            # must fail closed rather than produce a report that overstates or understates itself.
+            raise DocumentationInputError(
+                "verdict confirmation source does not match its state; refusing to draft"
+            )
+
+    @classmethod
+    def _confirmation_status(cls, verdict: Mapping[str, Any]) -> str:
+        """Derive the report's confirmation status from the verdict alone.
+
+        Deliberately not a ``DocumentationInput`` field. The caller supplies sanitized narrative
+        material; it does not get to say whether the finding is confirmed. That fact belongs to the
+        verdict, and reading it from there is what makes mislabelling structurally impossible
+        rather than merely discouraged.
+        """
+
+        return cls._DOCUMENTABLE_STATES[verdict["state"]][1]
 
     @classmethod
     def _validate_input(cls, value: DocumentationInput) -> None:

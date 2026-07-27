@@ -348,6 +348,10 @@ export interface ReportReadModel extends JsonRecord {
   source_case_id: string;
   severity: "low" | "medium" | "high" | "critical";
   category: string;
+  /** Whether a deterministic oracle, canary or human confirmed this finding, or whether it rests
+   *  solely on the model evaluator. A candidate_unconfirmed report has NOT been accepted by a
+   *  reviewer and is permanently blocked from publication. */
+  confirmation_status: "confirmed" | "candidate_unconfirmed";
   description: string;
   clinical_impact: string;
   minimal_reproduction: string[];

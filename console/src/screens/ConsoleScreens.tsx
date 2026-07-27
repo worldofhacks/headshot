@@ -1645,6 +1645,7 @@ export function ReportsScreen({ client, entityId }: ScreenProps) {
               "source_case_id",
               "severity",
               "category",
+              "confirmation_status",
               "status",
               "publication_state",
               "report_integrity",
@@ -1652,6 +1653,19 @@ export function ReportsScreen({ client, entityId }: ScreenProps) {
               "created_at",
             ]}
           />
+          {/* First thing under the header, before any narrative. A reviewer must know whether they
+              are reading a corroborated finding or an unreviewed model opinion BEFORE they read
+              the description that argues for it. */}
+          {selected.confirmation_status === "candidate_unconfirmed" && (
+            <div className="candidate-banner">
+              <p className="field-label">Candidate · not confirmed</p>
+              <AdversarialText>
+                {"No deterministic oracle, canary or human has corroborated this finding. It rests "
+                  + "solely on the model evaluator's assessment and is awaiting your review. It "
+                  + "cannot be published while it remains a candidate."}
+              </AdversarialText>
+            </div>
+          )}
           {[
             ["Description", selected.description],
             ["Clinical impact", selected.clinical_impact],

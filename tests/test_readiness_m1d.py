@@ -13,7 +13,7 @@ def test_integrated_alembic_head_is_the_single_forward_revision() -> None:
     # 0025 admits the six supported case categories and records reviewed-workload provenance.
     # 0026 adds campaign outcome breakdowns; 0027 adds protected, immutable prompt evidence;
     # 0028 adds the bounded, append-only provider response recorded per physical call.
-    assert expected_alembic_head() == "0030"
+    assert expected_alembic_head() == "0031"
 
 
 def test_database_schema_ready_accepts_migrated_integrated_head(migrated_db) -> None:

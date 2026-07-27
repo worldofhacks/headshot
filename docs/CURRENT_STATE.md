@@ -7,7 +7,7 @@
 **Repository parity at the latest read-only check:** `origin/main == gitlab/main == d6136ff`
 (2026-07-27, immediately before this candidate was pushed)
 
-**Packaged schema:** sole Alembic head `0030`; the verified staging database is at canonical `0026`
+**Packaged schema:** sole Alembic head `0031`; the verified staging database is at canonical `0026`
 before this candidate is deployed
 
 **Canonical requirements:** [`Week_3_AgentForge.pdf`](../Week_3_AgentForge.pdf)
@@ -46,7 +46,7 @@ occurred.
 | Web | `SUCCESS` | deployment `74d39043-7ef8-410e-963d-e7aee107ec13` |
 | Runner | `SUCCESS` | deployment `0a6a2303-4bc2-4c20-b156-12ed34e545df` |
 | Scheduler | `SUCCESS` | deployment `6689fdf2-a92e-4af1-808b-6d8068f05ef2` |
-| PostgreSQL | ready | repository candidate head `0030`; deployed staging at canonical `0026` |
+| PostgreSQL | ready | repository candidate head `0031`; deployed staging at canonical `0026` |
 | Public Web | healthy | `/health` 200, `/ready` 200, unauthenticated `/api/v1/principal` 401 |
 
 This table is the pre-candidate baseline: these deployment IDs predate the provider-call
@@ -100,7 +100,7 @@ credential-generation, synthetic-fixture, canary, cap, lease, and two-person aut
 | Deployment | One Docker artifact; Railway Web, Runner, Scheduler, PostgreSQL; Web-only public ingress |
 | CI/release | GitHub Actions and GitLab CI must both pass; release refs must be identical |
 
-The repository package is now at Alembic `0030`. Migration `0026` adds durable campaign outcome
+The repository package is now at Alembic `0031`. Migration `0026` adds durable campaign outcome
 counts; migration `0027` adds immutable,
 organization-scoped prompt snapshots for logical agent executions. Runner can insert/select those
 rows; Web can only select them. Append-only triggers prevent update/delete and enforce run,

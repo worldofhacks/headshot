@@ -651,6 +651,10 @@ class ReportReadModel(_ReadModel):
     source_case_id: str
     severity: Literal["low", "medium", "high", "critical"]
     category: str
+    # Required, never defaulted. A consumer that saw this key absent would fall back to the
+    # pre-0031 shape, in which every report was confirmed by construction -- silently promoting an
+    # unconfirmed candidate. Making it mandatory forces the distinction to travel with the report.
+    confirmation_status: Literal["confirmed", "candidate_unconfirmed"]
     description: str
     clinical_impact: str
     minimal_reproduction: tuple[str, ...]

@@ -659,6 +659,24 @@
   margin: 0.25rem 0 0.75rem;
 }
 
+/* An unconfirmed candidate must not read like a confirmed finding at a glance. Deliberately a
+   warning hue rather than the informational accent used for the advisory assessment: the two say
+   different things, and a reviewer skimming should be able to tell them apart without reading. */
+.candidate-banner {
+  border-left: 3px solid var(--warning, #e0a458);
+  background: color-mix(in srgb, var(--warning, #e0a458) 8%, transparent);
+  padding: 0.6rem 0.75rem;
+  margin: 0.5rem 0 1rem;
+  border-radius: 0 4px 4px 0;
+}
+
+.candidate-banner .field-label {
+  color: var(--warning, #e0a458);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
 .judge-rationale-verdict {
   font-weight: 600;
   margin: 0 0 0.35rem;

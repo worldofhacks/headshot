@@ -258,6 +258,7 @@ const validResources: Array<[string, (value: unknown) => unknown, unknown]> = [
       source_case_id: "case-1",
       severity: "high",
       category: "prompt_injection",
+      confirmation_status: "confirmed",
       description: "A verified synthetic finding.",
       clinical_impact: "Synthetic clinical scope crossed.",
       minimal_reproduction: ["Submit the redacted input."],
@@ -1851,5 +1852,24 @@ describe("v1 read-model decoders", () => {
       ...snapshot,
       agent_activity: [{ ...terminal, duration_ms: null }],
     })).toThrow("Invalid Birdseye agent activity read model");
+  });
+
+  it("refuses a report that omits or misstates its confirmation status", () => {
+    const [, , fixture] = validResources.find(([name]) => name === "reports")!;
+    const report = (fixture as Array<Record<string, unknown>>)[0];
+
+    // A candidate is decodable — it is the whole point of the field.
+    expect(decodeReports([{ ...report, confirmation_status: "candidate_unconfirmed" }]))
+      .toEqual([{ ...report, confirmation_status: "candidate_unconfirmed" }]);
+
+    // Absent is refused rather than defaulted. Defaulting would resolve to the pre-0031 shape,
+    // in which every report was confirmed, silently promoting an unreviewed candidate.
+    const { confirmation_status: _omitted, ...withoutStatus } = report;
+    expect(() => decodeReports([withoutStatus])).toThrow("Invalid report read model");
+
+    // And an unrecognised value is refused rather than passed through to the UI, which would
+    // render neither the confirmed nor the candidate treatment.
+    expect(() => decodeReports([{ ...report, confirmation_status: "probably" }]))
+      .toThrow("Invalid report read model");
   });
 });

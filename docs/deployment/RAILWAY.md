@@ -31,7 +31,7 @@ Staging:
 - their packaged `hosted_policy.py` SHA-256 is identical;
 - PostgreSQL must be verified by revision and schema shape: canonical `0026` adds campaign
   outcomes, `0027` adds immutable prompt snapshots, `0028` adds bounded provider response
-  evidence columns on `provider_call_events`, `0029` adds the evaluator rationale to `verdict`, and `0030` lets that reasoning reach
+  evidence columns on `provider_call_events`, `0029` adds the evaluator rationale to `verdict`, `0030` lets that reasoning reach
   vulnerability reports;
 - `/health` and `/ready` return 200; and
 - unauthenticated `/api/v1/principal` returns 401.
@@ -57,7 +57,7 @@ All services build `Dockerfile`. The runtime image contains:
 Only `railway/web.json` declares `alembic upgrade head`. Runner and Scheduler call an exact-head
 readiness check before consuming/enqueuing work. The canonical repository chain is `0025` reviewed
 workload provenance → `0026` campaign outcome breakdown → `0027` immutable prompt snapshots →
-`0028` physical provider response evidence → `0029` verdict evaluator rationale → `0030` advisory reasoning in reports. Never hard-code a
+`0028` physical provider response evidence → `0029` verdict evaluator rationale → `0030` advisory reasoning in reports → `0031` reviewable reports for unconfirmed candidate findings. Never hard-code a
 revision into automation that should
 derive the packaged or deployed head.
 

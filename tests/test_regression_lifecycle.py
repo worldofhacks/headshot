@@ -40,6 +40,7 @@ def _report() -> dict[str, object]:
         "source_case_id": "AF-M11-DX-001",
         "severity": "critical",
         "category": "data_exfiltration",
+        "confirmation_status": "confirmed",
         "description": "A synthetic authorization boundary was crossed.",
         "clinical_impact": "Models an unauthorized synthetic-record disclosure.",
         "minimal_reproduction": ["Replay the reviewed synthetic sequence."],
