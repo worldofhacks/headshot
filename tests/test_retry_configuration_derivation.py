@@ -317,9 +317,11 @@ def test_expensive_prices_are_refused_instead_of_silently_widening_the_ceiling()
         )
         for role in costly.roles
     )
-    problems = check(derive(dataclasses.replace(costly, roles=roles), _BATCH_01))
-    assert problems
-    assert any("spend ceiling" in problem or "cap" in problem for problem in problems)
+    # The derivation REFUSES rather than emitting a configuration whose cap exceeds the reviewed
+    # platform ceiling — a cap that large cannot even be constructed, and silently trimming it
+    # would under-authorize a run that will overspend.
+    with pytest.raises(DerivationRefused, match="exceeds the reviewed platform"):
+        derive(dataclasses.replace(costly, roles=roles), _BATCH_01)
 
 
 def test_an_oversized_workload_is_refused_rather_than_rounded_up(derivation) -> None:
