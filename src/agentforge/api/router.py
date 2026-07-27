@@ -473,6 +473,20 @@ def provider_call_evidence(
     )
 
 
+@router.get("/target-calls/{request_id}/evidence")
+def target_call_evidence(
+    request: Request,
+    request_id: str,
+    principal: EvidencePrincipal,
+) -> JSONResponse:
+    return _read(
+        request,
+        "target_call_evidence",
+        principal,
+        {"request_id": request_id},
+    )
+
+
 @router.get("/targets")
 def targets(request: Request, principal: ConsolePrincipal) -> JSONResponse:
     return _read(request, "targets", principal)

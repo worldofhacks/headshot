@@ -56,6 +56,7 @@ import type {
   ReportReadModel,
   ResilienceReadModel,
   SafetyCapsReadModel,
+  TargetCallEvidenceReadModel,
   TargetCatalogEntryReadModel,
   TargetReadModel,
   ToolScopeReadModel,
@@ -3074,6 +3075,67 @@ export const decodeProviderCallEvidence: ReadModelDecoder<ProviderCallEvidenceRe
     ? null
     : decodeProviderCallEvidenceResponse(result.response);
   return result as ProviderCallEvidenceReadModel;
+};
+
+/**
+ * Exact recorded target payload. Unlike `nullableString` an empty payload is a legitimate
+ * recorded value, so "" decodes rather than failing; only a non-string, a NUL-bearing string, or
+ * an over-bound string is rejected. The payload is never repaired, truncated or reconstructed
+ * here — a value that fails the bound is refused outright.
+ */
+const nullableTargetPayload = (
+  value: JsonRecord,
+  key: string,
+  name: string,
+): string | null => {
+  const candidate = value[key];
+  if (candidate === null) return null;
+  if (
+    typeof candidate !== "string"
+    || candidate.includes("\u0000")
+    || utf8Length(candidate) > 1_048_576
+  ) return invalid(name);
+  return candidate;
+};
+
+export const decodeTargetCallEvidence: ReadModelDecoder<TargetCallEvidenceReadModel> = (
+  value,
+) => {
+  const name = "target call evidence";
+  const result = record(value, name);
+  exactKeys(result, [
+    "request_id",
+    "campaign_id",
+    "attempt_id",
+    "operation",
+    "method",
+    "destination_host",
+    "relative_path",
+    "status",
+    "status_code",
+    "error_code",
+    "duration_ms",
+    "started_at",
+    "request_payload",
+    "response_payload",
+  ], name);
+  for (const key of ["request_id", "campaign_id", "operation", "status"]) {
+    string(result, key, name);
+  }
+  for (const key of [
+    "attempt_id",
+    "method",
+    "destination_host",
+    "relative_path",
+    "error_code",
+  ]) nullableString(result, key, name);
+  nullableNonnegativeInteger(result, "status_code", name);
+  const durationMs = nullableNumber(result, "duration_ms", name);
+  if (durationMs !== null && durationMs < 0) invalid(name);
+  timestamp(result, "started_at", name);
+  result.request_payload = nullableTargetPayload(result, "request_payload", name);
+  result.response_payload = nullableTargetPayload(result, "response_payload", name);
+  return result as TargetCallEvidenceReadModel;
 };
 
 const decodeAgentActivityRecord = (value: unknown): AgentActivityReadModel => {

@@ -1780,6 +1780,59 @@ class ProviderCallEvidenceReadModel(_ReadModel):
     response: ProviderCallEvidenceResponseReadModel | None = None
 
 
+class TargetCallEvidenceReadModel(_ReadModel):
+    """One physical TARGET call's exact sent request body and its exact received response.
+
+    This is the target-side twin of :class:`ProviderCallEvidenceReadModel`.  That one answers
+    "what did we say to the model provider"; this one answers "what did we actually attack the
+    target with, and what did it say back".  The aggregate ``traces`` projection derives only
+    bounded previews and inspection flags from the same two columns and deliberately never
+    serves them, so this resource is the ONLY place the exact bytes are disclosed -- and it is
+    gated on ``org:evidence:read`` for the resource as a whole, before any row is read.
+
+    Both payload members are nullable and are NEVER reconstructed.  ``None`` means the column
+    held no payload; it never means "we could not render it", and a partial or synthesised
+    stand-in is never substituted, because an operator reasoning about an attack has to be able
+    to trust that what they are reading is what was sent.
+
+    ``request_payload`` is serialised from the JSONB column with sorted keys so one row always
+    renders identically; ``response_payload`` is stored as text and is passed through byte-for
+    -byte.  Neither is length-bounded here: unlike a provider response there is no storage
+    bound to mirror, and silently trimming evidence is worse than serving it whole.
+
+    Clinical content in these payloads is synthetic by construction (no real PHI ever reaches a
+    target) and is deliberately served UNMANGLED -- the synthetic patient identifiers and canary
+    markers ARE the attack.  Credentials are the one thing that must not survive, so the
+    projection runs ``screen_credentials`` over both payloads and the validator below enforces
+    that screen rather than trusting it.
+    """
+
+    request_id: str = Field(min_length=1, max_length=64)
+    campaign_id: str = Field(min_length=1, max_length=64)
+    attempt_id: str | None = Field(default=None, min_length=1, max_length=64)
+    operation: str = Field(min_length=1, max_length=64)
+    method: str | None = Field(default=None, min_length=1, max_length=16)
+    destination_host: str | None = Field(default=None, min_length=1, max_length=255)
+    relative_path: str | None = Field(default=None, max_length=1024)
+    status: str = Field(min_length=1, max_length=16)
+    status_code: int | None = None
+    error_code: str | None = Field(default=None, min_length=1, max_length=64)
+    duration_ms: float | None = Field(default=None, ge=0)
+    started_at: datetime.datetime
+    request_payload: str | None = None
+    response_payload: str | None = None
+
+    @model_validator(mode="after")
+    def validate_payloads_are_credential_free(self) -> Self:
+        for label, payload in (
+            ("request", self.request_payload),
+            ("response", self.response_payload),
+        ):
+            if payload is not None and screen_credentials(payload) != payload:
+                raise ValueError(f"target {label} payload still contains a credential")
+        return self
+
+
 class AgentActivityReadModel(_ReadModel):
     execution_id: str
     campaign_run_id: str
@@ -2296,6 +2349,7 @@ _SINGLE_ADAPTERS = {
     "agent_prompt": TypeAdapter(AgentPromptReadModel),
     "agent_prompt_snapshot": TypeAdapter(AgentPromptSnapshotReadModel),
     "provider_call_evidence": TypeAdapter(ProviderCallEvidenceReadModel),
+    "target_call_evidence": TypeAdapter(TargetCallEvidenceReadModel),
     "configuration": TypeAdapter(ConfigurationReadModel),
     "birdseye": TypeAdapter(BirdseyeSnapshotReadModel),
 }
@@ -2366,6 +2420,7 @@ __all__ = [
     "ReportReadModel",
     "ResilienceReadModel",
     "SurfaceReadModel",
+    "TargetCallEvidenceReadModel",
     "TargetCatalogEntryReadModel",
     "TargetReadModel",
     "ToolScopeReadModel",

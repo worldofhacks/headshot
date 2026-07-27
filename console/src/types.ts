@@ -559,6 +559,28 @@ export interface ProviderCallEvidenceReadModel extends JsonRecord {
   response: ProviderCallEvidenceResponseReadModel | null;
 }
 
+/**
+ * Evidence-gated, single target call: the exact payload Headshot sent to the target under test
+ * and the exact payload the target returned. Both members are `null` when the durable record
+ * holds no payload — a payload is never synthesised or reconstructed for display.
+ */
+export interface TargetCallEvidenceReadModel extends JsonRecord {
+  request_id: string;
+  campaign_id: string;
+  attempt_id: string | null;
+  operation: string;
+  method: string | null;
+  destination_host: string | null;
+  relative_path: string | null;
+  status: string;
+  status_code: number | null;
+  error_code: string | null;
+  duration_ms: number | null;
+  started_at: string;
+  request_payload: string | null;
+  response_payload: string | null;
+}
+
 export interface CostReadModel extends JsonRecord {
   accounting_id: string;
   campaign_id: string;

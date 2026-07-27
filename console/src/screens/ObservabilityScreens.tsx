@@ -1,11 +1,12 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 
-import type { ApiClient } from "../api/client";
+import { ApiClientError, type ApiClient } from "../api/client";
 import type { Principal, ResourceResult } from "../api/contracts";
 import { RESOURCE_PATHS } from "../api/paths";
 import {
   decodeCosts,
   decodeProviderCalls,
+  decodeTargetCallEvidence,
   decodeTraces,
 } from "../api/read-models";
 import { AdversarialText } from "../components/AdversarialText";
@@ -35,8 +36,10 @@ import type {
   AgentBudgetReadModel,
   CostReadModel,
   ProviderCallReadModel,
+  TargetCallEvidenceReadModel,
   TraceReadModel,
 } from "../types";
+import { PERMISSIONS } from "../types";
 
 const sum = (values: number[]) => values.reduce((total, value) => total + value, 0);
 const knownCost = (value: number | null) => value ?? 0;
@@ -126,6 +129,19 @@ const physicalRequests = (traces: TraceReadModel[]) => {
 
 const agentObservations = (traces: TraceReadModel[]) =>
   traces.filter((trace) => trace.agent_role !== null);
+
+/**
+ * A row that records an outbound HTTP call Headshot made to the target under test. Agent and
+ * provider observations are excluded deliberately: they carry their own permission-gated prompt
+ * and response disclosure, and pairing a second one with them would misattribute an agent prompt
+ * as an attack payload.
+ */
+const isTargetCall = (trace: TraceReadModel): boolean => (
+  trace.agent_role === null
+  && trace.request_id !== null
+  && trace.method !== null
+  && trace.destination_host !== null
+);
 
 const liveObservations = (traces: TraceReadModel[]) =>
   traces.filter((trace) => (
@@ -432,16 +448,167 @@ function TraceDetails({ trace }: { trace: TraceReadModel }) {
   );
 }
 
+type TargetCallEvidenceState =
+  | { status: "idle" }
+  | { status: "loading" }
+  | { status: "ready"; evidence: TargetCallEvidenceReadModel }
+  | { status: "unavailable"; detail: string }
+  | { status: "error"; reason: string };
+
+/**
+ * Collapsed, permission-gated disclosure of the exact payload sent to the target and the exact
+ * payload it returned for one outbound call. The read is issued on the first expand only and the
+ * result is cached for the lifetime of the row, so collapsing and re-expanding never re-reads
+ * evidence. Nothing here is reconstructed: a payload the durable record does not hold is reported
+ * as not recorded.
+ */
+export function TargetCallEvidenceDisclosure({
+  trace,
+  client,
+  principal,
+}: {
+  trace: TraceReadModel;
+  client?: ApiClient;
+  principal?: Principal;
+}) {
+  const [state, setState] = useState<TargetCallEvidenceState>({ status: "idle" });
+  const requested = useRef(false);
+  const requestId = trace.request_id;
+
+  if (requestId === null) return null;
+  if (client === undefined || principal === undefined) {
+    return (
+      <p className="data-note target-call-evidence-note">
+        The exact request and response payloads for this target call are unavailable here: this
+        view was rendered without an authenticated client and organization principal, so no
+        evidence read can be authorized.
+      </p>
+    );
+  }
+  if (!principal.organization_permissions.includes(PERMISSIONS.evidenceRead)) {
+    return (
+      <StateNotice
+        state="unavailable"
+        detail="The exact attack payload sent to the target and the target's response require the org:evidence:read permission."
+      />
+    );
+  }
+
+  const load = async () => {
+    if (requested.current) return;
+    requested.current = true;
+    setState({ status: "loading" });
+    try {
+      const envelope = await client.read<unknown>(
+        RESOURCE_PATHS.targetCallEvidence(requestId),
+      );
+      if (
+        !["ready", "stale", "degraded"].includes(envelope.state)
+        || envelope.data === null
+      ) {
+        setState({
+          status: "unavailable",
+          detail: envelope.detail
+            ?? envelope.reason_code
+            ?? "The server returned no evidence record for this target call.",
+        });
+        return;
+      }
+      const evidence = decodeTargetCallEvidence(envelope.data);
+      if (
+        evidence.request_id !== requestId
+        || evidence.campaign_id !== trace.campaign_id
+      ) {
+        setState({ status: "error", reason: "evidence_identity_mismatch" });
+        return;
+      }
+      setState({ status: "ready", evidence });
+    } catch (error: unknown) {
+      setState({
+        status: "error",
+        reason: error instanceof ApiClientError ? error.code : "invalid_response_contract",
+      });
+    }
+  };
+
+  return (
+    <ExpandableEvidence
+      title="Attack prompt & target response"
+      meta={`${trace.method ?? "HTTP"} · request ${shortId(requestId)} · permission-gated`}
+      onToggle={(open) => {
+        if (open) void load();
+      }}
+    >
+      {state.status === "idle" && (
+        <p className="data-note target-call-evidence-note">
+          Expand to request the exact payload that was sent to the target and the exact payload the
+          target returned for this call.
+        </p>
+      )}
+      {state.status === "loading" && (
+        <StateNotice
+          state="loading"
+          detail="Waiting for an authenticated server response."
+        />
+      )}
+      {state.status === "unavailable" && (
+        <StateNotice state="unavailable" detail={state.detail} />
+      )}
+      {state.status === "error" && (
+        <StateNotice
+          state="error"
+          reason={state.reason}
+          detail="The recorded request and response payloads could not be read for this target call. Reload the view to request them again."
+        />
+      )}
+      {state.status === "ready" && (
+        <div className="evidence-stack target-call-evidence">
+          <div>
+            <p className="field-label">Sent to target · exact request payload</p>
+            {state.evidence.request_payload === null
+              ? (
+                <StateNotice
+                  state="empty"
+                  detail="No request payload was recorded for this target call."
+                />
+              )
+              : <AdversarialText>{state.evidence.request_payload}</AdversarialText>}
+          </div>
+          <div>
+            <p className="field-label">Returned by target · exact response payload</p>
+            {state.evidence.response_payload === null
+              ? (
+                <StateNotice
+                  state="empty"
+                  detail="No response payload was recorded for this target call."
+                />
+              )
+              : <AdversarialText>{state.evidence.response_payload}</AdversarialText>}
+          </div>
+          <p className="data-note">
+            Both payloads are the exact bytes recorded on the outbound call, credential-screened on
+            the way out. Neither is reconstructed, and neither is used to reach a verdict.
+          </p>
+        </div>
+      )}
+    </ExpandableEvidence>
+  );
+}
+
 function TraceLedger({
   traces,
   selected,
   onSelect,
   label,
+  client,
+  principal,
 }: {
   traces: TraceReadModel[];
   selected: TraceReadModel | undefined;
   onSelect?: (identity: string) => void;
   label: string;
+  client?: ApiClient;
+  principal?: Principal;
 }) {
   const visible = traces.slice(0, 25);
   return (
@@ -465,19 +632,31 @@ function TraceLedger({
             </>
           );
           const className = `trace-list-row ${selected && traceIdentity(selected) === traceIdentity(trace) ? "active" : ""}`;
-          return onSelect ? (
+          const row = onSelect ? (
             <button
               type="button"
-              role="listitem"
               className={className}
-              key={traceIdentity(trace)}
               onClick={() => onSelect(traceIdentity(trace))}
             >
               {content}
             </button>
           ) : (
-            <div role="listitem" className={className} key={traceIdentity(trace)}>
-              {content}
+            <div className={className}>{content}</div>
+          );
+          // The row identity keys the entry, so a poll refresh that reorders the ledger moves the
+          // disclosure with its row and preserves any evidence already loaded into it.
+          return (
+            <div role="listitem" className="trace-list-entry" key={traceIdentity(trace)}>
+              {row}
+              {isTargetCall(trace) && (
+                <div className="trace-list-evidence">
+                  <TargetCallEvidenceDisclosure
+                    trace={trace}
+                    client={client}
+                    principal={principal}
+                  />
+                </div>
+              )}
             </div>
           );
         })}
@@ -536,9 +715,16 @@ function TraceFailureSummary({ trace }: { trace: TraceReadModel }) {
 function TraceDashboard({
   traces,
   campaignId,
+  client,
+  principal,
 }: {
   traces: TraceReadModel[];
   campaignId?: string;
+  // Optional so a caller that renders traces without an authenticated client or organization
+  // principal still works; the per-target-call evidence disclosure then reports itself
+  // unavailable rather than issuing a read it cannot authorize.
+  client?: ApiClient;
+  principal?: Principal;
 }) {
   const allObservations = liveObservations(traces);
   const newestObservation = [...allObservations].sort(
@@ -609,6 +795,8 @@ function TraceDashboard({
               traces={globalHistory}
               selected={undefined}
               label="Global correlated target requests and agent executions"
+              client={client}
+              principal={principal}
             />
           </ExpandableEvidence>
         )}
@@ -663,6 +851,8 @@ function TraceDashboard({
             selected={selected}
             onSelect={setSelectedId}
             label="Campaign-correlated target requests and agent executions"
+            client={client}
+            principal={principal}
           />
         </Panel>
         <Panel title="Observation detail" meta={selected ? time(selected.started_at) : undefined} eyebrow="MEASURED TELEMETRY">
@@ -684,6 +874,8 @@ function TraceDashboard({
             traces={globalHistory}
             selected={undefined}
             label="Global correlated target requests and agent executions"
+            client={client}
+            principal={principal}
           />
         </ExpandableEvidence>
       )}
@@ -1135,7 +1327,14 @@ export function TracesScreen({
     <div className="screen-stack">
       <ScreenHeading title="Traces" detail="Campaign-scoped failures, logical agent executions, physical OpenRouter calls and target requests, correlated to the durable ledger and Langfuse projection." eyebrow="HEADSHOT OBSERVABILITY" />
       <ResourceView result={traces.result} emptyLabel="No request or agent telemetry has been recorded yet.">
-        {(data) => <TraceDashboard traces={data} campaignId={campaignId} />}
+        {(data) => (
+          <TraceDashboard
+            traces={data}
+            campaignId={campaignId}
+            client={client}
+            principal={principal}
+          />
+        )}
       </ResourceView>
       <Panel
         title="OpenRouter physical calls"

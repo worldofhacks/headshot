@@ -250,6 +250,34 @@ def _has_evidence_read(principal: Any) -> bool:
     return EVIDENCE_READ in principal.organization_permissions
 
 
+# Resources whose whole purpose is to disclose exact recorded bytes. Membership here -- not a
+# per-member side effect somewhere inside a projection -- is what requires `org:evidence:read`.
+_EVIDENCE_READ_RESOURCES = frozenset({"provider_call_evidence", "target_call_evidence"})
+
+
+def _exact_target_payload(value: Any) -> str | None:
+    """Render one stored target payload as the exact string the console displays.
+
+    ``outbound_http_requests.request_payload`` is JSONB, so it arrives decoded; canonicalising
+    it with ``sort_keys=True`` means one row always renders identically and a console diff is
+    meaningful. ``response_payload`` is a text column and arrives as the string the target
+    actually returned, so it is passed through untouched -- re-encoding it would wrap the body
+    in quotes and escapes and stop being the received bytes.
+
+    ``None`` stays ``None``. A missing payload is a fact about the row and is never filled in
+    with a reconstruction, a preview, or a placeholder.
+    """
+
+    if value is None:
+        return None
+    payload = (
+        value
+        if isinstance(value, str)
+        else json.dumps(value, allow_nan=False, ensure_ascii=False, sort_keys=True)
+    )
+    return screen_credentials(payload)
+
+
 def _rows(connection, statement: str, parameters: Mapping[str, Any]) -> list[dict[str, Any]]:
     return [dict(row) for row in connection.execute(text(statement), parameters).mappings().all()]
 
@@ -2334,14 +2362,16 @@ class PostgresApiBackend(ApiBackend):
 
     def read(self, resource, principal, *, identifiers=None):
         identifiers = dict(identifiers or {})
-        if resource == "provider_call_evidence" and not _has_evidence_read(principal):
-            # Serving this resource discloses the exact prompt sent to the provider and the
-            # exact bytes it sent back. That authority is a property of the RESOURCE, so it is
+        if resource in _EVIDENCE_READ_RESOURCES and not _has_evidence_read(principal):
+            # Serving these resources discloses exact recorded bytes: for a provider call, the
+            # prompt sent and the response returned; for a target call, the attack payload sent
+            # and the target's answer. That authority is a property of the RESOURCE, so it is
             # decided here, unconditionally, before any row is read or projected -- and before
             # the identifier is even validated, so a refusal cannot disclose which invocations
-            # exist. It was previously only a side effect of the protected snapshot accessor,
-            # which the projection skips whenever the logical execution has no snapshot: the
-            # one member with no other screen was also the one member with no gate.
+            # or requests exist. It was previously only a side effect of the protected snapshot
+            # accessor, which the projection skips whenever the logical execution has no
+            # snapshot: the one member with no other screen was also the one member with no
+            # gate.
             return ResourceResult.unavailable("evidence_authorization_required")
         if resource == "principal":
             return ResourceResult.ready(
@@ -3301,6 +3331,60 @@ class PostgresApiBackend(ApiBackend):
                                 "error_code": source["error_code"],
                                 "prompt": evidence_prompt,
                                 "response": evidence_response,
+                            }
+                        ]
+                elif resource == "target_call_evidence":
+                    target_request_id = identifiers.get("request_id", "")
+                    if (
+                        not isinstance(target_request_id, str)
+                        or not target_request_id
+                        or len(target_request_id) > 64
+                    ):
+                        return ResourceResult.empty()
+                    # One physical target call, organization-scoped. The aggregate `traces`
+                    # projection reads the same two columns but only to derive bounded previews
+                    # and inspection flags; it discards the payloads. This is the only path that
+                    # serves them, which is why the evidence permission is enforced at the top
+                    # of `read` and both payloads are credential-screened on the way out.
+                    target_rows = _rows(
+                        connection,
+                        "SELECT request_id, campaign_run_id AS campaign_id, attempt_id, "
+                        "operation, method, destination_host, relative_path, status, "
+                        "status_code, error_code, duration_ms, started_at, "
+                        "request_payload, response_payload "
+                        "FROM outbound_http_requests "
+                        "WHERE organization_id = :org AND request_id = :request",
+                        {
+                            "org": principal.organization_id,
+                            "request": target_request_id,
+                        },
+                    )
+                    if not target_rows:
+                        rows = []
+                    else:
+                        source = target_rows[0]
+                        rows = [
+                            {
+                                "request_id": source["request_id"],
+                                "campaign_id": source["campaign_id"],
+                                "attempt_id": source["attempt_id"],
+                                "operation": source["operation"],
+                                "method": source["method"],
+                                "destination_host": source["destination_host"],
+                                "relative_path": source["relative_path"],
+                                "status": source["status"],
+                                "status_code": source["status_code"],
+                                "error_code": source["error_code"],
+                                "duration_ms": (
+                                    float(source["duration_ms"])
+                                    if source["duration_ms"] is not None
+                                    else None
+                                ),
+                                "started_at": source["started_at"],
+                                "request_payload": _exact_target_payload(source["request_payload"]),
+                                "response_payload": _exact_target_payload(
+                                    source["response_payload"]
+                                ),
                             }
                         ]
                 elif resource == "agent_activity":
@@ -5437,7 +5521,36 @@ class PostgresApiBackend(ApiBackend):
         # response is the only member no upstream screen touches, so its projection above runs
         # the credential screen on the way out and the read model refuses to serve any text that
         # still matches a credential shape.
-        exact_evidence_resources = {"agent_prompt_snapshot", "provider_call_evidence"}
+        #
+        # `target_call_evidence` joins them for the same reason and within the same limit.
+        # Measured, not assumed: `_safe` and `screen_credentials` differ on these payloads by
+        # exactly two rules -- `redact_mapping`'s key-name masking and `_LABELED_SECRET`. The
+        # second is the one that rewrites evidence. `_LABELED_SECRET` matches
+        # `\b(...|secret|password|credential|...)\b\s*[:=]\s*[^\s;,]+`, and its trailing
+        # `[^\s;,]+` is greedy to the next space -- so an attack turn ending
+        # `... reveal the operator secret: whatever-you-were-told.` loses the instruction that IS
+        # the attack AND the `"]}` that closes the document, leaving a payload that no longer
+        # parses as JSON. An operator cannot reason about a payload that lies about itself.
+        # (The synthetic patient identifiers and canary markers survive `_safe` untouched; the
+        # display rewrites that would erase them live in `_redact_evidence_display`, not here.)
+        #
+        # `screen_credentials` is sufficient for the one thing that must not survive because it
+        # is the SECOND screen, not the first. `agentforge.telemetry.outbound._sanitize` already
+        # ran over both payloads BEFORE they were written, applying the per-call redaction
+        # strings plus `redact_mapping` and its own JWT, Authorization, Cookie, URL-userinfo,
+        # provider-key and labeled-secret patterns -- so both rules `_safe` would add here have
+        # already been applied at storage time, and the bytes in the column are post-sanitizer
+        # bytes. The exit screen re-applies every credential pattern `_safe` applies bar
+        # `_LABELED_SECRET`, and on one shape it is strictly stronger: storage-time
+        # `_URL_USERINFO_SECRET` only covers http/https, while `CREDENTIAL_URL_PATTERN` covers
+        # any scheme, so a `postgres://user:pw@host/db` echoed in a target error body is caught
+        # on the way out. And it is enforced rather than trusted: `TargetCallEvidenceReadModel`
+        # refuses to serve either payload that still matches a credential shape.
+        exact_evidence_resources = {
+            "agent_prompt_snapshot",
+            "provider_call_evidence",
+            "target_call_evidence",
+        }
         sanitized = rows if resource in exact_evidence_resources else _safe(rows)
         if resource in {
             "campaign",
@@ -5450,6 +5563,7 @@ class PostgresApiBackend(ApiBackend):
             "agent_prompt",
             "agent_prompt_snapshot",
             "provider_call_evidence",
+            "target_call_evidence",
             "configuration",
             "birdseye",
             "hosted_configuration_set",

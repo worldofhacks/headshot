@@ -25,6 +25,8 @@ export const RESOURCE_PATHS = {
     campaignScoped("provider-calls", campaignId),
   providerCallEvidence: (invocationId: string) =>
     `provider-calls/${segment(invocationId)}/evidence`,
+  targetCallEvidence: (requestId: string) =>
+    `target-calls/${segment(requestId)}/evidence`,
   costs: "costs",
   campaignCosts: (campaignId: string) => campaignScoped("costs", campaignId),
   targetCatalog: "target-catalog",

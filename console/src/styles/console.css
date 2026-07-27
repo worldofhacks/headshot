@@ -321,7 +321,8 @@
 .trace-explorer-grid { grid-template-columns: minmax(380px, 0.85fr) minmax(480px, 1.15fr); }
 .trace-list { max-height: 520px; display: flex; flex-direction: column; overflow: auto; border: 1px solid var(--sep); border-radius: var(--r-sm); background: var(--bg-inset); }
 .trace-list-row { width: 100%; min-height: 55px; display: grid; grid-template-columns: 8px minmax(180px, 1fr) 80px 64px; align-items: center; gap: 10px; padding: 8px 10px; border-bottom: 1px solid var(--sep); color: var(--tx2); text-align: left; transition: background 150ms var(--ease-out), color 150ms var(--ease-out); }
-.trace-list-row:last-child { border-bottom: 0; }
+.trace-list-entry { flex: 0 0 auto; min-width: 0; display: flex; flex-direction: column; }
+.trace-list-entry:last-child > :last-child { border-bottom: 0; }
 .trace-list-row:hover, .trace-list-row.active { background: var(--sel); color: var(--tx); }
 .trace-list-row.active { box-shadow: inset 2px 0 0 var(--brand); }
 .trace-list-row > span:nth-child(2) { min-width: 0; display: flex; flex-direction: column; gap: 4px; }
@@ -329,6 +330,13 @@
 .trace-list-row strong { color: inherit; font-size: var(--fs-xs); font-weight: 600; }
 .trace-list-row small { color: var(--tx3); font-size: var(--fs-2xs); }
 .trace-list-row > span:nth-last-child(-n+2) { color: var(--tx2); font-size: var(--fs-2xs); text-align: right; }
+.trace-list-evidence { min-width: 0; padding: 0 10px 10px; border-bottom: 1px solid var(--sep); }
+.trace-list-evidence .event-record { max-width: 100%; }
+.trace-list-evidence .adversarial-text { max-height: 220px; }
+.trace-list-evidence .target-call-evidence-note { margin: 0; padding-top: 0; border-top: 0; }
+.trace-list-evidence > .state-notice { margin: 0; }
+.target-call-evidence > div { min-width: 0; }
+.target-call-evidence .data-note { margin: 0; }
 
 .trace-detail-stack { display: flex; flex-direction: column; gap: 14px; }
 .trace-detail-hero { display: flex; justify-content: space-between; align-items: flex-start; gap: 18px; }
