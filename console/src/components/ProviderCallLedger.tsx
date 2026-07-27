@@ -116,6 +116,25 @@ export function ProviderCallEvidenceDisclosure({
     );
   }
 
+  // A physical call that has not terminalized has no provider_call_events row yet, so the
+  // evidence route correctly finds nothing. Reporting that as "no evidence record" told
+  // operators the evidence was missing when it was merely not written yet -- and it showed up
+  // almost exclusively on red_team, whose calls run an order of magnitude longer than any other
+  // role and so spend far longer in flight. Name the real state instead, and issue no request.
+  if (call.status === "in_flight") {
+    return (
+      <ExpandableEvidence
+        title="Prompt & response"
+        meta={`physical #${call.physical_sequence} · in flight`}
+      >
+        <StateNotice
+          state="loading"
+          detail="This physical call has not returned yet. Its sent prompt and recorded response become readable once the provider responds and the terminal event is written."
+        />
+      </ExpandableEvidence>
+    );
+  }
+
   const load = async () => {
     if (requested.current) return;
     requested.current = true;

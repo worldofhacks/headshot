@@ -45,7 +45,10 @@ describe("expandable evidence", () => {
     );
 
     expect(screen.getByText("judge-v2")).not.toBeNull();
-    expect(screen.getAllByText("Judge the evidence independently.")).toHaveLength(2);
+    // Exactly once. Both decoders require provider_messages[0] to BE the system prompt byte for
+    // byte, so rendering the transcript entry as well as the snapshot showed operators the same
+    // text twice under two headings and made the transcript look like it held nothing else.
+    expect(screen.getAllByText("Judge the evidence independently.")).toHaveLength(1);
     expect(screen.getByText(/authorization_header/)).not.toBeNull();
     expect(screen.getByText("Exact system prompt").closest("details")?.open).toBe(false);
     expect(screen.getByText("Bounded redaction metadata").closest("details")?.open).toBe(false);

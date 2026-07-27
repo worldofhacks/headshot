@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { ApiClient } from "../src/api/client";
 import type { Principal } from "../src/api/contracts";
+import { ProviderCallLedger } from "../src/components/ProviderCallLedger";
 import { CostsScreen, TracesScreen } from "../src/screens/ObservabilityScreens";
 import type { ProviderCallReadModel } from "../src/types";
 import { PERMISSIONS } from "../src/types";
@@ -134,6 +135,49 @@ describe("provider call evidence disclosure wiring", () => {
         screen.getByText(/rendered without an authenticated client and organization principal/),
       ).toBeTruthy();
     });
+    expect(evidenceReads(client)).toHaveLength(0);
+  });
+});
+
+describe("a physical call still in flight", () => {
+  // red_team calls average ~90s and have run to ~11 minutes, so they sit in flight far longer
+  // than any other role. The evidence route has no provider_call_events row to find until the
+  // call terminalizes, and reporting that as "no evidence record" read as data loss.
+  const inFlight: ProviderCallReadModel = {
+    ...call,
+    agent_role: "red_team",
+    physical_sequence: 1,
+    status: "in_flight",
+    langfuse_observation_name: "provider.attempt.1",
+    returned_model: null,
+    upstream_provider: null,
+    provider_request_id: null,
+    finished_at: null,
+    duration_ms: null,
+    input_tokens: null,
+    output_tokens: null,
+    reasoning_tokens: null,
+    measured_cost_usd: null,
+    cost_measurement_state: "not_observed",
+    accounting_status: "pending",
+    langfuse_status: "not_attempted",
+    langfuse_verified_at: null,
+  };
+
+  it("names the in-flight state and issues no evidence request", async () => {
+    const client = screenClient();
+
+    render(
+      <ProviderCallLedger
+        calls={[inFlight]}
+        client={client}
+        principal={principalWith([PERMISSIONS.consoleRead, PERMISSIONS.evidenceRead])}
+      />,
+    );
+
+    expect(await screen.findByText("Prompt & response")).toBeTruthy();
+    expect(screen.getByText(/has not returned yet/)).toBeTruthy();
+    expect(screen.queryByText(/no evidence record/)).toBeNull();
     expect(evidenceReads(client)).toHaveLength(0);
   });
 });

@@ -137,24 +137,35 @@ export function PromptTranscript({
         </div>
       </dl>
       <div className="event-stack">
-        <ExpandableEvidence title="Exact system prompt" meta="immutable snapshot">
+        <ExpandableEvidence
+          title="Exact system prompt"
+          meta={`immutable snapshot · ${systemPrompt.length.toLocaleString()} characters`}
+        >
           <AdversarialText>{systemPrompt}</AdversarialText>
         </ExpandableEvidence>
-        {/* Each sent message is its own top-level disclosure, as a sibling of the system prompt
-            rather than nested under a wrapper. The wrapper read as a section header, so the
-            message that actually carries the request body sat four expansions deep behind the
-            label "2. user" and operators reported seeing "only system prompts". The role and the
-            character count are in the summary so the body-bearing message is identifiable without
-            opening anything. */}
-        {messages.map((message, index) => (
-          <ExpandableEvidence
-            key={`${index}-${message.role}`}
-            title={`Message ${index + 1} · ${message.role}`}
-            meta={`${message.content.length.toLocaleString()} characters`}
-          >
-            <AdversarialText>{message.content}</AdversarialText>
-          </ExpandableEvidence>
-        ))}
+        {/* Each remaining sent message is its own top-level disclosure, as a sibling of the system
+            prompt rather than nested under a wrapper. The wrapper read as a section header, so the
+            message carrying the request body sat four expansions deep behind the label "2. user"
+            and operators reported seeing "only system prompts".
+
+            Message 1 is skipped because both decoders require it to BE the system prompt, byte for
+            byte, so rendering it again showed the same text twice under two different headings.
+            Ordinals still count from the real transcript position, so the surviving entries keep
+            their true index and nothing about the recorded order is implied away. */}
+        {messages.map((message, index) => {
+          if (index === 0 && message.role === "system" && message.content === systemPrompt) {
+            return null;
+          }
+          return (
+            <ExpandableEvidence
+              key={`${index}-${message.role}`}
+              title={`Message ${index + 1} · ${message.role}`}
+              meta={`${message.content.length.toLocaleString()} characters`}
+            >
+              <AdversarialText>{message.content}</AdversarialText>
+            </ExpandableEvidence>
+          );
+        })}
         {redactions.length > 0 && (
           <ExpandableEvidence
             title="Bounded redaction metadata"
