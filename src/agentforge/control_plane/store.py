@@ -7038,6 +7038,15 @@ class ControlPlaneStore:
         *,
         inside_target_evidence: bool = False,
     ) -> bool:
+        """Reject explicit non-synthetic claims and credential fields, not clinical text.
+
+        Every runnable target is already authorized only after its synthetic-data attestation is
+        verified. Prompt snapshots therefore must preserve the exact synthetic clinical evidence
+        sent to the Judge; pattern-matching labels such as ``DOB`` or ``MRN`` here both destroys
+        useful evidence and can abort an otherwise valid campaign. Credential screening remains
+        independent and fail-closed.
+        """
+
         def is_explicitly_safe_sensitive_value(item: object) -> bool:
             if item is None:
                 return True
@@ -7057,20 +7066,25 @@ class ControlPlaneStore:
                 raw_key = str(key)
                 normalized_key = cls._prompt_snapshot_key(raw_key)
                 if (
-                    cls._prompt_snapshot_contains_sensitive_text(raw_key)
-                    or (normalized_key == "contains_real_phi" and item is not False)
+                    (normalized_key == "contains_real_phi" and item is not False)
                     or (normalized_key == "synthetic_data_only" and item is not True)
                     or (
-                        normalized_key in _PROMPT_SNAPSHOT_FORBIDDEN_KEYS
-                        and not is_explicitly_safe_sensitive_value(item)
-                    )
-                    or (
-                        _PROMPT_SNAPSHOT_SENSITIVE_KEY.search(normalized_key) is not None
-                        and not is_explicitly_safe_sensitive_value(item)
-                    )
-                    or (
-                        inside_target_evidence
-                        and normalized_key in _PROMPT_SNAPSHOT_RAW_TARGET_EVIDENCE_KEYS
+                        normalized_key
+                        in {
+                            "access_token",
+                            "api_key",
+                            "authorization",
+                            "authorization_header",
+                            "cookie",
+                            "credential_ref",
+                            "credential_reference",
+                            "credentials",
+                            "password",
+                            "refresh_token",
+                            "secret",
+                            "session_token",
+                            "set_cookie",
+                        }
                         and not is_explicitly_safe_sensitive_value(item)
                     )
                 ):
@@ -7092,8 +7106,6 @@ class ControlPlaneStore:
                 )
                 for item in value
             )
-        if isinstance(value, str):
-            return cls._prompt_snapshot_contains_sensitive_text(value)
         return False
 
     @staticmethod

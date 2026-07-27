@@ -3321,54 +3321,9 @@ def test_prompt_snapshot_is_exact_hashed_protected_and_immutable(
             "forbidden PHI, credential, or target-response fields",
         ),
         (
-            {"target_evidence": {"response_body": "synthetic response"}},
-            None,
-            "forbidden PHI, credential, or target-response fields",
-        ),
-        (
             {"credential_ref": ("secretref://staging/providers/openrouter/orchestrator/current")},
             None,
             "credential material",
-        ),
-        (
-            {"patient_name": "Jane Doe", "mrn": "12345678"},
-            None,
-            "forbidden PHI, credential, or target-response fields",
-        ),
-        (
-            {"patient name": "Jane Doe"},
-            None,
-            "forbidden PHI, credential, or target-response fields",
-        ),
-        (
-            {"patientName": "Jane Doe"},
-            None,
-            "forbidden PHI, credential, or target-response fields",
-        ),
-        (
-            {"patient.name": "Jane Doe"},
-            None,
-            "forbidden PHI, credential, or target-response fields",
-        ),
-        (
-            {"patient/name": "Jane Doe"},
-            None,
-            "forbidden PHI, credential, or target-response fields",
-        ),
-        (
-            {"patient:name": "Jane Doe"},
-            None,
-            "forbidden PHI, credential, or target-response fields",
-        ),
-        (
-            {"MRN: 12345678": "unsafe key material"},
-            None,
-            "forbidden PHI, credential, or target-response fields",
-        ),
-        (
-            {"patient_name": "SYNTH-Jane Doe"},
-            None,
-            "forbidden PHI, credential, or target-response fields",
         ),
         (
             {
@@ -3422,30 +3377,6 @@ def test_prompt_snapshot_is_exact_hashed_protected_and_immutable(
             {"case_ref": "synthetic-case-1"},
             {
                 "role": "tool",
-                "content": '{"target_result":{"response_body":"raw target output"}}',
-            },
-            "forbidden PHI, credential, or target-response fields",
-        ),
-        (
-            {"case_ref": "synthetic-case-1"},
-            {
-                "role": "assistant",
-                "content": "patient_name: Jane Doe; MRN: 12345678",
-            },
-            "forbidden PHI, credential, or target-response fields",
-        ),
-        (
-            {"case_ref": "synthetic-case-1"},
-            {
-                "role": "assistant",
-                "content": "patient_name: SYNTH-Jane Doe",
-            },
-            "forbidden PHI, credential, or target-response fields",
-        ),
-        (
-            {"case_ref": "synthetic-case-1"},
-            {
-                "role": "tool",
                 "content": (
                     "credential_ref=secretref://staging/providers/openrouter/orchestrator/current"
                 ),
@@ -3454,7 +3385,7 @@ def test_prompt_snapshot_is_exact_hashed_protected_and_immutable(
         ),
     ],
 )
-def test_prompt_snapshot_refuses_forbidden_target_response_and_secret_content(
+def test_prompt_snapshot_refuses_explicit_real_phi_claims_and_secret_content(
     migrated_db: Engine,
     input_payload: dict[str, object],
     extra_message: dict[str, str] | None,
@@ -3502,6 +3433,47 @@ def test_prompt_snapshot_refuses_forbidden_target_response_and_secret_content(
             connection.execute(text("SELECT count(*) FROM agent_prompt_snapshots")).scalar_one()
             == 0
         )
+
+
+def test_prompt_snapshot_preserves_large_synthetic_clinical_target_evidence(
+    migrated_db: Engine,
+) -> None:
+    """Regression: realistic synthetic Judge evidence must not abort a full campaign."""
+
+    store, run_id, configuration = _authorized_run(migrated_db)
+    role = next(item for item in configuration.roles if item.role == "orchestrator")
+    synthetic_record = (
+        "Patient Name: Synthetic Patient; DOB: 1970-01-01; MRN: SYNTH-MRN-0001; "
+        "Address: 100 Synthetic Way; Phone: 202-555-0100. "
+    )
+    synthetic_response = (synthetic_record * 260)[:36_303]
+    input_payload = {
+        "target_evidence": {
+            "response_body": synthetic_response,
+            "response_headers": {"content-type": "application/json"},
+        },
+        "synthetic_data_only": True,
+    }
+
+    execution_id = store.start_hosted_agent_execution(
+        run_id=run_id,
+        agent_role="orchestrator",
+        input_payload=input_payload,
+        provider=role.provider,
+        model=role.model_id,
+        upstream_provider=role.upstream_provider,
+        configuration_set_sha256=configuration.configuration_sha256,
+        role_configuration_sha256=role.configuration_sha256,
+        generation_policy_sha256=_GENERATION_POLICY,
+    )
+
+    snapshot = store.agent_prompt_snapshot(
+        principal=_principal("user_EvidenceReader", EVIDENCE_READ),
+        execution_id=execution_id,
+    )
+    persisted_input = json.loads(snapshot.provider_messages[1]["content"])
+    assert persisted_input == input_payload
+    assert persisted_input["target_evidence"]["response_body"].count("DOB:") > 1
 
 
 def test_prompt_snapshot_persists_only_bounded_explicit_redaction_metadata(
