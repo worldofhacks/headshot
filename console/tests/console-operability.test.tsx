@@ -700,10 +700,10 @@ describe("target console operability", () => {
     await waitFor(() => expect(command).toHaveBeenCalledTimes(1));
     const enable = await screen.findByRole("button", { name: "Enable surface" });
     expect((enable as HTMLButtonElement).disabled).toBe(true);
-    expect((screen.getByRole("button", {
+    expect(screen.queryByRole("heading", { name: "Register reviewed target" })).toBeNull();
+    expect(screen.queryByRole("button", {
       name: "Register exact catalog target",
-    }) as HTMLButtonElement).disabled).toBe(true);
-    expect(screen.getByText(/browser submits only the selected target ID and version/i)).toBeTruthy();
+    })).toBeNull();
   });
 
   it("registers only the exact selected server-owned catalog identity", async () => {

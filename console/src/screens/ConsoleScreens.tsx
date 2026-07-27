@@ -2387,9 +2387,15 @@ export function LegacyTargetsScreen({ client, principal }: ScreenProps) {
   const [catalogIdentity, setCatalogIdentity] = useState("");
   const records = targets.result.data ?? [];
   const catalogRecords = catalog.result.data ?? [];
-  const selectedCatalog = catalogRecords.find(
+  const availableCatalog = catalogRecords.filter(
+    (entry) => entry.registration_state === "available",
+  );
+  const conflictingCatalog = catalogRecords.filter(
+    (entry) => entry.registration_state === "conflict",
+  );
+  const selectedCatalog = availableCatalog.find(
     (entry) => `${entry.target_id}\n${entry.version}` === catalogIdentity,
-  ) ?? null;
+  ) ?? availableCatalog[0] ?? null;
   const canManageTargets = hasPermission(principal, PERMISSIONS.targetsManage);
   const selected = selectedIdentity
     ? records.find(
@@ -2406,79 +2412,66 @@ export function LegacyTargetsScreen({ client, principal }: ScreenProps) {
         title="Targets"
         detail="Only persisted immutable target and attack-surface versions may be selected for dispatch."
       />
-      <Panel
-        title="Trusted target catalog"
-        meta="server-owned registration"
-        eyebrow="CONTROL PLANE"
-      >
-        <ResourceView
-          result={catalog.result}
-          emptyLabel="No reviewed target versions are available in the server catalog."
+      {canManageTargets && selectedCatalog && (
+        <Panel
+          title="Register reviewed target"
+          meta={`${availableCatalog.length} available`}
+          eyebrow="CONTROL PLANE"
         >
-          {(data) => (
-            <div className="evidence-stack">
-              <label className="form-field">
-                <span>Reviewed target version</span>
-                <select
-                  aria-label="Reviewed target version"
-                  value={catalogIdentity}
-                  onChange={(event) => setCatalogIdentity(event.currentTarget.value)}
-                >
-                  <option value="">Select an exact catalog entry</option>
-                  {data.map((entry) => (
-                    <option
-                      key={`${entry.target_id}:${entry.version}`}
-                      value={`${entry.target_id}\n${entry.version}`}
-                    >
-                      {entry.name} · {entry.target_id}@{entry.version} · {entry.registration_state}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              {selectedCatalog && (
-                <EvidenceGrid values={[
-                  { label: "Target", value: selectedCatalog.target_id },
-                  { label: "Version", value: selectedCatalog.version },
-                  { label: "Environment", value: selectedCatalog.environment },
-                  { label: "Surfaces", value: count(selectedCatalog.surface_count) },
-                  { label: "Registration", value: selectedCatalog.registration_state },
-                ]} />
-              )}
-              <CommandButton
-                client={client}
-                path={COMMAND_PATHS.createTarget}
-                payload={selectedCatalog
-                  ? {
-                      target_id: selectedCatalog.target_id,
-                      version: selectedCatalog.version,
-                    }
-                  : {}}
-                label="Register exact catalog target"
-                allowed={Boolean(
-                  canManageTargets
-                  && selectedCatalog?.registration_state === "available",
-                )}
-                unavailableReason={!canManageTargets
-                  ? PERMISSIONS.targetsManage
-                  : selectedCatalog?.registration_state === "registered"
-                    ? "an unregistered catalog target"
-                    : selectedCatalog?.registration_state === "conflict"
-                      ? "manual resolution of the persisted immutable-state conflict"
-                      : "an exact reviewed target version"}
-                onAcknowledged={() => {
-                  catalog.refresh();
-                  targets.refresh();
-                }}
-              />
-              <p className="data-note">
-                The browser submits only the selected target ID and version. URLs, hosts,
-                adapters, credentials, authorization references, and surface definitions remain
-                server-owned.
-              </p>
-            </div>
-          )}
-        </ResourceView>
-      </Panel>
+          <div className="evidence-stack">
+            <label className="form-field">
+              <span>Reviewed target version</span>
+              <select
+                aria-label="Reviewed target version"
+                value={`${selectedCatalog.target_id}\n${selectedCatalog.version}`}
+                onChange={(event) => setCatalogIdentity(event.currentTarget.value)}
+              >
+                {availableCatalog.map((entry) => (
+                  <option
+                    key={`${entry.target_id}:${entry.version}`}
+                    value={`${entry.target_id}\n${entry.version}`}
+                  >
+                    {entry.name} · {entry.target_id}@{entry.version}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <EvidenceGrid values={[
+              { label: "Target", value: selectedCatalog.target_id },
+              { label: "Version", value: selectedCatalog.version },
+              { label: "Environment", value: selectedCatalog.environment },
+              { label: "Surfaces", value: count(selectedCatalog.surface_count) },
+            ]} />
+            <CommandButton
+              client={client}
+              path={COMMAND_PATHS.createTarget}
+              payload={{
+                target_id: selectedCatalog.target_id,
+                version: selectedCatalog.version,
+              }}
+              label="Register exact catalog target"
+              allowed
+              onAcknowledged={() => {
+                catalog.refresh();
+                targets.refresh();
+              }}
+            />
+            <p className="data-note">
+              The browser submits only the selected target ID and version. URLs, hosts,
+              adapters, credentials, authorization references, and surface definitions remain
+              server-owned.
+            </p>
+          </div>
+        </Panel>
+      )}
+      {conflictingCatalog.length > 0 && (
+        <StateNotice
+          state="unavailable"
+          detail={`${count(conflictingCatalog.length)} reviewed catalog ${
+            conflictingCatalog.length === 1 ? "entry has" : "entries have"
+          } a persisted identity conflict. Resolution is server-side; no unsafe browser action is exposed.`}
+        />
+      )}
       {records.length > 0 && (
         <>
           <MetricStrip label="Target summary" values={[
