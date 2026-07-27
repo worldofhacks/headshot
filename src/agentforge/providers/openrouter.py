@@ -847,6 +847,18 @@ class OpenRouterTransport:
                         reasoning_tokens=max_reasoning_tokens,
                     )
                 except HostedProviderError as exc:
+                    # A retry re-reserves, so a campaign with exactly one call/spend slot left
+                    # surfaces the reservation refusal on attempt 2 instead of the schema failure
+                    # that actually caused the retry. That refusal carries no observed_result, so
+                    # attempt 1's measured tokens and cost would be dropped from the logical row
+                    # and the operator would see a budget error for a formatting fault.
+                    #
+                    # Report the original typed cause and keep its measurements; the cap breach
+                    # stays visible as __cause__. The retry is still refused — no extra send
+                    # happens — so no authority is consumed by this.
+                    if isinstance(last_error, HostedStructuredOutputInvalid):
+                        last_error.account_physical_attempts(physical_attempts)
+                        raise last_error from exc
                     exc.account_physical_attempts(physical_attempts)
                     raise
                 try:

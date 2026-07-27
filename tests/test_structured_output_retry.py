@@ -196,6 +196,64 @@ def test_a_provider_retry_never_produces_a_target_request() -> None:
         assert request.url.host == "openrouter.ai", request.url
 
 
+def test_a_retry_blocked_by_the_call_cap_still_reports_the_schema_failure() -> None:
+    """The retry re-reserves, so a nearly-exhausted cap can refuse attempt 2.
+
+    When that happens the operator must still see invalid_structured_output — the formatting
+    fault is what actually stopped the call — and attempt 1's measured tokens and cost must
+    survive on the logical row. Reporting a budget error here would both misdiagnose the failure
+    and silently drop a charge that really happened.
+    """
+
+    import dataclasses
+
+    base = _configuration()
+    # Exactly one call of authority: attempt 1 consumes it, attempt 2's reservation is refused.
+    roles = tuple(
+        dataclasses.replace(role, limits=dataclasses.replace(role.limits, max_calls=1))
+        for role in base.roles
+    )
+    configuration = dataclasses.replace(
+        base,
+        roles=roles,
+        global_limits=dataclasses.replace(base.global_limits, max_calls=1),
+    )
+    sent: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent.append(request)
+        return _invalid()
+
+    transport = OpenRouterTransport(
+        configuration=configuration,
+        credential_resolver=lambda _reference: Secret("test-provider-value"),
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+        lineage_recorder=_ProviderRecorder(),
+    )
+
+    with pytest.raises(HostedStructuredOutputInvalid) as raised:
+        transport.invoke(
+            role="judge",
+            messages=_messages(),
+            output_schema=_VERDICT_SCHEMA,
+            schema_name="judge_verdict",
+            generation_policy_sha256=_digest("generation-policy"),
+            input_tokens_upper_bound=100,
+            max_output_tokens=50,
+            max_reasoning_tokens=20,
+            timeout_seconds=5,
+            provider_context=_provider_context(configuration),
+        )
+
+    assert raised.value.code == "invalid_structured_output"
+    # Attempt 1's measurements survive rather than being replaced by a measurement-free
+    # reservation error.
+    assert raised.value.observed_result.measured_cost_usd == Decimal("0.000065")
+    # The cap breach is still visible, just not as the headline cause.
+    assert raised.value.__cause__ is not None
+    assert len(sent) == 1, "the refused retry must not reach the provider"
+
+
 # --------------------------------------------------------------------------------------
 # Everything else still terminates on the first physical send.
 # --------------------------------------------------------------------------------------
