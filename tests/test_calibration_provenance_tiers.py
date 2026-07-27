@@ -9,6 +9,7 @@ human must name the floor, and the accepted tiers are written into the artifact 
 from __future__ import annotations
 
 import glob
+import hashlib
 import json
 from pathlib import Path
 
@@ -198,6 +199,32 @@ def test_a_reconciliation_earns_the_measured_tier() -> None:
         },
     )
     assert tier == "usage_export_reconciled"
+
+
+def test_exact_langfuse_query_back_earns_the_disclosed_projection_tier() -> None:
+    bundle = {"samples": [_sample(1), _sample(2)]}
+    request_ids = [str(sample["provider_request_id"]) for sample in bundle["samples"]]
+    tier, _ = classify_provider_provenance(
+        bundle,
+        attestation={
+            "attestation_kind": "langfuse_query_back_verified",
+            "matched_generation_count": 2,
+            "provider_request_ids_sha256": hashlib.sha256(
+                "\n".join(sorted(request_ids)).encode()
+            ).hexdigest(),
+        },
+    )
+    assert tier == "langfuse_query_back_verified"
+
+    drifted, _ = classify_provider_provenance(
+        bundle,
+        attestation={
+            "attestation_kind": "langfuse_query_back_verified",
+            "matched_generation_count": 2,
+            "provider_request_ids_sha256": "0" * 64,
+        },
+    )
+    assert drifted == "lineage_consistent"
 
 
 def test_a_reconciliation_covering_fewer_samples_does_not_earn_it() -> None:

@@ -1,0 +1,101 @@
+{
+  "batch": {
+    "batch_count": 2,
+    "batch_index": 0,
+    "batch_size": 34,
+    "label_ids": [
+      "GT-M11-DS-AMB-001",
+      "GT-M11-DS-CONF-001",
+      "GT-M11-DS-INJECT-001",
+      "GT-M11-DS-INJECT-002",
+      "GT-M11-DS-LIKELY-001",
+      "GT-M11-DS-NEARNEG-001",
+      "GT-M11-DS-NEARPOS-001",
+      "GT-M11-DS-NEG-001",
+      "GT-M11-DS-REFUSAL-001",
+      "GT-M11-DX-AMB-001",
+      "GT-M11-DX-CONF-001",
+      "GT-M11-DX-INJECT-001",
+      "GT-M11-DX-INJECT-002",
+      "GT-M11-DX-LIKELY-001",
+      "GT-M11-DX-NEARNEG-001",
+      "GT-M11-DX-NEARPOS-001",
+      "GT-M11-DX-NEG-001",
+      "GT-M11-DX-REFUSAL-001",
+      "GT-M11-IR-AMB-001",
+      "GT-M11-IR-CONF-001",
+      "GT-M11-IR-INJECT-001",
+      "GT-M11-IR-INJECT-002",
+      "GT-M11-IR-LIKELY-001",
+      "GT-M11-IR-NEARNEG-001",
+      "GT-M11-IR-NEARPOS-001",
+      "GT-M11-IR-NEG-001",
+      "GT-M11-IR-REFUSAL-001",
+      "GT-M11-PI-AMB-001",
+      "GT-M11-PI-CONF-001",
+      "GT-M11-PI-INJECT-001",
+      "GT-M11-PI-INJECT-002",
+      "GT-M11-PI-LIKELY-001",
+      "GT-M11-PI-NEARNEG-001",
+      "GT-M11-PI-NEARPOS-001"
+    ],
+    "note": "One sub-run of a batched campaign. Every batch runs against the SAME staged configuration, so judge_model_version is identical across batches and the bundles can be merged by scripts/merge_calibration_batches.py.",
+    "total_sample_count": 54
+  },
+  "capture_run_id": "provisional-judge-20260727-b0r1",
+  "evidence_provenance": {
+    "kind": "authored_synthetic_ground_truth",
+    "note": "The Judge model calls are real and billed, but the evidence they judge is authored offline for calibration; the ground-truth envelopes carry campaign_run_id 'ground-truth-unexecuted' and no live target was contacted. This measures the evaluator, not the target.",
+    "target_executed": false
+  },
+  "executions": {
+    "failed": 0,
+    "finished": 34,
+    "physical_attempts_total": 34,
+    "provider_calls_open": 0,
+    "provider_calls_reserved": 34,
+    "provider_calls_terminal": 34,
+    "started": 34,
+    "succeeded": 34
+  },
+  "identity_binding": {
+    "attested_configuration_sha256": "a40723d196e2447ba7a6ee65390906841ad27574a872c9f47d5d86915490aef9",
+    "hosted_configuration_set_path": "/tmp/agentforge-provisional-judge-config.json",
+    "judge_limits": {
+      "max_calls": 34,
+      "max_concurrency": 1,
+      "max_input_tokens": 6720000,
+      "max_output_tokens": 224000,
+      "max_reasoning_tokens": 448000,
+      "max_requests_per_second": "0.5",
+      "max_retries": 0,
+      "max_usd": "5"
+    },
+    "judge_policy_sha256": "bb44280b564b7829935618110613ffa6c9cdba3d4483f8ef3e50573b60f56927",
+    "judge_prompt_sha256": "ae95f4b8398410b40c0b9b028aec47b6d7e027965b4f3eea4f5b524e58a29065",
+    "judge_role_configuration_sha256": "ba659f652ad46da14975268804407dd29a6943310e439ffae0a36a10fa15278a",
+    "note": "judge_model_version == judge_role_configuration_sha256, which hashes model, prompt, policy, prices, credential reference, and limits together. The configuration was supplied by the deployment, not synthesized here.",
+    "observed_configuration_sha256": "a40723d196e2447ba7a6ee65390906841ad27574a872c9f47d5d86915490aef9",
+    "source": "staged_production_configuration_set"
+  },
+  "langfuse_query_back": {
+    "matched_generation_count": 34,
+    "trace_id": "0078ac3129bfe032ca0e6310e725ccdd",
+    "verified_at": "2026-07-27T13:55:16.141371+00:00"
+  },
+  "ledger": {
+    "measured_usd": "0.538288750000",
+    "physical_calls": 34,
+    "unresolved_exposure_usd": "0.00"
+  },
+  "sample_count": 34,
+  "slice_ids": [
+    "GT-SLICE-M11-DS",
+    "GT-SLICE-M11-DX",
+    "GT-SLICE-M11-IR",
+    "GT-SLICE-M11-PI",
+    "GT-SLICE-M11-SC",
+    "GT-SLICE-M11-TM"
+  ],
+  "trace_id_derivation": "agentforge.correlation.campaign_trace_id('<capture_run_id>:<label_id>') — the platform's W3C-compatible correlation id for provider lineage. When query-back is required, a separate batch trace in langfuse-attestation.json carries the sanitized calibration projection."
+}

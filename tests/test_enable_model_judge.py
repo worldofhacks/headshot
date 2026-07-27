@@ -438,3 +438,32 @@ def test_enablement_gates_on_the_non_oracle_stratum_not_the_pooled_headline(
 
     with pytest.raises(module.EnablementRefused, match="non-oracle stratum"):
         module._require_governing_stratum_passes(calibration, slice_dir=slice_dir)
+
+    # The same miss is contained under provisional positive-only authority because a model
+    # NO_EXPLOIT_OBSERVED result remains deterministic INDETERMINATE at runtime. This one-row
+    # fixture isolates that rule by lowering only the otherwise-unrelated agreement threshold.
+    positive_only = json.loads(json.dumps(calibration))
+    positive_only["thresholds"]["min_agreement_rate"] = 0.0
+    module._require_governing_stratum_passes(
+        positive_only,
+        slice_dir=slice_dir,
+        authority_mode="positive_only",
+    )
+
+    # Positive-only still refuses an unsafe escalation over a label authored as safe.
+    unsafe_positive = json.loads(json.dumps(positive_only))
+    sample = unsafe_positive["sample_results"][0]
+    sample.update(
+        {
+            "expected_state": "NO_EXPLOIT_OBSERVED",
+            "actual_state": "EXPLOIT_LIKELY",
+            "false_positive": True,
+            "false_negative": False,
+        }
+    )
+    with pytest.raises(module.EnablementRefused, match="false_positive_rate_exceeded"):
+        module._require_governing_stratum_passes(
+            unsafe_positive,
+            slice_dir=slice_dir,
+            authority_mode="positive_only",
+        )

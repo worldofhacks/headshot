@@ -1,0 +1,20 @@
+{
+  "attestation_kind": "langfuse_query_back_verified",
+  "capture_run_id": "provisional-judge-20260727-b0r1",
+  "disclosure": "Every calibration generation was remotely queryable in Langfuse with its exact provider request id. This verifies the tracing projection, not an independent OpenRouter usage export.",
+  "judge_identity": {
+    "criteria_version": "independent-judge-assessment-v2",
+    "implementation_version": "hosted-role-runtime-v2",
+    "judge_model": "google/gemini-2.5-pro",
+    "judge_model_version": "ba659f652ad46da14975268804407dd29a6943310e439ffae0a36a10fa15278a",
+    "judge_provider": "openrouter:google-vertex",
+    "red_team_model": "qwen/qwen3.5-397b-a17b",
+    "red_team_provider": "openrouter:chutes"
+  },
+  "matched_generation_count": 34,
+  "observation_name": "agent.judge.runtime",
+  "provider_request_ids_sha256": "69a735f2d5ed0bfb1bd77d757a9db08c6091853566746ad52eed45c7c75727ee",
+  "schema_version": "1",
+  "trace_id": "0078ac3129bfe032ca0e6310e725ccdd",
+  "verified_at": "2026-07-27T13:55:16.141371+00:00"
+}

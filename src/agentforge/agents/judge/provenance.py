@@ -22,6 +22,7 @@ Nothing here changes what the Judge may decide.  Confirmation remains oracle / c
 
 from __future__ import annotations
 
+import hashlib
 import re
 from collections.abc import Mapping, Sequence
 from typing import Any, Literal
@@ -32,7 +33,12 @@ GroundTruthTier = Literal[
     "rule_derived",
     "unattested",
 ]
-ProviderTier = Literal["usage_export_reconciled", "lineage_consistent", "unverified"]
+ProviderTier = Literal[
+    "usage_export_reconciled",
+    "langfuse_query_back_verified",
+    "lineage_consistent",
+    "unverified",
+]
 
 #: Strongest first. Position is the comparison; the names are the vocabulary.
 GROUND_TRUTH_TIERS: tuple[GroundTruthTier, ...] = (
@@ -43,6 +49,7 @@ GROUND_TRUTH_TIERS: tuple[GroundTruthTier, ...] = (
 )
 PROVIDER_TIERS: tuple[ProviderTier, ...] = (
     "usage_export_reconciled",
+    "langfuse_query_back_verified",
     "lineage_consistent",
     "unverified",
 )
@@ -70,6 +77,11 @@ PROVIDER_DISCLOSURE: Mapping[ProviderTier, str] = {
     "usage_export_reconciled": (
         "measured — every sample reconciled against the provider's own usage export by request "
         "id, model and cost"
+    ),
+    "langfuse_query_back_verified": (
+        "Langfuse query-back verified — every calibration generation was remotely observed with "
+        "its exact provider request id, model, tokens and measured cost. This proves the tracing "
+        "projection is queryable; it is not an independent provider usage export"
     ),
     "lineage_consistent": (
         "consistent with a real provider run, NOT reconciled against the provider's records — "
@@ -176,6 +188,24 @@ def classify_provider_provenance(
                 "sample_count": len(samples),
                 "matched_generation_count": matched,
             }
+        if (
+            attestation.get("attestation_kind") == "langfuse_query_back_verified"
+            and isinstance(matched, int)
+            and matched >= len(samples)
+        ):
+            request_ids = [str(sample.get("provider_request_id") or "") for sample in samples]
+            expected_digest = hashlib.sha256(
+                "\n".join(sorted(request_ids)).encode()
+            ).hexdigest()
+            if (
+                len(set(request_ids)) == len(request_ids)
+                and attestation.get("provider_request_ids_sha256") == expected_digest
+            ):
+                return "langfuse_query_back_verified", {
+                    "sample_count": len(samples),
+                    "matched_generation_count": matched,
+                    "provider_request_ids_sha256": expected_digest,
+                }
 
     request_ids = [str(sample.get("provider_request_id", "")) for sample in samples]
     costs = {str(sample.get("measured_cost_usd")) for sample in samples}

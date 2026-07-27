@@ -215,11 +215,14 @@ def _reconcile_runner_evaluator(
 ) -> JudgeReconciliation:
     """Apply the exact externally calibrated authority state at the pre-manifest seam."""
 
+    model_authority_allowed = calibration.model_authoritative
+    if calibration.authority_mode == "positive_only":
+        model_authority_allowed = assessment.get("state") in {"EXPLOIT_LIKELY", "ERROR"}
     return reconcile_judge_assessment(
         assessment=assessment,
         deterministic_verdict=deterministic_verdict,
         calibration_state=_evaluator_calibration_state(calibration),
-        model_authority_allowed=calibration.model_authoritative,
+        model_authority_allowed=model_authority_allowed,
     )
 
 
@@ -484,6 +487,7 @@ class _DurableHostedExecutionLifecycle:
             detail.update(
                 {
                     "calibration_state": self._calibration.state,
+                    "calibration_authority_mode": self._calibration.authority_mode,
                     "decision_authority": decision_authority,
                     "decision_authority_basis": reconciliation.decision_authority,
                     "model_state": output_payload.get("state"),

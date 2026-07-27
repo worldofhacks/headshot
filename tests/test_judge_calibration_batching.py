@@ -279,6 +279,45 @@ def test_merge_joins_disjoint_batches_that_exactly_cover_the_corpus(tmp_path: Pa
     assert manifest["label_to_batch"]["L-3"] == str(second)
 
 
+def test_merge_combines_complete_langfuse_query_back_attestations(tmp_path: Path) -> None:
+    module = _module(_MERGE, "merge_calibration_batches")
+    first = _write_batch(tmp_path, index=0, label_ids=["L-1", "L-2"])
+    second = _write_batch(tmp_path, index=1, label_ids=["L-3", "L-4"])
+    for index, directory in enumerate((first, second)):
+        bundle = json.loads((directory / "captured-results.json").read_text(encoding="utf-8"))
+        request_ids = [sample["provider_request_id"] for sample in bundle["samples"]]
+        (directory / "langfuse-attestation.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": "1",
+                    "attestation_kind": "langfuse_query_back_verified",
+                    "capture_run_id": f"run-{index}",
+                    "trace_id": f"{index + 1}" * 32,
+                    "judge_identity": _identity(),
+                    "matched_generation_count": 2,
+                    "provider_request_ids_sha256": hashlib.sha256(
+                        "\n".join(sorted(request_ids)).encode()
+                    ).hexdigest(),
+                    "verified_at": f"2026-07-27T0{index}:00:00+00:00",
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    merged = module._merge_langfuse_attestations(
+        [first, second],
+        judge_identity=_identity(),
+        sample_count=4,
+    )
+
+    assert merged["matched_generation_count"] == 4
+    assert merged["batch_count"] == 2
+    expected = [f"gen-L-{index}" for index in range(1, 5)]
+    assert merged["provider_request_ids_sha256"] == hashlib.sha256(
+        "\n".join(sorted(expected)).encode()
+    ).hexdigest()
+
+
 def test_merge_refuses_when_a_batch_is_missing(tmp_path: Path) -> None:
     """The failure a silent merge would turn into a better-looking agreement rate."""
 

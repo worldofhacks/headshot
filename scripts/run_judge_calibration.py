@@ -75,6 +75,11 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="exit 2 unless calibration thresholds pass (runtime stays disabled regardless)",
     )
+    parser.add_argument(
+        "--output",
+        type=Path,
+        help="write the calibration result JSON to this path instead of stdout",
+    )
     return parser
 
 
@@ -104,7 +109,12 @@ def main() -> int:
         )
     except CalibrationInputError as exc:
         parser.error(str(exc))
-    print(json.dumps(result, indent=2, sort_keys=True))
+    encoded = json.dumps(result, indent=2, sort_keys=True) + "\n"
+    if args.output is None:
+        print(encoded, end="")
+    else:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(encoded, encoding="utf-8")
     return 2 if args.require_pass and result["state"] != "passed" else 0
 
 

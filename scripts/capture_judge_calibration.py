@@ -64,6 +64,7 @@ import hashlib
 import json
 import os
 import re
+import time
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
@@ -79,12 +80,26 @@ from agentforge.agents.hosted_runtime import (
     HostedRoleRuntime,
     hosted_judge_identity,
 )
-from agentforge.agents.judge import CalibrationInputError, HostedEvaluator
+from agentforge.agents.judge import (
+    CalibrationInputError,
+    HostedEvaluator,
+    HostedEvaluatorError,
+)
 from agentforge.correlation import campaign_trace_id
 from agentforge.evals.validation import validate_ground_truth_slice
 from agentforge.providers import HostedUsageLedger, OpenRouterTransport
+from agentforge.providers.lineage import (
+    ProviderInvocationContextV1,
+    ProviderLogicalContextV1,
+    ProviderTerminalEventV1,
+)
 from agentforge.secrets import Secret
 from agentforge.target.spec import HostedRunBinding
+from agentforge.telemetry.outbound import (
+    _LangfuseBridge,
+    _observation_field,
+    _observation_metadata,
+)
 
 _ROOT = Path(__file__).resolve().parents[1]
 _GROUND_TRUTH = _ROOT / "evals" / "ground-truth"
@@ -179,6 +194,14 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="print the batch plan and the derived identity, then exit without calling a provider",
     )
+    parser.add_argument(
+        "--require-langfuse-query-back",
+        action="store_true",
+        help=(
+            "project every calibration generation to Langfuse and refuse unless exact remote "
+            "query-back observes every provider request id"
+        ),
+    )
     return parser
 
 
@@ -228,6 +251,15 @@ def main() -> int:
     credential = os.environ.get("OPENROUTER_API_KEY", "")
     if not credential:
         raise SystemExit("refusing to run: OPENROUTER_API_KEY is not set")
+    langfuse = (
+        _LangfuseCaptureVerifier(
+            capture_run_id=args.capture_run_id,
+            judge_identity=identity.payload(),
+            judge_model_version=judge_role.configuration_sha256,
+        )
+        if args.require_langfuse_query_back
+        else None
+    )
     print(
         f"batch {args.batch_index + 1}/{plan['batch_count']}: "
         f"{len(labels)} labels ({batch['first_label_id']} … {batch['last_label_id']})",
@@ -244,12 +276,13 @@ def main() -> int:
         provider_timeout_seconds=_JUDGE_CALL_BOUNDS.timeout_seconds,
     )
 
-    lifecycle = _InMemoryExecutionLifecycle()
+    lifecycle = _InMemoryExecutionLifecycle(capture_run_id=args.capture_run_id)
     ledger = HostedUsageLedger(configuration)
     transport = OpenRouterTransport(
         configuration=configuration,
         credential_resolver=lambda reference: _resolve(reference, configuration, credential),
         ledger=ledger,
+        lineage_recorder=lifecycle,
     )
     try:
         runtime = HostedRoleRuntime(
@@ -267,17 +300,34 @@ def main() -> int:
         for index, (category, label) in enumerate(labels, start=1):
             label_id = label["label_id"]
             print(f"[{index}/{len(labels)}] {category} {label_id}", flush=True)
-            result = evaluator.evaluate(
-                label["evidence_envelope"],
-                integrity_ok=True,
-                sanitized=True,
-            )
-            lineage = result.lineage
+            try:
+                result = evaluator.evaluate(
+                    label["evidence_envelope"],
+                    integrity_ok=True,
+                    sanitized=True,
+                )
+            except HostedEvaluatorError:
+                execution_id = f"judge-calibration-execution-{index}"
+                lineage = lifecycle.failed_lineage(execution_id)
+                if lineage is None:
+                    raise
+                assessment = {
+                    "state": "ERROR",
+                    "confidence": 0.0,
+                    "rationale": (
+                        "Provider response failed the trusted Judge assessment validator."
+                    ),
+                    "criteria_hits": [],
+                    "error_code": "invalid_structured_output",
+                }
+            else:
+                lineage = result.lineage
+                assessment = dict(result.assessment)
             returned_models.add(lineage.returned_model)
             samples.append(
                 {
                     "label_id": label_id,
-                    "assessment": dict(result.assessment),
+                    "assessment": assessment,
                     "provider_request_id": lineage.provider_request_id,
                     "trace_id": campaign_trace_id(f"{args.capture_run_id}:{label_id}"),
                     "returned_model": lineage.returned_model,
@@ -287,9 +337,14 @@ def main() -> int:
                     "measured_cost_usd": lineage.measured_cost_usd,
                 }
             )
+            if langfuse is not None:
+                langfuse.record(samples[-1])
     finally:
         transport.close()
 
+    langfuse_attestation = (
+        None if langfuse is None else langfuse.verify(samples)
+    )
     if len(returned_models) != 1:
         raise CaptureError("provider returned more than one model identity across the capture")
     bundle = {
@@ -310,6 +365,8 @@ def main() -> int:
     args.output_dir.mkdir(parents=True, exist_ok=True)
     _write_json(args.output_dir / "captured-results.json", bundle)
     _write_json(args.output_dir / "judge-identity.json", identity.payload())
+    if langfuse_attestation is not None:
+        _write_json(args.output_dir / "langfuse-attestation.json", langfuse_attestation)
     _write_json(
         args.output_dir / "capture-manifest.json",
         {
@@ -364,8 +421,20 @@ def main() -> int:
             "executions": lifecycle.summary(),
             "trace_id_derivation": (
                 "agentforge.correlation.campaign_trace_id('<capture_run_id>:<label_id>') — the "
-                "platform's W3C-compatible correlation id. This offline capture does not export "
-                "to Langfuse, so this is NOT a Langfuse trace id."
+                "platform's W3C-compatible correlation id for provider lineage. When query-back "
+                "is required, a separate batch trace in langfuse-attestation.json carries the "
+                "sanitized calibration projection."
+            ),
+            "langfuse_query_back": (
+                None
+                if langfuse_attestation is None
+                else {
+                    "trace_id": langfuse_attestation["trace_id"],
+                    "matched_generation_count": langfuse_attestation[
+                        "matched_generation_count"
+                    ],
+                    "verified_at": langfuse_attestation["verified_at"],
+                }
             ),
         },
     )
@@ -375,6 +444,155 @@ def main() -> int:
         flush=True,
     )
     return 0
+
+
+class _LangfuseCaptureVerifier:
+    """Sanitized projection plus exact remote query-back for calibration generations."""
+
+    _OBSERVATION_NAME = "agent.judge.runtime"
+
+    def __init__(
+        self,
+        *,
+        capture_run_id: str,
+        judge_identity: Mapping[str, str],
+        judge_model_version: str,
+        bridge: _LangfuseBridge | None = None,
+    ) -> None:
+        self.capture_run_id = capture_run_id
+        self.judge_identity = dict(judge_identity)
+        self.judge_model_version = judge_model_version
+        self.trace_id = campaign_trace_id(f"judge-calibration:{capture_run_id}")
+        self.bridge = bridge or _LangfuseBridge()
+        if not self.bridge.configured():
+            raise CaptureError("Langfuse query-back was required but credentials are unavailable")
+        if self.bridge.auth_check() is not True:
+            raise CaptureError("Langfuse query-back was required but authentication failed")
+
+    def record(self, sample: Mapping[str, Any]) -> None:
+        provider_request_id = str(sample["provider_request_id"])
+        label_digest = hashlib.sha256(str(sample["label_id"]).encode("utf-8")).hexdigest()
+        state = self.bridge.start_agent(
+            trace_id=self.trace_id,
+            role="judge",
+            provider="openrouter",
+            model=str(sample["returned_model"]),
+            execution_mode="calibration",
+            version=self.judge_model_version,
+            input_payload={"label_sha256": label_digest},
+            metadata={
+                "calibration.capture_run_id": self.capture_run_id,
+                "calibration.label_sha256": label_digest,
+                "calibration.provider_request_id": provider_request_id,
+            },
+        )
+        if state is None:
+            raise CaptureError("Langfuse calibration observation did not open")
+        self.bridge.finish_agent(
+            state,
+            output={"state": sample["assessment"]["state"]},
+            metadata={
+                "calibration.capture_run_id": self.capture_run_id,
+                "calibration.label_sha256": label_digest,
+                "calibration.provider_request_id": provider_request_id,
+            },
+            error_code=None,
+            status="succeeded",
+            input_tokens=int(sample["input_tokens"]),
+            output_tokens=int(sample["output_tokens"]),
+            reasoning_tokens=int(sample["reasoning_tokens"]),
+            measured_cost=float(str(sample["measured_cost_usd"])),
+            cost_measurement_state="measured",
+            provider_event_ids=[],
+            returned_model=str(sample["returned_model"]),
+        )
+
+    def verify(self, samples: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+        expected = {str(sample["provider_request_id"]) for sample in samples}
+        observed: set[str] = set()
+        deadline = time.monotonic() + 45.0
+        while time.monotonic() < deadline:
+            self.bridge.flush()
+            observed = self._observed_provider_request_ids()
+            if observed == expected:
+                break
+            time.sleep(1.0)
+        if observed != expected:
+            missing = len(expected - observed)
+            extra = len(observed - expected)
+            raise CaptureError(
+                "Langfuse query-back did not reconcile the exact calibration generation set "
+                f"(missing={missing}, extra={extra})"
+            )
+        request_id_digest = hashlib.sha256(
+            "\n".join(sorted(expected)).encode("utf-8")
+        ).hexdigest()
+        return {
+            "schema_version": "1",
+            "attestation_kind": "langfuse_query_back_verified",
+            "capture_run_id": self.capture_run_id,
+            "trace_id": self.trace_id,
+            "observation_name": self._OBSERVATION_NAME,
+            "judge_identity": self.judge_identity,
+            "matched_generation_count": len(observed),
+            "provider_request_ids_sha256": request_id_digest,
+            "verified_at": datetime.now(UTC).isoformat(),
+            "disclosure": (
+                "Every calibration generation was remotely queryable in Langfuse with its exact "
+                "provider request id. This verifies the tracing projection, not an independent "
+                "OpenRouter usage export."
+            ),
+        }
+
+    def _observed_provider_request_ids(self) -> set[str]:
+        client = self.bridge._client()
+        observations = getattr(getattr(client, "api", None), "observations", None)
+        query = None
+        for name in ("get_many", "get", "list"):
+            candidate = getattr(observations, name, None)
+            if callable(candidate):
+                query = candidate
+                break
+        if query is None:
+            raise CaptureError("Langfuse observation query API is unavailable")
+
+        found: set[str] = set()
+        cursor: str | None = None
+        seen: set[str] = set()
+        for _page in range(100):
+            parameters: dict[str, Any] = {
+                "trace_id": self.trace_id,
+                "limit": 1000,
+                "fields": "core,basic,io,metadata",
+            }
+            if cursor is not None:
+                parameters["cursor"] = cursor
+            response = query(**parameters)
+            data = _observation_field(response, "data")
+            if not isinstance(data, (list, tuple)):
+                raise CaptureError("Langfuse observation query returned no data list")
+            for observation in data:
+                if _observation_field(observation, "name") != self._OBSERVATION_NAME:
+                    continue
+                if _observation_field(observation, "end_time", "endTime") is None:
+                    continue
+                metadata = _observation_metadata(observation)
+                request_id = metadata.get("calibration.provider_request_id")
+                if isinstance(request_id, str) and request_id:
+                    found.add(request_id)
+            meta = _observation_field(response, "meta")
+            next_cursor = _observation_field(meta, "cursor", "next", "after")
+            if next_cursor is None:
+                page = _observation_field(meta, "page")
+                if isinstance(page, Mapping):
+                    next_cursor = page.get("cursor")
+            if next_cursor is None:
+                return found
+            if not isinstance(next_cursor, str) or not next_cursor or next_cursor in seen:
+                raise CaptureError("Langfuse observation pagination is invalid")
+            seen.add(next_cursor)
+            cursor = next_cursor
+        raise CaptureError("Langfuse observation pagination exceeded its bound")
 
 
 def _resolve(
@@ -565,18 +783,108 @@ def _generation_policy_sha256(
 class _InMemoryExecutionLifecycle:
     """Satisfy the mandatory lifecycle seam without a control-plane database.
 
-    A calibration capture is not a campaign: there is no run row, no attempt, and no durable
-    ledger to write to. The lifecycle is still exercised (start before the call, finish after it)
-    so the runtime's ordering guarantees hold, and its tally is written into the run manifest.
+    A calibration capture is not a campaign: there is no run row, no attempt, and no control-plane
+    database to write to. The lifecycle and physical-call lineage seams are still exercised in
+    memory (reservation before send, terminal event after send), and their tallies are written into
+    the run manifest. This keeps the target-free harness aligned with the production transport
+    contract without fabricating campaign persistence.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, *, capture_run_id: str) -> None:
+        self._campaign_run_id = hashlib.sha256(
+            f"judge-calibration:{capture_run_id}".encode()
+        ).hexdigest()
         self._starts: list[dict[str, Any]] = []
         self._finishes: list[dict[str, Any]] = []
+        self._invocations: dict[str, ProviderInvocationContextV1] = {}
+        self._events: dict[str, ProviderTerminalEventV1] = {}
 
     def start(self, **kwargs: Any) -> str:
         self._starts.append(dict(kwargs))
         return f"judge-calibration-execution-{len(self._starts)}"
+
+    def provider_context(
+        self,
+        *,
+        execution_id: str,
+        prompt_version: str,
+        prompt_sha256: str,
+    ) -> ProviderLogicalContextV1:
+        try:
+            started = next(
+                item
+                for index, item in enumerate(self._starts, start=1)
+                if execution_id == f"judge-calibration-execution-{index}"
+            )
+        except StopIteration as exc:
+            raise CaptureError("calibration execution context is unavailable") from exc
+        return ProviderLogicalContextV1(
+            organization_id="org-headshot-calibration",
+            campaign_run_id=self._campaign_run_id,
+            campaign_attempt_id=None,
+            logical_execution_id=execution_id,
+            parent_execution_id=started["parent_execution_id"],
+            agent_role=started["role"],
+            requested_model=started["model"],
+            configured_upstream=started["upstream_provider"],
+            prompt_version=prompt_version,
+            prompt_sha256=prompt_sha256,
+            configuration_set_sha256=started["configuration_sha256"],
+            role_configuration_sha256=started["role_configuration_sha256"],
+            generation_policy_sha256=started["generation_policy_sha256"],
+        )
+
+    def begin_physical_attempt(
+        self,
+        logical_context: ProviderLogicalContextV1,
+        sequence: int,
+    ) -> ProviderInvocationContextV1:
+        invocation_id = hashlib.sha256(
+            (
+                f"{logical_context.organization_id}:{logical_context.campaign_run_id}:"
+                f"{logical_context.logical_execution_id}:{sequence}"
+            ).encode()
+        ).hexdigest()
+        if invocation_id in self._invocations:
+            raise CaptureError("duplicate calibration provider-call reservation")
+        invocation = ProviderInvocationContextV1(
+            invocation_id=invocation_id,
+            organization_id=logical_context.organization_id,
+            campaign_run_id=logical_context.campaign_run_id,
+            campaign_attempt_id=logical_context.campaign_attempt_id,
+            logical_execution_id=logical_context.logical_execution_id,
+            parent_execution_id=logical_context.parent_execution_id,
+            agent_role=logical_context.agent_role,
+            physical_sequence=sequence,
+            idempotency_key=f"provider-call:{invocation_id}",
+            requested_model=logical_context.requested_model,
+            configured_upstream=logical_context.configured_upstream,
+            prompt_version=logical_context.prompt_version,
+            prompt_sha256=logical_context.prompt_sha256,
+            configuration_set_sha256=logical_context.configuration_set_sha256,
+            role_configuration_sha256=logical_context.role_configuration_sha256,
+            generation_policy_sha256=logical_context.generation_policy_sha256,
+            started_at=datetime.now(UTC),
+        )
+        self._invocations[invocation_id] = invocation
+        return invocation
+
+    def finish_physical_attempt(
+        self,
+        invocation: ProviderInvocationContextV1,
+        event: ProviderTerminalEventV1,
+    ) -> ProviderTerminalEventV1:
+        reserved = self._invocations.get(invocation.invocation_id)
+        if reserved != invocation:
+            raise CaptureError("calibration provider-call reservation is unavailable")
+        if event.invocation_id != invocation.invocation_id:
+            raise CaptureError("calibration provider-call terminal identity differs")
+        if event.physical_sequence != invocation.physical_sequence:
+            raise CaptureError("calibration provider-call terminal sequence differs")
+        if event.invocation_id in self._events:
+            raise CaptureError("duplicate calibration provider-call terminal event")
+        self._events[event.invocation_id] = event
+        return event
 
     def finish(
         self,
@@ -595,8 +903,16 @@ class _InMemoryExecutionLifecycle:
                 "error_code": error_code,
                 "failed_physical_attempts": failed_physical_attempts,
                 "physical_attempts": (None if lineage is None else lineage.physical_attempts),
+                "lineage": lineage,
             }
         )
+
+    def failed_lineage(self, execution_id: str) -> HostedExecutionLineage | None:
+        for item in reversed(self._finishes):
+            if item["execution_id"] == execution_id and item["status"] == "failed":
+                lineage = item["lineage"]
+                return lineage if isinstance(lineage, HostedExecutionLineage) else None
+        return None
 
     def summary(self) -> dict[str, Any]:
         return {
@@ -608,6 +924,9 @@ class _InMemoryExecutionLifecycle:
                 item["physical_attempts"] or item["failed_physical_attempts"] or 0
                 for item in self._finishes
             ),
+            "provider_calls_reserved": len(self._invocations),
+            "provider_calls_terminal": len(self._events),
+            "provider_calls_open": len(set(self._invocations) - set(self._events)),
         }
 
 

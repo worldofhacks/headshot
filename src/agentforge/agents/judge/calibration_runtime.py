@@ -18,6 +18,7 @@ from typing import Any, Literal
 
 from agentforge.agents.judge.calibration import JudgeIdentity
 from agentforge.agents.judge.enablement import require_model_judge_enablement
+from agentforge.agents.judge.provenance import ProvenanceError, decode_approver_ref
 from agentforge.contracts import validate
 
 CalibrationRuntimeState = Literal[
@@ -49,6 +50,25 @@ class JudgeCalibrationStatus:
 
         return copy.deepcopy(self._artifact)
 
+    @property
+    def authority_mode(self) -> Literal["none", "full", "positive_only"]:
+        """Return the model authority supported by the artifact's disclosed provenance."""
+
+        if not self.model_authoritative or self._artifact is None:
+            return "none"
+        try:
+            provenance = decode_approver_ref(str(self._artifact.get("approver_ref") or ""))
+        except ProvenanceError:
+            # Enabled artifacts from before graded provenance retain their historical meaning
+            # after the existing identity, content-address, and enablement gates pass.
+            return "full"
+        if (
+            provenance["ground_truth_tier"] == "human_two_person"
+            and provenance["provider_tier"] == "usage_export_reconciled"
+        ):
+            return "full"
+        return "positive_only"
+
     def public_payload(self) -> dict[str, Any]:
         """Return only status fields suitable for telemetry or a read model."""
 
@@ -58,6 +78,7 @@ class JudgeCalibrationStatus:
             "metrics": None if self.metrics is None else dict(self.metrics),
             "reason_codes": list(self.reason_codes),
             "model_authoritative": self.model_authoritative,
+            "authority_mode": self.authority_mode,
             "source": self.source,
         }
 

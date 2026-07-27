@@ -1,0 +1,34 @@
+{
+  "attestation_kind": "langfuse_query_back_verified",
+  "batch_count": 2,
+  "batches": [
+    {
+      "capture_run_id": "provisional-judge-20260727-b0r1",
+      "matched_generation_count": 34,
+      "provider_request_ids_sha256": "69a735f2d5ed0bfb1bd77d757a9db08c6091853566746ad52eed45c7c75727ee",
+      "trace_id": "0078ac3129bfe032ca0e6310e725ccdd",
+      "verified_at": "2026-07-27T13:55:16.141371+00:00"
+    },
+    {
+      "capture_run_id": "provisional-judge-20260727-b1r1",
+      "matched_generation_count": 20,
+      "provider_request_ids_sha256": "b2ae2b809b5ab3cdf3c550cc6181e6ad5e245acbce728e5ee1af6d6541a0a958",
+      "trace_id": "e9241bada0dc436692d314daaae7a778",
+      "verified_at": "2026-07-27T14:00:51.452326+00:00"
+    }
+  ],
+  "disclosure": "Every calibration generation was remotely queryable in Langfuse. This verifies the tracing projection, not an independent OpenRouter usage export.",
+  "judge_identity": {
+    "criteria_version": "independent-judge-assessment-v2",
+    "implementation_version": "hosted-role-runtime-v2",
+    "judge_model": "google/gemini-2.5-pro",
+    "judge_model_version": "ba659f652ad46da14975268804407dd29a6943310e439ffae0a36a10fa15278a",
+    "judge_provider": "openrouter:google-vertex",
+    "red_team_model": "qwen/qwen3.5-397b-a17b",
+    "red_team_provider": "openrouter:chutes"
+  },
+  "matched_generation_count": 54,
+  "provider_request_ids_sha256": "c97d07b5baa6621cd97ca60264133c270961a016825b2b897497acea16f355e2",
+  "schema_version": "1",
+  "verified_at": "2026-07-27T14:00:51.452326+00:00"
+}

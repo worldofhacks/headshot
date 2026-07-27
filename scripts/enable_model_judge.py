@@ -38,7 +38,7 @@ import json
 import re
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from agentforge.agents.hosted import HostedConfigurationSet
 from agentforge.agents.hosted_runtime import hosted_judge_identity
@@ -181,7 +181,19 @@ def _enable(args: argparse.Namespace) -> dict[str, Any]:
         )
 
     ground_truth_tier, provider_tier = _classify(args, calibration=calibration)
-    _require_governing_stratum_passes(calibration, slice_dir=args.slice_dir)
+    authority_mode: Literal["full", "positive_only"] = (
+        "full"
+        if (
+            ground_truth_tier == "human_two_person"
+            and provider_tier == "usage_export_reconciled"
+        )
+        else "positive_only"
+    )
+    _require_governing_stratum_passes(
+        calibration,
+        slice_dir=args.slice_dir,
+        authority_mode=authority_mode,
+    )
 
     try:
         approver_ref = encode_approver_ref(
@@ -302,8 +314,20 @@ def _load_slices(slice_dir: Path) -> list[dict[str, Any]]:
     return [_read_json(path, "ground-truth slice") for path in candidates]
 
 
-def _require_governing_stratum_passes(calibration: Mapping[str, Any], *, slice_dir: Path) -> None:
-    """Gate on the non-oracle stratum: the only cases an enabled model Judge decides."""
+def _require_governing_stratum_passes(
+    calibration: Mapping[str, Any],
+    *,
+    slice_dir: Path,
+    authority_mode: Literal["full", "positive_only"] = "full",
+) -> None:
+    """Gate the non-oracle stratum against the authority the artifact can actually grant.
+
+    Full authority must pass every existing breach check. Provisional positive-only authority
+    never persists ``NO_EXPLOIT_OBSERVED`` as safe: a model false negative remains the
+    deterministic ``INDETERMINATE`` result. Consequently ``false_negative_rate_exceeded`` and
+    ``positive_scored_safe`` are contained by construction in that mode; agreement, false
+    positives, abstention, and all other breaches still fail closed.
+    """
 
     analyzer = _load_analyzer()
     try:
@@ -312,10 +336,17 @@ def _require_governing_stratum_passes(calibration: Mapping[str, Any], *, slice_d
         raise EnablementRefused(f"the calibration could not be stratified: {exc}") from exc
 
     non_oracle = report["non_oracle"]
-    if non_oracle["breaches"]:
+    breaches = list(non_oracle["breaches"])
+    if authority_mode == "positive_only":
+        breaches = [
+            breach
+            for breach in breaches
+            if breach not in {"false_negative_rate_exceeded", "positive_scored_safe"}
+        ]
+    if breaches:
         raise EnablementRefused(
             "the non-oracle stratum — the only cases the model actually decides — breaches "
-            f"{', '.join(non_oracle['breaches'])} "
+            f"{', '.join(breaches)} "
             f"(n={non_oracle['sample_count']}, agreement={non_oracle['agreement_rate']:.4f}, "
             f"false-negative={non_oracle['false_negative_rate']:.4f}). The pooled headline may "
             "still pass; it is not the number that governs enablement."
