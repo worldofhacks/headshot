@@ -300,6 +300,14 @@ The current live corpus is 100 cases/121 target turns split into three independe
 sub-workloads of 34/33/33 cases. Each batch has exact logical and physical caps and zero target
 retries. This split is an authorization boundary, not an internal Runner chunking feature.
 
+A sequential multi-turn attempt that ends early — a turn returns non-2xx, so the remaining
+authorized turns are never sent — raises `IncompleteMultiTurnAttempt`, a narrow `AbortError`
+subclass. The runner abandons that single case without a verdict, because a partially dispatched
+attempt has no recorded evidence and any verdict would be a claim the evidence cannot support.
+Three consecutive such failures abort the run as `target_unavailable`. The narrowness is
+load-bearing: the base `AbortError` also carries budget, rate, attempt and physical-request-cap
+breaches, which are facts about the run's authority and must never be skipped past.
+
 ## 9. Judge design
 
 The Judge consumes a bounded Evidence Envelope with explicit trust labels. Target and Red Team text is

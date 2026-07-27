@@ -145,8 +145,9 @@ invented one.
 
 ## Campaign fault isolation
 
-A campaign aborts only for governance, security or integrity failures, or an unknown target
-outcome. Two case-local provider faults are isolated instead:
+A campaign aborts only for governance, security or integrity failures, or a target the platform
+can no longer reason about. Three case-local faults are isolated instead — two provider-side, one
+target-side:
 
 - `HostedStructuredOutputInvalid` (and its `HostedStructuredOutputTruncated` subclass) — a
   proposal or adjudication that will not parse.
@@ -158,12 +159,32 @@ outcome. Two case-local provider faults are isolated instead:
   error *code* cannot discriminate either, since `HostedSettlementFailed`, `_PhysicalCallError`
   and `_StructuredOutputAbsent` all report the identical `hosted-provider-unavailable`.
 
-The two phases differ deliberately. In the proposal phase no target turn ran, so there is no
-evidence and the pre-bound attempt is abandoned un-attacked rather than handed a verdict it did not
-earn. In the dispatch phase the target was already attacked and its evidence exists, so the case
-receives a contract-valid `ERROR` verdict. Neither can open a finding or trigger the Documentation
-agent. A *sustained* outage still aborts: a campaign that attacked nothing may never be reported as
-a campaign that found nothing.
+- `IncompleteMultiTurnAttempt` — a sequential multi-turn sequence ended before every authorized
+  turn was sent, because a turn returned a non-2xx status. Raised at one site in the Policy
+  Gateway. It is a narrow `AbortError` subclass for the same reason: the base also carries budget,
+  rate, attempt and physical-request-cap breaches, which are facts about the run's authority and
+  must always abort.
+
+The three differ deliberately in what they leave behind. In the proposal phase no target turn ran,
+so there is no evidence and the pre-bound attempt is abandoned un-attacked rather than handed a
+verdict it did not earn. In the dispatch phase a *provider* fault leaves the target already
+attacked with its evidence recorded, so the case receives a contract-valid `ERROR` verdict. An
+unfinished multi-turn sequence has neither: the attempt is partially dispatched but has no
+`attempt_result` row, so it is abandoned without a verdict — writing `ERROR` there would be a claim
+the evidence cannot support. None of the three can open a finding or trigger the Documentation
+agent.
+
+What remains unknown after a partial sequence is bounded and specific: whether the target processed
+the turn that failed. That makes the attempt unadjudicable, not the campaign. Live example — run
+`2cf3773d` (2026-07-27) sent turn 1 successfully, took one HTTP 502 on turn 2 after 63.8 seconds,
+and discarded 33 authorized cases; the target answered healthily moments later.
+
+Sustained failure still aborts, on both axes. Total proposal abandonment leaves
+`dispatched_case_count` at zero and raises, and three *consecutive* unfinished multi-turn attempts
+abort with `target_unavailable` — the streak resets on any case that completes dispatch, so it
+means consecutive rather than cumulative. A campaign that attacked nothing may never be reported as
+a campaign that found nothing, and a target that is down must stop the run rather than absorb a
+queue of unadjudicable work.
 
 ## Operations-console candidate
 
