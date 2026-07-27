@@ -961,24 +961,34 @@ class OutboundHttpTelemetry:
                     .mappings()
                     .one()
                 )
-                # Already-durable physical attempts for this logical execution. Read here so the
-                # projection needs no new table, worker or outbox — it reuses the connection the
-                # completion read already opened.
-                physical_attempts = [
-                    _physical_attempt_metadata(record)
-                    for record in connection.execute(
-                        text(
-                            "SELECT physical_sequence, status, returned_model, "
-                            "upstream_provider, provider_request_id, input_tokens, "
-                            "output_tokens, reasoning_tokens, measured_cost_usd, "
-                            "cost_measurement_state, duration_ms, error_code "
-                            "FROM provider_call_events "
-                            "WHERE logical_execution_id = :execution_id "
-                            "ORDER BY physical_sequence"
-                        ),
-                        {"execution_id": execution_id},
-                    ).mappings()
-                ]
+                # Already-durable physical attempts for this logical execution, read on the
+                # connection the completion read already opened so the projection needs no new
+                # table, worker or outbox.
+                #
+                # Isolated in its own try: this is an OPTIONAL projection and must never be able
+                # to fail the REQUIRED completion below. An earlier version shared the outer
+                # handler, so a failure here silently aborted the agent finish entirely.
+                try:
+                    physical_attempts = [
+                        _physical_attempt_metadata(record)
+                        for record in connection.execute(
+                            text(
+                                "SELECT physical_sequence, status, returned_model, "
+                                "upstream_provider, provider_request_id, input_tokens, "
+                                "output_tokens, reasoning_tokens, measured_cost_usd, "
+                                "cost_measurement_state, duration_ms, error_code "
+                                "FROM provider_call_events "
+                                "WHERE logical_execution_id = :execution_id "
+                                "ORDER BY physical_sequence"
+                            ),
+                            {"execution_id": execution_id},
+                        ).mappings()
+                    ]
+                except Exception as exc:
+                    _logger.warning(
+                        "physical attempt projection read failed: %s", type(exc).__name__
+                    )
+                    physical_attempts = []
         except Exception:
             _logger.warning("agent telemetry completion persistence read failed")
             return False
@@ -1024,7 +1034,15 @@ class OutboundHttpTelemetry:
             "error_code": pending.error_code,
         }
         try:
-            self.langfuse.record_physical_attempts(handle.langfuse_state, physical_attempts)
+            # Optional projection, resolved defensively: an alternative bridge (or a test double)
+            # need not implement it, and a failure here must never abort the agent finish that
+            # follows. The codebase uses this same idiom for bind_agent_attempt.
+            project_attempts = getattr(self.langfuse, "record_physical_attempts", None)
+            if callable(project_attempts) and physical_attempts:
+                try:
+                    project_attempts(handle.langfuse_state, physical_attempts)
+                except Exception as exc:
+                    _logger.warning("physical attempt projection failed: %s", type(exc).__name__)
             self.langfuse.finish_agent(
                 handle.langfuse_state,
                 output={"sha256": str(row["output_sha256"])},

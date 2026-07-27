@@ -152,6 +152,12 @@ def derive(base: HostedConfigurationSet, workload_id: str) -> dict:
         # happened to allow: inheriting is how a retry silently outgrows its authority. Round up
         # to the cent, then refuse below if that exceeds the reviewed platform ceiling.
         role_cap = max(_ceil_cents(worst), base_role.limits.max_usd)
+        if role_cap > HOSTED_ROLE_MAX_MEASURED_USD[role_name]:
+            raise DerivationRefused(
+                f"{role_name} needs a ${role_cap} spend cap to cover its ${worst} worst case, "
+                f"which exceeds the reviewed platform role ceiling "
+                f"${HOSTED_ROLE_MAX_MEASURED_USD[role_name]}"
+            )
 
         # Everything except the limits is copied verbatim: model, upstream, prompt hash, opaque
         # credential reference, prices. The derived set must differ from its base only where the
@@ -194,6 +200,12 @@ def derive(base: HostedConfigurationSet, workload_id: str) -> dict:
 
     global_worst = totals["usd"].quantize(Decimal("0.000001"))
     global_cap = max(_ceil_cents(global_worst), base.global_limits.max_usd)
+    if global_cap > HOSTED_MAX_MEASURED_USD:
+        raise DerivationRefused(
+            f"this workload needs a ${global_cap} global spend cap to cover its "
+            f"${global_worst} worst case, which exceeds the reviewed platform ceiling "
+            f"${HOSTED_MAX_MEASURED_USD} — the ceiling must be re-reviewed, not assumed"
+        )
     derived = dataclasses.replace(
         base,
         roles=tuple(derived_roles),
