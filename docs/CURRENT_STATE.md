@@ -39,7 +39,7 @@ occurred.
 | Web | `SUCCESS` | deployment `ae2505f2-798b-4d96-98d9-7619e104feb0` |
 | Runner | `SUCCESS` | deployment `ce2eeb34-95b-4ac0-999b-df3de4ea659a` |
 | Scheduler | `SUCCESS` | deployment `4c2e38a4-6b10-4d0f-96ab-d51b2d8f63b9` |
-| PostgreSQL | ready | sole Alembic head `0026` |
+| PostgreSQL | ready | repository candidate head `0026`; deployed staging at `0025` (release `456d6e5`) |
 | Public Web | healthy | `/health` 200, `/ready` 200, unauthenticated `/api/v1/principal` 401 |
 
 Web, Runner, and Scheduler all report generation-policy digest

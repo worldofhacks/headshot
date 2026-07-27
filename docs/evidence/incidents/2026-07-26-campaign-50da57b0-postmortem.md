@@ -285,10 +285,11 @@ documentation 1) = 34 + 34 + 68 + 34 = 170. The old 136 was the same arithmetic 
 deliberately cannot stage it: an append-only governed write requires a Clerk principal holding
 `org:config:manage`, and inventing that authority in a script is the shortcut this platform exists to
 catch. Worst case for `headshot-live-100-batch-01`: 170 physical calls, 4,177,920 input / 365,568
-output / 417,792 reasoning tokens, `$10.820813` against the `$12` ceiling. Per-million prices were
-solved from this incident's own measurements — orchestrator `$5`/`$25` exact, judge `$1.25`/`$10`
-exact, red_team `$0.40`/`$3` to within about 0.1%. Documentation has no measured rate, because it has
-never executed, and is assumed at the Judge's rate.
+output / 417,792 reasoning tokens. The worst-case **spend** is deliberately not quoted here: prices
+must come from a reviewed `HostedConfigurationSet`, and the derivation refuses without one. An
+earlier draft quoted `$10.820813` from prices solved out of this incident's own measurements; that
+was withdrawn, because an average conflates rate with usage mix and Documentation — which never
+executed — had no measured rate at all and was being priced as the Judge.
 
 **Proof.** `tests/test_campaign_fault_isolation_db.py` drives a real four-role hosted campaign against
 migrated PostgreSQL using the real transport, store, lifecycle and Runner loop, faking only the

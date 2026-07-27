@@ -29,7 +29,8 @@ Staging:
 
 - Web, Runner, and Scheduler are successful and share generation-policy digest `b83acb23…`;
 - their packaged `hosted_policy.py` SHA-256 is identical;
-- PostgreSQL is at Alembic `0026`;
+- PostgreSQL is at the head packaged into the deployed artifact — `0025` for the currently
+  deployed staging release `456d6e5`, and `0026` for the repository candidate;
 - `/health` and `/ready` return 200; and
 - unauthenticated `/api/v1/principal` returns 401.
 
@@ -52,7 +53,8 @@ All services build `Dockerfile`. The runtime image contains:
 - the Langfuse campaign verifier.
 
 Only `railway/web.json` declares `alembic upgrade head`. Runner and Scheduler call an exact-head
-readiness check before consuming/enqueuing work. The current sole head is `0026`; never hard-code that
+readiness check before consuming/enqueuing work. The current sole repository head is `0026` and
+deployed staging is at `0025`; never hard-code either
 value into automation that should derive the packaged head.
 
 One release must be tested as an immutable artifact. Do not independently rebuild services from

@@ -377,6 +377,48 @@ def test_a_first_attempt_refusal_is_unchanged_and_carries_no_observed_result() -
 
     assert not isinstance(raised.value, HostedRetryAdmissionRefused)
     assert not isinstance(raised.value, HostedProviderResponseError)
+    # The underlying resolver failure is the cause — and the error is never its own cause.
+    assert raised.value.__cause__ is not raised.value
+    assert isinstance(raised.value.__cause__, RuntimeError)
+
+
+def test_no_pre_send_refusal_is_ever_its_own_cause() -> None:
+    """`raise exc from exc` renders as a self-referential chain and hides the real origin.
+
+    Every pre-send blocker is exercised on a FIRST attempt, where the helper re-raises the
+    original error rather than wrapping it. Walking the cause chain must terminate.
+    """
+
+    configuration = _configuration()
+
+    def refuse_credential(_reference: str) -> Secret:
+        raise HostedProviderError("credential gone")
+
+    class _FailsBegin(_ProviderRecorder):
+        def begin_physical_attempt(self, logical_context, sequence):  # type: ignore[override]
+            raise HostedProviderError("lineage unavailable")
+
+    scenarios = [
+        ("credential", refuse_credential, _ProviderRecorder()),
+        ("lineage", lambda _r: Secret("test-provider-value"), _FailsBegin()),
+    ]
+
+    for label, resolver, recorder in scenarios:
+        transport = OpenRouterTransport(
+            configuration=configuration,
+            credential_resolver=resolver,
+            client=httpx.Client(transport=httpx.MockTransport(lambda _r: _valid())),
+            lineage_recorder=recorder,
+        )
+        with pytest.raises(HostedProviderError) as raised:
+            _invoke_with(configuration, transport)
+
+        seen: set[int] = set()
+        node: BaseException | None = raised.value
+        while node is not None:
+            assert id(node) not in seen, f"{label}: cause chain loops on {type(node).__name__}"
+            seen.add(id(node))
+            node = node.__cause__
 
 
 # --------------------------------------------------------------------------------------

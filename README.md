@@ -9,7 +9,8 @@ authorized live URL; target code does not live in this repository.
 As of 2026-07-26, the platform has:
 
 - an authenticated React/Clerk operator console and protected FastAPI API;
-- a PostgreSQL control plane, queue, audit/evidence store, and Alembic head `0026`;
+- a PostgreSQL control plane, queue, audit/evidence store, at repository candidate Alembic
+  head `0026` (staging is deployed at release `456d6e5`, whose database is still at `0025`);
 - private Railway Runner and Scheduler services;
 - exact-scope two-person campaign authorization;
 - hosted Orchestrator, Red Team, Judge, and Documentation roles through OpenRouter;
@@ -110,7 +111,7 @@ and fresh authorization.
 | `src/agentforge/telemetry/` | PostgreSQL/Langfuse projection |
 | `src/agentforge/contracts/v1/` | packaged JSON Schema contracts |
 | `evals/` | synthetic fixtures, reviewed workloads, calibration/evidence artifacts |
-| `migrations/` | Alembic history; sole head is `0026` |
+| `migrations/` | Alembic history; sole repository head is `0026`; deployed staging is at `0025` |
 | `console/` | React/Vite operator console |
 | `railway/` | Web/Runner/Scheduler service manifests |
 | `docs/` | current runbooks plus dated evidence/history |

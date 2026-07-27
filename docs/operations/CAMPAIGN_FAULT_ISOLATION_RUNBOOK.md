@@ -284,20 +284,20 @@ platform ceilings   per-role 68 / global 170 / $12
 Exit status is `0` when the derivation fits the envelope and `1` when it does not; a non-fitting
 derivation prints `REFUSED` and every reason. **What to do with the output:**
 
-1. **Read the `NOTE` line.** Per-million prices were *solved* from the measured totals of run
-   `50da57b0`, not taken from a list: orchestrator $5 / $25 and judge $1.25 / $10 are exact,
-   red_team $0.40 / $3 is within ~0.1%. Documentation never executed in that run — it only fires on
-   a confirmed finding — so it has **no measured rate** and is priced at the Judge's rate. That is an
-   assumption, flagged as `price_is_assumed`, and the documentation row must be re-derived against
-   the staged configuration's real prices before anyone relies on it.
+1. **Supply the reviewed base.** The script takes `--base-configuration`, the canonical payload of
+   the reviewed `HostedConfigurationSet` you intend to supersede, and reads every price from it. It
+   **refuses** if that file is missing, is not a valid configuration set, or omits any role's price.
+   Prices are never inferred from a run's measured averages: an average conflates rate with usage
+   mix and yields nothing at all for a role that never executed.
 2. **Check the headroom, because there is none.** Judge worst case is 68 physical calls against a
    per-role ceiling of 68, and the global worst case is 170 against a global ceiling of 170. The
    ceilings were raised to fit this derivation exactly: `HOSTED_MAX_PHYSICAL_CALLS` 56 → 68,
    `HOSTED_MAX_GLOBAL_PHYSICAL_CALLS` 136 → 170, `HOSTED_MAX_MEASURED_USD` $10 → $12. The arithmetic
    is 34 cases × (orchestrator 1 + red_team 1 + judge 2 + documentation 1) = 34 + 34 + 68 + 34 = 170;
    the old 136 was the same arithmetic with no retry anywhere (34 × 4). A 35th case, or a retry
-   granted to any second role, does not fit and the script will refuse it. Cost has room —
-   $10.820813 against $12 — but call count does not.
+   granted to any second role, does not fit and the script will refuse it. Whether the $12 spend
+   ceiling fits is **not** settled — it depends on the reviewed base's prices and is recomputed on
+   every run. Read the spend line the script prints; do not assume $12 survives.
 3. **Hand the `--json` payload to a principal holding `org:config:manage`.** The script
    *cannot* apply it, and this is intentional: staging a configuration set is an append-only
    governed write requiring an authenticated Clerk principal, and inventing that authority inside a

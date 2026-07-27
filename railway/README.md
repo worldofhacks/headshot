@@ -12,7 +12,9 @@ PostgreSQL is a fourth private managed service.
 
 - Web alone runs `alembic upgrade head`.
 - Runner and Scheduler refuse work until PostgreSQL is at the exact packaged head.
-- The current sole packaged head is `0026`.
+- The current sole repository candidate head is `0026`. The head PACKAGED into a given artifact
+  is whatever that build contained: deployed staging release `456d6e5` packages `0025`. Candidate,
+  packaged and deployed are three different facts and are not interchangeable.
 - Web, Runner, and Scheduler must expose the same hosted generation-policy digest and packaged policy
   file hash before new campaign authorization is minted.
 - Staging currently satisfies that policy parity. Production does not; see

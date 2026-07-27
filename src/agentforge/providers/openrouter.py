@@ -18,7 +18,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from decimal import Decimal, InvalidOperation
 from types import MappingProxyType
-from typing import Any
+from typing import Any, NoReturn
 
 import httpx
 from jsonschema import Draft202012Validator
@@ -855,24 +855,35 @@ class OpenRouterTransport:
         physical_attempts = 0
         conservative_input_bound = self._conservative_input_token_bound(messages)
 
-        def refuse_before_send(exc: HostedProviderError) -> HostedProviderError:
-            """Shape a pre-send failure so a retry never loses attempt 1's measurements.
+        def refuse_before_send(
+            exc: HostedProviderError,
+            *,
+            cause: BaseException | None = None,
+        ) -> NoReturn:
+            """Raise a pre-send failure so a retry never loses attempt 1's measurements.
 
             Pacing, credential resolution, reservation and lineage all run BEFORE the physical
             send, so failing there consumes no provider authority. On a first attempt there is
-            nothing to preserve and the error passes through unchanged.
+            nothing to preserve and the original error is re-raised untouched — deliberately
+            WITHOUT ``from``, because chaining an exception to itself creates a self-referential
+            __cause__ that renders as a confusing repeated frame.
 
-            On a RETRY there is: attempt 1 was really sent, really measured and really charged.
-            Letting a measurement-free refusal escape would drop that charge from the logical
-            execution and misreport a formatting fault as an authority fault. So the refusal is
-            re-shaped to carry attempt 1's observed result — while remaining its own campaign-fatal
-            type, never the case-isolatable structured-output type, because exhausted authority is
-            a fact about the whole run.
+            On a RETRY there is something to preserve: attempt 1 was really sent, really measured
+            and really charged. Letting a measurement-free refusal escape would drop that charge
+            from the logical execution and misreport a formatting fault as an authority fault. So
+            the refusal is re-shaped to carry attempt 1's observed result — while remaining its own
+            campaign-fatal type, never the case-isolatable structured-output type, because
+            exhausted authority is a fact about the whole run.
+
+            ``cause`` is the underlying non-Hosted exception when one exists (a raw pacing or
+            credential-resolver failure); it becomes __cause__ instead of ``exc`` itself.
             """
 
             if not isinstance(last_error, HostedStructuredOutputInvalid):
                 exc.account_physical_attempts(physical_attempts)
-                return exc
+                if cause is None or cause is exc:
+                    raise exc
+                raise exc from cause
             refusal = HostedRetryAdmissionRefused(
                 "authorized retry was refused before it could be sent",
                 observed_result=last_error.observed_result,
@@ -880,30 +891,32 @@ class OpenRouterTransport:
                 provider_event_status="invalid_output",
             )
             refusal.account_physical_attempts(physical_attempts)
-            return refusal
+            raise refusal from (exc if cause is None else cause)
 
         with self._concurrency:
             for attempt in range(1, attempts + 1):
                 try:
                     self._pace(configuration)
                 except HostedProviderError as exc:
-                    raise refuse_before_send(exc) from exc
+                    refuse_before_send(exc)
                 except Exception as exc:
-                    raise refuse_before_send(
+                    refuse_before_send(
                         HostedProviderError(
                             "provider pacing failed before another physical send",
-                        )
-                    ) from exc
+                        ),
+                        cause=exc,
+                    )
                 try:
                     credential = self._credential_resolver(configuration.credential_reference)
                     if not isinstance(credential, Secret) or not credential:
                         raise HostedProviderError("hosted credential reference is unavailable")
                 except HostedProviderError as exc:
-                    raise refuse_before_send(exc) from exc
+                    refuse_before_send(exc)
                 except Exception as exc:
-                    raise refuse_before_send(
-                        HostedProviderError("hosted credential reference is unavailable")
-                    ) from exc
+                    refuse_before_send(
+                        HostedProviderError("hosted credential reference is unavailable"),
+                        cause=exc,
+                    )
                 try:
                     reservation = self._ledger.reserve(
                         role,
@@ -915,14 +928,14 @@ class OpenRouterTransport:
                         reasoning_tokens=max_reasoning_tokens,
                     )
                 except HostedProviderError as exc:
-                    raise refuse_before_send(exc) from exc
+                    refuse_before_send(exc)
                 try:
                     invocation = self._begin_physical_attempt(
                         provider_context,
                         sequence=attempt,
                     )
                 except HostedProviderError as exc:
-                    raise refuse_before_send(exc) from exc
+                    refuse_before_send(exc)
                 physical_attempts = attempt
                 try:
                     result = self._send(

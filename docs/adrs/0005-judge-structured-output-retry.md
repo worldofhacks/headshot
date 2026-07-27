@@ -202,17 +202,24 @@ from the same policy bounds:
 | red_team | 34 | 0 | 34 | 2.116813 |
 | judge | 34 | 1 | 68 | 3.829760 |
 | documentation | 34 | 0 | 34 | 1.044480 |
-| **total** | **136** | | **170** | **10.820813** |
+| **total** | **136** | | **170** | see below |
 
-with token bounds of 4,177,920 input, 365,568 output and 417,792 reasoning. The per-million prices are
-**solved from the measured run**, not taken from a price list: orchestrator $5 / $25 (exact), judge
-$1.25 / $10 (exact), red_team $0.40 / $3 (~0.1% off). Documentation never executed in run `50da57b0`
-— it fires only on a confirmed finding — so it has no measured rate; it is priced at the Judge's rate,
-which is an assumption and is flagged as one in the script's output.
+with token bounds of 4,177,920 input, 365,568 output and 417,792 reasoning.
 
-$10.820813 > $10, so the old spend ceiling would have refused the configuration at preflight even
-though every individual role cap held. `HOSTED_MAX_MEASURED_USD` therefore moves $10 → $12. The round
-number is not the load-bearing part; the derivation is. The script re-checks every role and the global
+The **call** columns above are pure arithmetic and therefore final. The **spend** column is not: it
+depends on per-token prices, which are authority carried by a reviewed `HostedConfigurationSet`.
+
+An earlier draft of this ADR quoted a worst case of `$10.820813` derived from prices solved out of
+run `50da57b0`'s measured totals. That was withdrawn. Solving a price from an average conflates the
+rate with the usage mix, cannot produce a rate at all for a role that never executed (Documentation
+fires only on a confirmed finding, so it had none and was being priced at the Judge's rate), and
+goes stale the moment a provider re-prices. `scripts/derive_retry_configuration.py` now **refuses**
+to derive unless it is handed a reviewed configuration carrying every role's exact price.
+
+`HOSTED_MAX_MEASURED_USD` moves $10 → $12 as a provisional value. Whether $12 is correct is an
+**open question** until the derivation is run against the real reviewed base; the script recomputes
+the global ceiling from those exact prices and refuses if the result does not fit, rather than
+assuming $12 survives. The call ceilings do not depend on price and are settled. The script re-checks every role and the global
 total against the ceilings and reports each way the derivation could be unsafe, so if a policy or
 workload change pushes the worst case past $12 that is a visible failure rather than a silent
 overspend.
