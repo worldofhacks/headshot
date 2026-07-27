@@ -1691,6 +1691,7 @@ const browserFixture = (): Plugin => ({
               corpus_id: "browser-corpus",
               corpus_hash: "sha256:browser-corpus",
               case_count: 9,
+              physical_request_count: 9,
               tool_sources: [],
               execution_profile: "live",
               maximum_caps: browserScope.caps,

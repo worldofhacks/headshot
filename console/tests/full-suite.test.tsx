@@ -614,8 +614,8 @@ describe("full suite console", () => {
     );
 
     expect(await screen.findByText("Batch 1 · failed")).toBeTruthy();
-    expect(screen.getByText("Authorization scope · completed")).toBeTruthy();
-    expect(screen.getByText("Authorization scope · running")).toBeTruthy();
+    expect(screen.getByText("34 cases · 41 requests · completed")).toBeTruthy();
+    expect(screen.getByText("33 cases · 40 requests · running")).toBeTruthy();
     expect(screen.getByText("Batch 2 of 3")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Request approval for batch 1" })).toBeNull();
     expect(read).toHaveBeenCalledWith(

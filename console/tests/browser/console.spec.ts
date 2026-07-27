@@ -57,10 +57,24 @@ test("exact six primary groups preserve legacy routes and expose Run operations 
   })).toBeVisible();
 
   await page.goto("/targets");
-  await expect(page.getByRole("heading", { name: "Targets", exact: true, level: 1 }))
+  await expect(page.getByRole("heading", { name: "Pilot runs", exact: true, level: 1 }))
     .toBeVisible();
   await expect(page.getByRole("tab", { name: "Targets", exact: true }))
     .toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("tab", { name: "Governed 100-case suite", exact: true }))
+    .toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("tab", { name: "Quick scan · 14 cases", exact: true }))
+    .toHaveAttribute("aria-selected", "false");
+  const governedSuite = page.getByRole("region", { name: "Governed suite", exact: true });
+  await expect(governedSuite.getByText("Suite cases", { exact: true })).toBeVisible();
+  await expect(governedSuite.getByText("100", { exact: true })).toBeVisible();
+  await expect(governedSuite.getByText("121 physical requests", { exact: true })).toBeVisible();
+  await expect(governedSuite.getByText("34 · 33 · 33 cases", { exact: true })).toBeVisible();
+  const batchState = page.getByLabel("Governed batch state", { exact: true });
+  await expect(batchState.getByText("34 cases · 41 requests · ready", { exact: true }))
+    .toBeVisible();
+  await expect(batchState.getByText("33 cases · 40 requests · ready", { exact: true }))
+    .toHaveCount(2);
   await expect(primary.getByRole("button", { name: "Runs", exact: true }))
     .toHaveAttribute("aria-current", "page");
 
@@ -119,7 +133,7 @@ test("390px grouped navigation has no overflow and supports keyboard tabs", asyn
   await operations.focus();
   await page.keyboard.press("ArrowRight");
   await expect(page).toHaveURL(/\/targets$/);
-  await expect(page.getByRole("heading", { name: "Targets", exact: true }))
+  await expect(page.getByRole("heading", { name: "Pilot runs", exact: true }))
     .toBeVisible();
   await expect(page.getByRole("tab", { name: "Targets", exact: true }))
     .toHaveAttribute("aria-selected", "true");
