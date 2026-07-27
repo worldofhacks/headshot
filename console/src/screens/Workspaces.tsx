@@ -13,8 +13,8 @@ import { AgentsScreen, ToolingScreen } from "./AgentToolScreens";
 import {
   ConfigurationScreen,
   FindingsScreen,
+  LegacyTargetsScreen,
   ReportsScreen,
-  TargetsScreen,
 } from "./ConsoleScreens";
 import { CostsScreen, TracesScreen } from "./ObservabilityScreens";
 import { RunOperationsScreen } from "./RunOperationsScreen";
@@ -124,7 +124,6 @@ export function RunsWorkspace({
   expandedAttemptId,
   onCampaignSelect,
   onCampaignResolved,
-  onAttemptSelect,
   ...props
 }: SharedWorkspaceProps & {
   view: RunsView;
@@ -133,7 +132,6 @@ export function RunsWorkspace({
   expandedAttemptId?: string | null;
   onCampaignSelect?: (campaignId: string) => void;
   onCampaignResolved?: (campaignId: string) => void;
-  onAttemptSelect?: (attemptId: string) => void;
 }) {
   return (
     <div className="screen-stack">
@@ -155,7 +153,6 @@ export function RunsWorkspace({
               attemptId={expandedAttemptId}
               onCampaignResolved={onCampaignResolved}
               onCampaignSelect={onCampaignSelect}
-              onAttemptSelect={onAttemptSelect}
             />
           )
           : (
@@ -165,10 +162,9 @@ export function RunsWorkspace({
             campaignId={campaignId}
             expandedAttemptId={expandedAttemptId}
             onCampaignSelect={onCampaignSelect}
-            onAttemptSelect={onAttemptSelect}
           />
             )
-        : <TargetsScreen {...props} campaignId={campaignId} />}
+        : <LegacyTargetsScreen {...props} />}
     </div>
   );
 }

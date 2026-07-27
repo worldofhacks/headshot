@@ -1,14 +1,57 @@
 import { act, renderHook } from "@testing-library/react";
+import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { ApiClient } from "../src/api/client";
 import { useResource } from "../src/hooks/useResource";
+import { LiveDataContext, type LiveDataContextValue } from "../src/live/LiveDataContext";
 
 afterEach(() => {
   vi.useRealTimers();
 });
 
 describe("live resource polling", () => {
+  it("keeps an explicitly requested reconciliation poll while the event stream is live", async () => {
+    vi.useFakeTimers();
+    const read = vi.fn(async () => ({
+      state: "ready" as const,
+      data: [{ revision: read.mock.calls.length }],
+    }));
+    const client = { read, command: vi.fn() } as unknown as ApiClient;
+    const live: LiveDataContextValue = {
+      events: { state: "empty", data: null },
+      connectionState: "live",
+      lastEventAt: null,
+      lastReconciledAt: null,
+      registerResource: vi.fn(() => () => undefined),
+    };
+    const decode = (value: unknown) => value as Array<{ revision: number }>;
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <LiveDataContext.Provider value={live}>{children}</LiveDataContext.Provider>
+    );
+
+    const { unmount } = renderHook(
+      () => useResource(
+        client,
+        "campaigns",
+        decode,
+        { pollIntervalMs: 5_000 },
+      ),
+      { wrapper },
+    );
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(read).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+    expect(read).toHaveBeenCalledTimes(2);
+    unmount();
+  });
+
   it("refreshes at the requested interval without blanking ready data", async () => {
     vi.useFakeTimers();
     const read = vi.fn(async () => ({
