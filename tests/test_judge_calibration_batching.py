@@ -123,9 +123,17 @@ def test_a_200_label_corpus_splits_into_batches_that_each_fit_the_staged_envelop
 
     plan = module._batch_plan(_labels(200), configuration=staged, judge_role=judge, batch_size=None)
 
-    assert plan["batch_size"] == HOSTED_MAX_PHYSICAL_CALLS
-    assert plan["batch_count"] == 4
-    assert [len(b["labels"]) for b in plan["batches"]] == [56, 56, 56, 32]
+    # Derived from the envelope rather than hardcoded: the Judge's per-role ceiling moved from
+    # 56 to 68 when it was granted a structured-output retry, so a 200-label corpus now needs
+    # three batches instead of four. Pinning the literal would have made a correct consequence
+    # of that change look like a regression.
+    size = HOSTED_MAX_PHYSICAL_CALLS
+    expected_count = -(-200 // size)
+    expected_sizes = [size] * (expected_count - 1) + [200 - size * (expected_count - 1)]
+
+    assert plan["batch_size"] == size
+    assert plan["batch_count"] == expected_count
+    assert [len(b["labels"]) for b in plan["batches"]] == expected_sizes
     assert sum(len(b["labels"]) for b in plan["batches"]) == 200
     # Disjoint and complete.
     seen = [lid for b in plan["batches"] for lid in b["label_ids"]]
@@ -143,7 +151,7 @@ def test_every_batch_of_one_campaign_attests_the_identical_identity() -> None:
     # Identity is a function of the staged configuration alone — not of any batch.
     identity = hosted_judge_identity(staged).payload()
     assert identity["judge_model_version"] == judge.configuration_sha256
-    assert plan["batch_count"] == 4
+    assert plan["batch_count"] == -(-200 // HOSTED_MAX_PHYSICAL_CALLS)
 
     # And the generation policy is bound to the campaign, so it is constant across sub-runs too.
     policies = {

@@ -10,6 +10,10 @@ from decimal import Decimal, localcontext
 import pytest
 
 from agentforge.agents.hosted import (
+    HOSTED_MAX_GLOBAL_PHYSICAL_CALLS,
+    HOSTED_MAX_LOGICAL_RETRIES,
+    HOSTED_MAX_MEASURED_USD,
+    HOSTED_MAX_PHYSICAL_CALLS,
     HostedConfigurationSet,
     HostedLimits,
     HostedRoleConfiguration,
@@ -221,14 +225,21 @@ def test_prices_and_limits_require_decimal_units_and_closed_bounds() -> None:
         replace(_limits("judge"), max_requests_per_second=Decimal("0.5001"))
     with pytest.raises(ValueError, match="concurrency"):
         replace(_limits("judge"), max_concurrency=2)
+    # One over each ceiling, derived rather than hardcoded. The ceilings moved when the Judge was
+    # granted a structured-output retry (56 -> 68 per role, 136 -> 170 global, $10 -> $12), and a
+    # literal here would turn that intended change into a spurious failure while silently
+    # ceasing to test the actual boundary.
     with pytest.raises(ValueError, match="closed platform maximum"):
-        replace(_limits("judge"), max_calls=137)
+        replace(_limits("judge"), max_calls=HOSTED_MAX_GLOBAL_PHYSICAL_CALLS + 1)
     with pytest.raises(ValueError, match="closed role ceiling"):
-        replace(_role("judge"), limits=replace(_limits("judge"), max_calls=57))
+        replace(
+            _role("judge"),
+            limits=replace(_limits("judge"), max_calls=HOSTED_MAX_PHYSICAL_CALLS + 1),
+        )
     with pytest.raises(ValueError, match="between zero and 1"):
-        replace(_limits("judge"), max_retries=2)
+        replace(_limits("judge"), max_retries=HOSTED_MAX_LOGICAL_RETRIES + 1)
     with pytest.raises(ValueError, match="closed platform maximum"):
-        replace(_limits("judge"), max_usd=Decimal("10.01"))
+        replace(_limits("judge"), max_usd=HOSTED_MAX_MEASURED_USD + Decimal("0.01"))
     with pytest.raises(ValueError, match="positive"):
         replace(_limits("judge"), max_calls=0)
 
