@@ -1664,6 +1664,29 @@ export function ReportsScreen({ client, entityId }: ScreenProps) {
               <AdversarialText>{value}</AdversarialText>
             </div>
           ))}
+          {/* Rendered AFTER the confirming evidence, under its own advisory heading, so the
+              reading order is: what was confirmed and by what authority, then separately what the
+              model thought. Never presented as the reason for confirmation. */}
+          {selected.model_assessment && (
+            <div>
+              <p className="field-label">Judge assessment · advisory, not the confirming evidence</p>
+              <div className="judge-rationale">
+                <p className="judge-rationale-verdict mono">
+                  {typeof selected.model_assessment.confidence === "number"
+                    && `confidence ${selected.model_assessment.confidence.toFixed(2)}`}
+                  {selected.model_assessment.criteria_hits
+                    && selected.model_assessment.criteria_hits.length > 0
+                    && ` · ${selected.model_assessment.criteria_hits.join(", ")}`}
+                </p>
+                <AdversarialText>{selected.model_assessment.rationale}</AdversarialText>
+                <p className="data-note">
+                  The Judge model cannot confirm an exploit. This report was confirmed by the
+                  trusted source named in Observed behavior; the reasoning above is advisory
+                  context only.
+                </p>
+              </div>
+            </div>
+          )}
           <VerificationChain verification={selected.verification} />
         </Panel>
       )}

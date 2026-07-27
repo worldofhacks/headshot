@@ -329,6 +329,16 @@ export interface ResilienceReadModel extends JsonRecord {
   recorded_at: string;
 }
 
+/** The Judge model's advisory reasoning on a report. `authority` is a constant so the advisory
+ *  status survives export, copy-paste, and being read as raw JSON. It is never why the exploit
+ *  was confirmed — `observed_behavior` states that. */
+export interface ReportModelAssessment extends JsonRecord {
+  authority: "advisory_never_confirmatory";
+  rationale: string;
+  confidence?: number;
+  criteria_hits?: string[];
+}
+
 export interface ReportReadModel extends JsonRecord {
   schema_version: "1";
   report_id: string;
@@ -343,6 +353,7 @@ export interface ReportReadModel extends JsonRecord {
   minimal_reproduction: string[];
   reproduction_sha256: string;
   observed_behavior: string;
+  model_assessment: ReportModelAssessment | null;
   expected_behavior: string;
   recommended_remediation: string;
   status: "draft" | "validated" | "remediation_pending" | "fix_pending" | "fixed" | "regressed";

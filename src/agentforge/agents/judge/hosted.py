@@ -125,6 +125,36 @@ class HostedEvaluator:
         )
 
 
+def _with_model_assessment(
+    ground_truth: Mapping[str, Any],
+    assessment: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Attach the evaluator's advisory reasoning to a verdict it did not decide.
+
+    The model runs on every adjudicated case, including those an oracle or canary confirms, and
+    its reasoning was previously discarded the moment ground truth won. Keeping it costs nothing
+    and is what lets a vulnerability report — generated only from ``EXPLOIT_CONFIRMED`` — show what
+    the evaluator thought.
+
+    It is attached, never promoted. ``state``, ``confidence``, ``reason_codes`` and
+    ``confirmation_source`` are untouched, so the authority that decided this verdict is exactly
+    what it was; only ``rationale`` and ``criteria_hits`` are added, and both are advisory by
+    definition. A verdict that already carries its own rationale (the calibrated-model path) is
+    returned unchanged.
+    """
+
+    merged = dict(ground_truth)
+    if merged.get("rationale") is not None:
+        return merged
+    rationale = assessment.get("rationale")
+    if isinstance(rationale, str) and rationale:
+        merged["rationale"] = rationale
+    criteria = assessment.get("criteria_hits")
+    if isinstance(criteria, (list, tuple)) and criteria:
+        merged["criteria_hits"] = list(criteria)
+    return merged
+
+
 def reconcile_judge_assessment(
     *,
     assessment: Mapping[str, Any],
@@ -170,7 +200,7 @@ def reconcile_judge_assessment(
         else:
             authority = "deterministic_ground_truth"
         return JudgeReconciliation(
-            effective_verdict=ground_truth,
+            effective_verdict=_with_model_assessment(ground_truth, evaluated),
             decision_authority=authority,
             calibration_state=calibration_state,
             model_decisive=False,
@@ -178,7 +208,7 @@ def reconcile_judge_assessment(
         )
     if calibration_state != "enabled" or not model_authority_allowed:
         return JudgeReconciliation(
-            effective_verdict=ground_truth,
+            effective_verdict=_with_model_assessment(ground_truth, evaluated),
             decision_authority="deterministic_ground_truth",
             calibration_state=calibration_state,
             model_decisive=False,

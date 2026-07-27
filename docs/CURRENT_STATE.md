@@ -7,7 +7,7 @@
 **Repository parity at the latest read-only check:** `origin/main == gitlab/main == d6136ff`
 (2026-07-27, immediately before this candidate was pushed)
 
-**Packaged schema:** sole Alembic head `0029`; the verified staging database is at canonical `0026`
+**Packaged schema:** sole Alembic head `0030`; the verified staging database is at canonical `0026`
 before this candidate is deployed
 
 **Canonical requirements:** [`Week_3_AgentForge.pdf`](../Week_3_AgentForge.pdf)
@@ -46,7 +46,7 @@ occurred.
 | Web | `SUCCESS` | deployment `74d39043-7ef8-410e-963d-e7aee107ec13` |
 | Runner | `SUCCESS` | deployment `0a6a2303-4bc2-4c20-b156-12ed34e545df` |
 | Scheduler | `SUCCESS` | deployment `6689fdf2-a92e-4af1-808b-6d8068f05ef2` |
-| PostgreSQL | ready | repository candidate head `0029`; deployed staging at canonical `0026` |
+| PostgreSQL | ready | repository candidate head `0030`; deployed staging at canonical `0026` |
 | Public Web | healthy | `/health` 200, `/ready` 200, unauthenticated `/api/v1/principal` 401 |
 
 This table is the pre-candidate baseline: these deployment IDs predate the provider-call
@@ -100,7 +100,7 @@ credential-generation, synthetic-fixture, canary, cap, lease, and two-person aut
 | Deployment | One Docker artifact; Railway Web, Runner, Scheduler, PostgreSQL; Web-only public ingress |
 | CI/release | GitHub Actions and GitLab CI must both pass; release refs must be identical |
 
-The repository package is now at Alembic `0029`. Migration `0026` adds durable campaign outcome
+The repository package is now at Alembic `0030`. Migration `0026` adds durable campaign outcome
 counts; migration `0027` adds immutable,
 organization-scoped prompt snapshots for logical agent executions. Runner can insert/select those
 rows; Web can only select them. Append-only triggers prevent update/delete and enforce run,
@@ -125,9 +125,21 @@ the criteria and dropped the rationale, the verdict contract had no member for e
 `reason_codes = ['calibrated_positive']` — a security claim at confidence 0.90 with no recorded
 justification, unqueryable and unauditable. `0029` adds nullable `rationale` (bounded at the
 evaluator's own 4,000-character limit) and `criteria_hits`, expand-only, nothing backfilled. Two
-CHECK constraints carry the weight: the bound, and
-`rationale IS NULL OR confirmation_source = 'calibrated_model'` — so model prose can never be
-attached to an oracle, canary or human confirmation and read as the reason it was confirmed.
+CHECK constraints carried the weight: the bound, and
+`rationale IS NULL OR confirmation_source = 'calibrated_model'`.
+
+Migration `0030` lifts that second constraint, because it was drawn in the wrong place. The
+evaluator runs on *every* adjudicated case: `reconcile_judge_assessment` receives its assessment
+alongside the deterministic verdict and, when an oracle or canary fired, returned ground truth and
+discarded the reasoning. So the assessment exists for confirmed exploits too — and vulnerability
+reports, which are generated **only** from `EXPLOIT_CONFIRMED`, could therefore never carry one.
+`0030` separates the two things `0029` conflated: `confirmation_source` remains the sole statement
+of authority, while `rationale` now means "the evaluator's advisory assessment of this attempt",
+recorded whatever decided the verdict. The report payload carries
+`model_assessment.authority = "advisory_never_confirmatory"` as a constant in the data, so the
+advisory status survives export, copy-paste and being read as raw JSON, and the report's
+`observed_behavior` continues to name the trusted source that confirmed the exploit. The
+4,000-character bound is untouched and nothing is backfilled.
 Verdicts written before `0029` report the rationale as unavailable rather than acquiring an
 invented one.
 

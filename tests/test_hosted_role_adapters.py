@@ -32,6 +32,35 @@ from agentforge.providers.lineage import ProviderLogicalContextV1
 from agentforge.providers.openrouter import OpenRouterResult
 from agentforge.target.spec import HostedRunBinding
 
+#: The authority-bearing members of a verdict. `reconcile_judge_assessment` may annotate a verdict
+#: it did not decide with the evaluator's advisory reasoning (`rationale`, `criteria_hits`), so
+#: identity comparison would now fail for a reason that has nothing to do with authority. Comparing
+#: this projection instead is STRICTER about the thing that matters: it asserts every field that
+#: decides or justifies the outcome is byte-identical to ground truth.
+_AUTHORITY_FIELDS = (
+    "schema_version",
+    "campaign_run_id",
+    "attempt_id",
+    "state",
+    "confidence",
+    "reason_codes",
+    "confirmation_source",
+    "error_code",
+)
+
+
+def _authority(verdict):
+    return {k: v for k, v in dict(verdict).items() if k in _AUTHORITY_FIELDS}
+
+
+def _assert_authority_unchanged(effective, ground_truth):
+    """The model may annotate, never decide."""
+
+    assert _authority(effective) == _authority(ground_truth)
+    # Nothing beyond the advisory annotation may appear.
+    assert set(dict(effective)) - set(dict(ground_truth)) <= {"rationale", "criteria_hits"}
+
+
 _MODELS = {
     "orchestrator": ("anthropic/claude-opus-4.8", "anthropic", Decimal("1.5")),
     "red_team": ("qwen/qwen3.5-397b-a17b", "together", Decimal("1")),
@@ -435,7 +464,9 @@ def test_evaluator_blinds_calibration_labels_from_provider_but_reconciles_locall
         deterministic_verdict=independently_stored_labels[label_id],
         calibration_state="failed",
     )
-    assert reconciliation.effective_verdict == independently_stored_labels[label_id]
+    _assert_authority_unchanged(
+        reconciliation.effective_verdict, independently_stored_labels[label_id]
+    )
     assert reconciliation.ground_truth_agreement is True
     assert reconciliation.model_decisive is False
 
@@ -498,7 +529,7 @@ def test_enabled_calibration_cannot_promote_model_without_safe_authority_seam() 
         model_authority_allowed=False,
     )
 
-    assert guarded.effective_verdict == deterministic
+    _assert_authority_unchanged(guarded.effective_verdict, deterministic)
     assert guarded.decision_authority == "deterministic_ground_truth"
     assert guarded.calibration_state == "enabled"
     assert guarded.model_decisive is False

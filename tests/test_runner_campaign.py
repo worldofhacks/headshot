@@ -63,6 +63,35 @@ from agentforge.target.spec import (
     TargetEnvironment,
 )
 
+#: The authority-bearing members of a verdict. `reconcile_judge_assessment` may annotate a verdict
+#: it did not decide with the evaluator's advisory reasoning (`rationale`, `criteria_hits`), so
+#: identity comparison would now fail for a reason that has nothing to do with authority. Comparing
+#: this projection instead is STRICTER about the thing that matters: it asserts every field that
+#: decides or justifies the outcome is byte-identical to ground truth.
+_AUTHORITY_FIELDS = (
+    "schema_version",
+    "campaign_run_id",
+    "attempt_id",
+    "state",
+    "confidence",
+    "reason_codes",
+    "confirmation_source",
+    "error_code",
+)
+
+
+def _authority(verdict):
+    return {k: v for k, v in dict(verdict).items() if k in _AUTHORITY_FIELDS}
+
+
+def _assert_authority_unchanged(effective, ground_truth):
+    """The model may annotate, never decide."""
+
+    assert _authority(effective) == _authority(ground_truth)
+    # Nothing beyond the advisory annotation may appear.
+    assert set(dict(effective)) - set(dict(ground_truth)) <= {"rationale", "criteria_hits"}
+
+
 ORG_ID = "org_RunnerFixture"
 _LEASE = datetime.timedelta(minutes=10)
 
@@ -1278,7 +1307,7 @@ def test_runner_promotes_model_only_for_exact_enabled_authoritative_calibration(
         calibration=dataclasses.replace(calibration, model_authoritative=False),
     )
 
-    assert guarded.effective_verdict == ground_truth
+    _assert_authority_unchanged(guarded.effective_verdict, ground_truth)
     assert guarded.model_decisive is False
 
 
@@ -1290,9 +1319,7 @@ def test_provisional_calibration_can_escalate_but_cannot_clear_a_case() -> None:
         reason_codes=("thresholds_satisfied",),
         model_authoritative=True,
         source="explicit_mapping",
-        _artifact={
-            "approver_ref": "gt=rule_derived;prov=lineage_consistent;by=operator"
-        },
+        _artifact={"approver_ref": "gt=rule_derived;prov=lineage_consistent;by=operator"},
     )
     deterministic = {
         "schema_version": "1",

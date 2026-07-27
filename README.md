@@ -11,7 +11,8 @@ As of 2026-07-26, the platform has:
 - an authenticated React/Clerk operator console and protected FastAPI API;
 - a PostgreSQL control plane, queue, audit/evidence store, and canonical Alembic chain through
   `0026` campaign outcomes, `0027` immutable prompt snapshots, `0028` bounded provider response
-  evidence, and `0029` the evaluator rationale carried on the verdict it produced;
+  evidence, `0029` the evaluator rationale carried on the verdict it produced, and `0030` that
+  reasoning reaching vulnerability reports;
 - private Railway Runner and Scheduler services;
 - exact-scope two-person campaign authorization;
 - hosted Orchestrator, Red Team, Judge, and Documentation roles through OpenRouter;
@@ -115,7 +116,7 @@ and fresh authorization.
 | `src/agentforge/telemetry/` | PostgreSQL/Langfuse projection |
 | `src/agentforge/contracts/v1/` | packaged JSON Schema contracts |
 | `evals/` | synthetic fixtures, reviewed workloads, calibration/evidence artifacts |
-| `migrations/` | Alembic history; sole repository head is `0029`; deployed state is tracked separately |
+| `migrations/` | Alembic history; sole repository head is `0030`; deployed state is tracked separately |
 | `console/` | React/Vite operator console |
 | `railway/` | Web/Runner/Scheduler service manifests |
 | `docs/` | current runbooks plus dated evidence/history |

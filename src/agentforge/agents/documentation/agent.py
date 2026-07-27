@@ -58,6 +58,13 @@ class DocumentationInput:
     recommended_remediation: str
     evidence_references: tuple[str, ...]
     sanitized: bool
+    # The evaluator's advisory reasoning about this attempt, when one was recorded. Optional
+    # because a report may be drafted for a verdict adjudicated before assessments were kept, and
+    # an absent assessment must read as absent rather than as an invented one. It never affects
+    # severity, status or publication state — those come from trusted evidence.
+    judge_rationale: str | None = None
+    judge_confidence: float | None = None
+    judge_criteria_hits: tuple[str, ...] = ()
 
 
 class DocumentationAgent:
@@ -113,6 +120,7 @@ class DocumentationAgent:
             "expected_behavior": report_input.expected_behavior,
             "recommended_remediation": report_input.recommended_remediation,
             "status": "draft",
+            **self._model_assessment(report_input),
             "fix_validation": {
                 "state": "not_run",
                 "summary": "No remediation has been validated.",
@@ -219,6 +227,38 @@ class DocumentationAgent:
             raise DocumentationInputError(
                 "evidence reference must be a content-addressed evidence://sha256 URI"
             )
+
+    @classmethod
+    def _model_assessment(cls, report_input: DocumentationInput) -> dict[str, Any]:
+        """Project the evaluator's advisory reasoning, or omit the member entirely.
+
+        Omission is deliberate: a report for a verdict adjudicated before assessments were kept
+        must read as having none, not as having an empty one. The rationale passes the same
+        bounded-text screening as every other report field, so provider-key-shaped material is
+        refused here exactly as it is elsewhere.
+        """
+
+        rationale = report_input.judge_rationale
+        if not isinstance(rationale, str) or not rationale.strip():
+            return {}
+        assessment: dict[str, Any] = {
+            # A constant, so the advisory status travels with the data — out of the console, into
+            # an exported document, and back out of raw JSON.
+            "authority": "advisory_never_confirmatory",
+            "rationale": cls._bounded_text("judge rationale", rationale),
+        }
+        confidence = report_input.judge_confidence
+        if isinstance(confidence, (int, float)) and not isinstance(confidence, bool):
+            if not 0 <= float(confidence) <= 1:
+                raise DocumentationInputError("judge confidence must be between 0 and 1")
+            assessment["confidence"] = float(confidence)
+        hits = [
+            cls._bounded_text("judge criteria hit", hit, maximum=120)
+            for hit in report_input.judge_criteria_hits
+        ]
+        if hits:
+            assessment["criteria_hits"] = hits
+        return {"model_assessment": assessment}
 
     @staticmethod
     def _bounded_text(

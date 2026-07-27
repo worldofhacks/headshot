@@ -1207,6 +1207,7 @@ const decodeReport = (value: unknown): ReportReadModel => {
     "minimal_reproduction",
     "reproduction_sha256",
     "observed_behavior",
+    "model_assessment",
     "expected_behavior",
     "recommended_remediation",
     "status",
@@ -1247,6 +1248,24 @@ const decodeReport = (value: unknown): ReportReadModel => {
     "blocked_pending_human_approval",
   ], name);
   literal(result, "report_integrity", ["verified"], name);
+  // Advisory model reasoning. Optional, because a report drafted before assessments were kept has
+  // none and must read as having none. The `authority` constant is validated rather than assumed,
+  // so a payload that carries reasoning without declaring it advisory is refused outright.
+  if (result.model_assessment === undefined) result.model_assessment = null;
+  if (result.model_assessment !== null) {
+    const assessment = object(result, "model_assessment", name);
+    literal(assessment, "authority", ["advisory_never_confirmatory"], "model assessment");
+    string(assessment, "rationale", "model assessment");
+    if (assessment.confidence !== undefined) {
+      number(assessment, "confidence", "model assessment", { minimum: 0 });
+      if (typeof assessment.confidence === "number" && assessment.confidence > 1) {
+        invalid("model assessment");
+      }
+    }
+    if (assessment.criteria_hits !== undefined) {
+      stringArray(assessment, "criteria_hits", "model assessment");
+    }
+  }
   stringArray(result, "minimal_reproduction", name);
   stringArray(result, "evidence_references", name);
   const fixValidation = object(result, "fix_validation", name);

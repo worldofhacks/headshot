@@ -656,6 +656,9 @@ class ReportReadModel(_ReadModel):
     minimal_reproduction: tuple[str, ...]
     reproduction_sha256: str
     observed_behavior: str
+    # The evaluator's advisory reasoning. Absent on reports drafted before assessments were kept,
+    # and never an authority claim -- `observed_behavior` states what confirmed the exploit.
+    model_assessment: dict[str, Any] | None = None
     expected_behavior: str
     recommended_remediation: str
     status: Literal[

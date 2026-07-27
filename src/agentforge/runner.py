@@ -2334,6 +2334,7 @@ class DurableCampaignRunner:
                     confirmation_source=str(
                         effective_verdict.get("confirmation_source", "trusted evidence")
                     ),
+                    verdict=effective_verdict,
                 )
                 use_hosted_report_writer = (
                     hosted_report_writer is not None and hosted_lifecycle is not None
@@ -2493,6 +2494,7 @@ class DurableCampaignRunner:
         attempt_id: str,
         evidence_content_hash: str,
         confirmation_source: str,
+        verdict: Mapping[str, Any] | None = None,
     ) -> DocumentationInput:
         """Build bounded report material without passing target transcripts to Documentation.
 
@@ -2539,6 +2541,13 @@ class DurableCampaignRunner:
             ),
             evidence_references=(f"evidence://sha256/{evidence_content_hash}",),
             sanitized=True,
+            # The evaluator's advisory reasoning, carried onto the verdict by
+            # `_with_model_assessment` even when an oracle or canary decided it. Advisory only:
+            # `observed_behavior` above still names the trusted source that confirmed the exploit,
+            # and the report payload labels this member `advisory_never_confirmatory`.
+            judge_rationale=(verdict or {}).get("rationale"),
+            judge_confidence=(verdict or {}).get("confidence"),
+            judge_criteria_hits=tuple((verdict or {}).get("criteria_hits") or ()),
         )
 
     def run_once(self, *, worker_id: str) -> bool:
