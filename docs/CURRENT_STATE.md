@@ -51,6 +51,10 @@ These deployments predate the integrated operations candidate. Their exact sourc
 authoritatively represented in Railway's local-upload metadata, so service parity must be
 re-established by deploying one reviewed candidate SHA to all three services.
 
+The packaged default generation-policy digest remains
+`b83acb23122de9b4911032738bce136f214a34328357b457935ad821b44b0b18`. This is a source-package
+identity, not a claim that the three deployments above currently expose that digest.
+
 Staging URL: `https://web-staging-8e30.up.railway.app`
 
 ### Production
