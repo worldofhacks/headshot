@@ -211,8 +211,14 @@ class _ScriptedProvider:
     JSON but does not match the Judge's schema, which is exactly the production failure.
     """
 
-    def __init__(self, *, judge_invalid_for_ordinals: set[int]) -> None:
+    def __init__(
+        self,
+        *,
+        judge_invalid_for_ordinals: set[int],
+        judge_unavailable_for_ordinals: set[int] | None = None,
+    ) -> None:
         self._invalid_ordinals = judge_invalid_for_ordinals
+        self._unavailable_ordinals = judge_unavailable_for_ordinals or set()
         self.requests: list[str] = []
         self._judge_calls = 0
         self._case_ordinal = 0
@@ -227,6 +233,10 @@ class _ScriptedProvider:
         self.requests.append(role)
         if role == "judge":
             self._judge_calls += 1
+        if role == "judge" and self._case_ordinal in self._unavailable_ordinals:
+            # A retryable upstream status with nothing observed, returned at the wire so the real
+            # transport exhausts its authorized retry and raises its own typed exhaustion.
+            return httpx.Response(503, json={"error": {"message": "upstream unavailable"}})
         schema = body["response_format"]["json_schema"]["schema"]
         if role == "judge" and self._case_ordinal in self._invalid_ordinals:
             # Valid JSON, wrong shape — the exact production failure mode.
@@ -576,3 +586,79 @@ def _install_scripted_provider(monkeypatch, provider: _ScriptedProvider) -> None
         return real(**kwargs)
 
     monkeypatch.setattr(runner_module, "OpenRouterTransport", factory)
+
+
+def test_an_unreachable_judge_does_not_end_the_campaign(
+    hosted_campaign, monkeypatch, tmp_path
+) -> None:
+    """The dispatch-phase twin of the proposal-phase provider isolation.
+
+    Case ordinal 1 has its Judge return a retryable upstream status on BOTH authorized physical
+    attempts, so the real transport exhausts its retry and raises HostedProviderUnavailable. The
+    target turn for that case DID run, so unlike an abandoned proposal there is evidence and the
+    case earns a contract-valid ERROR verdict rather than being dropped — exactly what
+    `docs`/CLAUDE.md require of exhausted case-local provider flakiness.
+    """
+
+    store, run, corpus, configuration, physical = hosted_campaign
+    engine = store._engine
+    provider = _ScriptedProvider(
+        judge_invalid_for_ordinals=set(),
+        judge_unavailable_for_ordinals={1},
+    )
+    _install_scripted_provider(monkeypatch, provider)
+    monkeypatch.setattr(
+        runner_module,
+        "_EXACT_MANIFEST_WORKLOAD_IDS",
+        frozenset({*runner_module._EXACT_MANIFEST_WORKLOAD_IDS, corpus.corpus_id}),
+    )
+    real_ensure = runner_module.DurableCampaignRunner._ensure_attempt_for_case
+
+    def tracking_ensure(self, *, run_id, ordinal, case):
+        provider.note_case(ordinal)
+        return real_ensure(self, run_id=run_id, ordinal=ordinal, case=case)
+
+    monkeypatch.setattr(
+        runner_module.DurableCampaignRunner, "_ensure_attempt_for_case", tracking_ensure
+    )
+
+    runner = _runner(store, corpus, tmp_path, configuration)
+    assert runner.run_once(worker_id="provider-unavailable-test") is True
+
+    states = [
+        row["state"]
+        for row in _rows(
+            engine,
+            "SELECT state FROM campaign_run_events WHERE run_id = :r ORDER BY id",
+            r=run.run_id,
+        )
+    ]
+    assert "failed" not in states and "aborted" not in states, states
+    assert states[-1] == "complete"
+
+    attempts = _rows(
+        engine,
+        "SELECT attempt_id, ordinal FROM campaign_attempts WHERE run_id = :r ORDER BY ordinal",
+        r=run.run_id,
+    )
+    assert len(attempts) == len(corpus.cases)
+
+    verdicts = {
+        row["attempt_id"]: row
+        for row in _rows(
+            engine,
+            "SELECT attempt_id, state, error_code FROM verdict WHERE campaign_run_id = :r",
+            r=run.run_id,
+        )
+    }
+    assert len(verdicts) == len(corpus.cases), "no case was left un-adjudicated"
+
+    failed = verdicts[attempts[1]["attempt_id"]]
+    assert failed["state"] == "ERROR"
+    assert failed["error_code"] == "hosted-provider-unavailable"
+
+    # Every other case really was evaluated, and the run continued past the failure.
+    for index, attempt in enumerate(attempts):
+        if index == 1:
+            continue
+        assert verdicts[attempt["attempt_id"]]["state"] != "ERROR"

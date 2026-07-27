@@ -76,6 +76,7 @@ from agentforge.policy.scoped_credentials import (
 )
 from agentforge.providers.lineage import ProviderLogicalContextV1
 from agentforge.providers.openrouter import (
+    HostedProviderUnavailable,
     HostedStructuredOutputInvalid,
     HostedUsageLedger,
     OpenRouterTransport,
@@ -1959,6 +1960,37 @@ class DurableCampaignRunner:
                         attempt_id=prebound_attempt.attempt_id,
                         error_code=exc.code,
                     ) from exc
+                except HostedProviderUnavailable as exc:
+                    if prebound_case is None or prebound_attempt is None:
+                        # Same fail-closed rule as the structured-output branch: with no attempt
+                        # row there is nothing to abandon, so refuse rather than silently skip.
+                        red_team_failure_code = "red_team_proposal_failed"
+                        raise CampaignAbort(
+                            "Red Team could not select an exact authorized case",
+                            code="red_team_proposal_failed",
+                        ) from exc
+                    # A provider that could not be reached is an operational fault about ONE case,
+                    # exactly like a proposal that would not parse. It reached here as the typed
+                    # exhaustion of the authorized retry, whose only possible causes are a timeout,
+                    # a transport error, or a retryable status — all recorded UNOBSERVED, none of
+                    # them a statement about this campaign's authority. Aborting discarded the
+                    # remaining authorized cases over a transient upstream blip: run 75ab8ed7
+                    # reached 4 of 34 before one 429/502/503 ended it, and with max_retries=0 the
+                    # first blip is also the last.
+                    #
+                    # No target turn ran, so there is no evidence and no verdict is invented; the
+                    # attempt is abandoned un-attacked on the same terms as an unparseable
+                    # proposal. Budget-, settlement-, accounting-, identity- and route-failures are
+                    # different types and still abort, which is why the isolated type is the narrow
+                    # subclass rather than HostedProviderError itself.
+                    orchestration_cycle += 1
+                    next_ordinal += 1
+                    raise _AbandonedProposal(
+                        case=prebound_case,
+                        case_id=prebound_attempt.case_id,
+                        attempt_id=prebound_attempt.attempt_id,
+                        error_code=exc.code,
+                    ) from exc
                 except Exception as exc:
                     red_team_failure_code = "red_team_proposal_failed"
                     raise CampaignAbort(
@@ -2275,7 +2307,14 @@ class DurableCampaignRunner:
                     verdict=effective_verdict,
                     evidence_content_hash=outcome.result.content_hash,
                 )
-            except HostedStructuredOutputInvalid as exc:
+            except (HostedStructuredOutputInvalid, HostedProviderUnavailable) as exc:
+                # HostedProviderUnavailable joins on the same terms: an evaluator the platform
+                # could not reach, after its authorized retry was exhausted, is case-local
+                # operational flakiness and not a statement about the run's authority. It cannot
+                # be a settlement, budget, route, identity or accounting failure -- those are
+                # sibling types that still propagate and abort here. Nor can it be an unknown
+                # TARGET outcome: target faults are DispatchUnavailable and friends, and this type
+                # is raised only by the provider transport.
                 effective_verdict = self._record_operational_error_verdict(
                     run_id=authorized.run.run_id,
                     attempt_id=attempt.attempt_id,

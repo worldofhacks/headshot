@@ -3,6 +3,7 @@
 from agentforge.providers.openrouter import (
     HostedBudgetExceeded,
     HostedProviderError,
+    HostedProviderUnavailable,
     HostedUsageLedger,
     OpenRouterResult,
     OpenRouterTransport,
@@ -11,6 +12,7 @@ from agentforge.providers.openrouter import (
 __all__ = [
     "HostedBudgetExceeded",
     "HostedProviderError",
+    "HostedProviderUnavailable",
     "HostedUsageLedger",
     "OpenRouterResult",
     "OpenRouterTransport",

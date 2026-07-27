@@ -39,6 +39,15 @@ genuine) and the real Runner loop — only the socket is scripted:
 * a proposal-phase ``HostedStructuredOutputInvalid`` costs exactly one case;
 * ``HostedStructuredOutputTruncated``, the production shape, is isolated identically because it is
   a subclass;
+* a proposal-phase ``HostedProviderUnavailable`` — an upstream that could not be reached after its
+  authorized retry — costs exactly one case on the same terms. This is the SECOND live incident,
+  campaign ``75ab8ed7`` at 14:41 on 2026-07-27, which reached 4 of 34 cases before one retryable
+  upstream status ended it: ``CampaignAbort[red_team_proposal_failed] <-
+  HostedProviderError[hosted-provider-unavailable] <- _RetryableResponse``. With
+  ``max_retries = 0`` the first transient blip is also the last, so a single 429/502/503 outside
+  anyone's control discarded 30 authorized cases;
+* the isolated provider fault is a distinct TYPE, never an error code — the base class and several
+  campaign-fatal siblings share the identical ``hosted-provider-unavailable`` code;
 * the abandoned attempt gets no verdict, no evidence, no finding and no Documentation execution;
 * migration 0026's identity ``decisive + indeterminate + operational_error = attempt_count`` still
   holds for the completed run;
@@ -71,6 +80,7 @@ from agentforge.policy.scoped_credentials import (
 )
 from agentforge.providers.openrouter import (
     HostedBudgetExceeded,
+    HostedProviderUnavailable,
     HostedRetryAdmissionRefused,
     HostedSettlementAccountingInvalid,
     HostedSettlementBudgetExceeded,
@@ -120,12 +130,14 @@ class _RedTeamProvider:
         overcharged_for_ordinals: frozenset[int] = frozenset(),
         unauthorized_route_for_ordinals: frozenset[int] = frozenset(),
         substituted_model_for_ordinals: frozenset[int] = frozenset(),
+        unavailable_for_ordinals: frozenset[int] = frozenset(),
     ) -> None:
         self._truncated = truncated_for_ordinals
         self._malformed = malformed_for_ordinals
         self._overcharged = overcharged_for_ordinals
         self._unauthorized_route = unauthorized_route_for_ordinals
         self._substituted_model = substituted_model_for_ordinals
+        self._unavailable = unavailable_for_ordinals
         self.requests: list[str] = []
         self._case_ordinal = 0
 
@@ -138,6 +150,13 @@ class _RedTeamProvider:
         role = next((r for r, (m, _u, _s) in _MODELS.items() if m == model), "unknown")
         self.requests.append(role)
         served = _MODELS[role][2] if role in _MODELS else "Unknown"
+        if role == "red_team" and self._case_ordinal in self._unavailable:
+            # The production shape of the 14:41 abort on run 75ab8ed7: a retryable upstream status
+            # with nothing observed. Returned at the wire so the REAL transport classifies it,
+            # exhausts its authorized retry, and raises its own typed exhaustion — nothing about
+            # the failure is stubbed above the socket.
+            return httpx.Response(503, json={"error": {"message": "upstream unavailable"}})
+
         schema = body["response_format"]["json_schema"]["schema"]
         content: str | None = json.dumps(_conforming(schema))
         cost = 0.000001
@@ -269,6 +288,11 @@ def _verdicts(engine: Engine, run_id: str) -> dict[str, dict]:
     [
         ("truncated_for_ordinals", "structured_output_truncated"),
         ("malformed_for_ordinals", "invalid_structured_output"),
+        # An unreachable provider isolates on identical terms. This is the 14:41 abort of run
+        # 75ab8ed7, which reached 4 of 34 cases before one retryable upstream status ended it —
+        # and with max_retries=0 the first blip is also the last. Nothing was observed, so like a
+        # proposal that would not parse it is a fact about ONE case, not about the run's authority.
+        ("unavailable_for_ordinals", "hosted-provider-unavailable"),
     ],
 )
 def test_an_unparseable_proposal_isolates_one_case_and_the_campaign_continues(
@@ -462,15 +486,25 @@ def test_several_abandoned_proposals_still_leave_a_truthful_completed_run(
 # ---------------------------------------------------------------------------------------
 
 
+@pytest.mark.parametrize(
+    "failure_kind",
+    ["truncated_for_ordinals", "unavailable_for_ordinals"],
+)
 def test_a_wholly_broken_model_aborts_instead_of_completing_an_empty_campaign(
-    hosted_campaign, monkeypatch, tmp_path
+    hosted_campaign, monkeypatch, tmp_path, failure_kind
 ) -> None:
-    """Total abandonment is the one case where the original abort is still the honest answer."""
+    """Total abandonment is the one case where the original abort is still the honest answer.
+
+    Parametrized over both isolatable faults because the risk they create is identical and is the
+    dangerous one: isolation must never turn a total outage into a campaign that reports finding
+    nothing. A sustained provider outage abandons every case in turn and must still end `aborted`
+    with no summary and no verdicts, exactly as a wholly unparseable model does.
+    """
 
     store, run, corpus, configuration, _physical = hosted_campaign
     engine = store._engine
     provider = _RedTeamProvider(
-        truncated_for_ordinals=frozenset(range(len(corpus.cases))),
+        **{failure_kind: frozenset(range(len(corpus.cases)))},
     )
     _drive(monkeypatch, corpus, provider)
 
@@ -604,6 +638,11 @@ def test_no_campaign_fatal_type_can_be_swallowed_by_the_proposal_isolation(
     credential are all facts about the run. None may be an instance of the isolatable type."""
 
     assert not issubclass(governance_type, HostedStructuredOutputInvalid)
+    # The provider-unreachable type is isolated on the same terms, so it needs the same guard.
+    # HostedProviderUnavailable is a SUBCLASS of HostedProviderError, and several governance
+    # failures — budget exhaustion, settlement, accounting — are siblings under that same base.
+    # Isolating the base would have swallowed every one of them.
+    assert not issubclass(governance_type, HostedProviderUnavailable)
 
 
 def test_an_abandoned_proposal_is_not_an_abort_and_carries_the_case_it_dropped() -> None:
@@ -642,3 +681,25 @@ def test_the_incident_corpus_is_outside_the_exact_completion_count_gate() -> Non
     """
 
     assert _EXACT_COUNT_CORPUS_ID not in LIVE_100_BATCH_IDS
+
+
+def test_the_isolatable_provider_fault_is_a_type_and_never_an_error_code() -> None:
+    """The trap this change had to avoid, pinned so nobody re-introduces it.
+
+    ``HostedProviderUnavailable`` does not own its ``code``: the base class and several genuinely
+    campaign-fatal types share the identical string ``hosted-provider-unavailable``. Isolating on
+    the code — or on the base class — would therefore have swallowed a settlement failure, an
+    unobserved physical-call fault, and an absent structured output, every one of which must abort
+    the run. Only the exact narrow subclass may be isolated.
+    """
+
+    from agentforge.providers.openrouter import (  # noqa: PLC0415
+        HostedProviderError,
+        HostedSettlementFailed,
+    )
+
+    assert HostedSettlementFailed.code == HostedProviderUnavailable.code
+    assert HostedProviderError.code == HostedProviderUnavailable.code
+    # Sharing a code, but NOT the isolatable type — which is the whole reason the handler
+    # discriminates by type.
+    assert not issubclass(HostedSettlementFailed, HostedProviderUnavailable)

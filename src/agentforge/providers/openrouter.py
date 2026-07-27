@@ -155,6 +155,24 @@ class HostedBudgetExceeded(HostedProviderError):
     code = "hosted-budget-exceeded"
 
 
+class HostedProviderUnavailable(HostedProviderError):
+    """Every authorized physical attempt failed to reach the provider, observing nothing.
+
+    Raised at exactly one site: the exhaustion of the retry loop, whose ``last_error`` can only
+    ever be an ``httpx.TimeoutException``, an ``httpx.TransportError``, or a ``_RetryableResponse``
+    — the three faults recorded as UNOBSERVED. Every other failure re-raises its own type before
+    reaching that point, so this class cannot be reached by a settlement, identity, route, model,
+    budget, or accounting failure.
+
+    That exclusivity is the whole point. It names the one provider fault a caller may treat as
+    being about a single unit of work rather than about the run's authority, without having to
+    reason about a base class that also covers configuration and accounting faults under the same
+    ``code``. The code is deliberately unchanged from the base, so durable statuses, recorded
+    error codes, and console rendering are untouched; only the TYPE is new, and only so callers
+    can discriminate.
+    """
+
+
 @dataclass(frozen=True, slots=True)
 class HostedLedgerSnapshot:
     physical_calls: int
@@ -1067,7 +1085,7 @@ class OpenRouterTransport:
                 else:
                     self._record_success(invocation, result)
                     return result
-        raise HostedProviderError(
+        raise HostedProviderUnavailable(
             "OpenRouter request failed after the authorized retry",
             physical_attempts=physical_attempts,
         ) from last_error
@@ -1873,6 +1891,7 @@ __all__ = [
     "HostedLedgerSnapshot",
     "HostedProviderError",
     "HostedProviderResponseError",
+    "HostedProviderUnavailable",
     "HostedUsageEnvelope",
     "HostedUsageLedger",
     "OPENROUTER_CHAT_COMPLETIONS_URL",
