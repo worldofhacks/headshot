@@ -1506,7 +1506,7 @@ export function ReportsScreen({ client, entityId }: ScreenProps) {
     decodeReports,
     { pollIntervalMs: LIVE_RESOURCE_POLL_INTERVAL_MS },
   );
-  const completionCampaigns = completionReportCampaigns(campaigns.result.data ?? []).slice(0, 2);
+  const completionCampaigns = completionReportCampaigns(campaigns.result.data ?? []);
   const selectedCampaign = entityId
     ? completionCampaigns.find((campaign) => campaign.run_id === entityId) ?? null
     : completionCampaigns[0] ?? null;
