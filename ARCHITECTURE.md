@@ -97,7 +97,7 @@ All application services build the same Docker artifact:
 | PostgreSQL | private only | managed service | durable authority, evidence, queue, audit, read models |
 
 Only Web runs `alembic upgrade head` as a Railway pre-deploy command. Runner and Scheduler refuse work
-unless the database is at the exact packaged head. The current sole head is `0025`.
+unless the database is at the exact packaged head. The current sole head is `0026`.
 
 Staging currently has one policy-aligned service set. Production is reachable but release-skewed and
 must not run campaigns until it is intentionally realigned. Dynamic deployment facts live in
@@ -339,7 +339,7 @@ The queue uses transactional claims and leases with `SKIP LOCKED`. Runner concur
 process; provider concurrency is one in the current configuration. Command mutations use idempotency
 keys.
 
-Alembic applies an expand/contract history and rejects schema skew. The current sole head is `0025`;
+Alembic applies an expand/contract history and rejects schema skew. The current sole head is `0026`;
 Runner/Scheduler do not migrate.
 
 ## 12. Observability and Langfuse

@@ -6330,13 +6330,34 @@ class ControlPlaneStore:
                 if scope.execution_profile.value == "synthetic"
                 else "live_target"
             )
+            # Adjudication outcomes are projected from the durable verdict rows in this same
+            # transaction, never from an in-process tally: a Runner restart must not be able to
+            # reset how many cases a completed run failed to adjudicate.
+            outcomes = (
+                connection.execute(
+                    text(
+                        "SELECT "
+                        "count(*) FILTER (WHERE state IN "
+                        "  ('EXPLOIT_CONFIRMED','EXPLOIT_LIKELY','NO_EXPLOIT_OBSERVED')) "
+                        "  AS decisive, "
+                        "count(*) FILTER (WHERE state = 'INDETERMINATE') AS indeterminate, "
+                        "count(*) FILTER (WHERE state = 'ERROR') AS operational_errors "
+                        "FROM verdict WHERE organization_id = :org AND campaign_run_id = :run_id"
+                    ),
+                    {"org": org, "run_id": run_id},
+                )
+                .mappings()
+                .one()
+            )
             connection.execute(
                 text(
                     "INSERT INTO campaign_run_summaries "
                     "(organization_id, run_id, execution_profile, provenance, attempt_count, "
-                    "request_count, confirmed_finding_count, measured_cost, started_at, ended_at) "
+                    "request_count, confirmed_finding_count, measured_cost, started_at, ended_at, "
+                    "decisive_verdict_count, indeterminate_verdict_count, operational_error_count) "
                     "VALUES (:org, :run_id, :profile, :provenance, :attempts, :requests, "
-                    ":findings, :cost, :started, clock_timestamp())"
+                    ":findings, :cost, :started, clock_timestamp(), "
+                    ":decisive, :indeterminate, :operational_errors)"
                 ),
                 {
                     "org": org,
@@ -6348,6 +6369,9 @@ class ControlPlaneStore:
                     "findings": confirmed_count,
                     "cost": measured_cost,
                     "started": started_at,
+                    "decisive": outcomes["decisive"],
+                    "indeterminate": outcomes["indeterminate"],
+                    "operational_errors": outcomes["operational_errors"],
                 },
             )
             connection.execute(

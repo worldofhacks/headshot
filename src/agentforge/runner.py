@@ -1698,9 +1698,6 @@ class DurableCampaignRunner:
         next_ordinal = 0
         first_decision_recorded = False
         latest_terminal_execution: str | None = None
-        # Operational faults are counted separately from security verdicts so a run that finished
-        # with isolated model failures can never be presented as fully evaluated.
-        operational_errors = 0
 
         def select_next_work() -> tuple[Any, dict[str, Any], Any, str]:
             """Run one feedback-driven Orchestrator/Red Team cycle over remaining authority."""
@@ -2172,7 +2169,6 @@ class DurableCampaignRunner:
                 # ERROR is never a security signal, so it can never open a finding or trigger
                 # the Documentation agent.
                 finding_id = None
-                operational_errors += 1
             if finding_id is not None:
                 report_input = self._documentation_input(
                     payload=dispatch_payload,
@@ -2419,6 +2415,12 @@ class DurableCampaignRunner:
                 label = type(cause).__name__
                 if isinstance(cause_code, str) and cause_code:
                     label += f"[{cause_code[:64]}]"
+                elif isinstance(cause, DispatchUnavailable | CampaignAbort):
+                    # These two carry their detail in the message, and that detail is always a
+                    # platform-generated blocker code (e.g. "preflight_blocked:exact_request_caps
+                    # _mismatch") — never provider or target text. Without it an operator sees
+                    # only the class name, which is what made the original failure undiagnosable.
+                    label += f"[{str(cause)[:120]}]"
                 failure_chain.append(label)
                 cause = cause.__cause__ or cause.__context__
             sanitized_chain = " <- ".join(failure_chain)

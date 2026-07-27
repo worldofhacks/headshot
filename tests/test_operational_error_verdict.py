@@ -1,5 +1,10 @@
 """An un-adjudicable case yields a contract-valid ERROR verdict, not a dead campaign.
 
+Behavioural proof lives in tests/test_campaign_fault_isolation_db.py, which drives a real
+multi-case campaign against migrated PostgreSQL. What remains here is contract and type
+algebra: the verdict shape the Runner writes, and the exception hierarchy that decides what may
+be isolated at all.
+
 Case 12 of run 50da57b037d44b3c93a10e4c2edf61a8 had both target turns complete and its evidence
 durably written; only the Judge's *formatting* failed. The campaign nonetheless dead-lettered,
 discarding the authority to evaluate the remaining 22 cases.
@@ -11,8 +16,6 @@ exception type used to trigger isolation cannot swallow a governance abort.
 
 from __future__ import annotations
 
-import inspect
-
 import pytest
 
 from agentforge.campaign.coordinator import CampaignAbort
@@ -22,7 +25,7 @@ from agentforge.providers.openrouter import (
     HostedProviderResponseError,
     HostedStructuredOutputInvalid,
 )
-from agentforge.runner import DispatchUnavailable, DurableCampaignRunner
+from agentforge.runner import DispatchUnavailable
 
 
 def _error_verdict(error_code: str = "invalid_structured_output") -> dict:
@@ -91,24 +94,6 @@ def test_a_generic_provider_failure_is_not_isolated() -> None:
 
     assert not issubclass(HostedProviderResponseError, HostedStructuredOutputInvalid)
     assert not issubclass(HostedProviderError, HostedStructuredOutputInvalid)
-
-
-def test_missing_evidence_fails_closed_rather_than_inventing_a_verdict() -> None:
-    """If the evidence hash cannot be recovered the campaign aborts; it does not guess."""
-
-    source = inspect.getsource(DurableCampaignRunner._record_operational_error_verdict)
-    assert "persisted_evidence_content_hash" in source
-    assert "CampaignAbort" in source
-    assert "attempt_evidence_unavailable" in source
-
-
-def test_the_isolated_path_never_opens_a_finding() -> None:
-    source = inspect.getsource(DurableCampaignRunner._execute_prepared)
-    isolated = source.split("except HostedStructuredOutputInvalid as exc:", 1)
-    assert len(isolated) == 2, "the isolation handler must exist"
-    handler = isolated[1].split("if finding_id is not None:", 1)[0]
-    assert "finding_id = None" in handler
-    assert "operational_errors += 1" in handler
 
 
 @pytest.mark.parametrize(

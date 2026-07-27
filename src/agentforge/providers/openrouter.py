@@ -637,6 +637,48 @@ class HostedStructuredOutputInvalid(HostedProviderResponseError):
     code = "invalid_structured_output"
 
 
+class HostedRetryAdmissionRefused(HostedProviderResponseError):
+    """A retry was refused before it could be sent, by authority rather than by formatting.
+
+    Deliberately NOT a :class:`HostedStructuredOutputInvalid`, even though a structured-output
+    failure is what prompted the retry. Exhausted call/token/cost/rate authority is a governance
+    fact about the whole campaign, so it must stay campaign-fatal; isolating it per case would let
+    a run continue past the point where its authorized envelope ran out, reported as a formatting
+    nuisance.
+
+    It still carries the FIRST attempt's ``observed_result`` so the measured tokens and cost of a
+    call that genuinely happened are never dropped from the logical execution, and the refusal
+    itself is retained as ``__cause__``.
+    """
+
+    code = "retry-admission-refused"
+
+
+class HostedSettlementFailed(HostedProviderResponseError):
+    """Usage was measured but could not be settled against the authorized ledger."""
+
+
+class HostedSettlementBudgetExceeded(HostedSettlementFailed):
+    """Settlement was refused because a token or cost cap is exhausted.
+
+    Separated from :class:`HostedSettlementAccountingInvalid` because the two demand different
+    operator responses: this one means the run legitimately reached its authorized ceiling, which
+    a human can raise through the governed configuration path.
+    """
+
+    code = "settlement-budget-exceeded"
+
+
+class HostedSettlementAccountingInvalid(HostedSettlementFailed):
+    """Settlement was refused because the usage record itself is not coherent.
+
+    A double-settled reservation or malformed usage is a correctness fault in accounting, not a
+    spending decision, and must never be mistaken for "we ran out of budget".
+    """
+
+    code = "settlement-accounting-invalid"
+
+
 class _StructuredOutputAmbiguous(HostedProviderError):
     """Structured output whose meaning is not single-valued — refused, never retried.
 
@@ -812,29 +854,55 @@ class OpenRouterTransport:
         last_error: Exception | None = None
         physical_attempts = 0
         conservative_input_bound = self._conservative_input_token_bound(messages)
+
+        def refuse_before_send(exc: HostedProviderError) -> HostedProviderError:
+            """Shape a pre-send failure so a retry never loses attempt 1's measurements.
+
+            Pacing, credential resolution, reservation and lineage all run BEFORE the physical
+            send, so failing there consumes no provider authority. On a first attempt there is
+            nothing to preserve and the error passes through unchanged.
+
+            On a RETRY there is: attempt 1 was really sent, really measured and really charged.
+            Letting a measurement-free refusal escape would drop that charge from the logical
+            execution and misreport a formatting fault as an authority fault. So the refusal is
+            re-shaped to carry attempt 1's observed result — while remaining its own campaign-fatal
+            type, never the case-isolatable structured-output type, because exhausted authority is
+            a fact about the whole run.
+            """
+
+            if not isinstance(last_error, HostedStructuredOutputInvalid):
+                exc.account_physical_attempts(physical_attempts)
+                return exc
+            refusal = HostedRetryAdmissionRefused(
+                "authorized retry was refused before it could be sent",
+                observed_result=last_error.observed_result,
+                code=HostedRetryAdmissionRefused.code,
+                provider_event_status="invalid_output",
+            )
+            refusal.account_physical_attempts(physical_attempts)
+            return refusal
+
         with self._concurrency:
             for attempt in range(1, attempts + 1):
                 try:
                     self._pace(configuration)
                 except HostedProviderError as exc:
-                    exc.account_physical_attempts(physical_attempts)
-                    raise
+                    raise refuse_before_send(exc) from exc
                 except Exception as exc:
-                    raise HostedProviderError(
-                        "provider pacing failed before another physical send",
-                        physical_attempts=physical_attempts,
+                    raise refuse_before_send(
+                        HostedProviderError(
+                            "provider pacing failed before another physical send",
+                        )
                     ) from exc
                 try:
                     credential = self._credential_resolver(configuration.credential_reference)
                     if not isinstance(credential, Secret) or not credential:
                         raise HostedProviderError("hosted credential reference is unavailable")
                 except HostedProviderError as exc:
-                    exc.account_physical_attempts(physical_attempts)
-                    raise
+                    raise refuse_before_send(exc) from exc
                 except Exception as exc:
-                    raise HostedProviderError(
-                        "hosted credential reference is unavailable",
-                        physical_attempts=physical_attempts,
+                    raise refuse_before_send(
+                        HostedProviderError("hosted credential reference is unavailable")
                     ) from exc
                 try:
                     reservation = self._ledger.reserve(
@@ -847,28 +915,14 @@ class OpenRouterTransport:
                         reasoning_tokens=max_reasoning_tokens,
                     )
                 except HostedProviderError as exc:
-                    # A retry re-reserves, so a campaign with exactly one call/spend slot left
-                    # surfaces the reservation refusal on attempt 2 instead of the schema failure
-                    # that actually caused the retry. That refusal carries no observed_result, so
-                    # attempt 1's measured tokens and cost would be dropped from the logical row
-                    # and the operator would see a budget error for a formatting fault.
-                    #
-                    # Report the original typed cause and keep its measurements; the cap breach
-                    # stays visible as __cause__. The retry is still refused — no extra send
-                    # happens — so no authority is consumed by this.
-                    if isinstance(last_error, HostedStructuredOutputInvalid):
-                        last_error.account_physical_attempts(physical_attempts)
-                        raise last_error from exc
-                    exc.account_physical_attempts(physical_attempts)
-                    raise
+                    raise refuse_before_send(exc) from exc
                 try:
                     invocation = self._begin_physical_attempt(
                         provider_context,
                         sequence=attempt,
                     )
                 except HostedProviderError as exc:
-                    exc.account_physical_attempts(physical_attempts)
-                    raise
+                    raise refuse_before_send(exc) from exc
                 physical_attempts = attempt
                 try:
                     result = self._send(
@@ -1366,7 +1420,17 @@ class OpenRouterTransport:
             ) from settle_error
 
         if settle_error is not None:
-            raise HostedProviderResponseError(
+            # Settlement fails for two materially different reasons and the old funnel erased the
+            # difference, so `except HostedBudgetExceeded` could not catch a settlement-time cap
+            # breach — only the string code survived. Budget exhaustion is a governed ceiling a
+            # human can raise; accounting corruption is a correctness fault that must never be
+            # mistaken for one.
+            settlement_type = (
+                HostedSettlementBudgetExceeded
+                if isinstance(settle_error, HostedBudgetExceeded)
+                else HostedSettlementAccountingInvalid
+            )
+            raise settlement_type(
                 "OpenRouter response failed after measured usage was observed",
                 observed_result=observed_result,
                 code=settle_error.code,

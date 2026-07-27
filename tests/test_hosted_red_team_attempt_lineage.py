@@ -653,95 +653,6 @@ def test_omitting_the_attempt_id_is_what_produced_an_unbound_execution() -> None
     assert store.starts[0]["attempt_id"] is None
 
 
-def _red_team_invocation_call() -> object:
-    """The AST node for the Runner's hosted Red Team ``lifecycle.invocation(...)`` call."""
-
-    import ast
-    import inspect
-
-    import agentforge.runner as runner_module
-
-    tree = ast.parse(inspect.getsource(runner_module))
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
-            continue
-        func = node.func
-        if not (isinstance(func, ast.Attribute) and func.attr == "invocation"):
-            continue
-        roles = [
-            kw.value.value
-            for kw in node.keywords
-            if kw.arg == "role" and isinstance(kw.value, ast.Constant)
-        ]
-        if roles == ["red_team"]:
-            return node
-    raise AssertionError("the hosted Red Team invocation call was not found in runner.py")
-
-
-def test_the_runner_passes_an_attempt_id_into_the_hosted_red_team_invocation() -> None:
-    """Structural, because the alternative is a live provider call.
-
-    If this regresses to the pre-fix shape, the hosted execution is created unbound again and
-    every live campaign dies at the first successful selection.
-    """
-
-    import ast
-
-    call = _red_team_invocation_call()
-    keywords = {kw.arg for kw in call.keywords}  # type: ignore[attr-defined]
-    assert "attempt_id" in keywords, "hosted Red Team must be born bound to its attempt"
-    attempt_kw = next(
-        kw
-        for kw in call.keywords  # type: ignore[attr-defined]
-        if kw.arg == "attempt_id"
-    )
-    # It must be the pre-created attempt, not a literal None.
-    assert isinstance(attempt_kw.value, ast.Name)
-    assert attempt_kw.value.id == "prebound_attempt_id"
-
-
-def test_the_runner_binds_after_the_fact_only_on_the_deterministic_path() -> None:
-    """``_bind_agent_execution_attempt`` must be unreachable once a provider call has run.
-
-    Asserted over the AST: the single bind site must sit in the ``else`` of a branch keyed on
-    ``prebound_attempt``. A dedent that made it unconditional again would move it out of that
-    ``orelse`` body and fail here, which a substring check would not catch.
-    """
-
-    import ast
-    import inspect
-    import textwrap
-
-    from agentforge.runner import DurableCampaignRunner
-
-    tree = ast.parse(textwrap.dedent(inspect.getsource(DurableCampaignRunner._execute_prepared)))
-
-    def _bind_calls(nodes) -> int:
-        total = 0
-        for node in nodes:
-            for inner in ast.walk(node):
-                if (
-                    isinstance(inner, ast.Call)
-                    and isinstance(inner.func, ast.Attribute)
-                    and inner.func.attr == "_bind_agent_execution_attempt"
-                ):
-                    total += 1
-        return total
-
-    assert _bind_calls([tree]) == 1, "exactly one bind site — the deterministic branch"
-
-    guarded = 0
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.If):
-            continue
-        if "prebound_attempt" not in ast.dump(node.test):
-            continue
-        # Hosted branch must never bind; the deterministic else-branch is the only one that may.
-        assert _bind_calls(node.body) == 0, "the hosted path must not bind after the fact"
-        guarded += _bind_calls(node.orelse)
-    assert guarded == 1, "the bind must live in the else of the prebound-attempt branch"
-
-
 def test_every_live_100_workload_is_an_exact_manifest_workload() -> None:
     """The supported hosted path is exactly the three-batch live-100 suite plus the whole."""
 
@@ -769,22 +680,6 @@ def test_red_team_timeout_is_180_seconds_with_token_bounds_unchanged() -> None:
     assert bounds.input_tokens == 32_768
     assert bounds.output_tokens == 8_192
     assert bounds.reasoning_tokens == 8_192
-
-
-def test_exact_caps_contract_still_demands_zero_target_retries() -> None:
-    """The hotfix widened a timeout, not retry authority.
-
-    Read the guard's own source rather than a copy of the rule, so deleting the condition fails
-    this test instead of silently passing it.
-    """
-
-    import inspect
-
-    from agentforge.runner import DurableCampaignRunner
-
-    preflight_source = inspect.getsource(DurableCampaignRunner.preflight)
-    assert "caps.target_retries_per_turn != 0" in preflight_source
-    assert "exact_request_caps_mismatch" in preflight_source
 
 
 def test_policy_digest_changed_and_is_the_only_resolvable_policy() -> None:

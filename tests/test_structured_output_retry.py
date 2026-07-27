@@ -22,8 +22,13 @@ import httpx
 import pytest
 
 from agentforge.providers.openrouter import (
+    HostedBudgetExceeded,
     HostedProviderError,
     HostedProviderResponseError,
+    HostedRetryAdmissionRefused,
+    HostedSettlementAccountingInvalid,
+    HostedSettlementBudgetExceeded,
+    HostedSettlementFailed,
     HostedStructuredOutputInvalid,
     OpenRouterTransport,
 )
@@ -196,13 +201,14 @@ def test_a_provider_retry_never_produces_a_target_request() -> None:
         assert request.url.host == "openrouter.ai", request.url
 
 
-def test_a_retry_blocked_by_the_call_cap_still_reports_the_schema_failure() -> None:
-    """The retry re-reserves, so a nearly-exhausted cap can refuse attempt 2.
+def test_a_retry_blocked_by_the_call_cap_is_fatal_and_keeps_measurements() -> None:
+    """Exhausted authority must stay campaign-fatal even though a format fault prompted the retry.
 
-    When that happens the operator must still see invalid_structured_output — the formatting
-    fault is what actually stopped the call — and attempt 1's measured tokens and cost must
-    survive on the logical row. Reporting a budget error here would both misdiagnose the failure
-    and silently drop a charge that really happened.
+    Two things have to be true at once. Attempt 1 really was sent, measured and charged, so its
+    tokens and cost must survive on the logical row. But the reason the run stopped is that its
+    authorized envelope ran out — a fact about the whole campaign — so this must NOT arrive as the
+    case-isolatable structured-output type, or the Runner would swallow budget exhaustion as a
+    per-case formatting nuisance and keep going.
     """
 
     import dataclasses
@@ -231,7 +237,7 @@ def test_a_retry_blocked_by_the_call_cap_still_reports_the_schema_failure() -> N
         lineage_recorder=_ProviderRecorder(),
     )
 
-    with pytest.raises(HostedStructuredOutputInvalid) as raised:
+    with pytest.raises(HostedRetryAdmissionRefused) as raised:
         transport.invoke(
             role="judge",
             messages=_messages(),
@@ -245,13 +251,175 @@ def test_a_retry_blocked_by_the_call_cap_still_reports_the_schema_failure() -> N
             provider_context=_provider_context(configuration),
         )
 
-    assert raised.value.code == "invalid_structured_output"
+    assert raised.value.code == "retry-admission-refused"
+    # Campaign-fatal, NOT case-isolatable: the Runner's per-case handler must not catch this.
+    assert not isinstance(raised.value, HostedStructuredOutputInvalid)
     # Attempt 1's measurements survive rather than being replaced by a measurement-free
     # reservation error.
     assert raised.value.observed_result.measured_cost_usd == Decimal("0.000065")
     # The cap breach is still visible, just not as the headline cause.
-    assert raised.value.__cause__ is not None
+    assert isinstance(raised.value.__cause__, HostedBudgetExceeded)
     assert len(sent) == 1, "the refused retry must not reach the provider"
+
+
+def _one_call_configuration():
+    """A configuration whose call authority is exhausted by attempt 1."""
+
+    import dataclasses
+
+    base = _configuration()
+    roles = tuple(
+        dataclasses.replace(role, limits=dataclasses.replace(role.limits, max_calls=1))
+        for role in base.roles
+    )
+    return dataclasses.replace(
+        base,
+        roles=roles,
+        global_limits=dataclasses.replace(base.global_limits, max_calls=1),
+    )
+
+
+def _invoke_with(configuration, transport):
+    return transport.invoke(
+        role="judge",
+        messages=_messages(),
+        output_schema=_VERDICT_SCHEMA,
+        schema_name="judge_verdict",
+        generation_policy_sha256=_digest("generation-policy"),
+        input_tokens_upper_bound=100,
+        max_output_tokens=50,
+        max_reasoning_tokens=20,
+        timeout_seconds=5,
+        provider_context=_provider_context(configuration),
+    )
+
+
+def test_a_retry_blocked_by_credential_loss_keeps_attempt_one_measurements() -> None:
+    """Credential resolution runs before the send, so failing there consumes no authority."""
+
+    configuration = _configuration()
+    sent: list[httpx.Request] = []
+    calls = {"n": 0}
+
+    def credentials(_reference: str) -> Secret:
+        calls["n"] += 1
+        if calls["n"] > 1:
+            raise RuntimeError("credential rotated away mid-campaign")
+        return Secret("test-provider-value")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent.append(request)
+        return _invalid()
+
+    transport = OpenRouterTransport(
+        configuration=configuration,
+        credential_resolver=credentials,
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+        lineage_recorder=_ProviderRecorder(),
+    )
+
+    with pytest.raises(HostedRetryAdmissionRefused) as raised:
+        _invoke_with(configuration, transport)
+
+    assert not isinstance(raised.value, HostedStructuredOutputInvalid)
+    assert raised.value.observed_result.measured_cost_usd == Decimal("0.000065")
+    assert len(sent) == 1
+
+
+def test_a_retry_blocked_by_lineage_failure_keeps_attempt_one_measurements() -> None:
+    """The lineage recorder is the last gate before a retry is sent."""
+
+    class _FailsSecondBegin(_ProviderRecorder):
+        def begin_physical_attempt(self, logical_context, sequence):  # type: ignore[override]
+            if sequence > 1:
+                raise HostedProviderError("provider lineage is unavailable")
+            return super().begin_physical_attempt(logical_context, sequence)
+
+    configuration = _configuration()
+    sent: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent.append(request)
+        return _invalid()
+
+    transport = OpenRouterTransport(
+        configuration=configuration,
+        credential_resolver=lambda _reference: Secret("test-provider-value"),
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+        lineage_recorder=_FailsSecondBegin(),
+    )
+
+    with pytest.raises(HostedRetryAdmissionRefused) as raised:
+        _invoke_with(configuration, transport)
+
+    assert not isinstance(raised.value, HostedStructuredOutputInvalid)
+    assert raised.value.observed_result.measured_cost_usd == Decimal("0.000065")
+    assert len(sent) == 1
+
+
+def test_a_first_attempt_refusal_is_unchanged_and_carries_no_observed_result() -> None:
+    """With nothing measured yet there is nothing to preserve; the original error passes through."""
+
+    configuration = _configuration()
+
+    def refuse(_reference: str) -> Secret:
+        raise RuntimeError("credential unavailable")
+
+    transport = OpenRouterTransport(
+        configuration=configuration,
+        credential_resolver=refuse,
+        client=httpx.Client(transport=httpx.MockTransport(lambda _r: _valid())),
+        lineage_recorder=_ProviderRecorder(),
+    )
+
+    with pytest.raises(HostedProviderError) as raised:
+        _invoke_with(configuration, transport)
+
+    assert not isinstance(raised.value, HostedRetryAdmissionRefused)
+    assert not isinstance(raised.value, HostedProviderResponseError)
+
+
+# --------------------------------------------------------------------------------------
+# Settlement failures are typed: a governed ceiling is not accounting corruption.
+# --------------------------------------------------------------------------------------
+
+
+def test_settlement_cost_cap_raises_the_budget_subtype() -> None:
+    payload = _body(json.dumps({"verdict": "NO_EXPLOIT_OBSERVED"}))
+    payload["usage"]["cost"] = 99.0
+    transport, _recorder, sent = _transport([httpx.Response(200, json=payload)])
+
+    with pytest.raises(HostedSettlementFailed) as raised:
+        _invoke(transport)
+
+    assert isinstance(raised.value, HostedSettlementBudgetExceeded)
+    assert not isinstance(raised.value, HostedSettlementAccountingInvalid)
+    assert isinstance(raised.value.__cause__, HostedBudgetExceeded)
+    # A settlement failure is never a retryable formatting fault.
+    assert not isinstance(raised.value, HostedStructuredOutputInvalid)
+    assert len(sent) == 1
+
+
+def test_the_two_settlement_subtypes_are_mutually_exclusive() -> None:
+    assert issubclass(HostedSettlementBudgetExceeded, HostedSettlementFailed)
+    assert issubclass(HostedSettlementAccountingInvalid, HostedSettlementFailed)
+    assert not issubclass(HostedSettlementBudgetExceeded, HostedSettlementAccountingInvalid)
+    assert not issubclass(HostedSettlementAccountingInvalid, HostedSettlementBudgetExceeded)
+    # Both remain observable as charged responses, so their measurements are never lost.
+    assert issubclass(HostedSettlementFailed, HostedProviderResponseError)
+
+
+def test_no_authority_failure_is_ever_case_isolatable() -> None:
+    """The Runner isolates exactly one type; every authority failure must fall outside it."""
+
+    for authority_failure in (
+        HostedRetryAdmissionRefused,
+        HostedSettlementFailed,
+        HostedSettlementBudgetExceeded,
+        HostedSettlementAccountingInvalid,
+        HostedBudgetExceeded,
+    ):
+        assert not issubclass(authority_failure, HostedStructuredOutputInvalid), authority_failure
 
 
 # --------------------------------------------------------------------------------------
