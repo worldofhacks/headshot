@@ -179,6 +179,22 @@ class _HostedJudgeAttemptContext:
     parent_execution_id: str
 
 
+class _AbandonedProposal(Exception):
+    """Internal: one pre-bound case whose Red Team proposal never parsed.
+
+    Not an outcome, not a verdict, not a governance failure. It carries the exact case so the
+    selection loop can drop it from remaining authority, and it never escapes
+    ``select_next_work``.
+    """
+
+    def __init__(self, *, case: Any, case_id: str, attempt_id: str, error_code: str) -> None:
+        super().__init__(error_code)
+        self.case = case
+        self.case_id = case_id
+        self.attempt_id = attempt_id
+        self.error_code = error_code
+
+
 def _evaluator_calibration_state(status: JudgeCalibrationStatus) -> str:
     """Map the durable five-state status to the evaluator's four authority states."""
 
@@ -1704,11 +1720,16 @@ class DurableCampaignRunner:
         previous_category: str | None = None
         orchestration_cycle = 0
         next_ordinal = 0
+        dispatched_case_count = 0
         first_decision_recorded = False
         latest_terminal_execution: str | None = None
 
-        def select_next_work() -> tuple[Any, dict[str, Any], Any, str]:
-            """Run one feedback-driven Orchestrator/Red Team cycle over remaining authority."""
+        def _propose_next_work() -> tuple[Any, dict[str, Any], Any, str]:
+            """Run one feedback-driven Orchestrator/Red Team cycle over remaining authority.
+
+            Raises rather than skipping. Whether a failure is isolatable is the caller's decision,
+            not this cycle's.
+            """
 
             nonlocal orchestration_cycle, next_ordinal, first_decision_recorded
             snapshot = self.store.load_orchestration_snapshot(
@@ -1903,6 +1924,37 @@ class DurableCampaignRunner:
                         proposals,
                         corpus_id=prepared.corpus.corpus_id,
                     )
+                except HostedStructuredOutputInvalid as exc:
+                    if prebound_case is None or prebound_attempt is None:
+                        # Only the hosted path can raise this type, and only after pre-binding.
+                        # Fail closed rather than skip a case with no attempt row to abandon.
+                        red_team_failure_code = "red_team_proposal_failed"
+                        raise CampaignAbort(
+                            "Red Team could not select an exact authorized case",
+                            code="red_team_proposal_failed",
+                        ) from exc
+                    # A proposal that will not parse is an operational fault about ONE case — the
+                    # same fault the DISPATCH phase already isolates on the campaign loop. This is
+                    # what discarded authority over 30 authorized cases of run 8f44953bdd10.
+                    # HostedStructuredOutputTruncated is a subclass, so a run-away generation is
+                    # isolated on the same terms. The difference from dispatch is decisive: no
+                    # target turn ran, so there is NO evidence — the attempt is abandoned
+                    # un-attacked rather than given a verdict it did not earn. The hosted runtime
+                    # has already terminalized this execution as failed with its typed code
+                    # (hosted_runtime.py _record_failure), so nothing is left open.
+                    #
+                    # Both counters advance exactly as on the success path. The attempt already
+                    # occupies this ordinal immutably and ensure_campaign_attempt refuses to reuse
+                    # it for different work ("attempt ordinal already names different immutable
+                    # work", store.py), so NOT advancing would abort on the next case.
+                    orchestration_cycle += 1
+                    next_ordinal += 1
+                    raise _AbandonedProposal(
+                        case=prebound_case,
+                        case_id=prebound_attempt.case_id,
+                        attempt_id=prebound_attempt.attempt_id,
+                        error_code=exc.code,
+                    ) from exc
                 except Exception as exc:
                     red_team_failure_code = "red_team_proposal_failed"
                     raise CampaignAbort(
@@ -1968,6 +2020,57 @@ class DurableCampaignRunner:
             orchestration_cycle += 1
             next_ordinal += 1
             return case, proposal, attempt, red_team_execution
+
+        def select_next_work() -> tuple[Any, dict[str, Any], Any, str] | None:
+            """Next dispatchable work unit, skipping cases whose PROPOSAL cannot be formatted.
+
+            The proposal-phase mirror of the dispatch-phase isolation on the campaign loop. A
+            dispatch failure happens AFTER the target turns ran, so its evidence exists and an
+            ERROR verdict can be written against it. A proposal failure produced no target
+            traffic at all: nothing was adjudicated and nothing may be recorded as though it
+            were. The pre-bound attempt stays durably un-attempted, and the failed hosted Red
+            Team execution already carries the typed reason.
+
+            Returns None when no authorized case remains to propose.
+            """
+
+            while remaining:
+                # Renew the queue lease before every proposal cycle, not just at dispatch.
+                #
+                # Before this loop existed the gap between heartbeats was structurally bounded by
+                # one cycle, because a proposal failure ended the run. Now K cases can be abandoned
+                # back to back, and one cycle is orchestrator (120s) + red_team (180s) = 300s
+                # nominal against a 600s lease — so K=1 already reaches the limit. The nominal
+                # figure is not even a ceiling: the timeout is per-connect/read/write rather than a
+                # total-request cap, and the run-away that motivated this fix measured 295s against
+                # its 180s bound. Two truncations in a row would exceed the lease outright.
+                #
+                # Losing the lease here is not survivable and must not be quiet: `queue.fail` also
+                # requires a live lease, so its failure is suppressed, leaving the job row
+                # permanently `leased` — never completed, failed, or re-claimable, since `claim`
+                # only selects `queued` and `reap_expired` has no production caller. Heartbeating
+                # keeps the lease alive across a run of abandonments; if it is already lost,
+                # LeaseLostError propagates (it is not the isolatable type) and aborts the run
+                # loudly, which is the correct outcome.
+                self.queue.heartbeat(job, extension=_DEFAULT_LEASE)
+                try:
+                    return _propose_next_work()
+                except _AbandonedProposal as abandoned:
+                    # The cycle and its ordinal were already consumed inside _propose_next_work.
+                    # low_signal_streak and previous_category are deliberately untouched: no
+                    # verdict was reached and no category was actually exercised.
+                    remaining.remove(abandoned.case)
+                    with contextlib.suppress(Exception):
+                        _LOGGER.error(
+                            "red team proposal abandoned run_id=%s attempt_id=%s case_id=%s "
+                            "error_code=%s remaining=%d",
+                            authorized.run.run_id,
+                            abandoned.attempt_id,
+                            abandoned.case_id,
+                            abandoned.error_code,
+                            len(remaining),
+                        )
+            return None
 
         # Select the first case before adapter construction. An invalid directive or circuit
         # breaker therefore remains a network-free refusal.
@@ -2127,7 +2230,7 @@ class DurableCampaignRunner:
             accounting=accounting,
             judge=pre_manifest_hosted_judge or Judge(),
         )
-        while True:
+        while work is not None:
             case, proposal, attempt, current_red_team_execution = work
             dispatch_payload = verified_case_payload(case)
             # Per-case fault isolation. A model that cannot format its answer is an operational
@@ -2315,9 +2418,22 @@ class DurableCampaignRunner:
             else:
                 low_signal_streak = 0
             remaining.remove(case)
+            dispatched_case_count += 1
             if not remaining:
                 break
             work = select_next_work()
+
+        if dispatched_case_count == 0:
+            # Every authorized proposal was abandoned: nothing was attacked, nothing adjudicated.
+            # Completing here would write a summary that reads as a campaign that ran and found
+            # nothing, which is exactly the claim the platform must never make. Per-case isolation
+            # exists to preserve authority over the cases that CAN still run; when there are none,
+            # the original abort is still the honest outcome. Code preserved so existing operator
+            # runbooks and alerts still match.
+            raise CampaignAbort(
+                "every authorized Red Team proposal was abandoned",
+                code="red_team_proposal_failed",
+            )
 
         self.store.complete_campaign_job(
             job=job,

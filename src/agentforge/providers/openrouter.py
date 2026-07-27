@@ -643,6 +643,37 @@ class HostedStructuredOutputInvalid(HostedProviderResponseError):
     code = "invalid_structured_output"
 
 
+class HostedStructuredOutputTruncated(HostedStructuredOutputInvalid):
+    """The model produced no content at all, almost always because it hit its output ceiling.
+
+    A subclass, deliberately: truncation is still a formatting failure about ONE call, so it must
+    keep the retry admission and per-case isolation that :class:`HostedStructuredOutputInvalid`
+    already earns. Every ``isinstance`` check therefore continues to work unchanged.
+
+    It exists because the old path was actively misleading. When a provider returns
+    ``content: null`` — the shape OpenRouter uses when generation stops at the token cap before
+    any content is emitted — ``json.loads(None)`` raises ``TypeError``, which the broad handler in
+    :meth:`_structured_output` rewrote into a generic "failed validation". Operators then saw
+    ``invalid_structured_output`` and went looking for a schema or prompt bug, when the real cause
+    was a run-away generation that exhausted its budget. Naming truncation separately, and
+    carrying the provider's own ``finish_reason``, points at the actual fault.
+    """
+
+    code = "structured_output_truncated"
+
+
+class _StructuredOutputAbsent(HostedProviderError):
+    """Internal: the response carried no assistant content to parse.
+
+    Raised instead of letting ``json.loads(None)`` throw ``TypeError`` into a broad handler, so the
+    call site can classify truncation accurately. Never escapes the transport.
+    """
+
+    def __init__(self, message: str, *, finish_reason: str | None) -> None:
+        super().__init__(message)
+        self.finish_reason = finish_reason
+
+
 class HostedRetryAdmissionRefused(HostedProviderResponseError):
     """A retry was refused before it could be sent, by authority rather than by formatting.
 
@@ -1545,6 +1576,18 @@ class OpenRouterTransport:
                 code=exc.code,
                 provider_event_status="invalid_output",
             ) from exc
+        except _StructuredOutputAbsent as exc:
+            # Same retry and per-case isolation as any other formatting failure (it is a subclass),
+            # but named for what actually happened so the operator is not sent looking for a schema
+            # bug that does not exist.
+            reason = exc.finish_reason or "unreported"
+            raise HostedStructuredOutputTruncated(
+                "OpenRouter returned no assistant content after measured usage "
+                f"(finish_reason={reason})",
+                observed_result=observed_result,
+                code=HostedStructuredOutputTruncated.code,
+                provider_event_status="invalid_output",
+            ) from exc
         except HostedProviderError as exc:
             raise HostedStructuredOutputInvalid(
                 "OpenRouter structured output failed schema validation after measured usage",
@@ -1718,6 +1761,20 @@ class OpenRouterTransport:
     def _structured_output(
         payload: Mapping[str, Any], output_schema: Mapping[str, Any]
     ) -> Mapping[str, Any]:
+        # Checked before the broad handler below, because `json.loads(None)` raises TypeError and
+        # that handler would rewrite it into a generic "failed validation" — reporting a run-away
+        # generation that hit its token ceiling as though the model had emitted malformed JSON.
+        try:
+            choice = payload["choices"][0]  # type: ignore[index]
+            absent = choice["message"].get("content") is None
+            finish_reason = choice.get("finish_reason")
+        except Exception:
+            absent, finish_reason = False, None
+        if absent:
+            raise _StructuredOutputAbsent(
+                "OpenRouter returned no assistant content to parse",
+                finish_reason=str(finish_reason) if finish_reason is not None else None,
+            )
         try:
             content = payload["choices"][0]["message"]["content"]  # type: ignore[index]
             decoded = json.loads(content, object_pairs_hook=_pairs_without_duplicates)
