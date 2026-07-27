@@ -225,10 +225,20 @@ test("attempt and prompt evidence are keyboard expandable and prompt loading is 
   await page.keyboard.press("Enter");
   await expect(exactSystemPromptContent).toBeVisible();
 
-  const orderedMessages = prompt.locator("details.event-record").filter({
-    has: page.getByText("Ordered provider messages", { exact: true }),
+  // The sent messages are siblings of the system prompt, each summarising its role and size, so
+  // the body-bearing message is reachable in one expansion instead of being nested behind a
+  // wrapper. Opening it is the point of this assertion: the previous shape left the request body
+  // two levels deeper under the bare label "2. user" and it was never exercised at all.
+  const userMessage = prompt.locator("details.event-record").filter({
+    has: page.getByText("Message 2 · user", { exact: true }),
   }).first();
-  await expect(orderedMessages).not.toHaveAttribute("open", "");
+  await expect(userMessage).not.toHaveAttribute("open", "");
+  await expect(userMessage.locator(":scope > summary")).toContainText("characters");
+  await userMessage.locator(":scope > summary").focus();
+  await page.keyboard.press("Enter");
+  await expect(userMessage).toHaveAttribute("open", "");
+  await expect(userMessage.locator(".adversarial-text").first()).toBeVisible();
+
   await expect(page.getByText("Bounded redaction metadata", { exact: true })).toBeVisible();
   expect(promptRequests.length).toBeGreaterThan(0);
 });

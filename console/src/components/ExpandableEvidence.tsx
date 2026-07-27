@@ -120,6 +120,14 @@ export function PromptTranscript({
           <dd className="mono">{promptVersion}</dd>
         </div>
         <div>
+          <dt>Sent payload</dt>
+          <dd className="mono">
+            {messages.length} message{messages.length === 1 ? "" : "s"} ·{" "}
+            {messages.reduce((total, message) => total + message.content.length, 0)
+              .toLocaleString()} characters
+          </dd>
+        </div>
+        <div>
           <dt>System prompt SHA-256</dt>
           <CopyableHash label="System prompt SHA-256" value={promptSha256} />
         </div>
@@ -132,21 +140,21 @@ export function PromptTranscript({
         <ExpandableEvidence title="Exact system prompt" meta="immutable snapshot">
           <AdversarialText>{systemPrompt}</AdversarialText>
         </ExpandableEvidence>
-        <ExpandableEvidence
-          title="Ordered provider messages"
-          meta={`${messages.length} exact message${messages.length === 1 ? "" : "s"}`}
-        >
-          <div className="event-stack">
-            {messages.map((message, index) => (
-              <ExpandableEvidence
-                key={`${index}-${message.role}`}
-                title={`${index + 1}. ${message.role}`}
-              >
-                <AdversarialText>{message.content}</AdversarialText>
-              </ExpandableEvidence>
-            ))}
-          </div>
-        </ExpandableEvidence>
+        {/* Each sent message is its own top-level disclosure, as a sibling of the system prompt
+            rather than nested under a wrapper. The wrapper read as a section header, so the
+            message that actually carries the request body sat four expansions deep behind the
+            label "2. user" and operators reported seeing "only system prompts". The role and the
+            character count are in the summary so the body-bearing message is identifiable without
+            opening anything. */}
+        {messages.map((message, index) => (
+          <ExpandableEvidence
+            key={`${index}-${message.role}`}
+            title={`Message ${index + 1} · ${message.role}`}
+            meta={`${message.content.length.toLocaleString()} characters`}
+          >
+            <AdversarialText>{message.content}</AdversarialText>
+          </ExpandableEvidence>
+        ))}
         {redactions.length > 0 && (
           <ExpandableEvidence
             title="Bounded redaction metadata"

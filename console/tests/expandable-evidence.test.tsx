@@ -48,8 +48,17 @@ describe("expandable evidence", () => {
     expect(screen.getAllByText("Judge the evidence independently.")).toHaveLength(2);
     expect(screen.getByText(/authorization_header/)).not.toBeNull();
     expect(screen.getByText("Exact system prompt").closest("details")?.open).toBe(false);
-    expect(screen.getByText("Ordered provider messages").closest("details")?.open).toBe(false);
     expect(screen.getByText("Bounded redaction metadata").closest("details")?.open).toBe(false);
+
+    // Every sent message is a SIBLING of the system prompt, not nested under a wrapper, and its
+    // summary names the role and size. Operators reported seeing "only system prompts" when the
+    // body-bearing message sat two levels deeper behind the bare label "2. user".
+    const userMessage = screen.getByText("Message 2 · user");
+    expect(userMessage.closest("details")?.open).toBe(false);
+    expect(
+      userMessage.closest("details")?.parentElement?.closest("details"),
+    ).toBeNull();
+    expect(screen.getByText("Sent payload")).not.toBeNull();
   });
 
   it("shows and copies each exact full prompt hash through an accessible control", async () => {
