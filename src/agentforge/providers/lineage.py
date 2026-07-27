@@ -38,6 +38,17 @@ _MAX_INTEGER: Final = 2_147_483_647
 # bytes are untrusted input recorded on the physical hot path, so the ceiling lives in the contract
 # as well as the schema and a violation is refused here rather than at the INSERT.
 MAX_PROVIDER_RESPONSE_BYTES: Final = 65_536
+# Codepoints a PostgreSQL TEXT column cannot hold, and therefore codepoints this contract may not
+# carry. U+0000 is refused outright by the protocol ("PostgreSQL text fields cannot contain NUL
+# (0x00) bytes"); an unpaired surrogate has no UTF-8 encoding at all, so ``str.encode`` fails before
+# the database is even reached. A provider response is untrusted bytes decoded on the physical hot
+# path, so both are reachable remotely — a single one of either would otherwise turn a billed call
+# into a lost terminal record.
+_UNSTORABLE_TEXT = re.compile("[\x00\ud800-\udfff]")
+# Replaced, not dropped: U+FFFD is the standard "something was here that cannot be represented"
+# marker, so offsets, surrounding bytes, and the fact that the provider emitted something anomalous
+# all survive. Deleting would silently shorten the evidence and hide the anomaly.
+UNSTORABLE_TEXT_REPLACEMENT: Final = "�"
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _SAFE_IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ._:/@+-]*$")
 _SENSITIVE = re.compile(
@@ -152,8 +163,9 @@ def capture_response_evidence(value: object) -> tuple[str | None, bool, str | No
 
     Returns ``(response_text, response_truncated, response_sha256)`` ready for
     :class:`ProviderTerminalEventV1`. The digest always covers the bytes that are actually kept:
-    over-long text is cut to :data:`MAX_PROVIDER_RESPONSE_BYTES` *before* hashing, and the cut is
-    made on a UTF-8 boundary so the stored text re-encodes to exactly the digested bytes.
+    codepoints PostgreSQL TEXT cannot store are replaced and over-long text is cut to
+    :data:`MAX_PROVIDER_RESPONSE_BYTES`, both *before* hashing, and the cut is made on a UTF-8
+    boundary so the stored text re-encodes to exactly the digested bytes.
 
     Anything that is not text — including absence — yields ``(None, False, None)``. This function
     never raises: a caller on the provider hot path must be able to give up on evidence without
@@ -162,6 +174,9 @@ def capture_response_evidence(value: object) -> tuple[str | None, bool, str | No
 
     if not isinstance(value, str):
         return None, False, None
+    # Sanitize before measuring. The replacement is wider than what it replaces, so bounding or
+    # digesting the raw text would describe bytes that are not the bytes that get stored.
+    value = _UNSTORABLE_TEXT.sub(UNSTORABLE_TEXT_REPLACEMENT, value)
     encoded = value.encode("utf-8")
     truncated = len(encoded) > MAX_PROVIDER_RESPONSE_BYTES
     if truncated:
@@ -411,6 +426,15 @@ class ProviderTerminalEventV1:
             return
         if not isinstance(self.response_text, str):
             raise ValueError("response_text must be text or absent")
+        # Defence in depth against a lost terminal record. ``capture_response_evidence`` already
+        # removes these, so reaching here means a producer built the event by hand; refusing it in
+        # the contract is the difference between one dropped piece of evidence and an INSERT the
+        # database rejects, which would strand the whole billed call as unsettled.
+        if _UNSTORABLE_TEXT.search(self.response_text):
+            raise ValueError(
+                "response_text contains codepoints PostgreSQL text cannot store; "
+                "sanitize before hashing"
+            )
         encoded = self.response_text.encode("utf-8")
         if len(encoded) > MAX_PROVIDER_RESPONSE_BYTES:
             raise ValueError("response_text exceeds the evidence bound; truncate before hashing")
@@ -436,6 +460,7 @@ class ProviderLineageRecorder(Protocol):
 
 __all__ = [
     "MAX_PROVIDER_RESPONSE_BYTES",
+    "UNSTORABLE_TEXT_REPLACEMENT",
     "capture_response_evidence",
     "normalize_provider_observation",
     "ProviderInvocationContextV1",

@@ -32,9 +32,18 @@ from agentforge.agents.prompts import PromptRegistryError, prompt_for_identity
 from agentforge.agents.runtime import AGENT_DEFINITIONS, default_assignment
 from agentforge.api.backend import ApiBackend, ApiBackendUnavailable, ApiConflict
 from agentforge.api.birdseye import build_birdseye_snapshot
-from agentforge.api.read_models import validate_ready_data
+from agentforge.api.read_models import (
+    CREDENTIAL_REFERENCE_PATTERN,
+    CREDENTIAL_REFERENCE_REDACTION,
+    CREDENTIAL_URL_PATTERN,
+    CREDENTIAL_URL_REDACTION,
+    screen_credentials,
+    validate_ready_data,
+)
 from agentforge.api.schemas import CommandResult, EventBatch, ResourceResult
 from agentforge.auth.errors import AuthorizationError
+from agentforge.auth.permissions import EVIDENCE_READ
+from agentforge.auth.principal import Principal
 from agentforge.campaign.corpus import (
     LIVE_100_BATCH_IDS,
     LIVE_100_BATCH_SPECS,
@@ -99,8 +108,10 @@ _PROVIDER_KEY = re.compile(r"\bsk-(?:ant-|or-|proj-)?[A-Za-z0-9_-]{8,}\b")
 _AUTHORIZATION_HEADER = re.compile(r"(?im)\bauthorization\s*:\s*[^\r\n]+")
 _COOKIE_HEADER = re.compile(r"(?im)\b(?:cookie|set-cookie)\s*:\s*[^\r\n]+")
 _SESSION_COOKIE = re.compile(r"(?i)\b__session=[^\s;,]+")
-_CREDENTIAL_URL = re.compile(r"(?i)\b[a-z][a-z0-9+.-]*://[^\s/:]+:[^\s/@]+@[^\s]+")
-_CREDENTIAL_REFERENCE = re.compile(r"(?i)\bsecretref://[A-Za-z0-9._~/-]+")
+# Single-sourced from `agentforge.api.read_models` so the projection that redacts and the
+# read model that verifies the redaction cannot drift apart.
+_CREDENTIAL_URL = CREDENTIAL_URL_PATTERN
+_CREDENTIAL_REFERENCE = CREDENTIAL_REFERENCE_PATTERN
 _LABELED_SECRET = re.compile(
     r"(?i)\b(?:access[_ -]?token|api[_ -]?key|authorization|bearer|cookie|credential|"
     r"password|refresh[_ -]?token|secret|session[_ -]?token)\b"
@@ -220,8 +231,8 @@ def _safe(value: Any) -> Any:
         value = _AUTHORIZATION_HEADER.sub("Authorization: ***REDACTED***", value)
         value = _COOKIE_HEADER.sub("Cookie: ***REDACTED***", value)
         value = _SESSION_COOKIE.sub("__session=***REDACTED***", value)
-        value = _CREDENTIAL_URL.sub("***REDACTED_CREDENTIAL_URL***", value)
-        value = _CREDENTIAL_REFERENCE.sub("***REDACTED_CREDENTIAL_REFERENCE***", value)
+        value = _CREDENTIAL_URL.sub(CREDENTIAL_URL_REDACTION, value)
+        value = _CREDENTIAL_REFERENCE.sub(CREDENTIAL_REFERENCE_REDACTION, value)
         value = _LABELED_SECRET.sub("***REDACTED_LABELED_SECRET***", value)
         value = _BEARER.sub("Bearer ***REDACTED***", value)
         value = _JWT.sub("***REDACTED***", value)
@@ -229,6 +240,14 @@ def _safe(value: Any) -> Any:
     if value is None or isinstance(value, (bool, int, float)):
         return value
     return str(value)
+
+
+def _has_evidence_read(principal: Any) -> bool:
+    """True only for a verified principal carrying the evidence-read custom permission."""
+
+    if not isinstance(principal, Principal):
+        return False
+    return EVIDENCE_READ in principal.organization_permissions
 
 
 def _rows(connection, statement: str, parameters: Mapping[str, Any]) -> list[dict[str, Any]]:
@@ -2315,6 +2334,15 @@ class PostgresApiBackend(ApiBackend):
 
     def read(self, resource, principal, *, identifiers=None):
         identifiers = dict(identifiers or {})
+        if resource == "provider_call_evidence" and not _has_evidence_read(principal):
+            # Serving this resource discloses the exact prompt sent to the provider and the
+            # exact bytes it sent back. That authority is a property of the RESOURCE, so it is
+            # decided here, unconditionally, before any row is read or projected -- and before
+            # the identifier is even validated, so a refusal cannot disclose which invocations
+            # exist. It was previously only a side effect of the protected snapshot accessor,
+            # which the projection skips whenever the logical execution has no snapshot: the
+            # one member with no other screen was also the one member with no gate.
+            return ResourceResult.unavailable("evidence_authorization_required")
         if resource == "principal":
             return ResourceResult.ready(
                 validate_ready_data(
@@ -3199,8 +3227,14 @@ class PostgresApiBackend(ApiBackend):
                     # One physical call, organization-scoped, associated to its protected
                     # prompt snapshot by the logical execution that issued it. The join only
                     # establishes that association; the snapshot CONTENT is served by the
-                    # protected store accessor below so its credential/PHI checks and hash
-                    # recomputation apply here exactly as they do to `agent_prompt_snapshot`.
+                    # protected store accessor below, so the PROMPT half gets that accessor's
+                    # credential/PHI checks and hash recomputation exactly as
+                    # `agent_prompt_snapshot` does.
+                    #
+                    # Nothing about that accessor covers this branch generally. It does not run
+                    # at all when there is no snapshot, and it never sees the RESPONSE half.
+                    # The evidence permission is therefore enforced at the top of `read`, not
+                    # here, and the recorded response is credential-screened below.
                     evidence_rows = _rows(
                         connection,
                         "SELECT e.invocation_id, e.campaign_run_id, "
@@ -3243,6 +3277,19 @@ class PostgresApiBackend(ApiBackend):
                                     "redactions": list(snapshot.redactions),
                                 }
                         response_text = source["response_text"]
+                        evidence_response: dict[str, Any] | None = None
+                        if response_text is not None:
+                            # Provider-controlled bytes, captured before any status check, so
+                            # an upstream 5xx body lands here verbatim. Integrity is not
+                            # confidentiality: the digest proves the row was not altered and
+                            # says nothing about a credential inside it. Screen what is served;
+                            # `sha256` keeps describing the STORED text, and the marker the
+                            # screen leaves behind is the signal that the two now differ.
+                            evidence_response = {
+                                "text": screen_credentials(str(response_text)),
+                                "truncated": bool(source["response_truncated"]),
+                                "sha256": source["response_sha256"],
+                            }
                         rows = [
                             {
                                 "invocation_id": source["invocation_id"],
@@ -3253,15 +3300,7 @@ class PostgresApiBackend(ApiBackend):
                                 "status": source["status"],
                                 "error_code": source["error_code"],
                                 "prompt": evidence_prompt,
-                                "response": (
-                                    None
-                                    if response_text is None
-                                    else {
-                                        "text": response_text,
-                                        "truncated": bool(source["response_truncated"]),
-                                        "sha256": source["response_sha256"],
-                                    }
-                                ),
+                                "response": evidence_response,
                             }
                         ]
                 elif resource == "agent_activity":
@@ -5392,8 +5431,12 @@ class PostgresApiBackend(ApiBackend):
         # hash recomputation. Generic display redaction would change the exact provider input, so
         # the strict prompt decoder is the only serialization boundary for this resource.
         # `provider_call_evidence` carries that same store-validated prompt plus the recorded
-        # provider response, and both are digest-verified by their strict decoders; redacting
-        # them here would break the very hashes that prove the evidence is exact.
+        # provider response. Skipping `_safe` here is about the DISPLAY redactions -- PHI-shaped
+        # identifiers, labeled secrets, hostile-text markers -- which would rewrite exact evidence
+        # and break the hashes that prove it. It is NOT a claim that the response is clean: the
+        # response is the only member no upstream screen touches, so its projection above runs
+        # the credential screen on the way out and the read model refuses to serve any text that
+        # still matches a credential shape.
         exact_evidence_resources = {"agent_prompt_snapshot", "provider_call_evidence"}
         sanitized = rows if resource in exact_evidence_resources else _safe(rows)
         if resource in {

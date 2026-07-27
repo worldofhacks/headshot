@@ -30,12 +30,17 @@ from agentforge.agents.hosted import HostedConfigurationSet
 from agentforge.control_plane.store import ControlPlaneStore
 from agentforge.providers.lineage import (
     MAX_PROVIDER_RESPONSE_BYTES,
+    UNSTORABLE_TEXT_REPLACEMENT,
+    ProviderInvocationContextV1,
+    ProviderLogicalContextV1,
     ProviderTerminalEventV1,
     capture_response_evidence,
 )
 from agentforge.providers.openrouter import HostedProviderError, OpenRouterTransport
 from agentforge.secrets import Secret
 from test_hosted_agent_execution_lineage import (
+    _GENERATION_POLICY,
+    _MODELS,
     _PROMPTS,
     _SELECTED_PROVIDER,
     _authorized_run,
@@ -53,6 +58,13 @@ from test_openrouter_transport import (
 # call sent can remove it, so its absence proves the credential itself is passed as a redaction
 # rather than the transport merely relying on secret-shaped heuristics.
 _OPAQUE_CREDENTIAL = "northwind-transport-value-9182"
+
+# Valid UTF-8, invalid JSON, and impossible to store in a PostgreSQL TEXT column. This is exactly
+# the ``invalid_output`` shape the evidence feature exists to keep: it is captured before
+# ``response.json()`` ever runs, and a hostile or malfunctioning upstream can emit it remotely on
+# every retry. One of these bytes used to cost a billed call its entire terminal record.
+_NUL_BEARING_BODY = b'{"error":"upstream\x00truncated"}'
+_STORABLE_NUL_BEARING_BODY = '{"error":"upstream�truncated"}'
 
 
 def _success_payload(*, extra_metadata: str | None = None) -> dict[str, object]:
@@ -317,6 +329,88 @@ def test_truncation_flag_must_be_a_boolean() -> None:
         _terminal_event(response_truncated=1)
 
 
+def test_a_nul_byte_is_replaced_at_capture_so_the_digest_matches_the_stored_text() -> None:
+    body = _NUL_BEARING_BODY.decode("utf-8")
+
+    response_text, truncated, digest = capture_response_evidence(body)
+
+    assert response_text == _STORABLE_NUL_BEARING_BODY
+    assert "\x00" not in response_text
+    # Replaced in place, not dropped: the anomaly stays visible and the surrounding bytes keep
+    # their meaning, so an operator can still read what the upstream was trying to say.
+    assert response_text.count(UNSTORABLE_TEXT_REPLACEMENT) == 1
+    assert truncated is False
+    # The digest describes the storable rendering, never the unstorable original — otherwise it
+    # would fail to verify the only copy that survives.
+    assert digest == hashlib.sha256(response_text.encode("utf-8")).hexdigest()
+    assert digest != hashlib.sha256(body.encode("utf-8")).hexdigest()
+    event = _terminal_event(
+        response_text=response_text,
+        response_truncated=truncated,
+        response_sha256=digest,
+    )
+    assert event.response_text == _STORABLE_NUL_BEARING_BODY
+
+
+def test_unencodable_surrogates_are_replaced_rather_than_raising_on_the_hot_path() -> None:
+    # A lone surrogate has no UTF-8 encoding at all, so an un-sanitized capture would raise inside
+    # ``str.encode`` — on the provider hot path, where evidence may never raise.
+    body = "lead \ud800 trail \udfff end"
+
+    response_text, truncated, digest = capture_response_evidence(body)
+
+    assert response_text == "lead � trail � end"
+    assert truncated is False
+    assert digest == hashlib.sha256(response_text.encode("utf-8")).hexdigest()
+    _terminal_event(
+        response_text=response_text,
+        response_truncated=truncated,
+        response_sha256=digest,
+    )
+
+
+def test_sanitising_before_bounding_keeps_the_widened_text_inside_the_bound() -> None:
+    # U+FFFD is three bytes where NUL was one. Bounding before replacement would produce text the
+    # contract and the CHECK constraint both refuse, so the order of the two steps is load-bearing.
+    body = "\x00" * MAX_PROVIDER_RESPONSE_BYTES
+
+    response_text, truncated, digest = capture_response_evidence(body)
+
+    assert truncated is True
+    assert response_text is not None
+    kept = response_text.encode("utf-8")
+    assert len(kept) <= MAX_PROVIDER_RESPONSE_BYTES
+    assert set(response_text) == {UNSTORABLE_TEXT_REPLACEMENT}
+    assert digest == hashlib.sha256(kept).hexdigest()
+    _terminal_event(
+        response_text=response_text,
+        response_truncated=truncated,
+        response_sha256=digest,
+    )
+
+
+def test_the_contract_refuses_a_nul_even_with_an_otherwise_perfect_digest() -> None:
+    """Defence in depth: capture sanitises, and the contract makes the mistake unrepresentable."""
+
+    body = _NUL_BEARING_BODY.decode("utf-8")
+    # The digest is exactly the one the validator computes for this text, so the refusal can only
+    # be about storability. A producer cannot buy its way past the guard with correct arithmetic.
+    with pytest.raises(ValueError, match="PostgreSQL text cannot store"):
+        _terminal_event(
+            response_text=body,
+            response_sha256=hashlib.sha256(body.encode("utf-8")).hexdigest(),
+        )
+
+
+def test_the_contract_refuses_an_unpaired_surrogate_instead_of_failing_to_encode() -> None:
+    body = "lone \ud800 surrogate"
+    with pytest.raises(ValueError, match="PostgreSQL text cannot store"):
+        _terminal_event(
+            response_text=body,
+            response_sha256=hashlib.sha256(body.encode("utf-8", "surrogatepass")).hexdigest(),
+        )
+
+
 # --------------------------------------------------------------------------------------------
 # The real transport
 # --------------------------------------------------------------------------------------------
@@ -461,6 +555,50 @@ def test_a_call_that_never_returned_records_no_response_at_all() -> None:
         assert event.response_text is None
         assert event.response_sha256 is None
         assert event.response_truncated is False
+
+
+def test_transport_keeps_a_nul_bearing_body_as_storable_evidence() -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-type": "application/json"},
+            content=_NUL_BEARING_BODY,
+        )
+
+    configuration = _configuration()
+    recorder = _ProviderRecorder()
+    transport = OpenRouterTransport(
+        configuration=configuration,
+        credential_resolver=lambda _reference: Secret("test-provider-value"),
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+        lineage_recorder=recorder,
+        sleeper=lambda _seconds: None,
+        monotonic=lambda: 0.0,
+    )
+    with pytest.raises(HostedProviderError) as failure:
+        transport.invoke(
+            role="judge",
+            messages=_messages(),
+            output_schema={"type": "object"},
+            schema_name="judge_verdict",
+            generation_policy_sha256=_digest("generation-policy"),
+            input_tokens_upper_bound=100,
+            max_output_tokens=50,
+            max_reasoning_tokens=20,
+            timeout_seconds=5,
+            provider_context=_provider_context(configuration),
+        )
+
+    # The call fails because the body is not JSON — that is the honest outcome. What must not
+    # happen is the failure being reported as an inability to record anything at all.
+    assert "could not be durably recorded" not in str(failure.value)
+    assert [item.status for item in recorder.events] == ["invalid_output"]
+    for event in recorder.events:
+        assert event.response_text == _STORABLE_NUL_BEARING_BODY
+        assert (
+            event.response_sha256
+            == hashlib.sha256(_STORABLE_NUL_BEARING_BODY.encode("utf-8")).hexdigest()
+        )
 
 
 def test_one_attempts_body_never_bleeds_into_the_next_physical_call() -> None:
@@ -798,6 +936,188 @@ def test_database_refuses_a_response_over_the_bound(migrated_db: Engine) -> None
                 "digest": hashlib.sha256(oversized.encode("utf-8")).hexdigest(),
             },
         )
+
+
+# --------------------------------------------------------------------------------------------
+# The real transport against the real store
+#
+# Neither layer alone can prove the claim these tests exist for. The contract cannot show that a
+# rejected body is refused at the INSERT rather than at validation, and the in-memory recorder
+# cannot show that the call still settles when the durable write is the thing that refuses it.
+# --------------------------------------------------------------------------------------------
+
+
+def _documentation_success_payload() -> dict[str, object]:
+    model = _MODELS["documentation"]
+    return {
+        "id": "gen-evidence-store-transport-1",
+        "model": model,
+        "openrouter_metadata": {
+            "requested": model,
+            "endpoints": {
+                "available": [
+                    {
+                        "provider": _SELECTED_PROVIDER["documentation"],
+                        "model": model,
+                        "selected": True,
+                    }
+                ]
+            },
+        },
+        "choices": [{"message": {"content": '{"summary":"held"}'}}],
+        "usage": {
+            "prompt_tokens": 30,
+            "completion_tokens": 10,
+            "completion_tokens_details": {"reasoning_tokens": 5},
+            "cost": 0.000065,
+        },
+    }
+
+
+def _invoke_documentation(
+    store: ControlPlaneStore,
+    configuration: HostedConfigurationSet,
+    execution_id: str,
+    recorder: object,
+    handler,
+) -> object:
+    """Drive one real physical call for a real, running logical execution."""
+
+    prompt = _PROMPTS["documentation"]
+    transport = OpenRouterTransport(
+        configuration=configuration,
+        credential_resolver=lambda _reference: Secret("synthetic-provider-credential"),
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+        lineage_recorder=recorder,  # type: ignore[arg-type]
+        sleeper=lambda _seconds: None,
+        monotonic=lambda: 0.0,
+    )
+    return transport.invoke(
+        role="documentation",
+        messages=_messages(role="documentation", user="Document."),
+        output_schema={"type": "object"},
+        schema_name="documentation_report",
+        generation_policy_sha256=_GENERATION_POLICY,
+        input_tokens_upper_bound=100,
+        max_output_tokens=50,
+        max_reasoning_tokens=20,
+        timeout_seconds=5,
+        provider_context=store.provider_logical_context(
+            execution_id=execution_id,
+            prompt_version=prompt.version,
+            prompt_sha256=prompt.sha256,
+        ),
+    )
+
+
+def _settled_events(engine: Engine, execution_id: str) -> list[dict[str, object]]:
+    with engine.connect() as connection:
+        return [
+            dict(row)
+            for row in connection.execute(
+                text(
+                    "SELECT physical_sequence, status, response_text, response_truncated, "
+                    "response_sha256 FROM provider_call_events "
+                    "WHERE logical_execution_id = :execution ORDER BY physical_sequence"
+                ),
+                {"execution": execution_id},
+            ).mappings()
+        ]
+
+
+class _RefusesResponseEvidence:
+    """A real store that refuses any terminal event carrying a body, and accepts it without one.
+
+    It stands in for every store-side refusal of provider bytes — the NUL rejection this suite
+    regresses, a future CHECK constraint, a column type change, an encoding the driver dislikes.
+    The invariant under test is not "NUL is handled" but "evidence the database will not take
+    costs the evidence and never the call".
+    """
+
+    def __init__(self, store: ControlPlaneStore) -> None:
+        self._store = store
+        self.refused = 0
+
+    def begin_physical_attempt(
+        self,
+        logical_context: ProviderLogicalContextV1,
+        sequence: int,
+    ) -> ProviderInvocationContextV1:
+        return self._store.begin_physical_attempt(logical_context, sequence)
+
+    def finish_physical_attempt(
+        self,
+        invocation: ProviderInvocationContextV1,
+        event: ProviderTerminalEventV1,
+    ) -> ProviderTerminalEventV1:
+        if event.response_text is not None:
+            self.refused += 1
+            raise RuntimeError("synthetic durable refusal of the observed response body")
+        return self._store.finish_physical_attempt(invocation, event)
+
+
+def test_a_nul_in_the_provider_body_still_settles_the_call_durably(migrated_db: Engine) -> None:
+    """The regression. One NUL byte used to destroy the terminal record of a billed call.
+
+    Capture did not strip it, the contract did not refuse it, and the rejection therefore landed
+    on the INSERT — outside the evidence fallback — so no ``provider_call_events`` row was ever
+    written, the invocation stayed open, and cost and tokens were never settled.
+    """
+
+    store, run_id, configuration = _authorized_run(migrated_db)
+    execution_id = _start(store, run_id, configuration, role="documentation")
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-type": "application/json"},
+            content=_NUL_BEARING_BODY,
+        )
+
+    with pytest.raises(HostedProviderError) as failure:
+        _invoke_documentation(store, configuration, execution_id, store, handler)
+
+    assert "could not be durably recorded" not in str(failure.value)
+    events = _settled_events(migrated_db, execution_id)
+    assert [item["physical_sequence"] for item in events] == [1]
+    for event in events:
+        assert event["status"] == "invalid_output"
+        stored = event["response_text"]
+        assert stored == _STORABLE_NUL_BEARING_BODY
+        assert isinstance(stored, str)
+        assert event["response_truncated"] is False
+        assert event["response_sha256"] == hashlib.sha256(stored.encode("utf-8")).hexdigest()
+    # The billed call is accounted for: nothing is left dangling to reconcile later as
+    # ``outcome_unknown``.
+    assert store.list_open_provider_invocations() == ()
+
+
+def test_evidence_the_store_refuses_costs_the_evidence_not_the_call(migrated_db: Engine) -> None:
+    """The general invariant behind the regression, independent of why a body is unstorable."""
+
+    store, run_id, configuration = _authorized_run(migrated_db)
+    execution_id = _start(store, run_id, configuration, role="documentation")
+    recorder = _RefusesResponseEvidence(store)
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=_documentation_success_payload())
+
+    result = _invoke_documentation(store, configuration, execution_id, recorder, handler)
+
+    # The call itself succeeds. Only its evidence is lost, and it is lost honestly as NULL rather
+    # than as a body the row cannot stand behind.
+    assert recorder.refused == 1
+    assert result.returned_model == _MODELS["documentation"]  # type: ignore[attr-defined]
+    assert _settled_events(migrated_db, execution_id) == [
+        {
+            "physical_sequence": 1,
+            "status": "succeeded",
+            "response_text": None,
+            "response_truncated": False,
+            "response_sha256": None,
+        }
+    ]
+    assert store.list_open_provider_invocations() == ()
 
 
 def test_database_refuses_a_malformed_response_digest(migrated_db: Engine) -> None:

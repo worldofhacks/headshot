@@ -42,10 +42,21 @@ _PROMPT_SENTINEL = "provider-call-evidence-prompt-sentinel"
 _RESPONSE_SENTINEL = "provider-call-evidence-response-sentinel"
 _REDACTION_MARKER = "[REDACTED:SYNTHETIC_FIXTURE]"
 
-# Three physical calls, each on its own logical execution so every invocation is sequence 1.
+# Synthetic credentials, never real. A recorded response is provider-controlled text captured
+# before any status check, so both of these shapes reach the column verbatim: a DSN out of an
+# upstream 5xx connection error, and a secret reference echoed back in a model's own rationale.
+_LEAKED_DSN = "postgres://user:hunter2@db.internal:5432/agentforge"
+_LEAKED_DSN_PASSWORD = "hunter2"
+_LEAKED_SECRET_REFERENCE = "secretref://staging/openrouter/judge/generation-1"
+_CREDENTIAL_URL_MARKER = "***REDACTED_CREDENTIAL_URL***"
+_CREDENTIAL_REFERENCE_MARKER = "***REDACTED_CREDENTIAL_REFERENCE***"
+
+# Five physical calls, each on its own logical execution so every invocation is sequence 1.
 _CASE_FULL = "full"  # snapshot + recorded response
 _CASE_NO_SNAPSHOT = "no-snapshot"  # recorded response, no protected snapshot row
 _CASE_NO_RESPONSE = "no-response"  # snapshot, no recorded response
+_CASE_CREDENTIAL_DSN = "credential-dsn"  # response embeds a DSN; no snapshot to screen it
+_CASE_CREDENTIAL_REFERENCE = "credential-reference"  # response embeds a secretref://
 
 _CASE_ROLES = {
     _CASE_FULL: "orchestrator",
@@ -53,6 +64,8 @@ _CASE_ROLES = {
     # Deliberately not the Judge: a succeeded judge execution carries extra decision-authority
     # constraints that are irrelevant to this evidence contract.
     _CASE_NO_RESPONSE: "documentation",
+    _CASE_CREDENTIAL_DSN: "red_team",
+    _CASE_CREDENTIAL_REFERENCE: "documentation",
 }
 
 _RETURNED_UPSTREAM = {
@@ -80,11 +93,33 @@ def _event_id(case: str) -> str:
 
 
 def _response_text(case: str) -> str:
+    """The bytes as STORED on the row -- what the provider actually said, unscreened."""
+
+    if case == _CASE_CREDENTIAL_DSN:
+        # An upstream error body, not JSON. The DSN sits mid-sentence with text on both sides
+        # so the assertions can show the screen removes the credential and nothing else.
+        return (
+            f"upstream error {_RESPONSE_SENTINEL}:{case} - "
+            f"could not reach {_LEAKED_DSN} after 3 attempts"
+        )
+    rationale = f"{_RESPONSE_SENTINEL}:{case}"
+    if case == _CASE_CREDENTIAL_REFERENCE:
+        rationale = f"{rationale} resolved via {_LEAKED_SECRET_REFERENCE} ok"
     return canonical_json(
         {
             "verdict": "fail",
-            "rationale": f"{_RESPONSE_SENTINEL}:{case}",
+            "rationale": rationale,
         }
+    )
+
+
+def _served_response_text(case: str) -> str:
+    """The bytes the endpoint is allowed to serve: the stored text minus any credential."""
+
+    return (
+        _response_text(case)
+        .replace(_LEAKED_DSN, _CREDENTIAL_URL_MARKER)
+        .replace(_LEAKED_SECRET_REFERENCE, _CREDENTIAL_REFERENCE_MARKER)
     )
 
 
@@ -411,6 +446,20 @@ def _seed_provider_call_evidence(engine: Engine) -> None:
             with_snapshot=True,
             with_response=False,
         )
+        _seed_physical_call(
+            connection,
+            case=_CASE_CREDENTIAL_DSN,
+            configuration=configuration,
+            with_snapshot=False,
+            with_response=True,
+        )
+        _seed_physical_call(
+            connection,
+            case=_CASE_CREDENTIAL_REFERENCE,
+            configuration=configuration,
+            with_snapshot=True,
+            with_response=True,
+        )
 
 
 def _principal(
@@ -468,7 +517,10 @@ def test_provider_call_evidence_requires_evidence_permission_and_organization_sc
     assert TestClient(app).get(path).status_code == 401
 
     app.dependency_overrides[require_authenticated] = lambda: _principal(evidence=False)
-    assert TestClient(app).get(path).status_code == 403
+    denied = TestClient(app)
+    # Every member, not just the one that happens to have a protected prompt snapshot.
+    for case in _CASE_ROLES:
+        assert denied.get(_evidence_path(case)).status_code == 403, case
 
     app.dependency_overrides[require_authenticated] = _principal
     assert TestClient(app).get(path).status_code == 200
@@ -592,6 +644,152 @@ def test_provider_call_evidence_decoder_recomputes_prompt_and_response_digests(
         validate_ready_data("provider_call_evidence", tampered_prompt)
 
 
+def test_provider_call_evidence_backend_refuses_without_evidence_permission(
+    evidence_db: Engine,
+) -> None:
+    """The gate belongs to the resource, not to whichever members a row happens to carry.
+
+    The refusal has to be identical for a call WITH a protected prompt snapshot and one
+    WITHOUT: an unauthorized read must not turn on the presence of an optional member, or
+    the unscreened member becomes the ungated one.
+    """
+
+    backend = PostgresApiBackend(evidence_db, environment="staging")
+    console_only = _principal(evidence=False)
+    assert EVIDENCE_READ not in console_only.organization_permissions
+
+    for case in _CASE_ROLES:
+        result = backend.read(
+            "provider_call_evidence",
+            console_only,
+            identifiers={"invocation_id": _invocation_id(case)},
+        )
+        assert result.state == "unavailable", (case, result)
+        assert result.reason_code == "evidence_authorization_required", case
+        assert result.data is None, case
+        serialized = json.dumps(result.model_dump(), sort_keys=True, default=str)
+        for forbidden in (
+            _RESPONSE_SENTINEL,
+            _PROMPT_SENTINEL,
+            _LEAKED_DSN_PASSWORD,
+            _LEAKED_SECRET_REFERENCE,
+        ):
+            assert forbidden not in serialized, (case, forbidden)
+
+    # A refusal must also not disclose which invocations exist, so an unknown identifier is
+    # refused the same way rather than reported as empty.
+    unknown = backend.read(
+        "provider_call_evidence",
+        console_only,
+        identifiers={"invocation_id": "0" * 64},
+    )
+    assert unknown.state == "unavailable"
+    assert unknown.reason_code == "evidence_authorization_required"
+
+
+def test_provider_call_evidence_screens_a_dsn_out_of_the_recorded_response(
+    evidence_db: Engine,
+) -> None:
+    """A digest proves the bytes were not altered; it proves nothing about a secret in them."""
+
+    app = _app(evidence_db)
+    app.dependency_overrides[require_authenticated] = _principal
+    response = TestClient(app).get(_evidence_path(_CASE_CREDENTIAL_DSN))
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["state"] == "ready", payload
+    data = payload["data"]
+    assert data["prompt"] is None  # the member with no store-side screen
+    served = data["response"]
+
+    stored = _response_text(_CASE_CREDENTIAL_DSN)
+    assert _LEAKED_DSN in stored and _LEAKED_DSN_PASSWORD in stored
+
+    assert served["text"] == _served_response_text(_CASE_CREDENTIAL_DSN)
+    assert _CREDENTIAL_URL_MARKER in served["text"]
+    # The screen removes the credential and nothing else.
+    assert served["text"].startswith(
+        f"upstream error {_RESPONSE_SENTINEL}:{_CASE_CREDENTIAL_DSN} - could not reach "
+    )
+    assert served["text"].endswith(" after 3 attempts")
+
+    # The digest keeps describing the STORED bytes, so the row stays provable even though
+    # what was served is deliberately not those bytes.
+    assert served["sha256"] == _digest(stored)
+    assert served["sha256"] != _digest(served["text"])
+
+    body = json.dumps(payload, sort_keys=True)
+    for forbidden in (_LEAKED_DSN, _LEAKED_DSN_PASSWORD, "db.internal"):
+        assert forbidden not in body, forbidden
+
+
+def test_provider_call_evidence_screens_a_secret_reference_and_leaves_the_prompt_exact(
+    evidence_db: Engine,
+) -> None:
+    app = _app(evidence_db)
+    app.dependency_overrides[require_authenticated] = _principal
+    response = TestClient(app).get(_evidence_path(_CASE_CREDENTIAL_REFERENCE))
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["state"] == "ready", payload
+    data = payload["data"]
+    served = data["response"]
+
+    stored = _response_text(_CASE_CREDENTIAL_REFERENCE)
+    assert _LEAKED_SECRET_REFERENCE in stored
+    assert served["text"] == _served_response_text(_CASE_CREDENTIAL_REFERENCE)
+    assert served["sha256"] == _digest(stored)
+
+    # Only the reference is replaced: the body is still the JSON the model returned.
+    decoded = json.loads(served["text"])
+    assert decoded["verdict"] == "fail"
+    assert decoded["rationale"] == (
+        f"{_RESPONSE_SENTINEL}:{_CASE_CREDENTIAL_REFERENCE} resolved via "
+        f"{_CREDENTIAL_REFERENCE_MARKER} ok"
+    )
+
+    # Screening the response does not weaken or touch the prompt half.
+    expected_prompt, expected_messages = _prompt_messages("documentation")
+    assert data["prompt"]["system_prompt_content"] == expected_prompt
+    assert data["prompt"]["provider_messages"] == expected_messages
+    assert data["prompt"]["transcript_sha256"] == _digest(
+        canonical_json({"messages": expected_messages})
+    )
+
+    assert _LEAKED_SECRET_REFERENCE not in json.dumps(payload, sort_keys=True)
+
+
+def test_provider_call_evidence_read_model_refuses_an_unscreened_credential(
+    evidence_db: Engine,
+) -> None:
+    """The read model enforces the screen rather than witnessing it."""
+
+    result = PostgresApiBackend(evidence_db, environment="staging").read(
+        "provider_call_evidence",
+        _principal(),
+        identifiers={"invocation_id": _invocation_id(_CASE_CREDENTIAL_DSN)},
+    )
+    assert result.state == "ready", result
+    assert validate_ready_data("provider_call_evidence", result.data) == result.data
+
+    stored = _response_text(_CASE_CREDENTIAL_DSN)
+    unscreened = {
+        **result.data,
+        "response": {"text": stored, "truncated": False, "sha256": _digest(stored)},
+    }
+    with pytest.raises(ValidationError, match="still contains a credential"):
+        validate_ready_data("provider_call_evidence", unscreened)
+
+    # A redaction marker is not a licence to serve anything: a digest mismatch with no
+    # marker is still tampering, on a screened row as much as an exact one.
+    tampered = {
+        **result.data,
+        "response": {**result.data["response"], "text": "tampered evidence"},
+    }
+    with pytest.raises(ValidationError, match="provider response hash"):
+        validate_ready_data("provider_call_evidence", tampered)
+
+
 def test_aggregate_provider_calls_never_exposes_prompt_or_response_content(
     evidence_db: Engine,
 ) -> None:
@@ -617,6 +815,11 @@ def test_aggregate_provider_calls_never_exposes_prompt_or_response_content(
             "transcript_sha256",
             _PROMPT_SENTINEL,
             _RESPONSE_SENTINEL,
+            _LEAKED_DSN,
+            _LEAKED_DSN_PASSWORD,
+            _LEAKED_SECRET_REFERENCE,
+            _CREDENTIAL_URL_MARKER,
+            _CREDENTIAL_REFERENCE_MARKER,
         ):
             assert forbidden not in serialized, (path, forbidden)
 

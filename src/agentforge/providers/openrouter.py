@@ -1192,18 +1192,30 @@ class OpenRouterTransport:
                 response_sha256=response_sha256 if with_response else None,
             )
 
+        def settle(
+            with_response: bool,
+        ) -> tuple[ProviderTerminalEventV1, ProviderTerminalEventV1]:
+            candidate = build(with_response)
+            return candidate, self._lineage_recorder.finish_physical_attempt(
+                invocation,
+                candidate,
+            )
+
         try:
             try:
-                event = build(True)
+                event, recorded = settle(True)
             except Exception:
-                # Losing the response evidence is acceptable; losing the terminal record of a real
-                # provider call is not. If the event is invalid for any other reason, the retry
-                # raises identically and the outer handler still reports it.
-                event = build(False)
-            recorded = self._lineage_recorder.finish_physical_attempt(
-                invocation,
-                event,
-            )
+                # Losing the response evidence is acceptable; losing the terminal record of a real,
+                # already-billed provider call is not. The fallback re-runs the durable write and
+                # not merely event construction, because evidence the store cannot accept is
+                # refused at the INSERT rather than by validation — that write is transactional, so
+                # the refused attempt left nothing behind and the retry starts from a clean slate.
+                #
+                # With no evidence to drop the retry would be byte-identical and would fail the
+                # same way, so the original failure is reported instead of doubling the write.
+                if response_text is None:
+                    raise
+                event, recorded = settle(False)
         except Exception as exc:
             raise HostedProviderError(
                 "physical provider terminal facts could not be durably recorded",

@@ -21,6 +21,57 @@ from agentforge.control_plane.finding_decisions import (
 )
 from agentforge.control_plane.serialization import canonical_json
 
+# The two scheme-agnostic credential shapes the API layer already screens for.  They live
+# here, next to the read model that verifies the screen, rather than only in the projection
+# that applies it: a projection that redacts and a decoder that checks the redaction must
+# not be able to drift apart.  ``agentforge.api.postgres`` imports these for ``_safe`` so
+# there is exactly one definition of each pattern and each replacement marker.
+CREDENTIAL_URL_PATTERN = re.compile(r"(?i)\b[a-z][a-z0-9+.-]*://[^\s/:]+:[^\s/@]+@[^\s]+")
+CREDENTIAL_REFERENCE_PATTERN = re.compile(r"(?i)\bsecretref://[A-Za-z0-9._~/-]+")
+CREDENTIAL_URL_REDACTION = "***REDACTED_CREDENTIAL_URL***"
+CREDENTIAL_REFERENCE_REDACTION = "***REDACTED_CREDENTIAL_REFERENCE***"
+# A provider echoes far more than DSNs. Every shape ``_safe`` already strips from ordinary display
+# responses must also be stripped here, because evidence resources deliberately bypass ``_safe`` —
+# its display redactions would rewrite exact evidence — leaving this the ONLY screen between a
+# provider body and the wire. Screening only URLs and secretrefs let an upstream 4xx/5xx echo an
+# API key or an Authorization header through verbatim: an OpenRouter error body quoting
+# ``invalid x-api-key: sk-ant-...`` is a real, observed response shape, and
+# ``_capture_response_evidence`` records error bodies too.
+BEARER_PATTERN = re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]{8,}")
+JWT_PATTERN = re.compile(r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b")
+PROVIDER_KEY_PATTERN = re.compile(r"\bsk-(?:ant-|or-|proj-)?[A-Za-z0-9_-]{8,}\b")
+AUTHORIZATION_HEADER_PATTERN = re.compile(r"(?im)\bauthorization\s*:\s*[^\r\n]+")
+COOKIE_HEADER_PATTERN = re.compile(r"(?im)\b(?:cookie|set-cookie)\s*:\s*[^\r\n]+")
+SESSION_COOKIE_PATTERN = re.compile(r"(?i)\b__session=[^\s;,]+")
+SECRET_REDACTION = "***REDACTED***"
+CREDENTIAL_REDACTIONS = (
+    CREDENTIAL_URL_REDACTION,
+    CREDENTIAL_REFERENCE_REDACTION,
+    SECRET_REDACTION,
+)
+
+
+def screen_credentials(value: str) -> str:
+    """Replace embedded credentials with their marker and leave every other byte alone.
+
+    Ordering matters. The header patterns run first and consume the whole header line, so a bearer
+    token inside ``Authorization:`` is removed with its header rather than leaving a bare
+    ``Authorization: Bearer ***REDACTED***`` that still discloses the scheme in use.
+
+    Idempotent: no marker contains ``://``, ``sk-``, ``Bearer`` or a ``:`` separator, so
+    re-screening already-screened text cannot match again and cannot compound a redaction.
+    """
+
+    screened = AUTHORIZATION_HEADER_PATTERN.sub("Authorization: " + SECRET_REDACTION, value)
+    screened = COOKIE_HEADER_PATTERN.sub("Cookie: " + SECRET_REDACTION, screened)
+    screened = SESSION_COOKIE_PATTERN.sub("__session=" + SECRET_REDACTION, screened)
+    screened = CREDENTIAL_URL_PATTERN.sub(CREDENTIAL_URL_REDACTION, screened)
+    screened = CREDENTIAL_REFERENCE_PATTERN.sub(CREDENTIAL_REFERENCE_REDACTION, screened)
+    screened = BEARER_PATTERN.sub("Bearer " + SECRET_REDACTION, screened)
+    screened = JWT_PATTERN.sub(SECRET_REDACTION, screened)
+    return PROVIDER_KEY_PATTERN.sub(SECRET_REDACTION, screened)
+
+
 _LANGFUSE_DELIVERY_STATES = (
     "not_attempted",
     "disabled",
@@ -1645,7 +1696,34 @@ class ProviderCallEvidencePromptReadModel(_ReadModel):
 
 
 class ProviderCallEvidenceResponseReadModel(_ReadModel):
-    """The recorded provider response for one physical call, verified against its digest."""
+    """The recorded provider response for one physical call, verified against its digest.
+
+    ``sha256`` ALWAYS digests the bytes as STORED in ``provider_call_events.response_text``
+    — never, in any case, the bytes served in ``text``.  The two are the same bytes for an
+    ordinary response and the digest then verifies what the caller is reading.
+
+    They differ in exactly one situation.  This is the only evidence member that carries
+    provider-controlled text past no upstream screen: the prompt half is validated by the
+    protected store before it is served, but the response body is captured before any
+    status check, so a connection string in a 5xx body from a misconfigured upstream is
+    recorded verbatim.  A digest proves those bytes were not altered in storage; it proves
+    nothing about whether they contain a secret.  So the projection screens the served text
+    for credentials, and when it removes one the served text carries
+    ``***REDACTED_CREDENTIAL_URL***`` / ``***REDACTED_CREDENTIAL_REFERENCE***`` in its
+    place.  The digest is deliberately left describing the stored evidence — an operator
+    can still prove what the row holds — and the visible marker is the signal that what
+    they are reading is not byte-exact.
+
+    The validator enforces the whole contract rather than witnessing it: the served text is
+    credential-free either way, and a digest mismatch is accepted ONLY when the text
+    carries a redaction marker.  Any other mismatch is tampering and is refused.
+
+    ``text`` is bounded by the same 65_536 bytes the column is bounded by.  Redaction can
+    in principle lengthen text (a short credential becomes a longer marker); a screened
+    body that crosses the bound fails closed as an unavailable read rather than being
+    served trimmed, because a silently trimmed body is indistinguishable from a truncated
+    one and ``truncated`` reports a storage fact, not a serialization one.
+    """
 
     text: str
     truncated: bool
@@ -1658,7 +1736,11 @@ class ProviderCallEvidenceResponseReadModel(_ReadModel):
         payload = self.text.encode("utf-8")
         if len(payload) > 65_536:
             raise ValueError("provider response exceeds its storage bound")
-        if hashlib.sha256(payload).hexdigest() != self.sha256:
+        if screen_credentials(self.text) != self.text:
+            raise ValueError("provider response still contains a credential")
+        if hashlib.sha256(payload).hexdigest() == self.sha256:
+            return self
+        if not any(marker in self.text for marker in CREDENTIAL_REDACTIONS):
             raise ValueError("provider response hash does not match its content")
         return self
 
@@ -1669,6 +1751,11 @@ class ProviderCallEvidenceReadModel(_ReadModel):
     Both content members are nullable and are never reconstructed: ``prompt`` is ``None``
     when the call's logical execution has no protected snapshot row, and ``response`` is
     ``None`` when no response text was recorded for that physical call.
+
+    Nullability is a property of the row, never of the caller's authority.  The whole
+    resource requires ``org:evidence:read``; that is enforced for the resource as a whole,
+    before any member is read, so a missing ``prompt`` can never be the thing that decides
+    whether ``response`` is disclosed.
     """
 
     invocation_id: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -2248,6 +2335,11 @@ __all__ = [
     "BirdseyeSnapshotReadModel",
     "BirdseyeTimelineReadModel",
     "CampaignReadModel",
+    "CREDENTIAL_REDACTIONS",
+    "CREDENTIAL_REFERENCE_PATTERN",
+    "CREDENTIAL_REFERENCE_REDACTION",
+    "CREDENTIAL_URL_PATTERN",
+    "CREDENTIAL_URL_REDACTION",
     "CampaignOperationsCaseProgressReadModel",
     "CampaignOperationsCostReadModel",
     "CampaignOperationsCurrentWorkReadModel",
@@ -2278,5 +2370,6 @@ __all__ = [
     "TargetReadModel",
     "ToolScopeReadModel",
     "TraceReadModel",
+    "screen_credentials",
     "validate_ready_data",
 ]
