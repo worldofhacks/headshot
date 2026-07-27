@@ -1,11 +1,10 @@
 # THREAT_MODEL.md — OpenEMR target + Headshot platform identity boundary
 
-> **First-pass** target threat model produced by `/arch-draft` (the "AUDIT.md slot" per CLAUDE.md). The
-> `threat-model` skill deepens it once the platform has probed the live target. Existing target defenses
-> are marked **to-be-probed** where they are not yet observed — never assumed. The six numbered categories
-> describe the **external target**. A separate section below now models the Headshot platform's human
-> identity boundary. Clerk integration and authenticated Railway deployment are selected/planned, not
-> claimed deployed. No real PHI is referenced anywhere in this repo.
+> **Living target and platform threat model, reconciled 2026-07-26.** The six numbered categories
+> describe the external target. The platform section describes the implemented Clerk/Railway/control-
+> plane boundary. Read `docs/CURRENT_STATE.md` for the latest execution evidence and open reliability
+> risks. Existing target defenses remain **to-be-probed** where no conclusive live evidence exists.
+> No real PHI is referenced anywhere in this repo.
 
 ## Summary (~500 words)
 
@@ -32,22 +31,22 @@ amplification**, because recursive tool calls and long chains already made "runt
 performance difficult to predict." (6) **Identity / role exploitation**, because a co-pilot that
 serves multiple roles is a privilege-escalation surface.
 
-**How the platform prioritizes coverage.** The Orchestrator reads observability — cases-per-category,
-pass/fail trend, open findings, regression risk — and directs the Red Team toward the highest-risk,
-least-covered categories first, in the order above. Coverage is not "run everything once": it is a
-standing loop that re-tests on every target version and escalates categories where partial successes
-cluster (the Red Team mutates partials into variants). Every case is tagged **boundary | invariant |
-regression** and mapped to **OWASP Web Top 10 + OWASP LLM Top 10**, so coverage is measured against a
-recognized surface, not an ad-hoc list. Confirmed exploits are admitted to a deterministic regression
-harness so a fixed vulnerability that reappears is caught on the next run.
+**How the platform prioritizes coverage.** The current live-100 release dispatches a frozen,
+human-reviewed manifest in exact order. The hosted Orchestrator receives coverage/cost state, and the
+hosted Red Team selects from a closed enum, but neither may change the authorized target bytes.
+Adaptive mutation and coverage-guided candidate generation exist as a separate quarantine/review
+workflow; generated candidates require immutable provenance, a new workload digest, and fresh
+authorization before live use. Every current case is tagged **boundary | invariant | regression** and
+mapped to **OWASP Web Top 10 + OWASP LLM Top 10**, so coverage is measured against a recognized
+surface, not an ad-hoc list. Confirmed exploits remain eligible for human-gated regression admission.
 
-**What is known vs. to-be-probed.** The target's *capabilities* are confirmed (RAG, write-back,
-tools, uploads). Its *existing defenses* — input filtering, output guardrails, per-patient
-authorization, rate limits, tool allowlists — are largely **unobserved** and are exactly what the
-platform exists to establish empirically. This document therefore states each category's surface and
-impact with confidence, and its existing-defenses column as a hypothesis the eval suite will confirm
-or refute. The exact **external target** auth mode and API shape of the Co-Pilot are open questions pending inspection
-(`PRESEARCH.md` OQ1–OQ3); they change *how* attacks are delivered, not *which* categories apply.
+**What is known vs. to-be-probed.** The target's declared capabilities include RAG, write-back,
+tools, and uploads; the currently governed live surface is a patient-pinned authenticated `POST
+/chat` session. Retrieval, upload, and tool/write surfaces are represented but disabled in the
+current trusted catalog. Input filtering, output guardrails, cross-patient authorization, and tool
+controls are not conclusively established by the latest run. A 2026-07-26 governed campaign reached
+12 cases and produced only uncalibrated `INDETERMINATE` verdicts before a Judge format failure, so it
+does not prove target safety.
 
 **Risk scoring** below is qualitative (Likelihood × Clinical Impact → Critical/High/Medium),
 appropriate for a first pass; the MVP threat model attaches measured pass/fail evidence per category.
@@ -141,8 +140,9 @@ This section models attacks against **AgentForge/Headshot itself**, not the exte
 protected assets are target configuration, campaign controls, findings, hostile evidence, approval/audit
 records, and event streams. The trust path is Browser → Clerk → public Railway Web → private Railway
 services/Postgres. Clerk provides human identity; custom organization permissions provide application
-RBAC; service identities and target-scoped credentials remain separate workload controls. All controls
-below are required by the selected design and remain **planned until integration/deployment verification**.
+RBAC; service identities and target-scoped credentials remain separate workload controls. These
+controls are implemented and deployed in staging. Public health/readiness and missing-token denial
+are verified; real-user Organization/MFA/two-person acceptance is still a required human audit.
 
 | Platform identity threat | Abuse path and impact | Required control / failure behavior | OWASP Web Top 10:2021 |
 |---|---|---|---|
@@ -167,7 +167,8 @@ target authorization, allowlist, scoped credentials, synthetic data, budget/rate
 
 ---
 
-## Target coverage priority (feeds the Orchestrator)
+## Target coverage priority
 `1 Prompt Injection (Critical)` → `2 Data Exfiltration (Critical)` → `4 Tool Misuse (Critical)` →
-`3 State Corruption (High)` → `5 DoS/Cost (High)` → `6 Identity/Role (High)`. Priority is
-re-evaluated each run from observability; a category with clustering partial-successes is escalated.
+`3 State Corruption (High)` → `5 DoS/Cost (High)` → `6 Identity/Role (High)`. The current exact
+manifest does not dynamically reorder itself. This priority guides authored workload revisions and
+future reviewed campaigns; any newly generated or reordered workload requires fresh authorization.

@@ -1,5 +1,11 @@
 # Tickets — Final submission gap closure (session-lease scope repair round 3)
 
+> **Historical backlog, not the current plan.** This file and `tickets/T-F*.md` preserve the
+> pre-release work decomposition and must not be used to infer current implementation, deployment,
+> migration, test, or CI status. Many tickets landed through differently named commits and later
+> migrations. Current facts are in [`docs/CURRENT_STATE.md`](docs/CURRENT_STATE.md); current work and
+> gates are in [`PLAN.md`](PLAN.md). Do not execute this file's waves against the current platform.
+
 [locked-decision] Base `23490ea`: 1001 Python passed/3 skipped, 75 console, 4 browser, dual CI green.
 Four slots total means coordinator + at most three workers. No deadline compresses RED → test review
 → freeze → GREEN → coordinator gate rerun → code review → security review.

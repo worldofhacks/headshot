@@ -1,5 +1,13 @@
 # Langfuse agent observability review
 
+> **Historical audit with a current correction (2026-07-26).** Preserve the findings below as evidence
+> for the reviewed commit; do not treat its deployment snapshot as current. Release `456d6e5` now
+> persists logical agent executions, physical provider invocations/events, target calls, tokens,
+> measured provider cost, and attempt lineage in PostgreSQL. In run `50da57b…`, all 36 agent and 16
+> target Langfuse deliveries remained `queued`, and the campaign verifier refuses non-completed runs.
+> Physical provider attempts are not yet complete first-class Langfuse observations. See
+> [`../CURRENT_STATE.md`](../CURRENT_STATE.md) and [`../../PLAN.md`](../../PLAN.md).
+
 **Date:** 2026-07-24  
 **Scope:** Canonical Orchestrator, Red Team, Judge, and Documentation execution;
 physical target requests; Langfuse export/query-back; Live, Agents, Costs, and Traces

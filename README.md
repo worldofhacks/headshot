@@ -1,275 +1,238 @@
 # AgentForge / Adversarial Machine
 
-AgentForge is a reusable, multi-agent adversarial evaluation platform for continuously
-red-teaming AI applications. Its first target is the externally deployed OpenEMR Clinical
-Co-Pilot. The target is reached over an authorized live URL; its code does not live in this
-repository.
+AgentForge is a reusable multi-agent platform for continuously red-teaming AI applications. Its first
+target is the externally deployed OpenEMR Clinical Co-Pilot. The target is reached only over an
+authorized live URL; target code does not live in this repository.
 
-> **Delivery status — 2026-07-25:** the Clerk-backed React console, protected FastAPI `/api/v1`,
-> organization-scoped PostgreSQL control plane, private Runner, live target adapter, and Langfuse
-> telemetry projection are implemented; the sole packaged Alembic head is
-> `0021_four_role_agent_acceptance`. Candidate `2069036e` is deployed to **staging** Runner-first
-> across Runner, Web, and Scheduler, with the database at `0021`. The public Web health/readiness,
-> unauthenticated protection boundary, and console/sign-in shell were smoke-tested. No staging
-> campaign or provider/target call ran, and no signed-in Clerk user, organization, permission, or MFA
-> flow was audited. **Production remains unverified.** An earlier authorized, synthetic-only campaign
-> ran against the live Co-Pilot target by a direct script; every verdict it produced is
-> `INDETERMINATE` and **no exploit has ever been confirmed** — see
-> [Red-teaming coverage review (2026-07-25)](docs/security/RED_TEAMING_COVERAGE_REVIEW_2026-07-25.md).
-> Live campaigns remain bounded by persisted exact-scope authorization, synthetic-only evidence,
-> rate/budget/timeout caps, and abort controls.
+## Current status
 
-| Endpoint | URL | Verification status |
+As of 2026-07-26, the platform has:
+
+- an authenticated React/Clerk operator console and protected FastAPI API;
+- a PostgreSQL control plane, queue, audit/evidence store, and Alembic head `0025`;
+- private Railway Runner and Scheduler services;
+- exact-scope two-person campaign authorization;
+- hosted Orchestrator, Red Team, Judge, and Documentation roles through OpenRouter;
+- exact reviewed-workload target dispatch through the Policy Gateway;
+- durable logical-agent and physical-provider lineage;
+- independent deterministic Judge precedence; and
+- PostgreSQL-authoritative telemetry with a fail-soft Langfuse projection.
+
+It is **not yet full-suite reliable**. The latest staging campaign ran 12 of 34 cases, then a
+schema-invalid Gemini Judge response failed the whole batch. The current staged configuration
+authorizes zero provider retries, the Runner cannot resume a terminal batch, and failed campaigns
+cannot be remotely query-back verified by the current Langfuse verifier.
+
+Read [`docs/CURRENT_STATE.md`](docs/CURRENT_STATE.md) for exact deployment IDs, role models/upstreams,
+caps, policy/configuration hashes, the latest run analysis, and open defects. Read
+[`docs/DOCUMENTATION.md`](docs/DOCUMENTATION.md) before treating a dated review or planning file as
+current.
+
+## Live endpoints
+
+| Endpoint | URL | Current status |
 |---|---|---|
-| Staging platform | `https://web-staging-8e30.up.railway.app` | **Infrastructure smoke verified** — `/health` 200, `/ready` 200, protected unauthenticated request 401, console/sign-in shell 200; no signed-in audit or campaign |
-| Production platform | `https://web-production-44528.up.railway.app` | **Unverified** — promotion evidence not recorded (`docs/deployment/RAILWAY.md`) |
-| Authorized live target | `https://agent-production-9f62.up.railway.app` | **Reached** — owner-authorized; live HTTP evidence in `evals/results/` and `docs/evidence/zap/` |
+| Staging platform | `https://web-staging-8e30.up.railway.app` | `/health` 200, `/ready` 200, unauthenticated protected API 401; services share current policy digest |
+| Production platform | `https://web-production-44528.up.railway.app` | reachable but release-skewed; do not launch campaigns |
+| Authorized external target | `https://agent-production-9f62.up.railway.app` | live and healthy in read-only audit; active traffic still requires exact authorization |
 
-The two platform rows are recorded here because a deployed URL is submitted with every checkpoint.
-Staging records only the completed infrastructure smoke; it is not evidence of a signed-in Clerk
-flow, a governed campaign, live model calls, or target calls. Production is listed as an expected
-origin, not as a deployment claim. See the dated evidence record and remaining promotion gates in
-[`docs/deployment/RAILWAY.md`](docs/deployment/RAILWAY.md).
-
-The requirements source of truth is [Week_3_AgentForge.pdf](Week_3_AgentForge.pdf). See
-[PLAN.md](PLAN.md), [ARCHITECTURE.md](ARCHITECTURE.md), and
-[IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) for sequencing and acceptance criteria.
-
-### Canonical source of truth
-
-Three documents govern; everything else derives from them. When a document disagrees with one of
-these, the canonical document wins — and when one of these disagrees with the code, the code wins and
-the drift is recorded rather than papered over.
-
-| Document | Governs |
-|---|---|
-| [ARCHITECTURE.md](ARCHITECTURE.md) | The binding architecture: agent roster, trust boundaries, contracts, cost model shape, deployment, AI-use disclosure |
-| [docs/planning/DECISIONS.md](docs/planning/DECISIONS.md) | The numbered decision log, D1–D26, with each decision's rationale, fallback, and invalidation condition |
-| [docs/cost/COST_ANALYSIS.md](docs/cost/COST_ANALYSIS.md) | The cost model: three independent cost families on different scaling functions, scaled in complete test runs at 100 / 1K / 10K / 100K |
-
-Current honest status of the red-team capability itself lives in
-[docs/security/RED_TEAMING_COVERAGE_REVIEW_2026-07-25.md](docs/security/RED_TEAMING_COVERAGE_REVIEW_2026-07-25.md),
-which supersedes the 2026-07-24 review.
+The deployed URL is submitted with every checkpoint, but a healthy URL is not campaign acceptance.
 
 ## Safety invariants
 
-- No real protected health information (PHI) is permitted. All fixtures, canaries, evidence,
-  logs, and demonstrations use synthetic data.
-- The Judge is independent of attack generation and can never downgrade a deterministic,
-  confirmed exploit.
-- The trusted Policy Gateway is the only path to an external target. It enforces the exact
-  target authorization, environment-scoped allowlist, target-bound credentials,
-  synthetic-data assertion, budget and rate limits, timeout, and hard abort.
-- Human approval is required before publishing a critical finding or performing remediation.
-  The launcher and approver must be different Clerk users; there is no self-approval bypass.
-- Human authentication is necessary but never sufficient to authorize a live campaign.
+- No real PHI. Fixtures, canaries, evidence, demonstrations, and documentation use synthetic data.
+- Red Team, Judge, Orchestrator, and Documentation are distinct roles and trust contexts.
+- The model Judge cannot confirm an exploit. Only an oracle, synthetic canary, or human can.
+- A confirmed exploit cannot be downgraded to safe.
+- Clerk authentication never authorizes target execution by itself.
+- A launcher cannot approve their own operation.
+- Only the Policy Gateway can release a target-scoped credential and send target traffic.
+- Target, surface, version, workload, credential generation, caps, lease, policy, and hosted
+  configuration are exact authorization-bound values.
+- Critical publication and all remediation require human approval.
+- Cost and usage come from durable measured facts; no placeholder is presented as measured.
 
-## Locked Railway topology
+## Architecture
 
-The full platform topology is deployed and smoke-tested in Railway staging. The current release still
-requires production promotion. Web, Runner, Scheduler, and PostgreSQL are separate services in each
-environment; only Web may receive public ingress.
+```mermaid
+flowchart LR
+    B["Authenticated browser"] --> W["Railway Web<br/>React + FastAPI"]
+    C["Clerk"] --> B
+    W --> P[("PostgreSQL<br/>control plane + queue + evidence")]
+    S["Private Scheduler"] --> P
+    R["Private Runner"] --> P
+    R --> O["OpenRouter<br/>four hosted roles"]
+    R --> L["Langfuse<br/>fail-soft projection"]
+    R --> G["Policy Gateway"]
+    G --> T["Authorized live target"]
+```
 
-| Railway component | Network boundary | Responsibility |
+Within a governed case:
+
+```mermaid
+flowchart LR
+    O["Orchestrator"] --> RT["Hosted Red Team<br/>closed reviewed-case selection"]
+    RT --> PG["Policy Gateway"]
+    PG --> T["Live target"]
+    T --> E["Hashed AttemptResult"]
+    E --> J["Independent Judge<br/>model + oracle reconciliation"]
+    J -->|confirmed only| D["Documentation + regression admission"]
+```
+
+PostgreSQL is the source of truth. Langfuse receives a sanitized projection and becomes delivery
+evidence only after authenticated exact query-back.
+
+See [`ARCHITECTURE.md`](ARCHITECTURE.md) for the binding architecture and AI-use disclosure.
+
+## Current hosted roles
+
+| Role | Model | Current staging upstream |
 |---|---|---|
-| Web | **Public** | React console shell, FastAPI, Clerk request authentication, authorization dependencies, health/readiness |
-| Runner | Private | Campaign and agent workload execution; no public ingress |
-| Scheduler | Private | Enqueues scheduled work; does not execute attacks inline |
-| PostgreSQL | Private | Jobs, checkpoints, exploit records, approvals, and append-only evidence |
+| Orchestrator | `anthropic/claude-opus-4.8` | Anthropic |
+| Red Team | `qwen/qwen3.5-397b-a17b` | Chutes |
+| Judge | `google/gemini-2.5-pro` | Google Vertex |
+| Documentation | `openai/gpt-5.4` | OpenAI |
 
-Clerk is an external managed identity provider. The OpenEMR target and model providers are also
-external. Only the Railway Web service receives public traffic; private services communicate over
-Railway's private network. See [Railway deployment](docs/deployment/RAILWAY.md).
+The live Red Team selects only from an immutable reviewed corpus. Novel/mutated candidate generation
+is quarantined and cannot reach a target until human review, frozen provenance, a new workload digest,
+and fresh authorization.
 
-## Clerk prerequisites
+## Repository layout
 
-Provisioning and real-user verification are manual integration steps. Staging and production must use
-isolated Clerk configuration, including different exact Organization IDs and authorized origins.
-
-1. Enable **Restricted** sign-up mode and use invitations for enrollment.
-2. Enable Organizations, create the single required **Headshot** Organization, disable Personal
-   Accounts, and disable user-created Organizations.
-3. Require MFA for every user. Enable authenticator-app TOTP and backup codes; SMS may be offered
-   but must not be the only factor.
-4. Create exactly the `org:operator` and `org:approver` Organization roles and assign the custom
-   permissions in the matrix below. Remove any retired or demo roles.
-5. Copy the publishable key and PEM JWT public key for each environment. Configure exact,
-   non-wildcard authorized parties and the environment's exact Headshot Organization ID.
-6. Do **not** configure `CLERK_SECRET_KEY` for request authentication. It is a future-only
-   requirement if the backend later manages users or invitations through Clerk's Backend API.
-
-The complete checklist is in [Authentication](docs/security/AUTHENTICATION.md).
+| Path | Purpose |
+|---|---|
+| `src/agentforge/` | application package |
+| `src/agentforge/agents/` | four agent roles, hosted policy/runtime, prompts |
+| `src/agentforge/policy/` | allowlist, scoped credentials, Policy Gateway, recorder |
+| `src/agentforge/campaign/` | authorization, workload resolution, coordinator |
+| `src/agentforge/control_plane/` | durable control-plane store and records |
+| `src/agentforge/providers/` | OpenRouter transport, usage ledger, physical lineage |
+| `src/agentforge/telemetry/` | PostgreSQL/Langfuse projection |
+| `src/agentforge/contracts/v1/` | packaged JSON Schema contracts |
+| `evals/` | synthetic fixtures, reviewed workloads, calibration/evidence artifacts |
+| `migrations/` | Alembic history; sole head is `0025` |
+| `console/` | React/Vite operator console |
+| `railway/` | Web/Runner/Scheduler service manifests |
+| `docs/` | current runbooks plus dated evidence/history |
 
 ## Local development
 
-Python 3.12+ and PostgreSQL 16 are expected. Local development may use HTTP only on loopback; all
-staging and production origins use HTTPS.
+Requirements:
+
+- Python 3.12+
+- Node `^20.19 || >=22.12`
+- PostgreSQL 16
 
 ```bash
-python -m venv .venv
+python3.12 -m venv .venv
 source .venv/bin/activate
 python -m pip install -e '.[dev]'
 cp .env.example .env.local
 docker compose up -d postgres
 alembic upgrade head
 cd console
-npm ci
+npm ci --ignore-scripts
 VITE_CLERK_PUBLISHABLE_KEY=pk_test_your_local_fixture npm run build
 cd ..
 python -m agentforge.web
 ```
 
-`.env.local` is local-only and must never be committed. Use synthetic values. The Clerk
-authentication path and protected API tests use locally generated fixture keys and make no Clerk,
-Railway, target, model, or JWKS request. `/ready` remains `503` until PostgreSQL is at the packaged
-Alembic head, the built console exists, and the complete Clerk and Web security configuration parses.
+`.env.local` is local-only. Never commit secrets or real clinical data. `/ready` returns 503 until
+PostgreSQL is reachable at the exact packaged Alembic head, the console build exists, and Clerk/Web
+security configuration parses.
 
-### Authentication configuration contract
-
-| Variable | Local meaning | Secret? |
-|---|---|---|
-| `VITE_CLERK_PUBLISHABLE_KEY` | Public identifier embedded in the browser bundle | No |
-| `CLERK_PUBLISHABLE_KEY` | Backend public environment identifier validated by the auth configuration; the current networkless Python verifier itself receives the PEM key and authorized parties | No |
-| `CLERK_JWT_KEY` | PEM public key used for networkless JWT verification | No, but integrity-sensitive |
-| `CLERK_AUTHORIZED_PARTIES` | Comma-separated exact browser origins; for example `http://localhost:5173` | No |
-| `CLERK_REQUIRED_ORG_ID` | Exact environment-specific Headshot Organization ID | No, but security-sensitive configuration |
-| `CLERK_PRODUCTION_AUTHORIZED_PARTIES` | Staging-only comparison guard containing the exact production origin list | No, but security-sensitive configuration |
-| `CLERK_PRODUCTION_ORG_ID` | Staging-only comparison guard containing the exact production Headshot Organization ID | No, but security-sensitive configuration |
-| `CLERK_FRONTEND_API_ORIGIN` | Exact HTTPS Clerk Frontend API origin admitted by deployed CSP; optional locally | No |
-| `AGENTFORGE_MAX_REQUEST_BYTES` | Request-body ceiling, 1 KiB–10 MiB; defaults to 1 MiB | No |
-| `AGENTFORGE_CONSOLE_DIR` | Optional built-console directory; image default `/app/console` | No |
-| `CLERK_SECRET_KEY` | **Unset for request authentication**; future Backend API administration only | Yes |
-
-Production rejects HTTP origins. Loopback HTTP origins are accepted only when
-`AGENTFORGE_ENVIRONMENT=local`. Wildcards are rejected. A staging configuration must never contain
-the production Railway origin or production Organization ID. Local and staging use a Clerk
-`pk_test_…` publishable key; production requires its matching `pk_live_…` key.
-
-Run the local checks with:
+### Local checks
 
 ```bash
-pytest
 ruff check .
 ruff format --check .
+pytest
+cd console
+npm run typecheck
+npm test
+npm run check:forbidden
+npm run build
+npm run check:bundle
 ```
 
-## Public and protected routes
+Unit and integration tests use local fixture keys and controlled adapters. They must not contact
+Clerk, Railway, Langfuse, a model provider, or the live target.
 
-The public route policy is an allowlist, not a list of exceptions:
+## Human access
 
-- `GET /health` — process liveness only.
-- `GET /ready` — readiness; returns unavailable when dependencies or schema are not ready.
-- Built static assets and the non-data SPA shell, including `/sign-in` and nested Clerk sign-in paths,
-  `/session-tasks/choose-organization`, `/session-tasks/setup-mfa`, and
-  `/session-tasks/reset-password`. Frozen console direct routes also receive only the shell; their data
-  stays closed until the browser presents a bearer session to protected `/api/v1`.
+The console uses Clerk invitation-only access, one exact Headshot Organization per environment, and
+mandatory MFA. The backend authorizes only custom Organization permissions from verified session
+claims.
 
-Every `/api/v1` route defaults to protected. Console data, findings, evidence, the event stream,
-campaign actions, target/configuration management, approvals, audit data, and remediation are never
-public. Unknown API paths never receive the SPA fallback.
-
-Missing, expired, malformed, not-yet-valid, incorrectly signed, wrong-algorithm, wrong-party, or
-non-session authentication receives a generic `401`. An active authenticated session that lacks the
-required Headshot Organization, permission, or distinct approver receives `403`. Clerk verifier or
-security-configuration failure denies access and reports service unavailability (`503`) without
-exposing tokens or headers.
-
-## Backend role and permission matrix
-
-Only custom Organization permissions from verified Clerk session claims authorize backend actions.
-Frontend labels and Clerk system permissions are not backend authority.
-
-| Role | Backend-authoritative custom permissions |
+| Role | Permissions |
 |---|---|
-| `org:operator` | `org:console:read`, `org:findings:read`, `org:evidence:read`, `org:audit:read`, `org:campaign:launch`, `org:campaign:abort`, `org:targets:manage`, `org:config:manage` |
-| `org:approver` | `org:console:read`, `org:findings:read`, `org:evidence:read`, `org:audit:read`, `org:campaign:authorize`, `org:findings:approve`, `org:findings:resolve` |
+| `org:operator` | console/findings/evidence/audit read; campaign launch/abort; target/config manage |
+| `org:approver` | console/findings/evidence/audit read; campaign authorize; finding approve/resolve |
 
-A role is useful for assignment and audit display, but the backend checks the verified custom
-permission set for each operation. Client-supplied roles or permissions are ignored.
+The backend enforces the full exact permission names documented in
+[`docs/security/AUTHENTICATION.md`](docs/security/AUTHENTICATION.md). Frontend labels only improve UX.
 
-## Authentication is not campaign authorization
+Public routes are limited to:
 
-Clerk answers **who the human is** and which Headshot custom permissions are present in that verified
-session. It does not answer **whether this target may be attacked now**. Campaign launch remains a
-separate decision:
+- `GET /health`;
+- `GET /ready`; and
+- the static/sign-in/session-task application shell.
 
-1. Clerk authenticates the human, exact Organization membership is verified, and the relevant custom
-   permission is required.
-2. A different authorized approver supplies the approval when the operation requires two people.
-3. The Policy Gateway independently verifies target authorization, allowlist membership,
-   target-bound credentials, synthetic-only fixtures, budgets, rate limits, timeout, monitoring, and
-   abort capability.
+All `/api/v1` data and mutations default to protected. Missing or invalid authentication returns a
+generic 401. An authenticated principal without the exact Organization/permission or distinct-person
+condition receives 403. Broken verifier/security configuration fails closed.
 
-Failure at any stage denies the action. Clerk tokens are human credentials and must never be reused as
-agent, runner, scheduler, model-provider, or target credentials.
+## Campaign authorization
 
-## Current local availability
+A live campaign requires:
 
-Revisions through `0021` add authoritative results, exact two-role authorization, regression replay
-planning, and four-agent runtime observability to the exact-scope control plane; `0017`–`0021` add
-hosted agent-execution lineage, provider-call lineage, recordable provider identity, agent-acceptance
-authority, and the four-role agent acceptance surface. A trusted server
-catalog prepares immutable campaign scopes; a private durable Runner claims the PostgreSQL queue,
-revalidates authorization immediately before every dispatch, resolves scoped credentials only at that
-boundary, and persists evidence before atomic job completion. The private Scheduler creates one
-append-only, human-authorization-blocked replay plan when a ready target version changes; it never
-executes an attack or bypasses campaign authorization. Application and database controls reject
-self-approval, and neither queue completion nor a replay plan is approval.
+1. authenticated Operator request;
+2. immutable exact scope;
+3. approval by a different authenticated Approver;
+4. current Web/Runner/Scheduler release parity;
+5. current Runner heartbeat;
+6. ready allowlisted target/surface/version;
+7. reviewed workload and synthetic fixture/canary provenance;
+8. sealed target and provider credential references;
+9. authorization and target-session lease coverage for the complete timeout;
+10. exact model/configuration/generation-policy authority; and
+11. target and provider call/token/cost/rate/retry/concurrency caps.
 
-For the Clinical Co-Pilot `/chat` surface, a live campaign pins one versioned, patient-scoped SMART
-session for its entire bounded run and reuses one HTTP client so cookies and connection state persist.
-The Runner never silently refreshes or rotates that identity: local expiry or the target's session-
-expired response hard-aborts the run before another attempt. Rotation requires a new secret-reference
-generation, target version, exact authorization scope, and distinct-person approval.
+Failure denies the launch or aborts before unsafe continuation. A prior approval is not reusable after
+a deployment or authority change.
 
-The deterministic synthetic profile runs the real nine-case corpus through the queue, Runner,
-coordinator, recorder, independent Judge, findings, API, Coverage, and event repositories without a
-target/model socket. Local integration evidence proves all attempts and hash-verified Coverage;
-this is not a deployed or live-target claim. Scheduling, traces,
-immutable configuration snapshots, component heartbeats, resilience history, and live-probe
-authorization are projected only from durable records; unavailable observations remain explicitly
-unavailable rather than being replaced by dummy data.
+## Documentation
 
-A live run **through the platform's production authorization path** — campaign-authorization request,
-a decision by a distinct authenticated Clerk Approver, `POST /campaigns`, the PostgreSQL queue, and
-the private durable Runner — remains blocked until the exact deployed target, ownership authorization,
-synthetic fixture/canary, surface, credential reference, caps, nonce, and that distinct Approver are
-persisted and every network-free preflight gate passes. Live *probing* of the authorized target has
-happened by other means and its artifacts are checked in under `evals/results/`; those runs were
-launched by direct scripts that now fail closed, and their recorded two-person provenance is one human
-plus one AI agent identified by free text, not two distinct authenticated principals. Read them as
-evidence about the target, never as evidence that the governed loop has executed.
+Current:
 
-## Further documentation
-
-**Canonical** (see *Canonical source of truth* above)
-
-- [Binding architecture](ARCHITECTURE.md)
-- [Decision log D1–D26](docs/planning/DECISIONS.md)
-- [Cost model — three independent families, scaled in test runs](docs/cost/COST_ANALYSIS.md) — projections are
-  explicitly unmeasured; no dollar figure in this repository comes from a measured run
-
-**Current honest status**
-
-- [Red-teaming coverage review — 2026-07-25](docs/security/RED_TEAMING_COVERAGE_REVIEW_2026-07-25.md)
-  (supersedes [2026-07-24](docs/security/RED_TEAMING_COVERAGE_REVIEW_2026-07-24.md))
-- [Vulnerability report index](docs/vulnerabilities/README.md) — six DRAFT reports; 004–006 contain
-  embedded offline re-derivations over retained captures, but none is published and no independent
-  attestation or separately recorded reproduction artifact exists; PRD-32 remains incomplete
-- [Ticket and requirement reconciliation](TICKETS.md)
-- [Requirements matrix](docs/requirements/REQUIREMENTS_MATRIX.md) ·
-  [canonical CSV ledger](docs/requirements/REQUIREMENTS_MATRIX.csv)
-
-**Reference**
-
+- [Current state](docs/CURRENT_STATE.md)
+- [Architecture](ARCHITECTURE.md)
+- [Reliability plan](PLAN.md)
+- [Railway runbook](docs/deployment/RAILWAY.md)
+- [Authentication contract](docs/security/AUTHENTICATION.md)
+- [Cost analysis](docs/cost/COST_ANALYSIS.md)
 - [Threat model](THREAT_MODEL.md)
-- [User workflows](USERS.md)
-- [Identity and access ADR](docs/adrs/0002-identity-and-access.md)
-- [Build-vs-configure ADR](docs/adrs/0001-build-vs-configure.md)
-- [Authentication security contract](docs/security/AUTHENTICATION.md)
-- [Railway deployment runbook](docs/deployment/RAILWAY.md)
-- [Clinical Co-Pilot target/session readiness](docs/target/READINESS.md)
-- [Hosted role model resolution](docs/agents/RED_TEAM_MODEL_RESOLUTION.md)
-- [Security-tool ATO evidence](docs/evidence/ato/SECURITY_TOOL_EVIDENCE.md)
-- [Security-tool integration plan](docs/planning/SECURITY_TOOL_INTEGRATION_PLAN.md)
-- [M1d integration handoff](docs/planning/M1D_INTEGRATION_HANDOFF.md)
+- [Users and workflows](USERS.md)
+
+Historical/detailed evidence:
+
+- [Requirements matrix](docs/requirements/REQUIREMENTS_MATRIX.md)
+- [Red-team coverage review, 2026-07-25](docs/security/RED_TEAMING_COVERAGE_REVIEW_2026-07-25.md)
+- [Langfuse review, 2026-07-24](docs/security/LANGFUSE_AGENT_OBSERVABILITY_REVIEW_2026-07-24.md)
+- [Vulnerability reports](docs/vulnerabilities/README.md)
+
+The historical files retain what was observed at their date. They do not override the current-state
+snapshot.
+
+## Release discipline
+
+GitHub Actions and GitLab CI are both release gates. A release is valid only when:
+
+- GitHub and GitLab CI are green on the exact commit;
+- the same commit is present on `origin` and `gitlab`;
+- Web, Runner, and Scheduler use the same artifact/policy;
+- PostgreSQL is at the packaged sole Alembic head; and
+- post-deploy target-free acceptance succeeds before fresh live authorization.
+
+Deployment, Railway variable changes, credential rotation, and live campaigns are explicit human
+operations. A code or documentation change does not authorize them.

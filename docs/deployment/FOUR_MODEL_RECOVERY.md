@@ -1,102 +1,75 @@
-# Four-model recovery runbook — launch blocked
+# Hosted four-role recovery
 
-This runbook describes the target four-model envelope without changing Railway topology,
-networking, domains, databases, services, Clerk, or the public API version. It is not evidence that
-the envelope is available or composed.
+**Reconciled:** 2026-07-26
 
-**Current stop condition:** the production Runner composes hosted Orchestrator, Judge, and
-Documentation calls, but Red Team remains deterministic corpus selection. The traced q generator is
-a tested component only; its governed generation → quarantine → human review → fresh authorization
-workflow is not production-composed. Do not launch or describe a four-model recovery until that gap
-is closed and a human gives final model-envelope confirmation.
+**Detailed state:** [`../CURRENT_STATE.md`](../CURRENT_STATE.md)
 
-## Fixed role set
+**Remediation plan:** [`../../PLAN.md`](../../PLAN.md)
 
-These are requested identities, not availability claims:
+This is an incident-recovery note, not an authorization to deploy, change Railway variables, rotate a
+target credential, or launch a campaign. The older pre-`0025` recovery instructions have been retired;
+they described a 56-call/15-minute envelope and an uncomposed hosted Red Team that no longer match the
+platform.
 
-| Role | Requested model |
-| --- | --- |
-| Orchestrator | `anthropic/claude-opus-4.8` |
-| Red Team | `qwen/qwen3.5-397b-a17b` |
-| Judge | `google/gemini-2.5-pro` |
-| Documentation | `openai/gpt-5.4` |
+## Current role binding
 
-After q is governed and composed, all four roles must be staged atomically. Per-role activation,
-model fallback, provider fallback, and browser-managed credential configuration remain unsupported.
-The distinct human confirmation must verify that every exact model/upstream pair resolves on the
-selected OpenRouter route; the repository must not infer availability from a model name or silently
-substitute another model.
+| Role | Model | Required upstream |
+|---|---|---|
+| Orchestrator | `anthropic/claude-opus-4.8` | `anthropic` |
+| Red Team | `qwen/qwen3.5-397b-a17b` | staging currently resolves `chutes` |
+| Judge | `google/gemini-2.5-pro` | `google-vertex` |
+| Documentation | `openai/gpt-5.4` | `openai` |
 
-## Read-only preflight
+The live Red Team is a hosted structured selector over the exact approved corpus. Novel generation is a
+separate quarantine/review/authorization workflow; generated text cannot flow directly to the target.
+The Documentation role runs only for a confirmed finding.
 
-Stop before every provider or target call unless the production-composition blocker above is closed
-and all of these checks pass:
+The default code generation-policy digest is
+`b83acb23122de9b4911032738bce136f214a34328357b457935ad821b44b0b18`. The active staged configuration is
+stored in PostgreSQL, not environment variables, and its digest and limits are recorded in
+`docs/CURRENT_STATE.md`.
 
-- the exact target and attack-surface versions are ready and allowlisted;
-- the private Runner heartbeat is no more than 30 seconds old;
-- the human-confirmed staged configuration hash resolves to four distinct role credential
-  references and exact model/upstream routes;
-- two distinct Headshot organization users requested and approved the exact scope;
-- the authorization covers campaign start plus the full run timeout;
-- the authorization binds the configuration set, generation policy, corpus, target and surface,
-  SMART session generation, 56-call maximum, **measured $10 maximum**, one retry, concurrency one, and
-  provider timeout; *(corrected 2026-07-25 from "$5" — the enforced ceiling is
-  `HOSTED_MAX_MEASURED_USD = Decimal("10")` at `src/agentforge/agents/hosted.py:28`, with per-role
-  ceilings of $1.50 / $1.00 / $4.00 / $1.00 at `:39-45` summing to $7.50 inside it. The 56-call,
-  one-retry and concurrency-one figures match `hosted.py:27,29,30` exactly.)*
-- the SMART lease covers campaign start plus the full run timeout;
-- all fixtures are synthetic.
+## Recovery sequence
 
-The configuration preflight is deliberately secret-free and performs zero provider and target
-calls. A missing q-generation composition, stale Runner heartbeat, incomplete credential
-readiness, unresolved model envelope, or lease failure is terminal for that launch attempt.
+1. Choose one reviewed commit. Confirm `origin/main` and `gitlab/main` resolve to that same commit and
+   run the required checks; a green check never substitutes for reviewing the release delta.
+2. Build one immutable image and use it for Web, Runner, and Scheduler.
+3. Make Runner inert, deploy Web, and allow Web's pre-deploy Alembic step to reach the packaged sole
+   head.
+4. Deploy Runner and Scheduler from the identical artifact.
+5. Verify database head, service health/readiness, Runner/Scheduler heartbeats, unauthorized denial,
+   and exact generation-policy parity across all three services.
+6. Perform the signed-in Clerk acceptance flow with real staging users.
+7. Validate the exact live target/surface catalog, synthetic-only fixtures, credential-generation
+   reference, credential lease, campaign authorization, physical-call limits, target-turn limits,
+   spend limits, and abort conditions.
+8. Create a fresh request and obtain approval from a different Headshot user after the deployment.
+   Authorizations minted against another policy/configuration digest are intentionally invalid.
+9. Launch once, then monitor PostgreSQL as the source of truth. Langfuse is a fail-soft projection and
+   must be reconciled, not trusted as the campaign ledger.
 
-## Final SMART session rotation
+## Current blockers to a reliable full suite
 
-This section is inapplicable while the q-composition stop condition remains open. Once closed, do
-not reuse or overwrite a previously authorized generation. Immediately before the final authorized
-campaign:
+The `456d6e5` staging release fixed execution-lineage conflicts and completed eleven full role/target/
+Judge cycles. It then aborted the whole campaign when one Judge call returned HTTP `200` with
+schema-invalid output. The current hosted configuration authorizes zero logical retries, the transport
+only retries selected transport/HTTP failures, a structured-output failure is not retried, and an
+attempt error fails the campaign. There is no resume path.
 
-1. Obtain a genuinely fresh session from the authorized operator workflow.
-2. Provision only the raw identifier value inside the protected provisioning boundary. Never
-   include a cookie-name wrapper.
-3. Create a new immutable, generation-specific secret reference and compute its digest inside that
-   same boundary.
-4. Update only the existing Runner credential binding, lease metadata, and versioned catalog
-   reference for the new generation.
-5. Record an issuer-verified expiry only when the issuer supplied it. Otherwise use
-   `operator_conservative_lease`.
-6. Restart only the existing private Runner and verify that no previous generation overlaps.
-7. Launch within five minutes, set authorization expiry within twenty minutes, and keep the
-   campaign timeout at fifteen minutes or less.
+Do not call this configuration full-suite reliable until the accepted `PLAN.md` work lands:
 
-Resolve the session once into one campaign HTTP client. Session expiry terminates the campaign;
-there is no refresh, substitution, or retry. Never place the identifier or its digest in the Web
-service, browser storage, API payloads, database records, logs, artifacts, source, shell history,
-or evidence.
-
-## Runtime and evidence acceptance
-
-The required future governed path is:
-
-`Orchestrator → q generation → quarantine/review → fresh authorization → deterministic selection → Policy Gateway/target → Judge → Documentation`
-
-The generation and dispatch phases are separate authorization domains; q output cannot flow
-directly to the target. The Policy Gateway remains the only target-dispatch authority. A
-deterministic oracle or canary finding takes precedence over the hosted Judge, and Documentation
-emits unpublished drafts behind the human approval gate.
-
-A live run is operationally accepted only when evidence includes real provider request IDs,
-returned model and upstream provider identities, token usage and measured cost, configuration and
-policy hashes, execution lineage, and real target HTTP records. The q generation must have its own
-canonical logical/physical lineage and a fresh authorized corpus must bind its reviewed output.
-Mocks, cassettes, deterministic Red Team selection, and component tests do not count as q-live
-evidence.
+- bounded Judge structured-output repair/retry with fully durable physical-attempt lineage;
+- case-local terminal outcomes for eligible provider failures;
+- resumable execution without repeating completed target turns;
+- complete Langfuse projection/reconciliation, including partial and failed campaigns; and
+- exact-model Judge calibration with an enforced category-level policy.
 
 ## Abort conditions
 
-Abort without a provider or target call when the q workflow is not composed, final human model
-confirmation is absent, or any preflight gate fails. Abort an active campaign on session expiry,
-returned-model/provider mismatch, invalid structured output, budget or physical-call exhaustion,
-authorization expiry, or explicit operator abort. Never relaunch a terminal campaign from a
-consumed approval.
+Abort before traffic on any release skew, stale heartbeat, migration mismatch, unknown policy/config
+digest, invalid or expired authorization, insufficient credential lease, unresolved route, cap mismatch,
+or non-synthetic fixture. Abort active work on a target/session/auth mismatch, target-version drift,
+budget/call exhaustion, or evidence-integrity failure.
+
+An observed target HTTP `422` is application evidence, not a transport success for product semantics.
+An `INDETERMINATE` Judge result is not proof that the target defended the attack.

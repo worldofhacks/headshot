@@ -1,165 +1,225 @@
 # CLAUDE.md — AgentForge / Adversarial Machine
 
-Repo orientation for Claude Code. Durable rules only. Full requirements live in
-`Week_3_AgentForge.pdf` (source of truth); the roadmap is in `PLAN.md`.
+Repository operating instructions for Claude Code. The canonical requirements are
+`Week_3_AgentForge.pdf`; current implementation and deployment facts are in
+`docs/CURRENT_STATE.md`.
 
-## What this is
-A **multi-agent adversarial evaluation platform** — a reusable system that continuously
-red-teams AI applications. It discovers, evaluates, validates, and documents
-vulnerabilities autonomously, without a human in the loop for every step.
-Gauntlet AI — Week 3.
+## Source hierarchy
 
-**The platform is target-agnostic. The OpenEMR Clinical Co-Pilot is its first target,
-not its subject.** That Co-Pilot already exists and is deployed; it is attacked over its
-**live URL** and no target code lives in this repo. Every target is reached through a
-**pluggable adapter behind an allowlist** — never hardcode a target.
+Read, in order:
 
-**Generalize the mechanism, specialize the content.** The PRD grades against the
-Co-Pilot case study, so `THREAT_MODEL.md`, the eval suite, and the vuln reports are
-Co-Pilot-specific — while the engine, contracts, regression harness, and observability
-stay target-neutral. Over-generalizing fails the case study ("traceable back to the
-problem"); under-generalizing misses the PRD's own "reusable platform" requirement.
+1. `Week_3_AgentForge.pdf`
+2. the relevant code, packaged migrations, tests, and read-only deployed-state evidence
+3. `docs/CURRENT_STATE.md`
+4. this file
+5. `ARCHITECTURE.md`
+6. `PLAN.md`
+7. the relevant operational runbook
 
-## Build posture — `production-grade` (locked)
-The bar is "defend it in front of a hospital CISO," not "it demos." Testing,
-deploy/rollback, failure-mode coverage, and observability are **required**, not
-nice-to-have. `arch-draft` and `arch-finalize` judge their audits against this posture.
+`docs/DOCUMENTATION.md` defines authority and historical-document rules. Dated evidence describes the
+recorded release and must not be promoted to present tense. `IMPLEMENTATION_PLAN.md` is the original
+build decomposition, not current task status.
 
-## Hard gates (non-negotiable)
-- A **deployed target URL** is submitted with *every* checkpoint; the platform tests a
-  **live system**, never only a mock.
-- **Multi-agent, not a pipeline.** Distinct agents, distinct trust levels.
-- The **Judge is independent** of attack generation — an agent that both attacks and
-  judges is compromised by design.
-- **Human approval gates** before publishing critical findings or any remediation.
-- Every eval case exercises a **boundary, invariant, or regression** — never happy-path
-  only. The Judge must **never** approve a confirmed exploit (an invariant).
-- Every attack case maps to **OWASP Top 10 (web)** and **OWASP LLM Top 10**.
-- Cost is **never** modeled as tokens × N.
-- **"Optional Engineering Deliverables" are mandatory** — the PRD grades them.
-- **No real PHI** — synthetic fixtures only.
-- **Railway hosts the full platform**: the console/API Web service is the only public
-  service; runner, scheduler, and Postgres services are private. Staging and production
-  have separate service bindings, databases, secrets, target authorization, and Clerk
-  configuration.
-- **Clerk authentication is mandatory for every meaningful human-facing route.** Access
-  is invitation-only/restricted, requires the exact Headshot Organization, and requires
-  MFA for every user. Personal accounts and user-created organizations are disabled.
-- Authentication is not campaign authorization. No authenticated user, role, or custom
-  permission may bypass the Policy Gateway's exact live-target authorization controls.
+Never fabricate a value. If deployed state has not been read-only verified, say so.
 
-## Human identity, authorization, and public routes (locked)
+## Product and posture
 
-**Provider and enrollment.** Clerk is the managed human identity provider. Signup is
-restricted/invitation-only; every user must belong to the one required **Headshot** Clerk
-Organization. Personal accounts and user-created organizations are disabled. MFA is required for
-all users, preferring TOTP plus backup codes; SMS must never be the only available factor. Clerk
-integration and authenticated Railway deployment remain **selected/planned until integration is
-verified** — do not describe them as deployed.
+AgentForge is a reusable multi-agent adversarial evaluation platform. It attacks an external target
+over an authorized live URL; target code is out of scope. The first target is the OpenEMR Clinical
+Co-Pilot, so the threat model, workload, and vulnerability material are target-specific while the
+engine, contracts, policy, storage, and observability remain target-neutral.
 
-**Backend authority only.** The backend accepts only a verified Clerk `session_token` for human
-requests, verifies it networklessly with `CLERK_JWT_KEY`, checks an explicit non-wildcard
-`CLERK_AUTHORIZED_PARTIES`, and requires the exact `CLERK_REQUIRED_ORG_ID`. Authorization uses the
-immutable set of **custom organization permissions from verified Clerk claims**. A frontend role
-label, request field, cookie value, client-supplied permission, or Clerk system permission has no
-authority. Frontend controls improve UX; they never enforce access.
+Build posture is production-grade: defendable to a hospital CISO. Failure behavior, evidence
+integrity, deployment parity, rollback, and observability are required features.
 
-| Clerk Organization role | Backend-authoritative custom permissions |
-|---|---|
-| `org:operator` | `org:console:read`, `org:findings:read`, `org:evidence:read`, `org:audit:read`, `org:campaign:launch`, `org:campaign:abort`, `org:targets:manage`, `org:config:manage` |
-| `org:approver` | `org:console:read`, `org:findings:read`, `org:evidence:read`, `org:audit:read`, `org:campaign:authorize`, `org:findings:approve`, `org:findings:resolve` |
+## Implemented architecture
 
-**Two-person invariant.** A launcher cannot approve or authorize their own operation. Approval
-requires a different authenticated `org:approver` principal carrying the required custom permission;
-role or permission alone never overrides `approver.user_id != launcher_user_id`. There is no solo-user
-or emergency self-approval bypass. Both immutable identities are audit fields.
+- Python 3.12, FastAPI/Uvicorn, SQLAlchemy/psycopg, Alembic, PostgreSQL.
+- React 18, TypeScript, Vite, and Clerk for the same-origin operator console.
+- One Docker artifact deployed to Railway Web, Runner, and Scheduler.
+- Web alone is public. Runner, Scheduler, and PostgreSQL have no public ingress.
+- A custom PostgreSQL queue and concurrency-one Runner perform durable orchestration.
+- There is no LangGraph dependency or runtime.
+- PostgreSQL is authoritative; Langfuse is a fail-soft external projection.
+- Inter-agent and evidence contracts are JSON Schema v1 packaged under
+  `src/agentforge/contracts/v1/`.
 
-**Public-route allowlist.** Only `GET /health`, `GET /ready`, and the minimal static/sign-in/callback
-shell required to complete Clerk authentication may be public. Before integration, that shell's
-concrete paths must be enumerated rather than matched by a broad wildcard. No console data, API,
-finding/evidence response, SSE/event stream, WebSocket, campaign action, or approval endpoint is
-public. Everything not explicitly allowlisted defaults to authenticated and authorized.
+### Runtime roles
 
-**Identity separation.** Clerk principals represent human users. Agent/workload identity continues to
-use service boundaries, per-agent database roles, and target-scoped credential bindings; a Clerk token
-is never an agent credential. Human authentication alone never constitutes authorization to attack a
-target, publish a critical finding, or perform remediation.
+| Role | Current model | Current responsibility |
+|---|---|---|
+| Orchestrator | `anthropic/claude-opus-4.8` | Plans each coverage/selection cycle under deterministic governance |
+| Red Team | `qwen/qwen3.5-397b-a17b` | Selects an exact case from a closed reviewed workload for governed replay |
+| Judge | `google/gemini-2.5-pro` | Advisory structured assessment reconciled against oracle/canary/human authority |
+| Documentation | `openai/gpt-5.4` | Drafts only after a trusted confirmed finding |
 
-## Runtime agents (application code — defined in ARCHITECTURE.md, not yet written)
-- **Orchestrator** — reads observability (coverage gaps, open findings, regressions),
-  prioritizes the next campaign, triggers regression runs, governs cost.
-- **Red Team** — generates and mutates adversarial inputs; multi-turn sequences.
-- **Judge** — independent verdicts (success / fail / partial); drift-guarded, calibrated.
-- **Documentation** — confirmed exploit → structured vuln report; data-quality gated.
-- Plus the **regression & validation harness** and the **observability layer**.
+The current staging upstreams are Anthropic, Chutes, Google Vertex, and OpenAI through OpenRouter.
+Provider fallback and model substitution are forbidden.
 
-These are built in `src/` via tdd-swarm. **They are NOT skills.**
+The live Red Team role cannot author target-bound bytes. Novel/mutated generation is quarantined,
+reviewed, content-addressed, and requires a new workload plus fresh authorization before dispatch.
 
-## Skills = our dev workflows (in `.claude/skills/`)
-Core pipeline: **arch-draft → arch-finalize → tasks-gen → tdd-swarm**. Support skills:
-`devlog` (run at every phase boundary), `grilling` (stress-test a plan before building),
-`eval-triage` + `bug-hunt` (during build), `interview-prep` (before each video interview).
-Week-3 skills being added (see `PLAN.md`): `threat-model`, `adversarial-eval-lifecycle`,
-`judge-calibration`, `authorized-live-campaign`, `contract-steward`.
+## Campaign flow
 
-**Four skills are intentionally forked** from their installed-plugin versions and patched
-for this project: `arch-draft` (repo-only, no upstream), plus `arch-finalize`, `devlog`,
-and `interview-prep`. Patches applied: `AUDIT.md` → `THREAT_MODEL.md`, cost scale →
-**test runs**, `arch-draft`'s uninstalled Excalidraw helpers flagged inline, and
-**`arch-draft` Phase H rewritten to the DECISIONS-style defense-script format**
-(index table + per-beat **Say / Why it holds / If pushed / Concede** + status tags).
-**If you re-sync any skill from the plugin, re-apply these patches.**
+1. An authenticated Operator creates an exact authorization request.
+2. A different authenticated Approver authorizes the immutable scope.
+3. Web enqueues a campaign only after server-side scope validation.
+4. Runner performs network-free preflight: schema, heartbeat, catalog, target/surface, workload,
+   authorization window, session lease, credentials, generation policy, hosted configuration, caps,
+   synthetic fixtures, and canaries.
+5. For each exact workload case:
+   - the Orchestrator runs;
+   - the durable attempt is created before hosted Red Team provider I/O;
+   - Red Team selects the authorized `case_ref`;
+   - the Policy Gateway alone dispatches exact reviewed bytes to the target;
+   - the recorder persists hashed evidence;
+   - the Judge evaluates and code reconciles the model output with trusted evidence;
+   - Documentation and regression admission run only for `EXPLOIT_CONFIRMED`.
+6. Scheduler may create an authorization-blocked replay plan on target-version change. It never
+   launches target traffic.
 
-Notes that override the stock skill text:
-- **Diagrams: Excalidraw** (`locked`). `arch-draft`'s two Excalidraw helper skills are
-  **not installed** — apply its layout, color-zone, and contrast rules manually. Always
-  commit the `.excalidraw` source **plus an exported SVG/PNG**, since `.excalidraw` does
-  not render on GitHub.
-- **`AUDIT.md` → `THREAT_MODEL.md`.** Four skills (`arch-draft`, `arch-finalize`,
-  `devlog`, `interview-prep`) expect a root `AUDIT.md` — an assumption inherited from the
-  skills' earlier-project lineage. **This project is greenfield: there is no audit and
-  none is coming.** `THREAT_MODEL.md` occupies that slot, and unlike an audit it is an
-  artifact we *produce*, not one we inherit. Never create `AUDIT.md`; never wait for one.
-- The arch skills also assume "users"-scale cost and an "Early" stage. For Week 3:
-  scale is **test runs** (100 / 1K / 10K / 100K); stages are **Defense / MVP / Final**.
-- **Threat model precedes architecture.** `arch-draft` wants the AUDIT-slot artifact as
-  an *input*, and the PRD orders Stage 2 (threat model) before Stage 4 (architecture).
-  A first-pass `THREAT_MODEL.md` comes out of `arch-draft` Phase A/B; the `threat-model`
-  skill deepens it for MVP. Note the threat model describes the **target**, so it needs
-  the target's shape (endpoints, tools, auth) — observed from the running system if one
-  exists, otherwise derived from the OpenEMR Clinical Co-Pilot reference design.
-- **`tasks-gen`'s "deliverables checklist"** = `Week_3_AgentForge.pdf` + `PLAN.md` §6–§7.
-  Hand it those paths so it doesn't stall asking.
-- **`tdd-swarm` cannot run yet.** It assumes a GitHub remote, protected `main`, CI status
-  checks, and an existing test runner. Chain: build-vs-configure ADR (stack) → push to
-  GitHub → CI + test runner → `tdd-swarm`.
-- **Trigger boundaries** — these overlap on the word "eval":
-  `adversarial-eval-lifecycle` authors/mutates/promotes cases · `eval-triage` diagnoses a
-  *failing* eval · `judge-calibration` is systematic ground-truth and drift work, never
-  per-incident · `bug-hunt` is deterministic code bugs.
-- `authorized-live-campaign` must gate **every** live attack run (allowlist, synthetic
-  data, budget + rate caps, abort). Live attacks are always intentional.
+## Safety and authority invariants
 
-## Deliverable names are law (repo root)
-`ARCHITECTURE.md` · `THREAT_MODEL.md` · `USERS.md` · `README.md` (with the deployed URL) ·
-`IMPLEMENTATION_PLAN.md`. Planning artifacts live in `docs/planning/`.
+- No real PHI; synthetic fixtures only.
+- Clerk authenticates humans but never authorizes an attack.
+- Only verified custom Organization permissions authorize application actions.
+- `approver.user_id != launcher_user_id`; no self-approval or emergency bypass.
+- Target credentials resolve only inside the private Runner at the dispatch boundary.
+- Exact target, surface, version, workload, credential generation, caps, policy/config hashes,
+  authorization expiry, and session lease are immutable run authority.
+- The Judge holds no target credential, mutation tool, publication authority, or remediation
+  authority.
+- The model Judge cannot output authoritative `EXPLOIT_CONFIRMED`.
+- Ambiguous or uncalibrated non-oracle outcomes are not safe; they remain `INDETERMINATE` or `ERROR`.
+- Provider token/cost facts come from provider responses and durable physical-call rows.
+- One observed target request must never be repeated merely because a later agent failed.
 
-## Dual-remote law (GitHub + GitLab)
-Every checkpoint and release must be pushed to both `origin` (GitHub) and `gitlab` (Gauntlet Labs).
-GitHub Actions is the sole CI gate: its required checks must be green on the exact commit. GitLab is
-a passive exact mirror with project CI/CD disabled in Settings; do not edit `.gitlab-ci.yml` merely
-to disable it and never wait for a GitLab pipeline. The two `main` refs must resolve to the same
-commit. (`main` tracks `origin`; push the same `main` commit to `gitlab` with
-`git push gitlab main` — never `-u`, never `--mirror`, never force-push.)
+## Current hosted policy
 
-## Deadlines
-- **Architecture Defense** — ~2.5h after kickoff (needs `docs/defense/DEFENSE_SCRIPT.md`,
-  diagrams, and the build-vs-configure ADR).
-- **MVP** — Tue Jul 21, 11:59 PM.
-- **Final** — Fri Jul 24, 12:00 PM.
+Generation-policy digest on repository `main` and staging:
+`b83acb23122de9b4911032738bce136f214a34328357b457935ad821b44b0b18`.
 
-## Guardrails for any Claude session here
-- Planning skills never write application code.
-- Never fabricate a value; unknowns stay visible as `open question`.
-- Keep the domain model and JSON contracts **framework-neutral** until the
-  build-vs-configure ADR locks the stack.
+Per-call bounds:
+
+- Orchestrator: 12,288 input / 1,024 output / 1,024 reasoning / 120 seconds.
+- Red Team: 32,768 input / 8,192 output / 8,192 reasoning / 180 seconds.
+- Judge: 32,768 input / 512 output / 1,024 reasoning / 180 seconds.
+- Documentation: 12,288 input / 512 output / 1,024 reasoning / 120 seconds.
+
+The Red Team envelope is intentionally large. A live Chutes call took 65.9 seconds and produced
+thousands of completion tokens for a closed selection. Do not shrink this envelope as a reliability
+fix.
+
+The current staged 34-case configuration has 136 global calls, `$10` global provider spend,
+concurrency one, 0.5 requests/second, and **zero retries** globally and per role. The platform maximum
+of one retry per logical call is not active authority.
+
+## Current defects that must remain visible
+
+The 2026-07-26 run `50da57b…` completed 12 target attempts and failed on one HTTP-200,
+schema-invalid Gemini Judge response.
+
+Current behavior:
+
+- HTTP 429/502/503, transport errors, and timeouts are retryable only if configuration authorizes a
+  retry.
+- Structured-output validation failures are never retried.
+- One exhausted agent exception fails the entire batch.
+- Queue failure is persisted `retryable = false`.
+- A fresh run restarts at case 1; there is no campaign resume.
+- Failed-run Langfuse query-back is rejected because the verifier requires a completed summary.
+- Agent and target rows remain `queued` until exact remote query-back; `flush()` is not proof.
+- Physical provider attempts are durable but are not first-class Langfuse child observations.
+- Staging has no enabled exact-identity Judge calibration.
+- Production is release-skewed.
+
+Do not describe the 11 `INDETERMINATE` verdicts as successful defenses. They prove only that no
+deterministic exploit was confirmed in those cases.
+
+## Required remediation direction
+
+Follow `PLAN.md`. The intended reliability behavior is:
+
+- retry only genuinely schema-invalid provider output, only within explicit per-role/global retry,
+  call, token, cost, and rate authority;
+- keep settlement/model/route/budget/evidence failures non-retryable;
+- after exhausted case-local provider flakiness, persist a contract-valid `ERROR` verdict and
+  continue;
+- resume from durable attempts/results/verdicts without repeating observed target work;
+- abort the campaign only for governance/security/integrity failures or unknown target outcomes;
+- remotely verify Langfuse for complete, failed, and aborted campaigns; and
+- calibrate the exact deployed Judge identity before allowing decisive non-oracle authority.
+
+## Human identity and routes
+
+Clerk request verification is implemented and deployed. The backend:
+
+- accepts a bearer `session_token`;
+- verifies RS256 networklessly with `CLERK_JWT_KEY`;
+- requires exact `CLERK_AUTHORIZED_PARTIES` and `CLERK_REQUIRED_ORG_ID`; and
+- uses only verified custom Organization permissions.
+
+Public routes are limited to `/health`, `/ready`, and the static/sign-in/session-task shell. All
+`/api/v1` data and mutations are protected. Frontend capability labels never authorize.
+
+The real-user Organization/MFA/two-person acceptance is a human Clerk Dashboard check. Do not claim it
+from unit tests or a missing-token 401 alone.
+
+## Observability
+
+PostgreSQL stores campaign/attempt lineage, target requests, logical agent executions, physical
+provider invocations/events, tokens, measured provider cost, target accounting, hashes, status, and
+Langfuse delivery state.
+
+Langfuse receives sanitized metadata, hashes, sizes, timing, status, usage, and cost, never raw
+credentials or unbounded hostile bodies. Remote query-back—not SDK return—is the delivery proof.
+
+When changing observability, preserve:
+
+- one campaign trace;
+- exact per-attempt parentage;
+- logical agent observations;
+- physical provider attempt child observations;
+- target HTTP child observations;
+- environment, tenant, model/upstream/request IDs, tokens, cost, and terminal status; and
+- PostgreSQL as the recovery and reconciliation source.
+
+## Documentation maintenance
+
+Any change to models, upstreams, prompts, generation policy, staged caps, migration head, retry/resume
+semantics, deployment topology, authentication, target/workload, or Langfuse hierarchy must update the
+files listed in `docs/DOCUMENTATION.md`.
+
+Do not alter dated evidence to imply it came from a newer run. Add a supersession note instead.
+
+## Development workflow
+
+- Preserve dirty user changes; use an isolated worktree based on the intended reviewed commit.
+- Read relevant migrations and tests before changing behavior.
+- Use test-driven changes and run the smallest relevant tests first, then the full required gate.
+- No live target/provider call from ordinary unit/integration tests.
+- Never put a raw secret, session, credential digest, hostile transcript, or real PHI in logs,
+  fixtures, docs, prompts, or tool output.
+- Planning skills do not write application code.
+- Runtime agents are application code, not Claude skills.
+
+## External-state authority
+
+Do not deploy, change Railway variables, rotate credentials, publish findings, or launch a live
+campaign unless the user explicitly requests that external mutation. When deployment is authorized,
+stop launches, verify quiescence, deploy one exact release through the documented sequence, verify
+policy/file hashes and heartbeats, and require fresh post-deploy authorization.
+
+## Dual remotes and CI
+
+GitHub Actions and GitLab CI are both release gates. The committed `.gitlab-ci.yml` mirrors the test,
+console, container, secret-scan, and security-tool classes required by GitHub.
+
+For every release/checkpoint:
+
+1. require GitHub and GitLab CI green on the exact commit;
+2. push that unchanged commit to `origin`;
+3. push the same commit to `gitlab`; and
+4. verify `origin/main == gitlab/main`.
+
+Never use `--force`, `--mirror`, or `-u` for the GitLab remote.

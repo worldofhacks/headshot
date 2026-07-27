@@ -1,6 +1,7 @@
 # Offline LLM security toolchain
 
-Verified: 2026-07-22. The tools in this document are CI/tooling dependencies, not Railway runtime
+Tool execution evidence below was verified 2026-07-22; runtime integration was reconciled 2026-07-26.
+The tools in this document are CI/tooling dependencies, not Railway runtime
 dependencies. They receive no target URL, target credential, Clerk material, database URL, or real
 PHI. Synthetic prompts only.
 
@@ -12,12 +13,12 @@ Coverage, or a verdict. Only the Policy Gateway dispatches an explicitly reviewe
 only the independent Judge adjudicates trusted gateway evidence. Critical publication remains
 blocked pending human approval.
 
-The approved `m11-seed-corpus-v1` remains the nine-case authored baseline. The deployed Web and
-Runner now prepare `headshot-full-scan-v1`: those nine cases plus five explicitly reviewed,
-contract-validated candidates from the pinned Garak, PyRIT, and Promptfoo artifacts. The exact 14
-attempts receive a distinct content hash and corpus ID, so no existing nine-case campaign grant can
-authorize the expanded scan. The native tools remain isolated CI/tooling dependencies; only their
-reviewed, content-hashed candidate bundles are packaged into the Railway runtime.
+The nine-case `m11-seed-corpus-v1` and 14-case `headshot-full-scan-v1` remain retained baselines. The
+current live workload is `headshot-live-100-v1`: 100 individually reviewed, content-addressed cases
+and 121 turns, including the 9 M11 seeds, 5 reviewed full-scan candidates, and 86 reviewed hosted
+Red-Team candidates. It is split into exact 34/33/33 authorization shards. No grant for an older
+corpus authorizes this workload. Native tool output remains isolated; only reviewed, hashed workload
+instances can enter a live manifest.
 
 ## Implemented and evidenced scope
 
@@ -32,7 +33,7 @@ Giskard's packaged LLM01 scenario currently contains a generator template rather
 attack message, so the evidenced run truthfully imports zero candidates. The adapter will import an
 explicit interaction if a later authorized, offline scenario resolution supplies one.
 
-At runtime, each tool-generated attempt has an `AF-M11-TOOL-*` case ID containing the first 12
+In the retained 14-case workload, each tool-generated attempt has an `AF-M11-TOOL-*` case ID containing the first 12
 hex characters of its provenance hash. The complete tool/version/technique/candidate/provenance
 record is part of the schema-validated authored case and its content hash. Every attempt—authored or
 tool-generated—uses the same Policy Gateway, recorder, independent Judge, and publication gate.

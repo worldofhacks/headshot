@@ -1,5 +1,10 @@
 # Final target surface-policy v2 migration
 
+> **Unactivated proposal, not current runtime.** The deployed governed chat path uses matching
+> target/surface version `1.0.1` and the legacy exact catalog/transport-policy contract. Versions
+> `2.0.0`/`2.1.0` below are proposed activation sets and confer no authority. See
+> [`../target/TARGETS.md`](../target/TARGETS.md) and [`../CURRENT_STATE.md`](../CURRENT_STATE.md).
+
 This migration replaces target-wide request shaping with one immutable policy for each attack
 surface. The version sequence is `1.0.0 -> 2.0.0 -> 2.1.0`.
 

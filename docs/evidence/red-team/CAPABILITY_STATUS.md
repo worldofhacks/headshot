@@ -1,5 +1,11 @@
 # Red-team capability status — honest ledger
 
+> **Historical capability audit.** This ledger was accurate for the named 2026-07-24 branch and is
+> retained as dated evidence; it is not the current operating contract. On release `456d6e5`, the live
+> Runner composes all four hosted roles and uses qwen as an exact-corpus structured selector. Novel
+> generation remains quarantined from live dispatch. Current facts, limitations, and remediation are in
+> [`../../CURRENT_STATE.md`](../../CURRENT_STATE.md) and [`../../../PLAN.md`](../../../PLAN.md).
+
 **Audited at:** `971dd98` (branch `redteam/judge-calibration-corpus-evidence`) · **Date:** 2026-07-24
 **Owner:** red-team / security-validation lead
 

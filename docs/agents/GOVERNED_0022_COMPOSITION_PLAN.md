@@ -1,5 +1,12 @@
 # Governed 0022 — real four-role composition (design, code-grounded)
 
+> **Historical implementation plan; do not execute.** Four-role governed composition landed and the
+> migration chain has advanced to sole head `0025`. The current Runner creates an attempt before the
+> hosted Red Team selector call, dispatches exact reviewed bytes, records target evidence, runs the
+> independent Judge, and conditionally invokes Documentation. Use
+> [`../CURRENT_STATE.md`](../CURRENT_STATE.md), [`../../ARCHITECTURE.md`](../../ARCHITECTURE.md), and
+> [`../../PLAN.md`](../../PLAN.md) for current behavior and remaining work.
+
 **Goal (v1 hard blocker):** a real attack flows end to end over the **existing reviewed/authorized
 corpus** — Orchestrator selects a reviewed case → Red Team dispatches *that exact reviewed case*
 through the Policy Gateway to the target → Recorder persists the **real** response → Judge evaluates

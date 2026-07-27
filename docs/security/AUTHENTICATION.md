@@ -1,11 +1,13 @@
 # Headshot authentication and authorization
 
-> **Status — updated 2026-07-25:** Clerk is the locked human identity provider. The bearer-only
-> `/api/v1` boundary and Clerk React console are deployed on Railway staging from candidate
-> `2069036e`. Staging readiness proved that the local Clerk/Web security configuration parses, the
-> console and sign-in shell load, and a missing-token protected request returns `401`. This is not a
-> signed-in acceptance test. Real Clerk users, exact Organization and permission assignments, MFA,
-> cross-Organization denial, the two-person flow, and production authentication remain unverified.
+> **Status — reconciled 2026-07-26:** Clerk remains the locked human identity provider. The
+> bearer-only `/api/v1` boundary and Clerk React console are deployed on Railway staging from release
+> `456d6e5`, with PostgreSQL at Alembic `0025`. Staging `/health` and `/ready` return `200`, and a
+> missing-token request to `/api/v1/principal` returns `401`. These machine checks do not prove a
+> signed-in user journey. Exact-Organization membership, custom permissions, MFA, cross-Organization
+> denial, two-distinct-user approval, and production sign-in still require human acceptance evidence.
+> Production is currently release-skewed and must not be used for a campaign. See
+> [`../CURRENT_STATE.md`](../CURRENT_STATE.md).
 
 This document is the security contract for human access to the Headshot console and API. It does not
 define agent/workload credentials and it does not authorize live campaigns.

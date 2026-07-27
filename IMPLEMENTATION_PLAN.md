@@ -1,8 +1,14 @@
 # IMPLEMENTATION_PLAN.md — AgentForge / Adversarial Machine
 
-> Executable decomposition of the binding **`ARCHITECTURE.md`** (§1–§21). Produced by `/tasks-gen`
+> **Historical build decomposition.** This file records the original 2026-07-20 implementation plan
+> and its acceptance criteria. Its checkboxes are not the current runtime/release status and must not
+> be used to decide what is deployed. Read `docs/CURRENT_STATE.md` for implemented/deployed facts and
+> `PLAN.md` for current remediation work. Retained task text remains valuable requirements history.
+>
+> Originally produced from the then-binding **`ARCHITECTURE.md`** (§1–§21) by `/tasks-gen`
 > (2026-07-20), corrected pass 2026-07-20. Requirements source: `Week_3_AgentForge.pdf`;
-> deliverables/phase checklist: `PLAN.md` §6–§7; binding constraints: `ARCHITECTURE.md` (esp. **§20**),
+> deliverables/phase checklist: the 2026-07-20 plan revision; binding constraints at that time:
+> the 2026-07-20 `ARCHITECTURE.md`,
 > `docs/planning/gap-audit.md`, `docs/planning/DECISIONS.md` (D1–D18), `THREAT_MODEL.md`,
 > `docs/planning/CLAUDE_CODE_HANDOFF.md`, `docs/planning/PRESEARCH.md` §5.2 (entities/state machines).
 > Posture: **production-grade** — a happy-path-only acceptance is incomplete.
@@ -12,8 +18,8 @@
 > `Accept:` behavior incl. edge + error · `Verify:` command/observation that proves it · `Test:`
 > unit/integration/eval hook (evals tagged boundary|invariant|regression) · `Skills:` dev workflow ·
 > `⚠ HUMAN AUTH:` requires explicit human authorization (external-state; **not executed in planning**).
-> Checkboxes are state; update in place. **This plan is not committed by the pass that generates it** and
-> `tasks-gen` writes no application code.
+> The original generator treated checkboxes as state. They are now frozen as historical evidence;
+> current work is tracked in `PLAN.md`.
 
 ## ⚠ External-state operations — HUMAN AUTHORIZATION REQUIRED
 

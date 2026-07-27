@@ -1,5 +1,10 @@
 # Agent-by-Agent Orchestration Trace — Authorized Live Co-Pilot Campaign
 
+> **Historical evidence.** This file describes the retained 2026-07-24 seed-replay run and must not be
+> read as the current hosted Runner architecture. Release `456d6e5` composes hosted Orchestrator,
+> exact-corpus Red Team selector, Judge, and conditional Documentation roles. Current deployment facts
+> and the latest failed-run analysis are in [`../CURRENT_STATE.md`](../CURRENT_STATE.md).
+
 **Target:** `https://agent-production-9f62.up.railway.app` (OpenEMR Clinical Co-Pilot, synthetic data only)
 **Surface:** `/chat` (`copilot_chat` profile) · **Corpus:** `m11-seed-corpus-v1` (`corpus_sha 011d2f2f…`)
 **Provenance:** approved by a **stand-in** two-person record, not two authenticated principals — see the

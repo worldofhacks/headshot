@@ -1,495 +1,277 @@
-# Railway deployment runbook
+# Railway deployment and rollback
 
-> **Status — staging promotion proven; production pending:** the Headshot Railway project has
-> separate Staging and production environments. Candidate `2069036e` was deployed to Staging in
-> Runner-first order across Web, Runner, Scheduler, and PostgreSQL. The staging database reached
-> `0021`, the public Web origin passed `/health` and `/ready`, an unauthenticated protected request
-> returned `401`, and the console shell loaded. This release adds the private Scheduler and the linear
-> migration head
-> **`0020_agent_acceptance_authority` → `0021_four_role_agent_acceptance`** *(updated 2026-07-25; this
-> line previously named `0018` → `0019`, two revisions behind — a runbook that names the wrong head
-> will fail its own readiness check)*.
->
-> This proves a smoke deployment, not an authenticated Clerk flow or a campaign. No signed-in user,
-> Organization/permission/MFA behavior, provider call, target call, or production promotion was
-> verified. The release-wide evidence checklist remains incomplete where a row combines staging with
-> production, authentication, campaign, or rollback evidence.
+**Reconciled:** 2026-07-26
 
-This runbook defines the required staging and production topology and the evidence needed before a
-deployed status can be claimed.
+**Current deployed-state snapshot:** [`../CURRENT_STATE.md`](../CURRENT_STATE.md)
 
-## Recorded staging promotion evidence
-
-| Item | Verified staging result |
-|---|---|
-| Candidate | `2069036e` |
-| Public Web origin | `https://web-staging-8e30.up.railway.app` |
-| Service order | Runner deployed first; Web-owned migration; Runner activation; Scheduler activation; Web public routing |
-| PostgreSQL | Sole Alembic head `0021` |
-| Public probes | `GET /health` → `200`; `GET /ready` → `200` |
-| Default-deny boundary | Unauthenticated protected request → `401` |
-| Browser surface | Console and sign-in shell load |
-| Explicitly not exercised | Signed-in Clerk flow, real Organization/permissions/MFA, campaign, provider/target I/O, production, rollback |
-
-## Repository deployment artifacts
-
-The repository now prepares one multi-stage production image and three service-specific Railway
-config files. These files describe deployable process boundaries; they do **not** create a Railway
-project, environment, service, database, domain, variable, or deployment.
-
-| Railway service | Config-as-code path | Exact process |
-|---|---|---|
-| Web | `/railway/web.json` | `python -m agentforge.web` |
-| Runner | `/railway/runner.json` | `python -m agentforge.runner` |
-| Scheduler | `/railway/scheduler.json` | `python -m agentforge.scheduler` |
-| Web pre-deploy | `/railway/web.json` | `alembic upgrade head` |
-
-Each Railway service must be configured in the Dashboard to use its exact config path. The same
-reviewed `Dockerfile` is built for all three processes. Its final non-root Python image contains the
-installed wheel, `/app/alembic.ini`, the complete `/app/migrations` tree, and only the compiled Vite
-assets under `/app/console`. Node, npm, TypeScript sources, tests, source maps, and development servers
-remain outside the runtime stage.
-
-The commands are packaging contracts, not deployment evidence. Runner composes the trusted credential
-resolver, adapter factory, per-dispatch Policy Gateway, bounded cancellation, and atomic
-result/queue-completion path. Scheduler writes idempotent target-version replay plans to PostgreSQL and
-heartbeats its state; every plan remains blocked on the normal human and policy authorization gates.
-Keep both services private. Do not set readiness overrides merely to make Railway show a running
-process.
-
-`VITE_CLERK_PUBLISHABLE_KEY` is the one frontend build argument. It is a public, environment-specific
-identifier, is required by every service build because all three services build the same image, and is
-consumed only by the throwaway Node stage. It is not an authentication secret or a private-service
-authority input. No Clerk secret, JWT verification key, session token, database URL, provider
-credential, or target credential may be a Docker build argument.
+This runbook governs AgentForge Web, Runner, Scheduler, and PostgreSQL on Railway. It does not
+authorize a deployment, variable change, credential rotation, or live campaign.
 
 ## Topology
 
-Create the same four-service pattern in separate Railway **staging** and **production** environments.
-
-| Service | Public ingress | Private connections | Responsibility |
+| Service | Public ingress | Command | Owns |
 |---|---:|---|---|
-| Web | **Yes — the only public service** | PostgreSQL, runner/scheduler control surfaces where explicitly required | React console shell, FastAPI, Clerk human authentication, backend authorization, health/readiness |
-| Runner | No | PostgreSQL, approved model providers, external target only through the Policy Gateway | Claims durable jobs and executes agent/campaign work |
-| Scheduler | No | PostgreSQL | Creates target-version regression replay plans blocked on human authorization; never performs attack execution inline |
-| PostgreSQL | No | Web, runner, scheduler through Railway private networking | Jobs, checkpoints, findings, approvals, audit records, append-only evidence |
+| Web | yes | `python -m agentforge.web` | console, API, commands/reads, health/readiness, Alembic pre-deploy |
+| Runner | no | `python -m agentforge.runner` | queue claims, hosted agents, target dispatch, evidence, telemetry |
+| Scheduler | no | `python -m agentforge.scheduler` | target-version observation, authorization-blocked replay plans |
+| PostgreSQL | no | managed | control plane, queue, evidence, audit, projections |
 
-External boundaries:
+Clerk, OpenRouter/upstream models, Langfuse, and the Clinical Co-Pilot target are external. Provider,
+target, Langfuse, and database credentials never enter the browser.
 
-- The user's Browser signs in through Clerk and sends its Clerk session to the public Web service.
-- Clerk is the managed human IdP. With `CLERK_JWT_KEY`, Web verifies issued session JWTs without a
-  request-time Clerk/JWKS call.
-- Model providers and the OpenEMR target are external. Only the trusted Policy Gateway may release a
-  target-scoped credential or send a live request.
-- A Clerk token is never forwarded to runner, scheduler, Postgres, a model provider, or the target.
+Staging and production use separate Railway environments, databases, service variables, target
+authorization, credential generations, Clerk applications/Organizations/origins, and Langfuse
+projects/keys.
 
-Do not expose runner, scheduler, PostgreSQL, an admin dashboard, a metrics endpoint, or an internal
-queue endpoint with a Railway public domain.
+## Current state
 
-## Environment isolation
+Staging:
 
-Staging and production are independent security boundaries, not variable groups over one shared
-database.
+- Web, Runner, and Scheduler are successful and share generation-policy digest `b83acb23…`;
+- their packaged `hosted_policy.py` SHA-256 is identical;
+- PostgreSQL is at Alembic `0025`;
+- `/health` and `/ready` return 200; and
+- unauthenticated `/api/v1/principal` returns 401.
 
-| Boundary | Staging | Production |
-|---|---|---|
-| Railway Web domain | Staging HTTPS origin only | Production HTTPS origin only |
-| PostgreSQL | Dedicated staging database | Dedicated production database |
-| Clerk application | Dedicated staging configuration | Dedicated production configuration |
-| Required Organization | Staging Headshot Organization with its own exact ID | Production Headshot Organization with a different exact ID |
-| Authorized parties | Staging Web origin only | Production Web origin only |
-| Target authorization | Fake/non-production target entry only; cannot resolve production credential | Authorized live target entries only after the live-campaign gate |
-| Provider/target secrets | Staging-scoped or absent | Production-scoped, least privilege, target-bound |
-| Langfuse | Dedicated staging project and keypair | Dedicated production project and different keypair |
-| Data | Synthetic fixtures only | Synthetic fixtures only; real PHI remains forbidden |
+Production:
 
-Hard checks:
+- Web/Runner and Scheduler expose different policy hashes;
+- production is therefore release-skewed; and
+- no campaign may be launched until one reviewed release is intentionally deployed and accepted.
 
-- `AGENTFORGE_ENVIRONMENT` is set explicitly by Railway to `staging` or `production`.
-- Deployed environments never read `.env` or `.env.local`.
-- Staging configuration fails to load if it contains the production Railway origin or production
-  Clerk Organization ID.
-- Staging cannot resolve a production target credential reference.
-- A database, volume, domain, key, Organization ID, or secret reference is never shared across the two
-  environments merely for convenience.
-- Sharing Langfuse project credentials across staging and production is forbidden. Environment
-  metadata is an acceptance check, not a substitute for separate Langfuse projects and distinct
-  public/secret keypairs.
+Exact IDs and hashes are in `docs/CURRENT_STATE.md`. Re-verify them immediately before an operation.
 
-## Public and private boundaries
+## Build and migration ownership
 
-The public Web service uses a default-deny route policy.
+All services build `Dockerfile`. The runtime image contains:
 
-Public allowlist:
+- the AgentForge wheel;
+- the built React console;
+- the complete Alembic history;
+- reviewed eval/workload/security-tool assets; and
+- the Langfuse campaign verifier.
 
-- `GET /health` for process liveness;
-- `GET /ready` for deployment readiness; and
-- only the concrete static/sign-in/callback shell paths required to complete Clerk authentication.
+Only `railway/web.json` declares `alembic upgrade head`. Runner and Scheduler call an exact-head
+readiness check before consuming/enqueuing work. The current sole head is `0025`; never hard-code that
+value into automation that should derive the packaged head.
 
-The integration must enumerate the shell paths after the frontend route contract is known. Do not use
-`/auth/*`, `/api/*`, or any other broad wildcard as a public exemption.
+One release must be tested as an immutable artifact. Do not independently rebuild services from
+different source states.
 
-Protected surfaces include all console data, APIs, findings, evidence, event streams, WebSockets,
-campaign controls, target/configuration management, approvals, remediation, audit records, internal
-metrics, and queue operations. Frontend hiding is not protection; FastAPI dependencies enforce the
-boundary on every protected route.
+## Service-scoped variables
 
-Railway private networking does not replace application authorization. Web-to-runner and each service's
-database access remain least-privilege and authenticated. Per-agent database roles enforce the recorder,
-Judge, and Red Team data boundaries.
+### Web
 
-## Build and deployment flow
+- `AGENTFORGE_ENVIRONMENT`
+- `DATABASE_URL`
+- `PORT`
+- `AGENTFORGE_CONSOLE_DIR=/app/console`
+- `AGENTFORGE_MAX_REQUEST_BYTES`
+- `VITE_CLERK_PUBLISHABLE_KEY` at build time
+- `CLERK_PUBLISHABLE_KEY`
+- `CLERK_JWT_KEY`
+- `CLERK_AUTHORIZED_PARTIES`
+- `CLERK_REQUIRED_ORG_ID`
+- `CLERK_FRONTEND_API_ORIGIN`
+- staging isolation guards for production Organization/origin
+- `AGENTFORGE_LIVE_TARGET_CATALOG_JSON` for trusted read/command validation
 
-Deploy the same reviewed commit through staging before production.
+Web must not contain OpenRouter, target-session, or Langfuse secret values.
 
-In this runbook, **deploy** means make an exact artifact available to a service while it remains
-unable to claim work or receive public traffic. **Activate** means permit that artifact to perform
-its service function: exact-head Runner work consumption, Scheduler enqueue, or Web public
-promotion. A successful Railway build or process start is deployment evidence, not activation
-evidence.
+### Runner
 
-The migration-bearing seam is Runner-first and requires this exact order. Let `C` mean the signed
-grant's current database revision and `H` the exact packaged Alembic head. The recorded staging
-promotion used its grant-bound values and reached `H = 0021`; later releases may serialize additional
-revisions:
+- `AGENTFORGE_ENVIRONMENT`
+- `DATABASE_URL`
+- `AGENTFORGE_RUNNER_WORKER_ID`
+- `AGENTFORGE_LIVE_TARGET_CATALOG_JSON`
+- `AGENTFORGE_WORKLOAD_ID`
+- `AGENTFORGE_WORKLOAD_SHA256`
+- `AGENTFORGE_CREDENTIAL_BINDINGS_JSON`
+- `AGENTFORGE_SESSION_LEASES_JSON`
+- the environment variables named by the sealed credential bindings
+- `AGENTFORGE_JUDGE_CALIBRATION_PATH` when an exact human-enabled calibration is mounted
+- `HEADSHOT_PER_CALL_USD`
+- `LANGFUSE_PUBLIC_KEY`
+- `LANGFUSE_SECRET_KEY`
+- `LANGFUSE_BASE_URL`
+- `LANGFUSE_TRACING_ENVIRONMENT`
 
-1. Freeze one release commit and image digest. Require green unit, integration, contract, corpus,
-   lint, formatting, secret-scan, and package checks in GitHub CI for that exact commit; then verify
-   the exact commit is mirrored to GitLab `main` (GitLab has no required runner pipeline). Record
-   actual results; never infer green from a local run.
-2. For the named environment, obtain a signed human deployment grant binding the release commit and
-   image, environment, exact public Web origin, Web/Runner/Scheduler service IDs, current revision
-   and target packaged head `H`, execution window, and rollback owner. The production grant is a
-   human-only gate and cannot be reused from staging.
-3. Quiesce the environment. Disable public launch admission and scheduler enqueue, drain or safely
-   abort active work, then prove and record all three zero counts:
-   - active `agent_work` leases;
-   - `running` hosted `agent_executions`; and
-   - queued work whose campaign authorization is still dispatchable.
-4. Scale the old private Runner deployment to zero and prove its process has stopped. Runner
-   `overlapSeconds: 30` is unsafe during this migration: a normal rolling replacement can keep an old
-   consumer alive while the new consumer starts. Do not rely on overlap, lease expiry, or a new
-   Runner's schema gate to contain the old process.
-5. Deploy the new Runner artifact **first**, still against schema `C`. Because its packaged exact
-   head is `H`, it must remain in the exact-head wait state. Prove that it does not publish a runtime
-   heartbeat, recover provider work, claim/reclaim a lease, mutate a job/campaign, or perform
-   provider/target I/O. This is deployed, not activated.
-6. Stage the new Web artifact without promoting it to the public domain. Using Web's narrowly
-   privileged pre-deploy binding and the signed grant, run the sole schema writer:
+The hosted configuration set itself is staged through the authenticated control plane and stored
+append-only in PostgreSQL. Ambient model-name variables are not production authority.
 
-   ```bash
-   alembic upgrade head
-   ```
+### Scheduler
 
-   Capture evidence that the single linear graph advanced from `C` through `H`, including `0018` and
-   then `0019` when they are in that range. Revision `0018` takes an exclusive `agent_executions` lock
-   and independently refuses any running hosted row; `0019` then makes observed model substitution
-   recordable without permitting it on a successful execution. A refusal, timeout, partial revision,
-   unexpected head, or second migrator stops the release. If the Railway workflow cannot hold the
-   candidate Web deployment from public traffic, stop rather than changing this order.
-7. Verify PostgreSQL reports the one exact packaged head `H`, the old Web remains compatible with
-   the additive schema, migration authority is absent from runtime roles, and the zero-work
-   conditions still hold.
-8. Activate the new private Runner **before** public Web promotion. Prove the exact artifact now
-   passes its schema/runtime check and emits a current heartbeat while launch remains closed and the
-   queue remains empty. A heartbeat must not claim that q is production-composed: Red Team remains
-   deterministic selection until the governed q generation workflow ships.
-9. Deploy/activate the private Scheduler only after Runner readiness is established, but keep
-   scheduling disabled. Then promote the already-staged Web artifact to public traffic and gate it
-   on `/health`, `/ready`, unauthenticated denial, authenticated least privilege, exact
-   Organization/origin, and private-service exposure checks.
-10. A different human supplies a signed-in production session for the live page audit. Verify real
-    served model, cost, prompt digest/version, physical lineage state, controls, and the absence of
-    unsupported four-live claims. Stop at `/sign-in` if that session is unavailable; do not bypass
-    Clerk or substitute staging/local evidence.
-11. Re-enable scheduling and launch admission only after all deployment signals are healthy.
-    Deployment grant, authentication, or service readiness never authorizes a campaign; every live
-    run still needs its own exact target authorization, distinct approver, synthetic-data checks,
-    budget/rate caps, and abort controls.
+- `AGENTFORGE_ENVIRONMENT`
+- `DATABASE_URL`
+- `AGENTFORGE_SCHEDULER_POLL_SECONDS`
 
-Repeat the complete sequence in production with the same reviewed artifact only after staging
-passes. “Runner before Web” therefore means both that the new Runner artifact is deployed first in
-an inert exact-head wait state and that Runner is activated before the new Web revision receives
-public traffic. Web remains the only schema writer between those two Runner states.
+Scheduler does not need target or provider credentials.
 
-The private Runner owns outbound telemetry. Configure `LANGFUSE_PUBLIC_KEY`,
-`LANGFUSE_SECRET_KEY`, `LANGFUSE_BASE_URL`, and `LANGFUSE_TRACING_ENVIRONMENT` on Runner only.
-`LANGFUSE_BASE_URL` must be an exact HTTPS origin without a path, user information, query parameters,
-or a fragment. `LANGFUSE_TRACING_ENVIRONMENT` must exactly equal `AGENTFORGE_ENVIRONMENT` in that
-Runner. Every durable Orchestrator, Red Team, Judge, and Documentation execution and every physical
-target request is first recorded in PostgreSQL, then projected asynchronously to one
-campaign-correlated Langfuse trace. Hosted calls include their typed generation facts so role-local
-latency, token usage, and cost remain queryable. The current deterministic Red Team corpus-selection
-row has no provider generation facts and is not evidence of q execution. Cross-agent
-`parent_execution_id` lineage is also native Langfuse parentage.
+## Pre-deploy gate
 
-Langfuse receives hashes, byte counts, stable identifiers, timing, usage, cost, and bounded status
-metadata—not prompts, target responses, clinical context, credentials, or evidence bodies. PostgreSQL
-remains the authoritative ledger. A durable `queued` status means the observation is awaiting exact
-remote query-back; even a non-raising SDK `flush()` does not assert remote acceptance. Only an exact
-authenticated query-back may atomically change a row to `exported` and set
-`langfuse_verified_at`; the console labels that state **observed**. Langfuse failure never causes a
-duplicate target retry.
+Before any release:
 
-After each deployed live campaign, verify remote visibility from the private Runner environment:
+1. identify the exact reviewed commit;
+2. verify `origin/main == gitlab/main` for releases;
+3. require GitHub Actions and GitLab CI green on the exact commit;
+4. build/test the package, console, Docker image, migration history, and secret scan;
+5. verify one Alembic head;
+6. inspect migration upgrade/downgrade/quiescence requirements;
+7. stop new launch and scheduling commands;
+8. prove zero active target work-unit leases;
+9. prove zero running hosted agent executions;
+10. prove no dispatchable queued campaign authorization;
+11. preserve database/PITR and rollback identifiers; and
+12. obtain explicit deployment authority.
 
-```bash
-# In the private Staging Runner:
-python scripts/verify_langfuse_campaign.py \
-  --campaign-run-id <completed-staging-live-run-id> \
-  --expected-environment staging \
-  --record-verification
+Deploying or restarting Runner invalidates heartbeat-based console readiness until a fresh heartbeat
+is recorded. Operators must not click Launch during the deployment window.
 
-# In the private production Runner:
-python scripts/verify_langfuse_campaign.py \
-  --campaign-run-id <completed-production-live-run-id> \
-  --expected-environment production \
-  --record-verification
-```
+## Deployment sequence
 
-The verifier is read-only unless `--record-verification` is explicitly supplied. It rejects non-live
-or incomplete campaigns and succeeds only when every durable agent execution is query-visible with
-its correct typed observation shape, terminal state, native parentage, exact usage, and reconciled
-cost, and every physical target request is query-visible one-for-one with its request/response
-hashes and target/surface/version lineage. It must not require or invent a hosted generation for a
-deterministic execution. The required `--expected-environment` must exactly match both deployed
-Runner environment variables, every agent and target observation's
-`deployment.environment` metadata, and Langfuse's native observation environment before
-verification can be recorded. A hosted generation with missing provider-returned token or
-cost accounting fails acceptance; it must never be presented as an observed zero.
+Use this order for schema-affecting releases:
 
-Only after all remote assertions pass, `--record-verification` atomically changes the exact queued
-agent-execution and physical-request rows to `exported` and writes their first
-`langfuse_verified_at` timestamp. Both returned ID sets must exactly match the durable snapshot or
-the transaction rolls back. A safe rerun preserves the first timestamp. The JSON result always
-includes `verification_recorded`; it is `false` when the flag is omitted, so a read-only pass leaves
-queued rows unchanged and cannot be mistaken for persisted observation. Store the JSON output as
-deployment evidence; do not substitute local fixtures or an SDK `flush()` result for this query-back
-check.
+1. **Runner artifact first, inert.** Deploy the new Runner while the old database head is active. It
+   must refuse to claim work at the exact-head gate.
+2. **Web and migration.** Deploy Web and let its pre-deploy command apply every migration to the new
+   sole head.
+3. **Web checks.** Verify `/health`, `/ready`, static/sign-in shell, and protected missing-token 401.
+4. **Runner activation.** Verify exact head, trusted catalog/workload, provider/config readiness,
+   Langfuse auth gate, and fresh heartbeat.
+5. **Scheduler.** Deploy after the schema and Runner are healthy; verify heartbeat/planning only.
+6. **Artifact parity.** Read the generation-policy digest and packaged `hosted_policy.py` hash from
+   every service. All must match.
+7. **Target-free acceptance.** Run the four-role OpenRouter/Langfuse acceptance with
+   `target_call_limit = 0`.
+8. **Langfuse query-back.** Verify remote observations; SDK flush is insufficient.
+9. **Fresh live authority.** Only now create a new campaign request and obtain distinct-person
+   approval for the exact deployed policy/configuration/workload/lease.
 
-Migrations through `0021` are deployed in staging, but that smoke ran no campaign. A newly authorized
-governed live campaign on the exact release head is still required before remote Langfuse evidence can
-exist. Migration `0018` adds authoritative physical-provider lineage and `0019` preserves rejected
-provider-model substitutions as non-success evidence. Historical campaigns that predate
-`agent_executions.langfuse_status` are not reconstructed or backfilled into Langfuse, and pre-`0018`
-hosted rows remain explicitly `historical_not_instrumented` with no fabricated physical events. Until
-a live run on the current packaged head passes the query-back verifier, the console must keep remote
-visibility—and any metric with no durable execution row—explicitly unavailable rather than infer
-either from fixtures or manifests. A q component test is never a production trace.
+For migrations whose constraints make old/new Runner overlap unsafe, scale the old Runner to zero
+after quiescence instead of relying on `overlapSeconds`.
 
-The process commands are fixed in the repository artifact table above. A command's presence is not
-evidence that its external Railway service exists or is healthy. The former one-shot
-`python -m agentforge.campaign run` and direct live scripts are retired fail-closed because they bypass
-the durable execution ledger. Railway Runner is the only live execution composition and consumes
-authorized `agent_work` jobs.
+## Hosted configuration and policy parity
 
-Only Web owns the schema-changing pre-deploy command. Runner and Scheduler must check that the database
-is already at the integrated Alembic head before consuming or producing work and must wait or exit
-fail-closed when it is not. This avoids concurrent Alembic writers if Railway builds the three services
-at the same time. For this migration-bearing release, follow the Runner-first sequence above:
-deploy the inert new Runner, apply the Web-owned migration, activate and verify Runner, and only then
-promote Web publicly. Do not interpret migration ownership as permission to make Web public first.
+Web mints an authorization containing the generation-policy digest. Runner resolves that digest
+through its closed package registry. If Web and Runner differ, Runner fails before provider I/O with
+hosted runtime authority invalid.
 
-## Pre-deploy migrations
+Acceptance requires:
 
-- Alembic is the only schema apply path.
-- The checked-in `alembic.ini` intentionally has a blank `sqlalchemy.url`. Programmatic migration tests
-  may inject an isolated URL; normal CLI/pre-deploy execution uses the process `DATABASE_URL`. A usable
-  localhost value in the INI would override Railway and is forbidden.
-- Migrations are forward-compatible expansions first; application rollout follows; destructive
-  contractions land only after all old consumers are gone.
-- The migrator uses a narrowly controlled database administration binding. Runtime Web/runner/scheduler
-  roles do not receive migration authority.
-- A migration failure stops deployment. Web must not become ready against a partial or stale schema.
-- Job/checkpoint payloads are versioned. An unknown version dead-letters or parks safely rather than
-  being interpreted under a new schema.
-- Code rollback does not roll back PostgreSQL. Keep the old schema compatible throughout the rollback
-  window.
+- same package/policy hash on Web, Runner, and Scheduler;
+- staged configuration release compatible with that package;
+- exact four-role model/upstream/prompt bindings;
+- role/global call, token, cost, retry, rate, concurrency, and timeout capacity;
+- credential references resolvable only by Runner; and
+- a fresh authorization minted after parity is established.
+
+Never edit only an expiry or digest to make a stale authorization pass.
 
 ## Health and readiness
 
-`GET /health` is liveness only. It returns success when the process can serve and does not query
-PostgreSQL, Clerk, a model provider, or the target.
+`/health` proves only the Web process is alive.
 
-`GET /ready` returns success only when the service can safely receive traffic. The integrated Web
-checks PostgreSQL connectivity, the exact Alembic head, packaged console availability, and local
-Clerk/Web security configuration parsing. It does not make a Clerk network request from the probe. A
-failed dependency or configuration check returns `503` and blocks promotion.
+`/ready` additionally proves the Web dependency/configuration boundary, including database and exact
+schema. It does not prove:
 
-Container CI exercises both sides without contacting Clerk: an unconfigured image must return `503`,
-while the same image connected to a migrated throwaway PostgreSQL database and given an in-memory
-generated RSA public fixture plus valid local settings must return `200`. This is packaging evidence,
-not real-user or deployed-environment verification.
+- Runner heartbeat;
+- provider credential/model route;
+- Langfuse remote delivery;
+- target credential/session lease;
+- campaign authorization;
+- Judge calibration;
+- full-suite reliability; or
+- real-user Clerk Organization/MFA/two-person behavior.
 
-Readiness is not a reason to call the live target or a model. Those dependencies have separate runtime
-health, circuit-breaker, and campaign preflight behavior.
+Use the authenticated read models and Runner/Scheduler heartbeats for component readiness.
 
-After deployment, verify at minimum:
+## Acceptance after deployment
 
-```text
-GET /health                    -> 200
-GET /ready                     -> 200 only when DB/schema/local auth config are ready
-protected route, no token      -> 401
-protected route, wrong org     -> 403
-protected route, no permission -> 403
-private service public URL     -> absent/unreachable
-```
+### Infrastructure smoke
 
-Never include a bearer token in a command transcript, CI log, screenshot, or ticket. Perform
-authenticated smoke tests through a secret-safe test harness.
+- Web `/health` 200.
+- Web `/ready` 200.
+- static/sign-in shell 200.
+- protected API without a token 401.
+- Runner/Scheduler no public domains.
+- exact schema head.
+- same policy/file hashes across services.
+- fresh Runner/Scheduler heartbeat.
 
-## Sealed variables
+### Human identity smoke
 
-Configure variables separately in each Railway environment. Values are injected at runtime by
-reference and never committed, printed, included in build arguments, or copied between environments.
+With two real invited Headshot members:
 
-| Variable or class | Service | Handling |
-|---|---|---|
-| `AGENTFORGE_ENVIRONMENT` | All | Plain enumerated setting; exact environment value |
-| `PORT` | Web | Assigned by Railway; Web binds this exact decimal port |
-| `AGENTFORGE_CONSOLE_DIR` | Web | Fixed packaged path `/app/console`; never a host/source directory in deployment |
-| `AGENTFORGE_MAX_REQUEST_BYTES` | Web | Explicit integer request-body cap from 1 KiB through 10 MiB |
-| `DATABASE_URL` | Each service that needs DB access | Railway reference to that environment's private Postgres; use least-privilege role per service |
-| `VITE_CLERK_PUBLISHABLE_KEY` | Build of each shared-image service | Public identifier; required Docker build argument, environment-specific, consumed only when compiling the browser bundle |
-| `CLERK_PUBLISHABLE_KEY` | Web | Public backend identifier; environment-specific |
-| `CLERK_JWT_KEY` | Web | Multiline PEM public verification key; sealed/integrity-controlled |
-| `CLERK_AUTHORIZED_PARTIES` | Web | Exact HTTPS Web origins only; no wildcard |
-| `CLERK_REQUIRED_ORG_ID` | Web | Exact environment-specific Headshot Organization ID |
-| `CLERK_FRONTEND_API_ORIGIN` | Web | Exact environment-specific Clerk Frontend API HTTPS origin used by the CSP `connect-src`; no path or wildcard |
-| `CLERK_PRODUCTION_AUTHORIZED_PARTIES` | Staging Web only | Exact production-origin comparison guard; never treated as a staging origin |
-| `CLERK_PRODUCTION_ORG_ID` | Staging Web only | Exact production Organization comparison guard; never accepted as staging membership |
-| `CLERK_SECRET_KEY` | None for request auth | Absent. Future Backend API administration only after separate review |
-| `AGENTFORGE_LIVE_TARGET_CATALOG_JSON` | Web + Runner | Identical reviewed, secret-free target/surface/policy definitions; never browser-authored |
-| `AGENTFORGE_CREDENTIAL_BINDINGS_JSON` | Runner only | Opaque `secretref://` handle to Runner variable-name mapping; contains no credential value |
-| `AGENTFORGE_SESSION_LEASES_JSON` | Runner only | Non-secret generation, RFC 3339 expiry, and sealed-value SHA-256 for each versioned delegated session; never contains the session value |
-| Model-provider keys | Runner only where needed | Dedicated, scoped, expiring/spend-limited keys; never exposed to Web/browser |
-| Target credential value | Runner only | Stored under the mapped Runner variable; never present on Web, in the catalog, or in PostgreSQL |
-| `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` | Runner only | Sealed, environment-specific Langfuse project credentials; staging and production keypairs must differ; never exposed to Web/browser |
-| `LANGFUSE_BASE_URL`, `LANGFUSE_TRACING_ENVIRONMENT` | Runner only | Exact regional HTTPS host and environment label (`staging` or `production`) |
-| `HEADSHOT_PER_CALL_USD` | Runner only | Positive contracted target-call cost; shared by budget enforcement and measured telemetry |
+- MFA/session tasks complete;
+- exact Organization enforced;
+- wrong Organization denied;
+- custom permissions enforced;
+- Operator cannot authorize their own launch;
+- Approver can authorize the immutable request;
+- tokens do not enter URLs, logs, traces, or browser persistence.
 
-Treat public Clerk keys as configuration that can change authentication trust even though they are not
-confidential. Audit all changes. Rotate compromised secrets and redeploy; never “temporarily” log them.
+### Target-free four-role acceptance
 
-## Delegated target-session continuity
+- one real call per hosted role;
+- exact requested/returned model/upstream;
+- physical provider lineage and measured usage/cost;
+- Red Team output quarantined from any target;
+- Langfuse exact query-back; and
+- all rows terminal.
 
-The Clinical Co-Pilot `/chat` surface uses a patient-pinned SMART session in the JSON `session_id`
-field. It is not a Clerk session and must exist only on the private Runner. Configure one immutable,
-versioned reference per target-session generation; the final reference segment must equal the metadata
-generation:
+### Governed live acceptance
 
-```text
-AGENTFORGE_CREDENTIAL_BINDINGS_JSON={"secretref://staging/openemr/session/generation-20260722a":"OPENEMR_SMART_SESSION_20260722A"}
-AGENTFORGE_SESSION_LEASES_JSON={"secretref://staging/openemr/session/generation-20260722a":{"generation":"generation-20260722a","expires_at":"2026-07-22T23:30:00Z","value_sha256":"<64 lowercase hex characters>"}}
-OPENEMR_SMART_SESSION_20260722A=<sealed Runner variable; never paste or print>
-```
+- fresh authorization after deployment;
+- synthetic-only workload/canaries;
+- target session lease covers the entire run timeout;
+- exact target and hosted caps;
+- attempt created before Red Team provider I/O;
+- target request/results/verdicts durable;
+- case errors remain explicit;
+- no observed target work repeated;
+- complete/failed/aborted Langfuse partial/full trace verified; and
+- no publication/remediation without approval.
 
-The expiry must be strictly later than the earlier of the authorization deadline and Runner start plus
-the authorization-bound run timeout. The digest must be computed by the secret-provisioning process
-without exposing the value in shell history, logs, tickets, screenshots, or the Web service.
+## Current live-suite caution
 
-At execution, Runner resolves this reference once, verifies the sealed value against its generation
-metadata, and pins the resulting `Secret` for the campaign. All attempts use one `OpenEmrAdapter` and
-one HTTP client, preserving its connection pool and cookie jar. The lease is checked before every
-attempt and both the credential reference and owned HTTP client are released on success or abort. This
-continuity never bypasses the Policy Gateway: every physical `/chat` request still passes the persisted
-authorization, allowlist, budget, rate, timeout, lease-ownership, and hard-abort checks.
-
-Do not refresh or replace a session inside an active campaign. A target `401` identified as session
-expiry or a local lease expiry is terminal: preserve completed evidence, abort the run, and dispatch no
-more attempts. To rotate safely:
-
-1. Stop new launches and let the old campaign finish, or hard-abort it.
-2. Choose a new generation identifier and create a new immutable target version whose credential
-   reference ends in that generation.
-3. Obtain a fresh SMART session for the reviewed synthetic patient fixture and provision its value,
-   expiry, and digest on Runner only.
-4. Restart/redeploy the private Runner so it loads the new sealed configuration.
-5. Create a new exact-scope authorization request and obtain approval from a different human.
-6. Launch a new campaign only after network-free preflight reports the session can cover its full
-   bounded window.
-
-If the new session expires while approval is pending, do not overwrite the value under the same
-reference. Allocate another generation and repeat the scope and approval flow. The complete target
-readiness and residual-unknown record is in `docs/target/READINESS.md`.
-
-## Exact Clerk configuration by environment
-
-Complete this table with private dashboard evidence during provisioning. Do not commit actual secret
-keys, invitation links, session tokens, or backup codes.
-
-| Setting | Staging | Production |
-|---|---|---|
-| Sign-up mode | Restricted; administrator invitations | Restricted; administrator invitations |
-| Organization | Headshot; staging-specific exact ID | Headshot; production-specific exact ID |
-| Personal Accounts | Disabled | Disabled |
-| User-created Organizations | Disabled | Disabled |
-| MFA session task | Required for all users | Required for all users |
-| Factors | TOTP + backup codes; SMS optional/not sole | TOTP + backup codes; SMS optional/not sole |
-| Roles | Operator, Approver only | Operator, Approver only |
-| Permissions | Exact custom matrix in `docs/security/AUTHENTICATION.md` | Exact same keys; environment-local assignments |
-| Authorized parties | Exact staging Railway HTTPS origin | Exact production Railway HTTPS origin |
-| Frontend API origin | Exact staging Clerk FAPI HTTPS origin | Exact production Clerk FAPI HTTPS origin |
-| JWT verification | Environment's PEM public key, networkless | Environment's PEM public key, networkless |
-| Accepted human token | `session_token` only | `session_token` only |
-| Publishable-key class | `pk_test_…` | `pk_live_…` |
-| Production-isolation guards | Exact production origin + Organization ID supplied for comparison and rejected as staging values | Not needed; production uses its own exact values |
-| Secret key | Absent for request authentication | Absent for request authentication |
-
-Before promotion, use negative tests to prove that swapping either environment's Organization ID,
-publishable key/JWT key pair, or origin causes denial.
+The current Runner fails an entire batch on an exhausted schema-invalid Judge response and cannot
+resume. The current staged configuration authorizes zero retries. Until `PLAN.md` P1–P4 are deployed
+and accepted, a fresh live launch can repeat completed target work and should not be treated as a safe
+recovery mechanism.
 
 ## Rollback
 
-Rollback begins by containing side effects, not by clicking redeploy:
+Rollback is constrained by database compatibility:
 
-1. Stop new scheduler enqueues and campaign launches.
-2. Trigger the hard abort for unsafe active campaigns; otherwise drain active leases with bounded time.
-3. Preserve logs, audit events, migration revision, deployed commit, and queue/checkpoint versions without
-   recording tokens or secrets.
-4. Roll the affected service back through Railway deployment history to a known compatible image.
-5. Do **not** automatically run a destructive Alembic downgrade. The expand/contract schema should remain
-   compatible with the prior image.
-6. If data restoration is necessary, treat PostgreSQL PITR/restore as a separate incident procedure,
-   restore to a new isolated database first, validate, and explicitly rebind services.
-7. Re-run liveness/readiness, authentication denial/allow tests, schema, queue, and private-network smoke
-   tests before resuming schedules.
+1. stop launches/scheduling and quiesce work;
+2. identify the last accepted application artifact and its supported schema range;
+3. prefer rolling application code forward over destructive schema downgrade;
+4. never downgrade while newer immutable rows violate the older schema's assumptions;
+5. restore from PITR only with explicit authority and an understood data-loss window;
+6. deploy one compatible artifact to all services;
+7. verify policy/file parity, schema, health, and heartbeats;
+8. rerun target-free acceptance; and
+9. mint new live authorization—never reuse pre-rollback approval.
 
-If a Clerk configuration change caused the incident, restore the last reviewed exact origins,
-Organization ID, and key pair; revoke affected sessions/users as appropriate. Never fail open or disable
-authentication to recover availability.
+Do not use `git reset --hard`, force pushes, broad variable deletion, or database destructive commands
+as deployment recovery.
 
-## Deployment evidence checklist
+## Evidence to retain
 
-- [ ] Staging and production are separate Railway environments with separate Postgres databases.
-- [ ] Only Web has a public domain; runner, scheduler, and PostgreSQL have none.
-- [ ] Environment-scoped variables and least-privilege database roles are verified.
-- [ ] Staging cannot resolve production target credentials or accept production Clerk configuration.
-- [ ] Every live session reference is versioned, its Runner-only metadata covers the bounded campaign window, and rotation creates a new target version and approval scope.
-- [ ] The environment-specific signed human deployment grant binds the exact release commit/image,
-      environment, public Web origin, service IDs, window, and target packaged head (including the
-      `0018` → `0019` seam).
-- [ ] Quiescence evidence shows zero active `agent_work` leases, running hosted executions, and
-      queued dispatchable authorizations before migration.
-- [ ] The old Runner was scaled to zero; Railway's 30-second Runner overlap was not used during the
-      migration.
-- [ ] The new Runner artifact was deployed first, proven inert at the grant-bound current revision
-      `C`, and activated only after
-      the Web-owned migration reached the one exact packaged head.
-- [ ] Alembic migration and revision evidence is captured without credentials.
-- [ ] The Web service uses `/railway/web.json`; Runner and Scheduler use their respective private config paths.
-- [ ] The built image contains `/app/alembic.ini`, the complete migration tree, and compiled console assets, and contains no Node/npm/source maps.
-- [ ] Clean-database and `0003 -> 0004 -> integrated head` migrations pass inside that exact image.
-- [ ] Web honors Railway `PORT`; Runner and Scheduler expose no HTTP listener.
-- [ ] `/health` and `/ready` behave as documented.
-- [ ] Public shell paths are enumerated; all other human routes deny by default.
-- [ ] Clerk restricted enrollment, Headshot Organization, MFA, roles, permissions, and add-on are verified.
-- [ ] Missing/wrong auth, wrong Organization, missing permission, and same-user approval are denied.
-- [ ] A different authorized approver succeeds without bypassing the Policy Gateway.
-- [ ] The new Web artifact received public traffic only after Runner activation, and a human-provided
-      signed-in production session completed the live console audit.
-- [ ] The console identifies deterministic Red Team selection honestly and does not claim a
-      production q trace or four live hosted roles.
-- [ ] Rollback is exercised in staging and both code and database recovery limits are recorded.
-- [ ] Exact staging/production URLs and actual CI/deployment statuses are added to README only after
-      successful verification.
+For every deployment:
+
+- exact commit and both remote refs;
+- GitHub and GitLab CI URLs/results;
+- Docker image digest;
+- Railway deployment IDs;
+- before/after Alembic head;
+- quiescence evidence;
+- service policy/file hashes;
+- health/readiness/401 results;
+- heartbeat timestamps;
+- target-free acceptance ID;
+- Langfuse remote verification counts;
+- rollback identifier; and
+- the human authorization that permitted the external change.
+
+Never retain raw credentials, session values, real PHI, or unbounded hostile payloads.

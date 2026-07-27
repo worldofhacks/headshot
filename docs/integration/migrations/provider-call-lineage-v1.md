@@ -50,7 +50,8 @@ returns a display identity. The release accepts only these explicitly normalized
 - `together` → `Together`;
 - `google-vertex` (including region variants) → `Google` or `Google Vertex`;
 - `openai` → `OpenAI`; and
-- `atlas-cloud` (including route variants) → `AtlasCloud`.
+- `atlas-cloud` (including route variants) → `AtlasCloud`; and
+- `chutes` → `Chutes`.
 
 Both requested and observed identities remain durable. Revision `0019` permits a mismatched returned
 model to be retained only on a non-successful logical row, so provider substitution is recordable
@@ -102,12 +103,11 @@ that already has a hosted execution with
 
 ## Red Team composition status
 
-The q generator component uses this same context/recorder seam and immutable prompt authority. It is
-not yet composed into the production Runner. Production still performs deterministic,
-authorization-bound corpus selection; calling q inside that loop would mutate an already authorized
-corpus.
+The current governed Runner composes qwen as a real hosted fourth role using this context/recorder
+seam. Its live schema returns a `case_ref` from the exact approved candidates, so its output cannot
+mutate authorized target bytes. The 2026-07-26 staging run durably recorded 12 Red Team logical
+executions and 12 Chutes physical provider calls with attempt lineage.
 
-The missing governed workflow is generation → normalization/content addressing → quarantine →
-human review → fresh corpus authorization → dispatch. Until that workflow is implemented and
-accepted, no deployment or console evidence may claim four live hosted roles. Component tests prove
-the seam, not a production q execution.
+The separate arbitrary q generator remains a candidate-authoring component. Its required workflow is
+generation → normalization/content addressing → quarantine → human review → fresh workload
+authorization → dispatch. It cannot feed generation output directly to a target.
