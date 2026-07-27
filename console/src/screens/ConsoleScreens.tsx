@@ -1507,6 +1507,7 @@ export function ReportsScreen({ client, entityId }: ScreenProps) {
     { pollIntervalMs: LIVE_RESOURCE_POLL_INTERVAL_MS },
   );
   const completionCampaigns = completionReportCampaigns(campaigns.result.data ?? []);
+  const [showAllReportCampaigns, setShowAllReportCampaigns] = useState(false);
   const selectedCampaign = entityId
     ? completionCampaigns.find((campaign) => campaign.run_id === entityId) ?? null
     : completionCampaigns[0] ?? null;
@@ -1526,12 +1527,16 @@ export function ReportsScreen({ client, entityId }: ScreenProps) {
       >
         {(data) => {
           const terminal = completionReportCampaigns(data);
+          const visibleCampaigns = showAllReportCampaigns ? terminal : terminal.slice(0, 2);
           return terminal.length === 0
             ? <StateNotice state="empty" detail="No terminal campaign is available for a completion report." />
             : (
-              <Panel title="Campaign report register" meta="latest terminal campaigns">
+              <Panel
+                title="Campaign report register"
+                meta={showAllReportCampaigns ? "all terminal campaigns" : "latest terminal campaigns"}
+              >
                 <RecordTable
-                  data={terminal}
+                  data={visibleCampaigns}
                   identityKeys={["run_id"]}
                   columns={[
                     { key: "run_id", label: "Campaign", mono: true },
@@ -1545,6 +1550,17 @@ export function ReportsScreen({ client, entityId }: ScreenProps) {
                     if (campaignId) navigateTo({ screen: "reports", entityId: campaignId });
                   }}
                 />
+                {!showAllReportCampaigns && terminal.length > 2 && (
+                  <div className="command-row">
+                    <button
+                      type="button"
+                      className="button"
+                      onClick={() => setShowAllReportCampaigns(true)}
+                    >
+                      Show all historical campaigns
+                    </button>
+                  </div>
+                )}
               </Panel>
             );
         }}
