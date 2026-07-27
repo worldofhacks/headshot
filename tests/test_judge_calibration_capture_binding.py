@@ -19,9 +19,10 @@ import json
 import os
 import subprocess
 import sys
+from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 
 import pytest
 
@@ -35,6 +36,7 @@ from agentforge.agents.hosted import (
 )
 from agentforge.agents.hosted_runtime import hosted_judge_identity
 from agentforge.agents.prompts import load_prompt_registry
+from agentforge.providers.lineage import ProviderTerminalEventV1
 
 ROOT = Path(__file__).resolve().parents[1]
 _SCRIPT = ROOT / "scripts" / "capture_judge_calibration.py"
@@ -228,3 +230,118 @@ def test_capture_cli_requires_the_staged_configuration_and_its_attested_hash() -
     assert completed.returncode != 0
     assert "--hosted-configuration-set" in completed.stderr
     assert "--expected-configuration-sha256" in completed.stderr
+
+
+def test_capture_lifecycle_supplies_complete_in_memory_provider_lineage() -> None:
+    module = _capture_module()
+    configuration = _staged_set()
+    judge = _judge_role(configuration)
+    lifecycle = module._InMemoryExecutionLifecycle(capture_run_id="capture-test")
+    generation_policy = "c" * 64
+
+    execution_id = lifecycle.start(
+        role="judge",
+        parent_execution_id=None,
+        model=judge.model_id,
+        upstream_provider=judge.upstream_provider,
+        configuration_sha256=configuration.configuration_sha256,
+        role_configuration_sha256=judge.configuration_sha256,
+        generation_policy_sha256=generation_policy,
+    )
+    context = lifecycle.provider_context(
+        execution_id=execution_id,
+        prompt_version="judge.v1",
+        prompt_sha256=judge.prompt_sha256,
+    )
+    invocation = lifecycle.begin_physical_attempt(context, 1)
+    event = ProviderTerminalEventV1(
+        invocation_id=invocation.invocation_id,
+        physical_sequence=1,
+        status="timeout",
+        returned_model=None,
+        upstream_provider=None,
+        provider_request_id=None,
+        input_tokens=None,
+        output_tokens=None,
+        reasoning_tokens=None,
+        cost_measurement_state="not_observed",
+        measured_cost_usd=None,
+        error_code="provider_timeout",
+        finished_at=datetime.now(UTC),
+    )
+
+    assert lifecycle.finish_physical_attempt(invocation, event) is event
+    assert lifecycle.summary()["provider_calls_open"] == 0
+
+
+def test_langfuse_capture_attestation_requires_exact_remote_generation_ids() -> None:
+    module = _capture_module()
+
+    class Bridge:
+        def __init__(self) -> None:
+            self.observations: list[object] = []
+            self.client = SimpleNamespace(
+                api=SimpleNamespace(
+                    observations=SimpleNamespace(
+                        get_many=lambda **_kwargs: SimpleNamespace(
+                            data=self.observations,
+                            meta={},
+                        )
+                    )
+                )
+            )
+
+        @staticmethod
+        def configured() -> bool:
+            return True
+
+        @staticmethod
+        def auth_check() -> bool:
+            return True
+
+        @staticmethod
+        def start_agent(**_kwargs: object) -> tuple[object, object, str, str]:
+            return object(), object(), "provider_pending", "observation-id"
+
+        def finish_agent(self, _state: object, **values: object) -> None:
+            self.observations.append(
+                SimpleNamespace(
+                    name="agent.judge.runtime",
+                    end_time="2026-07-27T00:00:00Z",
+                    metadata=values["metadata"],
+                )
+            )
+
+        @staticmethod
+        def flush() -> None:
+            return None
+
+        def _client(self) -> object:
+            return self.client
+
+    bridge = Bridge()
+    verifier = module._LangfuseCaptureVerifier(
+        capture_run_id="capture-test",
+        judge_identity=hosted_judge_identity(_staged_set()).payload(),
+        judge_model_version=_judge_role(_staged_set()).configuration_sha256,
+        bridge=bridge,
+    )
+    samples = [
+        {
+            "label_id": "GT-1",
+            "assessment": {"state": "EXPLOIT_LIKELY"},
+            "provider_request_id": "gen-12345678-abcdefgh",
+            "returned_model": "google/gemini-2.5-pro",
+            "input_tokens": 10,
+            "output_tokens": 5,
+            "reasoning_tokens": 1,
+            "measured_cost_usd": "0.01",
+        }
+    ]
+
+    verifier.record(samples[0])
+    attestation = verifier.verify(samples)
+
+    assert attestation["attestation_kind"] == "langfuse_query_back_verified"
+    assert attestation["matched_generation_count"] == 1
+    assert len(attestation["provider_request_ids_sha256"]) == 64

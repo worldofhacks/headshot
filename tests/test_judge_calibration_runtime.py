@@ -83,6 +83,7 @@ def test_unconfigured_or_unreadable_artifact_is_unavailable_not_authoritative(
         "metrics": None,
         "reason_codes": ["calibration_artifact_unavailable"],
         "model_authoritative": False,
+        "authority_mode": "none",
         "source": "none",
     }
     assert missing.state == "unavailable"
@@ -140,6 +141,25 @@ def test_only_exact_human_enabled_pass_is_model_authoritative() -> None:
     assert status.model_authoritative is True
     assert status.calibration_id == enabled_artifact["calibration_id"]
     assert status.artifact() == enabled_artifact
+    assert status.authority_mode == "full"
+
+
+def test_graded_weaker_provenance_is_positive_only() -> None:
+    gate = CalibrationGate(evaluator=_ExpectedVerdictEvaluator(_slices()))
+    enabled_artifact = gate.human_enable(
+        _passed(),
+        current_identity=_identity(),
+        approver_ref="gt=rule_derived;prov=lineage_consistent;by=operator",
+    )
+
+    status = load_judge_calibration_status(
+        current_identity=_identity(),
+        artifact=enabled_artifact,
+    )
+
+    assert status.state == "enabled"
+    assert status.model_authoritative is True
+    assert status.authority_mode == "positive_only"
 
 
 def test_identity_drift_or_tampered_content_address_is_invalidated() -> None:

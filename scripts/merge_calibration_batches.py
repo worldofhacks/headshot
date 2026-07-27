@@ -26,6 +26,7 @@ batch manifest recording which labels came from which sub-run and what each cost
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from collections.abc import Mapping, Sequence
 from decimal import Decimal
@@ -83,6 +84,13 @@ def main() -> int:
     _write(args.output_dir / "captured-results.json", bundle)
     _write(args.output_dir / "judge-identity.json", bundle["judge_identity"])
     _write(args.output_dir / "batch-manifest.json", manifest)
+    langfuse_attestation = _merge_langfuse_attestations(
+        args.batch_dir,
+        judge_identity=bundle["judge_identity"],
+        sample_count=manifest["sample_count"],
+    )
+    if langfuse_attestation is not None:
+        _write(args.output_dir / "langfuse-attestation.json", langfuse_attestation)
 
     print(f"merged {manifest['batch_count']} batches -> {manifest['sample_count']} samples")
     print(f"  identity   {bundle['judge_identity']['judge_model_version']}")
@@ -185,6 +193,78 @@ def merge(
         ],
     }
     return bundle, manifest
+
+
+def _merge_langfuse_attestations(
+    batch_dirs: Sequence[Path],
+    *,
+    judge_identity: Mapping[str, Any],
+    sample_count: int,
+) -> dict[str, Any] | None:
+    paths = [directory / "langfuse-attestation.json" for directory in batch_dirs]
+    present = [path.exists() for path in paths]
+    if not any(present):
+        return None
+    if not all(present):
+        raise MergeRefused("Langfuse query-back exists for only part of the calibration batches")
+    attestations = [_read_json(path) for path in paths]
+    provider_request_ids: list[str] = []
+    for directory, attestation in zip(batch_dirs, attestations, strict=True):
+        if (
+            not isinstance(attestation, Mapping)
+            or attestation.get("attestation_kind") != "langfuse_query_back_verified"
+            or attestation.get("judge_identity") != dict(judge_identity)
+        ):
+            raise MergeRefused("a batch carries an invalid or identity-drifted Langfuse attestation")
+        bundle = _read_json(directory / "captured-results.json")
+        samples = bundle.get("samples") if isinstance(bundle, Mapping) else None
+        if not isinstance(samples, list):
+            raise MergeRefused("a Langfuse-attested batch carries no captured samples")
+        batch_request_ids = [str(sample.get("provider_request_id") or "") for sample in samples]
+        expected_digest = hashlib.sha256(
+            "\n".join(sorted(batch_request_ids)).encode()
+        ).hexdigest()
+        if (
+            len(set(batch_request_ids)) != len(batch_request_ids)
+            or attestation.get("provider_request_ids_sha256") != expected_digest
+            or attestation.get("matched_generation_count") != len(batch_request_ids)
+        ):
+            raise MergeRefused(
+                "a batch Langfuse attestation differs from its exact provider request id set"
+            )
+        provider_request_ids.extend(batch_request_ids)
+    matched = sum(int(item.get("matched_generation_count") or 0) for item in attestations)
+    if matched != sample_count:
+        raise MergeRefused(
+            f"Langfuse query-back covers {matched} generations but the bundle has {sample_count}"
+        )
+    if len(set(provider_request_ids)) != sample_count:
+        raise MergeRefused("Langfuse-attested provider request ids are not globally unique")
+    return {
+        "schema_version": "1",
+        "attestation_kind": "langfuse_query_back_verified",
+        "judge_identity": dict(judge_identity),
+        "matched_generation_count": matched,
+        "provider_request_ids_sha256": hashlib.sha256(
+            "\n".join(sorted(provider_request_ids)).encode()
+        ).hexdigest(),
+        "batch_count": len(attestations),
+        "batches": [
+            {
+                "capture_run_id": item["capture_run_id"],
+                "trace_id": item["trace_id"],
+                "matched_generation_count": item["matched_generation_count"],
+                "provider_request_ids_sha256": item["provider_request_ids_sha256"],
+                "verified_at": item["verified_at"],
+            }
+            for item in attestations
+        ],
+        "verified_at": max(str(item["verified_at"]) for item in attestations),
+        "disclosure": (
+            "Every calibration generation was remotely queryable in Langfuse. This verifies the "
+            "tracing projection, not an independent OpenRouter usage export."
+        ),
+    }
 
 
 def _load_batch(directory: Path) -> dict[str, Any]:

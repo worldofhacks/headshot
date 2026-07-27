@@ -1,0 +1,9 @@
+{
+  "criteria_version": "independent-judge-assessment-v2",
+  "implementation_version": "hosted-role-runtime-v2",
+  "judge_model": "google/gemini-2.5-pro",
+  "judge_model_version": "ba659f652ad46da14975268804407dd29a6943310e439ffae0a36a10fa15278a",
+  "judge_provider": "openrouter:google-vertex",
+  "red_team_model": "qwen/qwen3.5-397b-a17b",
+  "red_team_provider": "openrouter:chutes"
+}

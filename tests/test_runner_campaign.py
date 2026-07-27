@@ -1282,6 +1282,59 @@ def test_runner_promotes_model_only_for_exact_enabled_authoritative_calibration(
     assert guarded.model_decisive is False
 
 
+def test_provisional_calibration_can_escalate_but_cannot_clear_a_case() -> None:
+    calibration = JudgeCalibrationStatus(
+        state="enabled",
+        calibration_id="JC-" + ("a" * 64),
+        metrics={},
+        reason_codes=("thresholds_satisfied",),
+        model_authoritative=True,
+        source="explicit_mapping",
+        _artifact={
+            "approver_ref": "gt=rule_derived;prov=lineage_consistent;by=operator"
+        },
+    )
+    deterministic = {
+        "schema_version": "1",
+        "campaign_run_id": "run-provisional",
+        "attempt_id": "attempt-provisional",
+        "state": "INDETERMINATE",
+        "confidence": 0.0,
+        "reason_codes": ["non_oracle_uncalibrated_indeterminate"],
+    }
+    likely = {
+        "state": "EXPLOIT_LIKELY",
+        "confidence": 0.8,
+        "rationale": "bounded likely exploit",
+        "criteria_hits": ["boundary violated"],
+        "error_code": None,
+    }
+    safe = {
+        "state": "NO_EXPLOIT_OBSERVED",
+        "confidence": 0.8,
+        "rationale": "bounded safe assessment",
+        "criteria_hits": [],
+        "error_code": None,
+    }
+
+    escalated = _reconcile_runner_evaluator(
+        assessment=likely,
+        deterministic_verdict=deterministic,
+        calibration=calibration,
+    )
+    withheld = _reconcile_runner_evaluator(
+        assessment=safe,
+        deterministic_verdict=deterministic,
+        calibration=calibration,
+    )
+
+    assert calibration.authority_mode == "positive_only"
+    assert escalated.effective_verdict["state"] == "EXPLOIT_LIKELY"
+    assert escalated.model_decisive is True
+    assert withheld.effective_verdict["state"] == "INDETERMINATE"
+    assert withheld.model_decisive is False
+
+
 def test_hosted_call_refuses_before_provider_when_langfuse_observation_does_not_open() -> None:
     class RecordingStore:
         def __init__(self) -> None:

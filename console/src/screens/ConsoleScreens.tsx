@@ -1328,6 +1328,14 @@ export const campaignSecurityConclusion = (
 };
 
 const judgeCalibrationLabel = (activity: AgentActivityReadModel[]): string => {
+  if (
+    activity.some(
+      (row) => row.agent_role === "judge"
+        && row.detail.calibration_authority_mode === "positive_only",
+    )
+  ) {
+    return "PROVISIONAL — POSITIVE-ONLY";
+  }
   const states = new Set(
     activity
       .filter((row) => row.agent_role === "judge")
