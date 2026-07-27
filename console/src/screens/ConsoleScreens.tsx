@@ -2164,9 +2164,14 @@ function FullCampaignSuite({
     >
       <MetricStrip label="Governed suite" values={[
         {
+          label: "Suite cases",
+          value: count(suite.case_count),
+          note: `${count(suite.physical_request_count)} physical requests`,
+        },
+        {
           label: "Batch scopes",
           value: count(suite.batches.length),
-          note: "server-owned authorization units",
+          note: suite.batches.map((batch) => count(batch.case_count)).join(" · ") + " cases",
         },
         {
           label: "Categories",
@@ -2193,7 +2198,10 @@ function FullCampaignSuite({
             <span>{view.batch.ordinal}</span>
             <div>
               <strong>Batch {view.batch.ordinal}</strong>
-              <small>Authorization scope · {view.state}</small>
+              <small>
+                {count(view.batch.case_count)} cases ·{" "}
+                {count(view.batch.physical_request_count)} requests · {view.state}
+              </small>
             </div>
           </div>
         ))}

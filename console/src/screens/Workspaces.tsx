@@ -1,4 +1,4 @@
-import { useEffect, type ComponentProps } from "react";
+import { useEffect, useState, type ComponentProps } from "react";
 
 import type { ApiClient } from "../api/client";
 import type { Principal } from "../api/contracts";
@@ -15,6 +15,7 @@ import {
   FindingsScreen,
   LegacyTargetsScreen,
   ReportsScreen,
+  TargetsScreen,
 } from "./ConsoleScreens";
 import { CostsScreen, TracesScreen } from "./ObservabilityScreens";
 import { RunOperationsScreen } from "./RunOperationsScreen";
@@ -27,6 +28,27 @@ interface SharedWorkspaceProps {
 }
 
 export type RunsView = "operations" | "targets";
+type TargetCampaignMode = "governed-suite" | "quick-scan";
+
+function TargetCampaignWorkspace(props: SharedWorkspaceProps) {
+  const [mode, setMode] = useState<TargetCampaignMode>("governed-suite");
+  return (
+    <div className="screen-stack">
+      <WorkspaceTabs
+        label="Target campaign mode"
+        active={mode}
+        onChange={setMode}
+        tabs={[
+          { id: "governed-suite", label: "Governed 100-case suite" },
+          { id: "quick-scan", label: "Quick scan · 14 cases" },
+        ]}
+      />
+      {mode === "governed-suite"
+        ? <TargetsScreen {...props} campaignId={null} />
+        : <LegacyTargetsScreen {...props} />}
+    </div>
+  );
+}
 
 function ResolvedLegacyOperations({
   evidence,
@@ -164,7 +186,7 @@ export function RunsWorkspace({
             onCampaignSelect={onCampaignSelect}
           />
             )
-        : <LegacyTargetsScreen {...props} />}
+        : <TargetCampaignWorkspace {...props} />}
     </div>
   );
 }
