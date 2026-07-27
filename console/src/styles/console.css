@@ -649,3 +649,20 @@
   }
   .mobile-more-menu button { width: 100%; min-height: 40px; padding: 0 10px; text-align: left; font-size: var(--fs-xs); }
 }
+
+/* The evaluator's own argument for a verdict. Given visual weight because a confidence-0.90
+   EXPLOIT_LIKELY is a security claim and its justification is what an operator judges; as one
+   row of a key/value grid it read as metadata and was missed. */
+.judge-rationale {
+  border-left: 3px solid var(--accent, #6ea8fe);
+  padding: 0.5rem 0 0.5rem 0.75rem;
+  margin: 0.25rem 0 0.75rem;
+}
+
+.judge-rationale-verdict {
+  font-weight: 600;
+  margin: 0 0 0.35rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  font-size: 0.85rem;
+}

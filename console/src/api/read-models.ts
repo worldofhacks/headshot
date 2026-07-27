@@ -986,6 +986,7 @@ const decodeFindingVerification = (value: unknown): FindingVerificationReadModel
       "rationale",
       "rationale_availability",
       "rationale_detail",
+      "criteria_hits",
       "error_code",
     ], "Judge basis");
     string(judge, "state", "Judge basis");
@@ -1003,8 +1004,15 @@ const decodeFindingVerification = (value: unknown): FindingVerificationReadModel
       "Judge basis",
     );
     nullableString(judge, "rationale", "Judge basis");
-    literal(judge, "rationale_availability", ["unavailable"], "Judge basis");
+    literal(judge, "rationale_availability", ["recorded", "unavailable"], "Judge basis");
     string(judge, "rationale_detail", "Judge basis");
+    stringArray(judge, "criteria_hits", "Judge basis");
+    // A rationale and its availability must agree. "recorded" with nothing to show, or prose
+    // presented as unavailable, would both misstate whether the evaluator actually explained
+    // itself — the exact question this field exists to answer.
+    if ((judge.rationale !== null) !== (judge.rationale_availability === "recorded")) {
+      invalid("Judge basis");
+    }
     nullableString(judge, "error_code", "Judge basis");
   }
   const regression = nullableObject(result, "regression", name);

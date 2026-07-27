@@ -710,6 +710,15 @@ def _validated_verdict(row: Mapping[str, Any]) -> dict[str, Any] | None:
     confirmation_source = row.get("verdict_confirmation_source")
     if confirmation_source is not None:
         verdict["confirmation_source"] = confirmation_source
+    # Recorded by migration 0029 and carried through the contract, so the served verdict states
+    # the evaluator's own argument instead of only a typed reason code. Absent on verdicts written
+    # before 0029 and on every oracle/canary/human confirmation, where the signal is the evidence.
+    rationale = row.get("verdict_rationale")
+    if isinstance(rationale, str) and rationale:
+        verdict["rationale"] = rationale
+    criteria_hits = row.get("verdict_criteria_hits")
+    if isinstance(criteria_hits, list) and criteria_hits:
+        verdict["criteria_hits"] = list(criteria_hits)
     error_code = row.get("verdict_error_code")
     if error_code is not None:
         verdict["error_code"] = error_code
@@ -1310,11 +1319,21 @@ class PostgresApiBackend(ApiBackend):
                 "confirmation_source": verdict.get("confirmation_source"),
                 "oracle_refs": safe_oracle_refs,
                 "canary_refs": safe_canary_refs,
-                "rationale": None,
-                "rationale_availability": "unavailable",
-                "rationale_detail": (
-                    "This verdict contract stores typed reason codes, not free-form Judge prose."
+                # The evaluator's own argument for THIS verdict, recorded by migration 0029.
+                # Present only where the model is the authority: an oracle, canary or human
+                # confirmation is evidenced by the signal itself, and 0029 refuses to pair prose
+                # with it. Verdicts written before 0029 stay unavailable rather than acquiring an
+                # invented explanation.
+                "rationale": verdict.get("rationale"),
+                "rationale_availability": (
+                    "recorded" if verdict.get("rationale") else "unavailable"
                 ),
+                "rationale_detail": (
+                    "Stated by the calibrated model evaluator; advisory, never a confirmation."
+                    if verdict.get("rationale")
+                    else "No model rationale was recorded for this verdict."
+                ),
+                "criteria_hits": list(verdict.get("criteria_hits") or ()),
                 "error_code": verdict.get("error_code"),
             },
             "report_id": report_id if isinstance(report_id, str) else None,
@@ -3794,6 +3813,8 @@ class PostgresApiBackend(ApiBackend):
                         "v.confidence AS verdict_confidence, "
                         "v.reason_codes AS verdict_reason_codes, "
                         "v.confirmation_source AS verdict_confirmation_source, "
+                        "v.rationale AS verdict_rationale, "
+                        "v.criteria_hits AS verdict_criteria_hits, "
                         "v.error_code AS verdict_error_code "
                         "FROM attempt_result ar "
                         "LEFT JOIN verdict v ON v.organization_id = ar.organization_id "
@@ -3874,6 +3895,8 @@ class PostgresApiBackend(ApiBackend):
                         "v.state AS verdict_state, v.confidence AS verdict_confidence, "
                         "v.reason_codes AS verdict_reason_codes, "
                         "v.confirmation_source AS verdict_confirmation_source, "
+                        "v.rationale AS verdict_rationale, "
+                        "v.criteria_hits AS verdict_criteria_hits, "
                         "v.error_code AS verdict_error_code, "
                         "vr.report_id AS vuln_report_id, vr.contract_payload AS report_payload, "
                         "rd.contract_payload AS regression_payload, "
@@ -4085,6 +4108,8 @@ class PostgresApiBackend(ApiBackend):
                         "v.state AS verdict_state, v.confidence AS verdict_confidence, "
                         "v.reason_codes AS verdict_reason_codes, "
                         "v.confirmation_source AS verdict_confirmation_source, "
+                        "v.rationale AS verdict_rationale, "
+                        "v.criteria_hits AS verdict_criteria_hits, "
                         "v.error_code AS verdict_error_code, "
                         "vr.report_id AS vuln_report_id, vr.contract_payload AS report_payload, "
                         "vr.created_at AS report_created_at, "
@@ -5255,6 +5280,8 @@ class PostgresApiBackend(ApiBackend):
                                 "v.confidence AS verdict_confidence, "
                                 "v.reason_codes AS verdict_reason_codes, "
                                 "v.confirmation_source AS verdict_confirmation_source, "
+                                "v.rationale AS verdict_rationale, "
+                                "v.criteria_hits AS verdict_criteria_hits, "
                                 "v.error_code AS verdict_error_code, "
                                 "vr.report_id AS vuln_report_id, "
                                 "vr.contract_payload AS report_payload, "

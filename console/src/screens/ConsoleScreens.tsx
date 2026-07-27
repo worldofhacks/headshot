@@ -633,12 +633,34 @@ function VerificationChain({
       {judge && (
         <div>
           <p className="field-label">Independent Judge rationale</p>
+          {/* Lead with the argument, not the label. A verdict of EXPLOIT_LIKELY at confidence
+              0.90 is a security claim, and the reason the evaluator gave for it is the single
+              thing an operator needs in order to agree or disagree. Rendered above the key/value
+              grid rather than as one row inside it, because in the grid it read as metadata and
+              was routinely missed. Advisory framing is deliberate and stated every time: this is
+              a model's opinion, never a confirmation. */}
+          {judge.rationale && (
+            <div className="judge-rationale">
+              <p className="judge-rationale-verdict mono">
+                {judge.state}
+                {judge.confidence !== null && ` · confidence ${judge.confidence.toFixed(2)}`}
+                {judge.criteria_hits && judge.criteria_hits.length > 0
+                  && ` · ${judge.criteria_hits.join(", ")}`}
+              </p>
+              <AdversarialText>{judge.rationale}</AdversarialText>
+              <p className="data-note">{judge.rationale_detail}</p>
+            </div>
+          )}
+          {!judge.rationale && (
+            <p className="data-note">{judge.rationale_detail}</p>
+          )}
           <RecordDetails
             data={judge}
             preferredKeys={[
               "state",
               "confidence",
               "confirmation_source",
+              "criteria_hits",
               "oracle_refs",
               "canary_refs",
               "reason_codes",

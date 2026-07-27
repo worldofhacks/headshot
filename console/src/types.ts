@@ -233,8 +233,9 @@ export interface JudgeBasisReadModel extends JsonRecord {
   oracle_refs: string[];
   canary_refs: string[];
   rationale: string | null;
-  rationale_availability: "unavailable";
+  rationale_availability: "recorded" | "unavailable";
   rationale_detail: string;
+  criteria_hits: string[];
   error_code: string | null;
 }
 

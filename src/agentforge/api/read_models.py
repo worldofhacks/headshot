@@ -583,8 +583,9 @@ class JudgeBasisReadModel(_ReadModel):
     oracle_refs: tuple[str, ...]
     canary_refs: tuple[str, ...]
     rationale: str | None = None
-    rationale_availability: Literal["unavailable"]
+    rationale_availability: Literal["recorded", "unavailable"]
     rationale_detail: str
+    criteria_hits: tuple[str, ...] = ()
     error_code: str | None = None
 
 

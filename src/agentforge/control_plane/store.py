@@ -5698,10 +5698,12 @@ class ControlPlaneStore:
                     connection.execute(
                         text(
                             "INSERT INTO verdict (state, confidence, campaign_run_id, attempt_id, "
-                            "organization_id, reason_codes, confirmation_source, error_code) "
+                            "organization_id, reason_codes, confirmation_source, error_code, "
+                            "rationale, criteria_hits) "
                             "VALUES "
                             "(CAST(:state AS verdict_state), :confidence, :run_id, :attempt_id, "
-                            ":org, CAST(:reasons AS jsonb), :source, :error) RETURNING id"
+                            ":org, CAST(:reasons AS jsonb), :source, :error, :rationale, "
+                            "CAST(:criteria AS jsonb)) RETURNING id"
                         ),
                         {
                             "state": state,
@@ -5712,6 +5714,15 @@ class ControlPlaneStore:
                             "reasons": canonical_json(list(verdict.get("reason_codes", []))),
                             "source": verdict.get("confirmation_source"),
                             "error": verdict.get("error_code"),
+                            # Absent on any verdict the model did not author, and NULL is the
+                            # honest representation of that -- migration 0029 refuses a rationale
+                            # paired with an oracle/canary/human confirmation source.
+                            "rationale": verdict.get("rationale"),
+                            "criteria": (
+                                canonical_json(list(verdict["criteria_hits"]))
+                                if verdict.get("criteria_hits")
+                                else None
+                            ),
                         },
                     )
                     .mappings()

@@ -36,6 +36,7 @@
       }
     },
     "confirmation_source": { "enum": ["oracle", "canary", "calibrated_model", "human"] },
+    "rationale": { "type": "string", "minLength": 1, "maxLength": 4000 },
     "criteria_hits": { "type": "array", "items": { "type": "string" } },
     "owasp": { "type": "array", "items": { "$ref": "#/$defs/owasp_tag" } },
     "error_code": { "type": ["string", "null"] }

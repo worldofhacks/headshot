@@ -144,9 +144,12 @@ const verification = {
     confirmation_source: "canary",
     oracle_refs: ["oracle://synthetic/case-1"],
     canary_refs: ["canary://synthetic/case-1"],
+    // A canary-confirmed verdict carries no model prose: the confirming signal is the canary
+    // itself. Migration 0029 refuses the pairing at the database level.
     rationale: null,
     rationale_availability: "unavailable",
     rationale_detail: "This contract stores typed reason codes.",
+    criteria_hits: [],
     error_code: null,
   },
   report_id: "report-1",

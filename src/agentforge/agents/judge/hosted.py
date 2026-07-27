@@ -383,6 +383,12 @@ def _model_verdict(
     }
     if state in {"EXPLOIT_LIKELY", "NO_EXPLOIT_OBSERVED"}:
         verdict["confirmation_source"] = "calibrated_model"
+        # Carry the evaluator's own stated reason with the decision it produced. The output schema
+        # already REQUIRES a rationale, so this invents nothing -- it stops discarding what the
+        # model was made to say. Attached only where the authority is the model itself: on an
+        # oracle, canary or human verdict the confirming signal is the evidence, not prose, and
+        # migration 0029 refuses the pairing at the schema level.
+        verdict["rationale"] = assessment["rationale"]
     if assessment["criteria_hits"]:
         verdict["criteria_hits"] = list(assessment["criteria_hits"])
     if state == "ERROR":
