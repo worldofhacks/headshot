@@ -37,7 +37,7 @@ import argparse
 import dataclasses
 import json
 import sys
-from decimal import Decimal
+from decimal import ROUND_CEILING, Decimal
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
@@ -56,6 +56,12 @@ from agentforge.campaign.corpus import (  # noqa: E402
     LIVE_100_BATCH_IDS,
     resolve_workload,
 )
+
+
+def _ceil_cents(value: Decimal) -> Decimal:
+    """Round a worst case UP to the cent. Rounding down would under-authorize the run."""
+
+    return value.quantize(Decimal("0.01"), rounding=ROUND_CEILING)
 
 
 class DerivationRefused(Exception):
@@ -142,6 +148,11 @@ def derive(base: HostedConfigurationSet, workload_id: str) -> dict:
         ) / Decimal(1_000_000)
         worst = (per_call * physical).quantize(Decimal("0.000001"))
 
+        # The configured cap must COVER the worst case, not merely inherit whatever the base
+        # happened to allow: inheriting is how a retry silently outgrows its authority. Round up
+        # to the cent, then refuse below if that exceeds the reviewed platform ceiling.
+        role_cap = max(_ceil_cents(worst), base_role.limits.max_usd)
+
         # Everything except the limits is copied verbatim: model, upstream, prompt hash, opaque
         # credential reference, prices. The derived set must differ from its base only where the
         # retry forces it to.
@@ -154,6 +165,7 @@ def derive(base: HostedConfigurationSet, workload_id: str) -> dict:
                     max_input_tokens=tokens["input"],
                     max_output_tokens=tokens["output"],
                     max_reasoning_tokens=tokens["reasoning"],
+                    max_usd=role_cap,
                     max_retries=retries,
                 ),
             )
@@ -166,7 +178,8 @@ def derive(base: HostedConfigurationSet, workload_id: str) -> dict:
             "max_output_tokens": tokens["output"],
             "max_reasoning_tokens": tokens["reasoning"],
             "worst_case_usd": str(worst),
-            "role_spend_cap": str(base_role.limits.max_usd),
+            "role_spend_cap": str(role_cap),
+            "base_role_spend_cap": str(base_role.limits.max_usd),
             "platform_role_spend_ceiling": str(HOSTED_ROLE_MAX_MEASURED_USD[role_name]),
             "price_input": str(prices.input_usd_per_million_tokens),
             "price_output": str(prices.output_usd_per_million_tokens),
@@ -180,6 +193,7 @@ def derive(base: HostedConfigurationSet, workload_id: str) -> dict:
         totals["usd"] += worst
 
     global_worst = totals["usd"].quantize(Decimal("0.000001"))
+    global_cap = max(_ceil_cents(global_worst), base.global_limits.max_usd)
     derived = dataclasses.replace(
         base,
         roles=tuple(derived_roles),
@@ -189,6 +203,7 @@ def derive(base: HostedConfigurationSet, workload_id: str) -> dict:
             max_input_tokens=totals["input"],
             max_output_tokens=totals["output"],
             max_reasoning_tokens=totals["reasoning"],
+            max_usd=global_cap,
             max_retries=max(_RETRY_ROLES.values(), default=0),
         ),
     )
@@ -207,7 +222,8 @@ def derive(base: HostedConfigurationSet, workload_id: str) -> dict:
             "max_output_tokens": totals["output"],
             "max_reasoning_tokens": totals["reasoning"],
             "worst_case_usd": str(global_worst),
-            "configured_spend_cap": str(base.global_limits.max_usd),
+            "configured_spend_cap": str(global_cap),
+            "base_configured_spend_cap": str(base.global_limits.max_usd),
             "platform_spend_ceiling": str(HOSTED_MAX_MEASURED_USD),
         },
         "platform_ceilings": {

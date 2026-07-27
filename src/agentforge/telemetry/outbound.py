@@ -17,6 +17,7 @@ import os
 import re
 import time
 import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import urlsplit
@@ -61,6 +62,48 @@ _REQUEST_METADATA_ALLOWLIST = frozenset(
         "execution_profile",
     }
 )
+
+
+def _physical_attempt_metadata(record: Mapping[str, Any]) -> dict[str, Any]:
+    """Project ONE durable provider_call_events row to safe span metadata.
+
+    Every field is a measurement or a bounded identifier the platform generated. Numbers are
+    stringified so Langfuse treats them as metadata rather than billable usage — the aggregate
+    runtime generation remains the single place cost is counted.
+    """
+
+    def text_of(value: object) -> str | None:
+        return None if value is None else str(value)
+
+    return {
+        "attempt.physical_sequence": text_of(record["physical_sequence"]),
+        "attempt.status": text_of(record["status"]),
+        "attempt.returned_model": text_of(record["returned_model"]),
+        "attempt.upstream_provider": text_of(record["upstream_provider"]),
+        "attempt.provider_request_id": text_of(record["provider_request_id"]),
+        "attempt.input_tokens": text_of(record["input_tokens"]),
+        "attempt.output_tokens": text_of(record["output_tokens"]),
+        "attempt.reasoning_tokens": text_of(record["reasoning_tokens"]),
+        "attempt.measured_cost_usd": text_of(record["measured_cost_usd"]),
+        "attempt.cost_measurement_state": text_of(record["cost_measurement_state"]),
+        "attempt.duration_ms": text_of(record["duration_ms"]),
+        "attempt.error_code": text_of(record["error_code"]),
+    }
+
+
+def _labelled_attempt_id(attempt_id: object) -> str | None:
+    """Label an attempt id so the secret heuristic cannot mistake it for a provider key.
+
+    ``looks_like_provider_key`` treats ANY lowercase-hex string of 40+ characters as a
+    Together-style key. A 64-hex attempt id matches that shape exactly, so it was being exported
+    as ``***REDACTED***`` and Langfuse could only correlate by campaign. Prefixing makes the value
+    no longer bare hex, which both defeats the false positive and says what the value is.
+    """
+
+    if attempt_id is None:
+        return None
+    text_value = str(attempt_id)
+    return text_value if text_value.startswith("attempt:") else f"attempt:{text_value}"
 
 
 def _sanitize_text(value: str, redactions: tuple[str, ...]) -> str:
@@ -242,6 +285,47 @@ class _LangfuseBridge:
                 agent.end()
             raise
         return agent, generation, cost_source, str(agent.id)
+
+    def record_physical_attempts(
+        self,
+        state: tuple[Any, Any, str, str] | None,
+        attempts: list[dict[str, Any]],
+    ) -> int:
+        """Emit one metadata-only child span per already-recorded physical provider call.
+
+        Parented beneath the agent's runtime generation, so a reader sees the logical call and
+        the physical attempts that actually served it — including a retry, which the aggregate
+        generation alone cannot show.
+
+        These spans deliberately carry NO usage or cost fields. Cost stays on the aggregate
+        runtime generation; attaching it here too would make Langfuse count the same spend twice.
+        The measured values are still visible, as plain metadata strings.
+
+        Metadata only: role, sequence, model, provider, status, latency, tokens and cost. No
+        prompt, no response, no credential, no target payload.
+        """
+
+        if state is None or not attempts:
+            return 0
+        _agent, generation, _cost_source, _observation_id = state
+        emitted = 0
+        for attempt in attempts:
+            try:
+                span = generation.start_observation(
+                    as_type="span",
+                    name=f"provider.attempt.{attempt.get('attempt.physical_sequence', '?')}",
+                    metadata=attempt,
+                )
+                span.end()
+                emitted += 1
+            except Exception as exc:
+                # A telemetry projection must never break the campaign that produced it — but a
+                # bare warning hid a KeyError here during development, so name the type. Type
+                # only: the message could carry provider-controlled text.
+                _logger.warning(
+                    "physical attempt span could not be projected: %s", type(exc).__name__
+                )
+        return emitted
 
     def finish_agent(
         self,
@@ -718,7 +802,9 @@ class OutboundHttpTelemetry:
                 "agent.acceptance_run_id": (
                     str(row["campaign_run_id"]) if row["run_kind"] == "agent_acceptance" else None
                 ),
-                "attempt_id": (str(row["attempt_id"]) if row["attempt_id"] is not None else None),
+                # Labelled so the provider-key heuristic cannot mistake a 64-hex id for a
+                # Together-style key and redact it. PostgreSQL keeps the raw value.
+                "attempt_id": _labelled_attempt_id(row["attempt_id"]),
                 "parent_execution_id": (
                     str(row["parent_execution_id"])
                     if row["parent_execution_id"] is not None
@@ -807,7 +893,9 @@ class OutboundHttpTelemetry:
         handle = self._agent_handles.get(execution_id)
         if handle is None:
             return
-        handle.metadata["attempt_id"] = attempt_id
+        # Langfuse-facing metadata is labelled; the in-process correlation map keeps the raw id
+        # because it is compared against durable PostgreSQL values.
+        handle.metadata["attempt_id"] = _labelled_attempt_id(attempt_id)
         if execution_id in self._agent_observation_ids:
             self._agent_attempt_ids[execution_id] = attempt_id
 
@@ -873,6 +961,24 @@ class OutboundHttpTelemetry:
                     .mappings()
                     .one()
                 )
+                # Already-durable physical attempts for this logical execution. Read here so the
+                # projection needs no new table, worker or outbox — it reuses the connection the
+                # completion read already opened.
+                physical_attempts = [
+                    _physical_attempt_metadata(record)
+                    for record in connection.execute(
+                        text(
+                            "SELECT physical_sequence, status, returned_model, "
+                            "upstream_provider, provider_request_id, input_tokens, "
+                            "output_tokens, reasoning_tokens, measured_cost_usd, "
+                            "cost_measurement_state, duration_ms, error_code "
+                            "FROM provider_call_events "
+                            "WHERE logical_execution_id = :execution_id "
+                            "ORDER BY physical_sequence"
+                        ),
+                        {"execution_id": execution_id},
+                    ).mappings()
+                ]
         except Exception:
             _logger.warning("agent telemetry completion persistence read failed")
             return False
@@ -918,6 +1024,7 @@ class OutboundHttpTelemetry:
             "error_code": pending.error_code,
         }
         try:
+            self.langfuse.record_physical_attempts(handle.langfuse_state, physical_attempts)
             self.langfuse.finish_agent(
                 handle.langfuse_state,
                 output={"sha256": str(row["output_sha256"])},
