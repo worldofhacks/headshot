@@ -24,6 +24,7 @@ from agentforge.control_plane import ControlPlaneStore
 from agentforge.correlation import campaign_trace_id
 from agentforge.policy.recorder import ExecutionRecorder
 from agentforge.security_tools.repository import SecurityToolEvidenceRepository
+from agentforge.target.catalog import CatalogEntry, TransportPolicy, TrustedTargetCatalog
 from agentforge.target.spec import SafetyCaps, TargetLifecycle
 from agentforge.telemetry import OutboundHttpTelemetry
 from agentforge.web import WebSecurityConfig, create_web_app
@@ -1736,6 +1737,98 @@ def test_target_projection_is_org_scoped_and_never_returns_credential_reference(
     assert body["data"][0]["credential_configured"] is True
     assert body["data"][0]["allowed_lifecycle_transitions"] == ["disabled"]
     assert "secretref://" not in response.text
+
+
+def test_target_registry_lists_only_exact_credentialed_live_catalog_versions(
+    migrated_db: Engine,
+) -> None:
+    _clean(migrated_db)
+    manager = _principal(LAUNCHER_ID, "org:console:read", "org:targets:manage")
+    _seed_ready_target(migrated_db, manager)
+    _seed_second_ready_target(migrated_db, manager)
+    source = PostgresApiBackend(migrated_db, environment="staging")
+    target = source._target(_target_payload())
+    surface = source._surface(target.target_id, _surface_payload())
+    catalog = TrustedTargetCatalog(
+        (
+            CatalogEntry(
+                target=target,
+                surfaces=(surface,),
+                transport_policy=TransportPolicy(
+                    allowed_methods=("POST",),
+                    write_upload_allowed=False,
+                    allowed_write_resource_refs=(),
+                    redirect_policy="deny",
+                    response_size_limit_bytes=262_144,
+                    allowed_content_types=("application/json",),
+                    request_timeout_seconds=120.0,
+                    tls_required=True,
+                    allow_private_destination=False,
+                ),
+                ownership_authorization_ref="authorization://synthetic/api-fixture",
+            ),
+        )
+    )
+
+    result = PostgresApiBackend(
+        migrated_db,
+        environment="staging",
+        target_catalog=catalog,
+    ).read("targets", manager)
+
+    assert result.state == "ready"
+    assert [(item["target_id"], item["version"]) for item in result.data] == [
+        ("copilot-api", "1.0.0")
+    ]
+    with migrated_db.connect() as connection:
+        assert connection.execute(text("SELECT count(*) FROM target_definitions")).scalar_one() == 2
+
+
+def test_approval_expires_when_remaining_window_cannot_cover_full_run(
+    migrated_db: Engine,
+) -> None:
+    _clean(migrated_db)
+    launcher = _principal(
+        LAUNCHER_ID,
+        "org:console:read",
+        "org:campaign:launch",
+        "org:targets:manage",
+    )
+    _seed_ready_target(migrated_db, launcher)
+    store = ControlPlaneStore(migrated_db, environment="staging")
+    scope = store.build_scope(
+        principal=launcher,
+        target_id="copilot-api",
+        target_version="1.0.0",
+        surface_id="chat-api",
+        surface_version="1.0.0",
+        corpus_hash="a" * 64,
+        caps=SafetyCaps(
+            budget_usd=2.0,
+            max_attempts_per_run=3,
+            target_requests_per_second=0.5,
+            run_timeout_seconds=120.0,
+        ),
+        run_nonce="launch-window-regression-0001",
+    )
+    request = store.request_campaign_authorization(
+        principal=launcher,
+        scope=scope,
+        expires_at=datetime.datetime.now(datetime.UTC) + datetime.timedelta(seconds=30),
+        idempotency_key="launch-window-regression-0001",
+    )
+
+    result = PostgresApiBackend(migrated_db, environment="staging").read(
+        "approvals",
+        launcher,
+    )
+    projected = next(item for item in result.data if item["request_id"] == request.request_id)
+
+    assert projected["expired"] is True
+    assert projected["consumed"] is False
+    assert datetime.datetime.fromisoformat(projected["expires_at"]) > datetime.datetime.now(
+        datetime.UTC
+    )
 
 
 def test_browser_registers_only_an_exact_server_owned_catalog_bundle(

@@ -4910,7 +4910,9 @@ class PostgresApiBackend(ApiBackend):
                         "AS target_base_url, d.decision, d.approver_user_id, "
                         "coalesce(d.self_approval_override, false) AS self_approval_override, "
                         "d.created_at AS decided_at, "
-                        "(q.expires_at <= clock_timestamp()) AS expired, "
+                        "(q.expires_at <= clock_timestamp() + make_interval(secs => "
+                        "(q.scope_payload->'caps'->>'run_timeout_seconds')::double precision)) "
+                        "AS expired, "
                         "EXISTS (SELECT 1 FROM campaign_runs r "
                         "WHERE r.organization_id = q.organization_id "
                         "AND r.authorization_request_id = q.request_id) AS consumed "
@@ -5029,6 +5031,24 @@ class PostgresApiBackend(ApiBackend):
                         + " ORDER BY d.target_id, d.created_at DESC",
                         parameters,
                     )
+                    if resource == "targets":
+                        # The immutable tables retain superseded versions for campaign/evidence
+                        # lineage. The active registry, however, is the exact credentialed live
+                        # catalog composed into this Web release—not every historical definition
+                        # ever persisted, nor the non-routable offline cassette.
+                        live_catalog_targets = {
+                            (entry.target.target_id, entry.target.version)
+                            for entry in self._target_catalog.entries
+                            if entry.target.credential_ref is not None
+                        }
+                        if live_catalog_targets:
+                            rows = [
+                                row
+                                for row in rows
+                                if (str(row["target_id"]), str(row["version"]))
+                                in live_catalog_targets
+                                and row.get("lifecycle") == TargetLifecycle.READY.value
+                            ]
                     hosted_configuration = (
                         self._latest_hosted_configuration(
                             connection,

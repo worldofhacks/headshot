@@ -23,7 +23,7 @@ const unavailableMessage = (reasonCode: string | undefined): string => {
 
 const failureMessage = (error: unknown): string => {
   if (error instanceof ApiClientError && error.status === 403) {
-    return "Backend denied this identity or exact scope (403). Refresh the session and verify that the original Operator is launching a separately approved request.";
+    return "Backend denied this launch (403). Refresh first. If the approval was already used or no longer covers the full run, request a fresh approval; otherwise return as the original Operator.";
   }
   if (error instanceof ApiClientError && error.status === 401) {
     return "Authentication expired. Sign in again before retrying.";

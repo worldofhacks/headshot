@@ -90,7 +90,7 @@ describe("non-optimistic command controls", () => {
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Launch approved campaign" }));
-    expect(await screen.findByText(/Backend denied this identity or exact scope \(403\)/))
+    expect(await screen.findByText(/Backend denied this launch \(403\)/))
       .toBeTruthy();
   });
 });

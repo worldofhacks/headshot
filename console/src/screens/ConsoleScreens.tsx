@@ -1174,7 +1174,7 @@ export function ApprovalsScreen({ client, principal, entityId }: ScreenProps) {
             <StateNotice
               state="unavailable"
               reason="authorization_expired"
-              detail="This authorization window has expired and cannot be decided or launched."
+              detail="This authorization no longer has enough time remaining to cover the full campaign and cannot be decided or launched."
             />
           )}
           {selected.consumed && (
