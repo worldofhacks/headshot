@@ -618,6 +618,37 @@ class HostedProviderResponseError(HostedProviderError):
         self.provider_event_status = provider_event_status
 
 
+class HostedStructuredOutputInvalid(HostedProviderResponseError):
+    """A fully measured, correctly routed response whose JSON failed the role's schema.
+
+    This is the ONLY provider failure that may be retried. It is deliberately a distinct type
+    rather than a ``provider_event_status`` check, because settlement failures (budget and token
+    caps) previously shared ``HostedProviderResponseError`` with schema failures, and a single
+    handler could not tell "the model formatted its answer badly" apart from "this call breached
+    an authorized cap". Retrying the latter would spend authority a human never granted.
+
+    By the time this is raised the response has already passed identity, route, model-substitution
+    and usage/cost settlement, so a retry cannot launder any of those violations. The failed
+    physical attempt stays durably recorded with its measured tokens, cost, request id and
+    ``invalid_output`` status; the retry is a new physical sequence under the same logical
+    execution and attempt.
+    """
+
+    code = "invalid_structured_output"
+
+
+class _StructuredOutputAmbiguous(HostedProviderError):
+    """Structured output whose meaning is not single-valued — refused, never retried.
+
+    Distinct from :class:`HostedStructuredOutputInvalid`: that one means "the model failed to
+    produce the shape we asked for", which a second attempt can legitimately fix. This one means
+    "the response can be read two different ways", which is a smuggling channel rather than a
+    formatting slip, and retrying it would simply re-offer the channel.
+    """
+
+    code = "provider-structured-output-ambiguous"
+
+
 class _ModelSubstituted(HostedProviderError):
     """A measured response whose observed model differs from its authorization."""
 
@@ -872,6 +903,21 @@ class OpenRouterTransport:
                                 "provider retry pacing failed",
                                 physical_attempts=physical_attempts,
                             ) from sleep_error
+                except HostedStructuredOutputInvalid as exc:
+                    # The one retryable provider failure. Ordered BEFORE the general
+                    # HostedProviderResponseError handler below, which must keep refusing every
+                    # settlement/identity/route/model failure without a second send.
+                    #
+                    # The failed attempt is recorded first, so its measured tokens, cost, request
+                    # id and invalid_output status survive regardless of what the retry does. On
+                    # exhaustion the typed cause is re-raised as-is rather than falling through to
+                    # the generic "failed after the authorized retry" error, so callers and the
+                    # console still see invalid_structured_output.
+                    self._record_observed_failure(invocation, exc)
+                    last_error = exc
+                    if attempt >= attempts:
+                        exc.account_physical_attempts(physical_attempts)
+                        raise
                 except HostedProviderResponseError as exc:
                     self._record_observed_failure(invocation, exc)
                     exc.account_physical_attempts(physical_attempts)
@@ -1315,13 +1361,25 @@ class OpenRouterTransport:
                 provider_event_status="invalid_usage",
             ) from settle_error
 
+        # Settlement (above) has already succeeded, so every cap this call could breach has been
+        # charged and accepted. What remains is purely a formatting question, which is why this —
+        # and only this — raises the retryable type.
         try:
             output = self._structured_output(payload, output_schema)
-        except HostedProviderError as exc:
+        except _StructuredOutputAmbiguous as exc:
+            # Ambiguity is a refusal, not a retry. Keep the original non-retryable type so the
+            # smuggling channel is terminalized at the wire exactly as before.
             raise HostedProviderResponseError(
                 "OpenRouter response failed after measured usage was observed",
                 observed_result=observed_result,
                 code=exc.code,
+                provider_event_status="invalid_output",
+            ) from exc
+        except HostedProviderError as exc:
+            raise HostedStructuredOutputInvalid(
+                "OpenRouter structured output failed schema validation after measured usage",
+                observed_result=observed_result,
+                code=HostedStructuredOutputInvalid.code,
                 provider_event_status="invalid_output",
             ) from exc
         return replace(observed_result, output=output)
@@ -1496,7 +1554,12 @@ class OpenRouterTransport:
             Draft202012Validator.check_schema(dict(output_schema))
             Draft202012Validator(dict(output_schema)).validate(decoded)
         except _DuplicateStructuredKey as exc:
-            raise HostedProviderError(
+            # NOT a formatting slip and NOT retryable. A repeated key validates against the FIRST
+            # value while json.loads keeps the LAST, so the payload that was screened is not the
+            # payload that gets stored — a smuggling channel through the generator's own output.
+            # Retrying would hand the same channel a second attempt, so this keeps its own type
+            # and terminalizes at the wire.
+            raise _StructuredOutputAmbiguous(
                 "OpenRouter structured output repeated an object key"
             ) from exc
         except Exception as exc:

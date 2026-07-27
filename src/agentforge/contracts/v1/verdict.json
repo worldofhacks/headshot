@@ -25,6 +25,7 @@
           "calibrated_positive",
           "calibrated_negative",
           "non_oracle_uncalibrated_indeterminate",
+          "judge_invalid_structured_output",
           "contradictory_evidence",
           "uncertainty_band",
           "calibration_unavailable",

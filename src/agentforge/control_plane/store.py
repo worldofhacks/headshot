@@ -5420,6 +5420,27 @@ class ControlPlaneStore:
                 actor_session_id="runner:system",
             )
 
+    def persisted_evidence_content_hash(self, *, run_id: str, attempt_id: str) -> str | None:
+        """Return the immutable evidence hash already recorded for one attempt, if any.
+
+        Needed when adjudication fails *after* the target turns were observed and their evidence
+        was durably written. The campaign can still record a typed ERROR verdict against that
+        exact evidence, but only ``record_attempt_outcome`` may do so and it demands the precise
+        hash — which the caller no longer holds once the Judge raised. This is read-only and never
+        invents a hash: a missing row returns ``None`` so the caller fails closed.
+        """
+
+        with self._engine.connect() as connection:
+            return connection.execute(
+                text(
+                    "SELECT ar.content_hash FROM campaign_attempts a JOIN attempt_result ar "
+                    "ON ar.organization_id = a.organization_id "
+                    "AND ar.campaign_run_id = a.run_id AND ar.attempt_id = a.attempt_id "
+                    "WHERE a.run_id = :run_id AND a.attempt_id = :attempt_id"
+                ),
+                {"run_id": run_id, "attempt_id": attempt_id},
+            ).scalar_one_or_none()
+
     def record_attempt_outcome(
         self,
         *,
