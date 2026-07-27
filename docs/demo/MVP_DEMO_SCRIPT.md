@@ -1,133 +1,116 @@
-# Headshot MVP demo script
+# Headshot staging demo and acceptance script
 
-**Length:** 4–5 minutes
+**Updated:** 2026-07-26
 
-**App:** https://web-staging-8e30.up.railway.app
+**Staging:** `https://web-staging-8e30.up.railway.app`
 
-## Before recording
+**Current state:** [`../CURRENT_STATE.md`](../CURRENT_STATE.md)
 
-1. Have the Operator and Approver credentials ready.
-2. Sign in as **Operator**.
-3. Do not show passwords, session IDs, or Railway variables.
-4. Use the deployed Clinical Co-Pilot target and synthetic test data only.
+This script is for a truthful product demonstration. It does not authorize a deployment or campaign.
+Until the reliability gates in `PLAN.md` are deployed, show the retained staging run and describe its
+failure honestly instead of launching another batch that is expected to fail on one provider-format
+error.
 
-## 0:00 — What Headshot does
+## Pre-demo safety check
 
-**Open:** **Live**
+- Use synthetic test data only.
+- Never show Clerk tokens, target sessions, Railway variables, provider keys, or raw credentials.
+- Confirm Web, Runner, and Scheduler are on one release and policy digest.
+- Confirm PostgreSQL is at the packaged sole head (`0025` in the current release).
+- Confirm `/health`, `/ready`, protected-route denial, and private worker heartbeats.
+- Confirm production remains out of scope while it is release-skewed.
+- For any live run, confirm the exact target/surface/version, workload, target-turn caps, hosted
+  configuration, generation policy, credential generation/lease, canaries, and two-person approval.
+- Do not launch while a deploy/restart is in flight.
 
-> “Headshot tests the live AI agents for adversarial failures.
-> This is the deployed control plane. The Web API, Postgres evidence
-> store, private Runner, and Langfuse connection are operational.”
+## 0:00 — Platform and trust boundaries
 
-## 0:20 — Select the target
+Open **Overview/Live**.
 
-**Open:** **Targets**
+> “Headshot is a Railway-hosted multi-agent control plane for adversarially evaluating a live AI
+> system. React and FastAPI form the public authenticated Web service. PostgreSQL is the authority and
+> durable queue. Runner and Scheduler are private. Model calls use exact OpenRouter routes, and only
+> the Policy Gateway can call the allowlisted target.”
 
-1. Select **openemr-copilot** from the target registry.
-2. Point out the deployed URL, enabled `chat` surface, live execution profile,
-   configured server-side credential, and synthetic-data restriction.
+Point out that Clerk authenticates humans but does not itself authorize a live campaign.
 
-> “I am selecting the deployed Clinical Co-Pilot and its versioned chat surface.
-> Headshot can only dispatch to this exact allowlisted origin.”
+## 0:35 — Target and workload
 
-## 0:45 — Configure the scan
+Open **Targets**, then **Coverage**.
 
-In **Exact campaign authorization request**, use:
+> “The target is the externally deployed OpenEMR Clinical Co-Pilot. This repository contains no
+> target code. The frozen suite has 100 reviewed cases and 121 target turns across six threat
+> categories. It is split into exact 34/33/33 campaign shards with 41/40/40 target turns and zero
+> target retries.”
 
-- Budget: **$1**
-- Maximum attempts: **9**
-- Target requests per second: **1**
-- Run timeout: **900 seconds**
-- Run nonce: leave the generated unique value
+Select `headshot-live-100-batch-01` for a future accepted run. Do not hand-edit its case/turn counts;
+the request must exactly match the immutable workload.
 
-Click **Request exact campaign authorization**.
+## 1:10 — Human authorization
 
-> “This scan covers nine cases across prompt injection, data exfiltration, and
-> tool misuse. The request binds the target, surface, corpus, rate, timeout,
-> budget, and one-time nonce.”
+Open **Approvals**.
 
-## 1:15 — Approve the exact scope
+1. As an Operator, create the exact campaign request.
+2. Show the bound target, surface, workload digest, credential generation, caps, policy/configuration
+   digests, expiry, and nonce.
+3. Sign out.
+4. Sign in as a different Approver in the exact Headshot Clerk Organization.
+5. Approve that unchanged request.
+6. Sign back in as the Operator before launch.
 
-**Open:** **Approvals**
+> “The server derives both identities from verified Clerk session claims. The launcher cannot approve
+> their own request. Any release, policy, configuration, target, workload, cap, credential, or expiry
+> change requires a fresh request.”
 
-1. Select the newest **pending** request and show its operation hash and scope.
-2. Sign out as Operator.
-3. Sign in as **Approver**.
-4. Return to **Approvals**, select the same request, and click
-   **Approve exact scope**.
+If a genuine two-user Clerk acceptance has not been captured for this environment, say so and do not
+claim this step is proven by a missing-token `401`.
 
-> “A different authenticated person must approve the exact scope. The requester
-> cannot approve their own campaign, and changing any bound value invalidates
-> the approval.”
+## 2:00 — Multi-agent execution
 
-## 1:55 — Launch the scan
+Open **Agents** and **Traces**.
 
-1. Sign out as Approver.
-2. Sign back in as **Operator**.
-3. Open **Approvals** and select the approved request.
-4. Click **Launch approved campaign**.
-5. Open **Live** and point to the queued or running campaign.
+> “For each case, the Orchestrator makes a bounded decision. The Runner creates the durable attempt
+> before the hosted Red Team selects from the exact approved corpus. The Policy Gateway sends the
+> immutable target turns. The independent Judge receives bounded evidence, and deterministic
+> oracle/canary evidence takes precedence. Documentation runs only after a trusted confirmed finding.”
 
-> “The approved campaign is now queued for the private Runner. The Runner
-> rechecks the authorization, destination, credential reference, synthetic-data
-> policy, caps, and abort controls before sending any request.”
+Clarify that the Red Team has a large 32k-input/8k-output/8k-reasoning, 180-second per-call envelope;
+the last run observed a 65.9-second Red Team response. Novel generated attacks remain quarantined and
+require review and reauthorization.
 
-## 2:30 — Show attack coverage
+## 2:45 — Latest run, without spin
 
-**Open:** **Coverage**
+Open run `50da57b037d44b3c93a10e4c2edf61a8`.
 
-> “The attack suite contains nine reproducible cases across three categories.
-> Each case records its prompt, expected safe behavior, severity, exploitability,
-> OWASP mappings, and regression criteria. The Red Team generates attacks and
-> the independent Judge evaluates recorded evidence.”
+> “This run proved the lineage repair: 12 attempts, 36 provider calls, and 16 target calls were
+> recorded without a post-hoc attempt-binding conflict. Eleven cases reached verdicts. One Gemini
+> Judge response was HTTP 200 but schema-invalid, and because this configuration authorized zero
+> retries and the Runner had batch-level failure semantics, the whole 34-case shard stopped.”
 
-## 3:00 — Show findings
+The 11 verdicts are `INDETERMINATE`. Say “no deterministic exploit was confirmed,” not “the target
+defended all attacks.” One target response was HTTP `422`; a recorded transport response is not an
+application success.
 
-**Open:** **Findings**
+## 3:25 — Evidence, Langfuse, and cost
 
-> “Headshot also **normalized** a live OWASP ZAP passive baseline against the authorized
-> target. It recorded missing HSTS, missing X-Content-Type-Options, and cache-control
-> review. These are publication-gated Low, Low, and Informational findings—not confirmed
-> exploits. Alongside them sit six draft vulnerability reports; the highest is a control
-> weakness on a session identifier carried in a URL query string. Reports 004–006 include
-> offline re-derivations over retained captures, but all six remain DRAFT and unpublished,
-> with no independent attestation or separately recorded reproduction artifact. PRD-32
-> remains incomplete.”
+Open **Costs** and **Traces**.
 
-*Severity, precisely:* PR #48 merged at `a67ac1e`, replacing closed, unmerged PR #33. In this tree,
-004 is **`medium`** and 005/006 are **`low`**, all legal `vuln_report` enum values. All three came
-from the owner's external Bruno captures, not the platform scanner. Their embedded derivations are
-checkable, but the claimed independent/blinded/no-network review process has no repository
-attestation or separate run artifact. Do not call 004 “Medium–High” or say its correction is unmerged.
+> “PostgreSQL is the source of truth. The run measured `$0.60731395` across 36 provider calls and
+> recorded `$0.16` of configured target-call accounting. Provider cost is measured; the target figure
+> is not an invoice. The current straight-line 100-case operational baseline is about `$6.27`, before
+> platform hosting, retries, Documentation, and fixed costs.”
 
-*Wording note:* say **normalized**, not "ingested". Nothing in the repository ingests the committed
-ZAP artifact into Postgres — the only `SecurityToolEvidenceRepository.ingest` calls are in tests. And
-name the six AF-VULN drafts: this beat previously presented the three ZAP records as the whole
-findings set, which understates the `medium` finding a reviewer will ask about.
-
-## 3:30 — Show observability and cost
-
-**Open:** **Traces**, then **Costs**
-
-> “Every physical request has a correlation trace, measured latency, status, and
-> Langfuse export state.”
-
-*Do not read the old cost line* ("nine-request campaign cost nine cents, averaged one cent per
-request, ~321 seconds"). Two problems, both verified 2026-07-25: only **five** attempt manifests are
-committed, not nine; and **no cost value is recorded in any result artifact** — the attempt manifests
-have no cost field. The per-request figure came from a configured constant in the outbound telemetry
-layer, which is an accounting cap, not a measurement. If asked about cost, say the caps: `$1.00`
-budget, 40 attempts, 60 physical requests, 0.5 req/s, 1800 s
-(`docs/evidence/authorization-requests/caps.json`) — and that measured spend is unrecorded.
+> “Langfuse is a fail-soft sanitized projection. For this failed run, all 52 logical agent/target
+> deliveries remain queued and the current verifier cannot query-back a failed campaign. A flush is
+> not proof of remote delivery; that gap is tracked as release-blocking observability work.”
 
 ## 4:05 — Close
 
-> “Headshot meets the MVP requirements: a live deployed target, a structured
-> threat model, a reproducible three-category attack suite, and a defensible
-> multi-agent architecture with evidence, cost tracking, and human approval.”
+> “The platform has real authenticated control-plane, hosted-agent, live-target, evidence, and cost
+> execution. The remaining work is reliability rather than a hidden scaffold: bounded structured
+> retry, case-local errors, exact-once resume, failed-run Langfuse reconciliation, exact Judge
+> calibration, and production release parity.”
 
-## If time is short
-
-Show **Targets → Approvals → Live → Coverage → Findings → Costs**. Never claim
-that an exploit was confirmed. Say that the current scan produced
-publication-gated evidence and fail-closed verdicts.
+Never claim a full 34- or 100-case campaign completed until the authoritative terminal evidence says
+it did. Never claim a vulnerability was autonomously documented unless a trusted confirmation and a
+durable Documentation execution exist.

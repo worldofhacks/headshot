@@ -1,59 +1,61 @@
-# Red Team model resolution check (evidence)
+# Hosted role routing and Red Team resolution
 
-Before the traced Red Team generator (`agents/red_team/hosted_generation.py`) is exercised live, the
-configured red_team model must resolve on OpenRouter's live model list — a bad id fails `generate()`
-at runtime the moment it is first called.
+**Reconciled:** 2026-07-26
 
-## Check
+**Current deployment evidence:** [`../CURRENT_STATE.md`](../CURRENT_STATE.md)
 
-- **Configured red_team model** (`src/agentforge/agents/hosted.py:34`): `qwen/qwen3.5-397b-a17b`
-- **Source of truth:** `GET https://openrouter.ai/api/v1/models` (public list), queried 2026-07-24.
+This document replaces the 2026-07-24 public-model-list check. A public model listing proves only that
+an identifier existed at one moment; it does not prove the exact authorized upstream route, current
+availability, price, or returned identity.
 
-## Result — RESOLVES ✓ (no change needed)
+## Binding role set
 
-`qwen/qwen3.5-397b-a17b` is a real, fully-populated OpenRouter model entry:
+| Role | Requested model | Required upstream |
+|---|---|---|
+| Orchestrator | `anthropic/claude-opus-4.8` | `anthropic` |
+| Red Team | `qwen/qwen3.5-397b-a17b` | staged as `chutes` |
+| Judge | `google/gemini-2.5-pro` | `google-vertex` |
+| Documentation | `openai/gpt-5.4` | `openai` |
 
-| field | value |
-|---|---|
-| id | `qwen/qwen3.5-397b-a17b` |
-| name | Qwen: Qwen3.5 397B A17B |
-| context_length | 262144 |
-| max_completion_tokens | 65536 |
-| pricing (prompt / completion, USD/token) | 0.00000039 / 0.00000234 |
-| created | 1771223018 (~2026-02-16 UTC) |
+The role model, upstream, prompt hash, generation-policy hash, configuration digest, price bounds, and
+per-call/campaign caps are authorization-bound. Fallback and substitution are disabled. There is no
+documented “nearest substitute”; changing a role requires a reviewed append-only configuration,
+capacity/preflight validation, updated calibration where applicable, and fresh campaign authorization.
 
-The `created` date (~Feb 2026) is *after* the assistant's Jan-2026 knowledge cutoff — the reason the
-id looked unfamiliar; it is a genuinely released model, not a placeholder. Fetch validated against
-known anchors (`openai/gpt-4o`, `meta-llama/llama-3.1-70b-instruct` present; 345 models total).
+## Red Team behavior
 
-Because the id resolves, **no provider change is required** and there is nothing to re-push for this.
-`TracedHostedRedTeamProvider` is model-agnostic (the model is injected via `RedTeamRoleIdentity` from
-the config), so if the config default ever changes the provider follows with no code change.
+The current live Red Team call does not generate arbitrary target bytes. It returns a schema-valid
+`case_ref` from the exact reviewed candidates supplied for the next authorized work unit. The Runner
+creates the durable attempt before the provider call, and dispatch still uses the immutable authored
+case. This keeps hosted Red Team participation and provider evidence without permitting unreviewed
+text to cross the Policy Gateway.
 
-## Documented fallback (also confirmed available)
+Novel generation/mutation tooling is a different authorization domain:
 
-If the red_team model default is ever repointed, `deepseek/deepseek-chat-v3-0324` resolves on the
-same live list (DeepSeek V3 0324, 163840 context, pricing 0.00000027 / 0.00000112). Repointing is a
-one-line change in `src/agentforge/agents/hosted.py` (the config default) + its config test fixtures
-— not in the traced generator.
+```text
+hosted candidate generation
+  -> quarantine
+  -> human review
+  -> immutable provenance/workload
+  -> fresh exact authorization
+  -> live selection and dispatch
+```
 
-## Full hosted-demo model envelope — all four roles (evidence)
+No generation output can directly become a live target request.
 
-The hosted 4-agent demo routes all four roles through OpenRouter, so a single unresolved id fails
-the acceptance run at runtime mid-demo. All four `HOSTED_ROLE_MODELS`
-(`src/agentforge/agents/hosted.py:31-36`) were checked against `GET
-https://openrouter.ai/api/v1/models` (public live list, queried 2026-07-24, 345 models; validated
-against anchors `openai/gpt-4o`, `meta-llama/llama-3.1-70b-instruct`).
+## Runtime acceptance
 
-| role | configured id | resolves | live name / context | nearest real substitute (if ever needed) |
-|---|---|---|---|---|
-| orchestrator | `anthropic/claude-opus-4.8` | ✓ | Claude Opus 4.8 / 1,000,000 | `anthropic/claude-opus-4.7` (or `-4.8-fast`) |
-| red_team | `qwen/qwen3.5-397b-a17b` | ✓ | Qwen3.5 397B A17B / 262,144 | `deepseek/deepseek-chat-v3-0324` |
-| judge | `google/gemini-2.5-pro` | ✓ | Gemini 2.5 Pro / 1,048,576 | `google/gemini-3.1-pro-preview` (or `-2.5-pro-preview`) |
-| documentation | `openai/gpt-5.4` | ✓ | GPT-5.4 / 1,050,000 | `openai/gpt-5.2` (or `gpt-5.1`) |
+Before a live campaign, prove all of the following for the exact staged configuration:
 
-**Result: the whole hosted-demo model envelope resolves — no substitution required.** Every id is a
-real, fully-populated live model entry (several `created` after the Jan-2026 cutoff, hence
-unfamiliar by name: Opus 4.8, Qwen3.5, GPT-5.4). The substitute column lists ids confirmed present on
-the same live list; each is a one-line change in `hosted.py` `HOSTED_ROLE_MODELS` + its config test
-fixtures — never in any agent's runtime code.
+1. Web, Runner, and Scheduler share the same packaged generation policy.
+2. Every requested model/upstream route resolves without fallback.
+3. The returned model and upstream exactly match the requested identity.
+4. Input/output/reasoning limits, timeout, rate, physical-call, retry, token, and spend capacity cover
+   the authorized workload.
+5. Prompt and policy digests match the authorization.
+6. Provider credentials are Runner-only and ready.
+7. The exact current Judge identity has an enabled, human-approved calibration artifact—or the UI and
+   evidence explicitly label its model output advisory/indeterminate.
+
+External availability and price can change at any time. Re-run preflight immediately before launch;
+do not refresh this file by guessing from a provider marketing page.

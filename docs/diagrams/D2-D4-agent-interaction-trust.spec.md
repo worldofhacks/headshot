@@ -1,11 +1,16 @@
 # D2/D4 — Agent Interaction + Trust Boundaries (merged)
 
-> Build spec. **This file is the source of truth**; `D2-D4-agent-interaction-trust.excalidraw`
+> **Historical render spec.** This file is the source of truth only for its dated Excalidraw export,
+> not for current architecture. The exports are stale. The implemented topology is documented in
+> [`../../ARCHITECTURE.md`](../../ARCHITECTURE.md), ADR-0004, and the current Mermaid diagrams in
+> `README.md` and `docs/defense/DEFENSE_SCRIPT.md`. Regenerate this artifact before presenting it.
+>
+> For the historical export, `D2-D4-agent-interaction-trust.excalidraw`
 > is a render of it. Any change to the diagram starts here. Export `.svg` + `.png` alongside
 > the `.excalidraw` — it does not render on GitHub.
 > Serves `DEFENSE_SCRIPT.md` **S3** (walkthrough) and **S4c** (trust boundaries).
 >
-> ⚠️ **RENDER STALE — INTEGRATION FOLLOW-UP REQUIRED (2026-07-21).** This spec includes both the F2
+> ⚠️ **RENDER STALE — INTEGRATION FOLLOW-UP REQUIRED.** This spec includes both the F2
 > trust-split correction and the selected Clerk/Railway identity boundary. The Red Team's one exit is a
 > **trusted Policy Gateway + Execution Recorder** (blue), and the Judge reads the recorder's hashed
 > `AttemptResult` rather than the raw target response. The existing `.excalidraw`, SVG, and PNG do not

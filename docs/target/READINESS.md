@@ -1,93 +1,94 @@
 # Clinical Co-Pilot target and session readiness
 
-Status: implementation and offline contract tests are complete; target-issued session lifetime and
-rotation behavior remain unmeasured until an explicitly authorized, synthetic-only live campaign.
-This document records facts and unknowns without making a live-readiness claim.
+**Reconciled:** 2026-07-26
 
-## Reviewed target contract
+**Target contract:** [`TARGETS.md`](TARGETS.md)
 
-| Property | Current record | Evidence class |
-|---|---|---|
-| Transport | Exact allowlisted HTTPS host; redirects denied | Enforced by catalog, Runner, adapter, and Policy Gateway |
-| Surface | `POST /chat` | Reviewed Bruno contract and offline adapter tests; not re-probed here |
-| Request body | Exactly `{"session_id": <sealed session>, "message": <case message>}` | Offline contract test |
-| Target authentication | Patient-pinned SMART session in `session_id`; no bearer header for this profile | Reviewed contract and offline test |
-| Human authentication | Clerk session is accepted only by Web and is never forwarded to the target | Platform security contract |
-| Data | Reviewed synthetic fixtures only; real PHI forbidden | Corpus validation and campaign gates |
-| Session lifetime | Unknown until supplied by the target/session issuer | External measurement required |
-| Target idle timeout / cookie requirements | Unknown | Authorized observation required |
-| Conversation-history namespace | Unknown whether `session_id` also accumulates history across case messages | Authorized observation required |
-| Session-expired response | Adapter recognizes HTTP 401 JSON whose detail begins `session expired` | Offline typed-error test; live wording still must be confirmed |
-| Response limits | Catalog-defined timeout, content types, and byte ceiling | Enforced configuration; target maxima not yet measured |
-| Rate limit | Authorization-bound target request rate | Enforced by gateway/Runner; target-provider ceiling not yet measured |
-| Local target build | No target source is present in this repository | Deployed-target-only integration boundary |
+**Platform state:** [`../CURRENT_STATE.md`](../CURRENT_STATE.md)
 
-The current adapter converts each authored case into one metered `/chat` request. A case with multiple
-authored turns is joined into one message. “Persistent session” therefore means stable target identity,
-HTTP cookie jar, and connection state across campaign cases; it does not mean issuing hidden internal
-turns. Any future per-turn conversation support must route every physical request through Policy
-Gateway accounting and requires a versioned adapter/contract change.
+The external target passed read-only `/health` and `/ready` checks during this audit, and the latest
+staging campaign made 16 authenticated target calls. Target reachability is therefore proven. It does
+not make the full platform run-ready: campaign reliability, exact lease coverage, release parity,
+hosted configuration, and authorization are separate gates.
 
-## Campaign session invariant
+## Observed and enforced facts
 
-One campaign may use exactly one immutable session generation:
+| Property | Current fact |
+|---|---|
+| Transport | exact allowlisted HTTPS host; redirects/private destinations denied |
+| Governed surface | authenticated `POST /chat` |
+| Request | one sealed session plus one authored turn |
+| Multi-turn behavior | one physical target request per authored turn; all are policy-metered |
+| Human auth | Clerk token terminates at Web and is never a target credential |
+| Data | reviewed synthetic fixtures/canaries only |
+| Client state | one campaign-owned `httpx` client preserves cookies/connections |
+| Target retry | zero for live-100 |
+| Latest traffic | 16 physical calls: 15 HTTP `200`, one HTTP `422` |
+| Observed input constraint | the HTTP `422` rejected a message over the target's 4,000-character limit |
+| Latest mean pace | roughly 72 seconds per completed case at provider concurrency one |
 
-1. The approved target definition contains a versioned opaque reference such as
-   `secretref://staging/openemr/session/generation-20260722a`. The operation hash binds that reference
-   without storing its value.
-2. Runner-only `AGENTFORGE_CREDENTIAL_BINDINGS_JSON` maps the reference to a sealed Railway variable.
-3. Runner-only `AGENTFORGE_SESSION_LEASES_JSON` records the same generation, a timezone-aware expiry,
-   and the SHA-256 of the sealed value. It contains no raw session.
-4. Network-free preflight requires metadata expiry to extend beyond the campaign's usable window:
-   `min(authorization expiry, Runner start + approved run timeout)`.
-5. At the first verified dispatch boundary, Runner resolves the value once and verifies its digest.
-   Later attempts receive the same in-memory `Secret`, even if process environment state changes.
-6. One campaign-owned HTTP client is reused, retaining its cookie jar and connection pool. Each request
-   still passes the pre-dispatch database revalidation and Policy Gateway limits.
-7. Before each attempt, an expired or released lease fails closed. A target-confirmed expiry aborts
-   after that single physical request. The campaign does not retry, refresh, or switch patient context.
-8. Success, failure, or abort releases the lease reference, clears the adapter credential, and closes
-   the owned client.
+`target_request.status = succeeded` currently means a response was observed and durably recorded. It
+does not mean the target accepted the application request; preserve the HTTP status and call the `422`
+an application rejection.
 
-The generation/digest check prevents a Railway variable edit from silently changing identity under an
-already approved reference. Python cannot guarantee byte-level zeroization of immutable strings, so
-private process isolation, least-privilege Railway variables, short lease duration, cleanup, and no
-logging remain required controls.
+## Session and lease invariant
 
-## Provisioning and rotation
+One campaign may use one exact target-session generation:
 
-The safe rotation unit is the full tuple of target version, credential reference generation, sealed
-value, metadata, and human authorization—not just the secret value.
+1. The target definition contains an opaque credential reference and generation.
+2. Runner-only binding resolves that reference to a sealed variable name.
+3. Runner-only lease metadata records generation, UTC expiry, value hash, and expiry source.
+4. Network-free preflight requires the lease to cover `now + run_timeout`, bounded by authorization
+   expiry.
+5. At first dispatch, Runner resolves the value and verifies its hash.
+6. The same in-memory secret and campaign client are used for all turns.
+7. Expiry or target-confirmed invalidity aborts; there is no silent refresh, replacement, or patient
+   switch.
+8. Terminalization closes the client and releases the runtime lease.
 
-1. Select a new generation and register a new immutable target version/surface that references it.
-2. Obtain a target session pinned to the reviewed synthetic patient fixture. Record the issuer's
-   absolute expiry out of band; never infer a longer lifetime than the issuer supplies.
-3. Provision the value only on private Runner and provision matching lifecycle metadata separately.
-   Do not put either the value or a reversible encoding in the catalog, database, Web, chat, CI, or
-   evidence.
-4. Restart the private Runner, request the exact campaign authorization, and obtain a decision from a
-   different Headshot Organization user.
-5. Launch only if preflight shows the session covers the full bounded window. Otherwise allocate a new
-   generation; never overwrite an approved generation.
+The usable launch deadline is `lease_expiry - approved_run_timeout`, not the lease expiry itself. For
+a two-hour timeout, a lease ending at 20:00Z cannot launch after 18:00Z.
 
-After expiry, preserve already recorded evidence and launch a newly approved campaign. Never resume the
-old run with a new session because that could alter patient scope and would invalidate its authorization
-and evidence lineage.
+## Safe lease refresh
 
-## Readiness checklist
+A lease timestamp is evidence, not an arbitrary number:
 
-- [x] Request shape and credential placement have offline contract tests.
-- [x] One credential generation is pinned across attempts and rejects silent replacement.
-- [x] One real HTTP client is reused and closed after the campaign.
-- [x] Local lease expiry and target-reported expiry are terminal typed aborts.
-- [x] Every physical request remains independently policy-gated and accounted.
-- [x] Session material is Runner-only and excluded from repr/log/config manifests.
-- [ ] Target issuer's absolute and idle lifetimes are measured without recording the session value.
-- [ ] Exact live expired-session status/body is confirmed against the reviewed adapter matcher.
-- [ ] Target cookies or additional response-derived state are documented if observed.
-- [ ] Cross-case conversation-history behavior is measured and either accepted as an explicit stateful campaign invariant or isolated through a newly reviewed target contract.
-- [ ] Target rate, response-size, and timeout ceilings are measured under explicit authorization.
-- [ ] One two-person-approved synthetic campaign completes without mid-run rotation.
+1. pause launches and confirm no deployment/restart or active campaign;
+2. test the exact target session through an approved credential-safe liveness procedure;
+3. confirm the revealed value still hashes to the same generation binding;
+4. set only an issuer-supplied or conservatively justified expiry source;
+5. restart/refresh the private Runner as required by configuration loading;
+6. wait for a fresh Runner heartbeat and repeat preflight; and
+7. create and approve a fresh campaign request after the final lease/policy/config state.
 
-Until all unchecked external items are complete, the live campaign remains blocked. Passive health
-checks and Clerk authentication do not authorize a target request.
+Never extend an expired or untested session just to pass preflight. Never print or copy its value/hash
+into documentation or chat.
+
+## Remaining target-specific unknowns
+
+- issuer-guaranteed absolute lifetime versus the owner-reported 72-hour idle lifetime;
+- exact cookie/response-derived state and cross-case conversation-history behavior;
+- target-wide concurrency/rate ceiling;
+- p95/p99 latency and timeout behavior across the full six-category workload;
+- all application validation limits beyond the observed 4,000-character message limit; and
+- enabled behavior for currently disabled upload, evidence-search, and write surfaces.
+
+These require separate synthetic-only, authorized observation. Do not infer them from a health check.
+
+## Launch checklist
+
+- [x] live target is reachable in read-only health checks;
+- [x] chat request shape and credential placement have offline contract tests;
+- [x] one credential generation is pinned and silent replacement is rejected;
+- [x] one campaign client is reused;
+- [x] each multi-turn physical call is independently gated/accounted;
+- [x] target-expired session is a typed abort;
+- [x] the latest run proved authenticated target traffic and exact call lineage;
+- [ ] the current lease covers the full new run timeout;
+- [ ] Web/Runner/Scheduler and database head are re-verified;
+- [ ] the reliability fixes in `PLAN.md` P1–P4 are deployed and accepted;
+- [ ] exact current Judge calibration is enabled or advisory status is accepted;
+- [ ] a fresh two-user authorization covers the exact batch;
+- [ ] a complete 34-case batch and all Langfuse observations reconcile.
+
+Until the unchecked per-run gates pass, do not launch merely because target health is green.

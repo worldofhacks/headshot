@@ -1,10 +1,17 @@
 # ADR-0002 — Identity and access for the Headshot platform
 
-- **Status:** Accepted; implementation selected/planned, not yet deployed
+- **Status:** Accepted and implemented; staging machine boundary deployed, human acceptance incomplete
 - **Date:** 2026-07-21
 - **Deciders:** platform author; subject to integration verification
 - **Applies to:** human access to the Railway-hosted console and API
 - **Does not apply to:** agent/workload, model-provider, target, or database identities
+
+> **Deployment reconciliation (2026-07-26):** The Clerk React/FastAPI boundary is deployed on staging
+> release `456d6e5`: health/readiness pass and unauthenticated protected access returns `401`. A real
+> signed-in exact-Organization/custom-permission/MFA/cross-Organization/two-user acceptance is still
+> required. Production is release-skewed and not campaign-ready. See
+> [`../security/AUTHENTICATION.md`](../security/AUTHENTICATION.md) and
+> [`../CURRENT_STATE.md`](../CURRENT_STATE.md).
 
 ## Context
 

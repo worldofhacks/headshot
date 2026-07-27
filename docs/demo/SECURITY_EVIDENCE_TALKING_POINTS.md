@@ -1,5 +1,10 @@
 # Security-evidence talking points (read aloud, ~1 page)
 
+> **Historical MVP evidence script. Do not read this as the current platform briefing.** Use
+> [`MVP_DEMO_SCRIPT.md`](MVP_DEMO_SCRIPT.md), [`../defense/DEFENSE_SCRIPT.md`](../defense/DEFENSE_SCRIPT.md),
+> and [`../CURRENT_STATE.md`](../CURRENT_STATE.md). In particular, both GitHub Actions and GitLab CI
+> are current release gates, hosted calls/cost now exist, and the live workload is 100 cases.
+
 Presenter script for the MVP. Every claim here is backed by a file or a verified local run. Paths
 are relative to the repo root.
 
@@ -10,10 +15,8 @@ are relative to the repo root.
 "We run **six pinned security tools** in CI. They are deterministic and offline, and on their last
 recorded pass every one returned **zero findings against our own code and dependencies**.
 
-> **Two corrections before this is said out loud (2026-07-25).**
-> **(a) Not "on both remotes".** `CLAUDE.md` and `AGENTS.md` at this base make GitHub Actions the sole
-> CI gate and GitLab a passive exact mirror with project CI/CD disabled. Say "in GitHub Actions CI",
-> and if asked about the dual-remote law, say the push law holds but only one CI system gates.
+> **Two corrections before this historical text is quoted (reconciled 2026-07-26).**
+> **(a)** Both remotes have required CI gates; the earlier single-gate note is superseded.
 > **(b) Not "zero findings" unqualified.** ZAP recorded 4 alerts on the fixture host and 3 on the live
 > target. "Zero findings" is true only of the SAST/dependency/secret tools over our own code.
 

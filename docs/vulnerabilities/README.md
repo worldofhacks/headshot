@@ -1,5 +1,10 @@
 # Vulnerability reports — authorized synthetic Clinical Co-Pilot campaign (2026-07-24)
 
+> **Historical draft-report index.** These reports retain their original evidence boundary and are
+> not the current live-run ledger. The 2026-07-26 staging run recorded no confirmed exploit and did
+> not invoke Documentation. Current run/Judge truth is in [`../CURRENT_STATE.md`](../CURRENT_STATE.md).
+> Every report remains draft and human-gated.
+
 Draft findings from **authorized, synthetic-only** testing of the owner's live Clinical Co-Pilot.
 The target host is referenced by name only. The **authoritative** allowlist entries live in
 `config/live-target-catalog.{staging,production}.json` — the only catalog the live path reads

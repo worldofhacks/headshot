@@ -1,5 +1,9 @@
 # Proposal — stage the full Co-Pilot surface contract
 
+> **Proposal only; not deployed authority.** The current governed surface is `POST /chat`; the
+> evidence-search, app, and document surfaces remain disabled in the tracked catalog. Do not follow
+> this activation sequence as an operations runbook. See [`../target/TARGETS.md`](../target/TARGETS.md).
+
 This is the separately reviewable catalog-owner companion to the T-F16a surface-policy contract
 and the Co-Pilot adapter mechanism. It does **not** modify
 `config/targets/clinical-copilot-20260724.json`, authorize a campaign, or enable a live surface.

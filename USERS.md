@@ -13,8 +13,10 @@ context for what an exploit puts at risk.)
 
 All human users enter through **Clerk** and must be invited into the exact required **Headshot**
 Organization for the environment. Personal accounts and user-created organizations are disabled. MFA is
-mandatory for every member, with TOTP plus backup codes preferred; SMS is not the only factor. Clerk and
-authenticated Railway integration are selected/planned and are not yet claimed deployed.
+mandatory for every member, with TOTP plus backup codes preferred; SMS is not the only factor. The
+Clerk-backed console and protected API are implemented and deployed in staging. Public shell/readiness
+and missing-token denial are verified; real-user Organization, permission, MFA, cross-Organization,
+and distinct-person acceptance still require a human Clerk audit.
 
 The backend authorizes the following custom organization permissions from verified Clerk session claims.
 Frontend role labels and client-supplied roles/permissions are display data only and create no authority.
@@ -72,12 +74,20 @@ authorization to operate.
 
 ---
 
-## 2. The system as its own operator (why "autonomous" is a user requirement, not a flourish)
+## 2. The system as its own operator (requirement and current implementation)
+
 The PRD's north star — *"adapting as attackers adapt, without a human in the loop for every step"* —
-makes autonomous operation a stated requirement. The Orchestrator is effectively a machine user: it
-reads the system's own state and decides what to test next, so that overnight and continuous runs
-produce learning, not just noise. The human stays in the loop for **judgment gates** (approve
-critical findings, approve remediation), not for **every step**.
+makes autonomous operation a stated requirement. The current implementation automates exact reviewed
+campaign execution after two-person authorization: durable scheduling/queueing, hosted role calls,
+target dispatch, evidence capture, Judge reconciliation, conditional drafting, and abort controls.
+Scheduler can observe a target-version change and create an authorization-blocked replay plan; it
+cannot approve or launch it.
+
+The live-100 workload is intentionally deterministic after authorization. Its manifest order and
+target bytes are frozen; the hosted Orchestrator and closed-corpus Red Team cannot mutate them.
+Coverage-guided novel generation/mutation is a separate quarantine/review pipeline and is not yet an
+unattended live-dispatch loop. This is the remaining gap between “automated governed replay” and the
+full adaptive autonomy the PRD asks for.
 
 That machine user is not a Clerk user. Agents use service identity, per-agent database roles, provider
 credentials, and target-scoped credential bindings. Human session tokens are never workload credentials,
@@ -90,12 +100,13 @@ and an agent cannot acquire a human permission by emitting role or permission te
 The PRD demands this justification, and it is defensible line by line:
 
 1. **Attacks mutate; static suites rot.** "Defenses built around a small number of known examples
-   rarely hold as attackers adapt." A human-maintained payload list is outdated the day after it's
-   written. An agent that takes a *partial* success and autonomously generates ten variants to find
-   the one that breaks through is doing work a static runner structurally cannot.
+   rarely hold as attackers adapt." The platform therefore preserves generation/mutation components
+   and provenance outside the live authorization domain. Completing the reviewed
+   generation→quarantine→new-workload loop is justified work, not a claim about the current replay
+   path.
 2. **Continuous ≠ occasional, and humans are the bottleneck.** The goal is *continuous* stress
-   testing across every target version. A human in the loop for every prompt caps throughput at
-   human speed; the value is precisely in the runs that happen while no one is watching.
+   testing across every target version. Humans authorize scope and review high-impact outcomes; the
+   private services perform the many bounded mechanical steps after authorization.
 3. **Reproducibility and regression are automation problems.** "Finding a vulnerability once is not
    enough." Converting an exploit into a deterministic, replayable test and re-running it on every
    target change is mechanical, high-volume, and exactly what machines are good at — and what humans

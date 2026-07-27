@@ -1,5 +1,12 @@
 # Red-teaming coverage review
 
+> **Historical audit.** The findings below are pinned to the reviewed 2026-07-25 tree. They must not
+> override the current release snapshot. Release `456d6e5` composes the four hosted roles; its Red Team
+> is an exact-approved-corpus structured selector, while novel generation remains a separate quarantine
+> and reauthorization domain. The latest staging campaign reached 12 attempts before a Judge
+> structured-output failure aborted the batch. See [`../CURRENT_STATE.md`](../CURRENT_STATE.md) and
+> [`../../PLAN.md`](../../PLAN.md).
+
 **Date:** 2026-07-25
 **Base:** `2069036` (branch `codex/platform-observability-followup`, tip after PR #44 "Retire
 superseded DeepSeek Red Team provider"; sole Alembic head `0021_four_role_agent_acceptance`). The

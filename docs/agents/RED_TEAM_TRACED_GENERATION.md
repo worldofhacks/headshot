@@ -1,66 +1,71 @@
-# Red Team (qwen) traced component — governed composition pending
+# Hosted Red Team selection and candidate generation
 
-## Current release truth
+**Reconciled:** 2026-07-26
 
-`agents/red_team/hosted_generation.py` provides a traced q-generator component, but the production
-Runner does **not** compose it. The authorized campaign path currently records Red Team corpus
-selection as deterministic seed replay, with no provider request, model usage, tokens, or hosted
-cost. That is intentional: an authorized corpus is immutable, so generating or mutating cases
-inside its dispatch loop would invalidate the approved scope.
+**Runtime identity:** [`RED_TEAM_MODEL_RESOLUTION.md`](RED_TEAM_MODEL_RESOLUTION.md)
 
-Accordingly:
+AgentForge has two deliberately separate hosted Red Team capabilities. Conflating them previously
+caused documentation to claim qwen was either absent or allowed to mutate a live campaign. Neither is
+true.
 
-- q is not a fourth live hosted role in production;
-- a deterministic Red Team execution must not be relabeled as a q provider call;
-- component/unit tests are not deployment evidence; and
-- Langfuse, Agents, Costs, and Traces must show q as unavailable until a real governed execution
-  has been durably recorded and remotely verified.
+## Governed live selector
 
-## Component seam
+`HostedReplaySelector` in `src/agentforge/agents/red_team/hosted_replay.py` is the Red Team used by the
+private Runner. It:
 
-`TracedHostedRedTeamProvider` routes hosted generation through the shared
-`OpenRouterTransport` with `role="red_team"`. It uses the shared cost/call/token ledger, the
-mandatory physical-lineage recorder, and the immutable prompt registry under
-`src/agentforge/agents/prompts/`; it does not create a separate SDK client, prompt store, or
-lineage shape.
+- runs `qwen/qwen3.5-397b-a17b` through the shared hosted runtime;
+- receives a bounded list of exact authorized candidate identities;
+- returns one schema-validated `case_ref`;
+- carries immutable campaign/attempt/logical/physical provider lineage;
+- cannot change the authored input sequence or target binding; and
+- cannot judge, confirm, document, publish, remediate, or hold a target credential.
 
-The component exposes two integration styles:
+The Runner creates the durable attempt before this provider call. The 2026-07-26 staging run recorded
+12 successful Red Team executions and 12 Chutes calls with zero lineage conflicts. Their combined
+measured cost was `$0.14276145`; maximum observed latency was 65.9 seconds.
 
-- `generate_traced(...)` returns proposed variants plus the provider-returned model/request/upstream
-  identity, input/output/reasoning usage, measured cost, and physical-attempt count for a
-  composition root that owns the logical execution lifecycle.
-- `generate(...)` uses `HostedExecutionLifecycle` to record the same logical and physical lineage
-  itself.
+The current per-call envelope is 32,768 input / 8,192 output / 8,192 reasoning tokens and 180 seconds.
+That headroom is intentional. Provider completion accounting can place thousands of tokens in output
+even when the final schema is small.
 
-`require_red_team_subcap(...)` verifies the configured Red Team cost ceiling before a live call.
-The shared ledger still enforces the per-role and global call, token, retry, concurrency, and cost
-bounds.
+## Quarantined candidate generator
 
-The output is always untrusted proposed input. It contains no target credential, evidence authority,
-finding verdict, or publication/remediation authority. Model credentials resolve only inside the
-private transport from a sealed reference.
+`TracedHostedRedTeamProvider` in `hosted_generation.py` can generate proposed variants with shared
+OpenRouter transport, prompt authority, physical-call lineage, tokens, cost, and content-addressed
+provenance. It is used by target-free acceptance and candidate-authoring workflows; it is not the
+Runner's live dispatch selector.
 
-## Required production workflow
+Its output is hostile/untrusted and follows:
 
-Production composition must be a distinct, governed workflow:
+```text
+generate
+  -> normalize and content-address
+  -> quarantine
+  -> human review
+  -> immutable generation/review records
+  -> new workload and manifest digest
+  -> fresh exact campaign authorization
+  -> governed selector and Policy Gateway
+```
 
-`generation → normalization/content addressing → quarantine → human review → fresh corpus authorization → dispatch`
+No generated string can flow directly to the target. This separation preserves the PRD's novel
+generation capability without allowing model output to expand an already approved operation.
 
-It must not be inserted into `SeedReplayRedTeam.propose(...)` or the current authorized case loop.
-Before q can be called live, the integration owner must prove all of the following:
+## Evidence and observability requirements
 
-1. generation has a separately authorized scope, policy hash, configuration hash, synthetic seed,
-   budget, rate limit, abort path, and distinct launcher/approver identities;
-2. every attempt obtains its durable logical context and pre-send physical reservation before
-   provider I/O;
-3. the exact registry prompt bytes and SHA-256 are the system message actually sent;
-4. proposed variants remain quarantined and cannot reach a target before review and a fresh,
-   content-addressed corpus authorization;
-5. provider/model substitution, missing accounting, invalid output, and crash recovery fail closed;
-   and
-6. a real deployed run produces query-verified provider identity, request ID, usage, cost, and
-   logical/physical lineage in the production telemetry views.
+Both capabilities must use:
 
-Final model-envelope confirmation and every live campaign remain human-only gates. Until this
-workflow and its deployed evidence exist, documentation must describe three hosted model roles plus
-deterministic Red Team selection—not a live four-model campaign.
+- the package-owned Red Team prompt and exact prompt SHA-256;
+- the authorization-bound model, upstream, policy, configuration, price, token, call, retry, rate,
+  concurrency, timeout, and spend envelopes;
+- durable logical execution before physical invocation;
+- one provider invocation row plus one terminal event per physical attempt;
+- exact returned model/upstream/request ID and measured usage/cost;
+- sanitized Langfuse projection with PostgreSQL as the authority; and
+- typed terminal errors without raw prompts, responses, credentials, or PHI.
+
+A component test is not deployment evidence. A live-role claim requires durable provider rows and
+exact Langfuse query-back (or an explicit queued/failed delivery statement) for the governed campaign.
+
+Current known reliability/observability gaps are in [`../CURRENT_STATE.md`](../CURRENT_STATE.md) and
+[`../../PLAN.md`](../../PLAN.md).

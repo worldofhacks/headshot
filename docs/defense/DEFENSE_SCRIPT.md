@@ -1,374 +1,154 @@
-# DEFENSE_SCRIPT.md — AgentForge / Adversarial Machine
-
-> Presenter's script for the ~2.5h Architecture Defense. Each beat: **Say** (the line), **Why it
-> holds** (the substantiation), **If pushed** (the follow-up), **Concede** (the honest limit).
-> Goal: defend every architectural decision — *especially where agents act autonomously* — to a
-> hospital-CISO standard. Evidence pack: `ARCHITECTURE.md` (binding), diagrams **D2** (agent interaction)
-> + **D4** (trust boundaries), `ADR-0001` (build-vs-configure), `ADR-0002` (identity/access),
-> `docs/security/AUTHENTICATION.md`, `docs/deployment/RAILWAY.md`, and `THREAT_MODEL.md`.
-> Tag: `must-land` unless noted.
->
-> **Status-label convention (F11 — never claim a system you have not built).** Every load-bearing claim
-> is one of `[implemented]` (code exists + runs), `[selected]` (decided, not yet built), `[measured]`
-> (a real result from a real trace or probe), or `[planned]` (designed, scheduled). Candidate
-> `2069036e` has `[measured]` Railway staging smoke evidence: Runner-first deployment, schema `0021`,
-> `/health` and `/ready` at `200`, unauthenticated protected access at `401`, and the console shell
-> loading. Clerk Dashboard configuration and a signed-in real-user flow, a campaign, rollback exercise,
-> and production promotion remain `[selected]`/`[planned]`. Do not infer any of those from the staging
-> infrastructure smoke.
-
-| # | Beat | What it lands | Time |
-|---|---|---|---|
-| S0 | The standard | Frames every answer against the CISO bar | 15s |
-| S1 | What it is | Reusable platform, not a Co-Pilot test suite | 60s |
-| S2 | Why this shape | **The spine** — separation is a security property | 3m |
-| S3 | Diagram walk (D2) | Shows the loop *learns* rather than runs randomly | 3–4m |
-| S4a | Build vs configure | We bought nothing; we built the four graded things | 90s |
-| S4b | Per-role models | The refusal problem, solved structurally | 90s |
-| S4c | Trust boundaries | Where autonomy stops | 90s |
-| S4d | Contracts + regression | A test passing for the wrong reason | 90s |
-| S4e | Railway boundary | Full platform on Railway; only Web is public | 60s |
-| S4f | Clerk identity | Invitation-only MFA, backend permissions, two people | 90s |
-| S5 | Threat model | Full surface, OWASP-mapped, honestly unproven | 60s |
-| S6 | Hard questions | `reactive` — answers pre-loaded | — |
-| S7 | Run of show | `pre-flight` — not spoken | — |
-| S8 | Still-open | Volunteer them; honesty is the CISO move | 45s |
-
----
-
-### S0 — The standard `must-land`
-
-**Say.** "The deliverable that matters isn't the most impressive jailbreak — it's the platform a
-hospital CISO would trust with continuous testing of systems their physicians depend on. Every
-decision here is made to that bar."
-
-**Why it holds.** It is the PRD's own closing standard. Stating it first means every later answer is
-judged against a bar you set.
-
-**If pushed.** "That's why the hard parts here are the Judge, regression semantics, the cost governor,
-and the trust boundary — not the attacks."
-
----
-
-### S1 — What it is `must-land`
-
-**Say.** A reusable, **multi-agent adversarial evaluation platform** that *continuously* red-teams a
-live clinical Co-Pilot — discovering, evaluating, validating, regression-guarding, and documenting
-vulnerabilities autonomously. Target-agnostic via a pluggable adapter behind an allowlist. The OpenEMR
-Co-Pilot is **target #1, not the subject**; it is attacked over its live URL, and no target code lives
-in this repo.
-
-**Why it holds.** The PRD asks for a *reusable* platform, not a one-time pen test. Target-agnosticism
-is enforced structurally — adapters plus allowlist — rather than promised.
-
-**If pushed.** "Generalize the mechanism, specialize the content. Engine, contracts, harness, and
-observability are target-neutral; threat model, eval suite, and vuln reports are Co-Pilot-specific."
-
-**Concede.** Only one target is wired today. A second adapter is what would prove the claim.
-
----
-
-### S2 — Why this shape `spine`
-
-**Say (1) — why multi-agent, not one agent or a pipeline.** Attack generation and attack *evaluation*
-are a conflict of interest inside one context. Strategic prioritization is not execution. Documentation
-autonomy needs a trust boundary the generator must not hold. **Separation is the security property, not
-an org chart.**
-
-**Say (2) — why an independent Judge.** "An agent that both attacks and judges is compromised by
-design." The Judge shares no model, no provider, and no process with the Red Team — independence *by
-construction*. Its invariant — never approve a confirmed exploit — is **`[selected]` deterministic and
-fail-closed**: a canary/oracle hit overrides the LLM Judge, and ambiguity resolves to
-`INDETERMINATE`/`ERROR`, which never count as safe. Model independence is **defense-in-depth, not the
-invariant** (`ARCHITECTURE.md` §5, D13) — see S4b.
-
-**Say (3) — why autonomous at all.** "Adapting as attackers adapt, without a human in the loop for
-every step." Static payload lists rot. A human approving every prompt caps throughput at human speed.
-The value is the runs that happen while nobody is watching — so the Orchestrator is a machine operator
-reading the system's own state to decide what to test next.
-
-**Why it holds.** Each separation maps to a named failure it prevents: self-grading, random testing,
-unreviewed disclosure.
-
-**If pushed — "isn't this just microservices with prompts?"** "The boundaries are trust boundaries, not
-deployment boundaries. The Red Team runs an uncensored model over untrusted output; the Judge runs a
-different vendor under refusal-integrity. Merging them doesn't cost modularity — it costs the security
-property."
-
-**Concede.** More agents means more coordination surface, and every boundary is somewhere a contract
-can drift. That is exactly why contracts are versioned and both-sided contract-tested (S4d).
-
----
-
-### S3 — Diagram walk (D2) `must-land`
-
-**Say.** Trace the `[planned]` loop on the diagram: **Coverage + Findings view → Orchestrator → Red Team → Policy Gateway +
-Execution Recorder → live Co-Pilot → (recorded) → Judge → {mutate | confirm} → Documentation → Human
-approval → Vuln report**, with the Regression Harness admitting confirmed exploits and every agent
-writing back to the data plane. The Judge evaluates the **recorder's hashed `AttemptResult`**, not the
-raw target response — the attacker never produces the evidence it is judged on.
-
-**Why it holds.** The colors carry the argument: **blue** trusted control plane, **green** data &
-observability plane, **purple/teal** governed evaluators, **red** quarantined Red Team, **gray**
-external, **yellow** human gate. The Red Team has **exactly one exit** — the **trusted Policy Gateway**
-(which holds the only target credentials and enforces the allowlist) — so quarantine is visible rather
-than asserted. Edge 1, **Coverage + Findings → Orchestrator**, is *why this learns instead of attacking
-randomly.* *(Diagram render is being regenerated for this trust-split — spec is updated; see the diagram
-spec's regen note.)*
-
-**If pushed — "what closes the loop?"** "The Judge's verdict writes to the exploit DB; the Orchestrator
-reads coverage gaps and open findings from that same store. The loop closes through data, not a
-hand-off."
-
-**Concede.** The learning signal is only as good as the coverage metric behind it. The local projection
-now requires hash-verified evidence, persisted verdicts, valid taxonomy, synthetic fixture provenance,
-and nonce deduplication; its deployed and live-target operation remain unverified.
-
----
-
-### S4a — Build vs configure `must-land` → ADR-0001
-
-**Say.** "We stand on Garak, PyRIT, Giskard, Promptfoo, ZAP, and Semgrep for coverage, multi-turn
-scaffolding, OWASP mapping, web DAST, and our-code SAST — all free and OSS. We *built* exactly the four
-things none of them do: coverage-driven orchestration, autonomous mutation, an independent
-drift-guarded Judge, and regression admission. We bought nothing — a commercial red-team platform is
-out of budget, closed, un-governable under our own allowlist and cost caps, and buying one *is* the
-product we were asked to build."
-
-**Why it holds.** The ADR evaluates each tool against what it actually covers and where it falls short,
-so "custom" lands as a finding rather than a default.
-
-**If pushed — "PyRIT already does multi-turn refinement, why not just use it?"** "It does, and we wrap
-it. What it doesn't do is orchestrate by coverage gap, judge independently, document reproducibly, or
-maintain a regression corpus across target versions. We configured the attack primitives and built the
-system around them."
-
-**Concede.** PyRIT/Garak/Giskard have versioned parser/normalization seams and fixture contract tests,
-but pinned offline executions remain deferred. The MVP campaign uses the hand-authored nine-case corpus;
-none of these tools is claimed as executed or as verdict authority.
-
----
-
-### S4b — Per-role models `must-land`
-
-**Say.** "Frontier models refuse authorized offensive generation, so the Red Team is an **uncensored
-open-weights model** — `[selected]` **hosted-OSS by default** for the deployed/overnight path (so
-'continuous, unattended' is real on Railway), with a **local 24–33B on the dev Mac** as a config switch
-for development and the local cost-baseline. The **Judge default is Claude Sonnet 5 (`claude-sonnet-5`)**, chosen on **measured
-calibration, false-negative rate, consistency, latency, and cost** — *not* because of refusal behavior:
-the 'never approve a confirmed exploit' invariant is enforced **deterministically** (oracle/canary
-precedence, fail-closed), and refusal is a model *characteristic and failure mode*, not a security
-control. Documentation default is **GPT-5.4 (`openai/gpt-5.4`)** — a *different vendor from the Judge*, so a single-vendor failure
-can't corrupt the trust chain (defense-in-depth, not the invariant)."
-
-> **Say the current model names (reconciled 2026-07-25).** The frozen hosted set is
-> `orchestrator=anthropic/claude-opus-4.8`, `red_team=qwen/qwen3.5-397b-a17b`,
-> **`judge=google/gemini-2.5-pro`**, `documentation=openai/gpt-5.4`
-> (`src/agentforge/agents/hosted.py:31-38`, rejected on deviation at `:352-353`). The vendor-separation
-> conclusion still holds — Google Judge vs OpenAI Documentation — but do **not** reach it via
-> "the Judge is Anthropic Sonnet": that premise is stale, and a reviewer who checks `hosted.py` will
-> catch it.
->
-> **If pushed on enforcement, concede immediately.** The `Judge.vendor != Documentation.vendor` check is
-> **specified but not implemented** — no such check exists in `src/agentforge/agents/**` and no test
-> references it. The property holds *by configuration*, and one provider (`openrouter`) fronts all four
-> roles, so provider-level correlated failure is not mitigated. Say that plainly; it is recorded in
-> `ARCHITECTURE.md` §20 and the drift register.
-
-**Why it holds.** Each role's model is chosen for the property that role must guarantee, and vendor
-diversity across Judge and Documentation breaks correlated failure.
-
-**If pushed — "you're running an uncensored model?"** "The model is unconstrained; the *system* around
-it is not. Allowlisted target only, synthetic data only, per-target scoped credentials, budget and rate
-caps, full trace capture, human approval before any finding publishes."
-
-**Concede.** Local throughput is unmeasured. Token profiles and Mac tok/s get measured at MVP **before
-any cost number is presented** — see S8.
-
----
-
-### S4c — Trust boundaries + human gates (same canvas as S3) `must-land`
-
-**Say.** "Attack *generation* is untrusted; attack *execution* is not. The Red Team proposes inputs but
-holds no credentials and has no path to the target — its only exit is a **trusted Policy Gateway +
-Execution Recorder** that enforces the allowlist, per-target scoped credentials, synthetic-data-only,
-budget and rate caps, and a hard abort, and records a **hashed, append-only `AttemptResult`** the Judge
-reads. Credentials are **bound to their target** — cross-target use is impossible by construction, and
-the allowlist is environment-scoped. Humans approve any critical finding and any remediation. **That is
-where autonomy stops.**"
-
-**Why it holds.** Two independent controls: the allowlist decides what you *may* hit; per-target scoped
-credentials decide what you *can* reach. Neither alone is sufficient — and both live in the **trusted**
-gateway, not the untrusted generator, so the attacker never controls the enforcement point or the
-evidence the Judge sees.
-
-**If pushed — "what stops this being turned on something else?"** "The allowlist, scoped credentials,
-authorization, budget and rate caps are enforced in the **Policy Gateway's runtime code** — independent
-of *how* a run was triggered (Claude, a direct Python call, or Railway cron). Disabling model-invocation
-on the campaign skill is a convenience that stops *Claude* auto-invoking it; it is **not** the control,
-because it does nothing against a direct run or a cron fire. Every run is fully traced and attributable."
-
-**Concede.** Anyone with sufficient administrative access could attempt to widen the allowlist — the
-controls are least privilege, runtime enforcement, review, and auditability. The two-person rule is not
-waived for the Week-3 timeline: `approver.user_id != launcher_user_id` is enforced from immutable Clerk
-identities. If no second authorized human is available, the operation remains pending or is aborted;
-there is no emergency self-approval path.
-
----
-
-### S4d — Contracts + regression integrity `must-land`
-
-**Say.** "Inter-agent messages are versioned, framework-neutral JSON Schemas with typed error
-taxonomies and both-sided contract tests. A regression case is admitted only if it reproduces *and*
-passes for the right reason — a real fix, not changed model behavior. **A test that goes green because
-behavior drifted is worse than no test.**"
-
-**Why it holds.** Breaking changes require a version bump, a migration note, and updated contract tests;
-the tooling *detects* incompatibility, a human *decides* whether to accept it.
-
-**If pushed — "how do you tell a fix from drift?"** "Where we can plant canary tokens in the target's
-synthetic fixtures, leakage is a deterministic string match rather than a judgment call, and admission
-requires deterministic reproduction before promotion. A confirmed exploit is marked *fixed* only by a
-deterministic regression oracle — never by an LLM-only verdict."
-
-**Concede.** The canary oracle needs write access to the *target's* data, and the target is external — so
-for a target we cannot pre-seed (likely for the flagship PHI-exfiltration category), detection is
-Judge-judgment **plus human escalation**, not deterministic. We state that honestly rather than imply an
-oracle the ownership boundary denies; the ground-truth calibration set is the control there (S6).
-
----
-
-### S4e — Railway hosting boundary `must-land`
-
-**Say.** "`[measured]` Railway staging hosts the **full platform**, not only a worker: one public Web
-service for the console/API and minimal health/authentication shell; private Runner, Scheduler, and
-Postgres services behind it. Candidate `2069036e` deployed Runner-first, migrated to sole head `0021`,
-then brought Scheduler and Web up. `[planned]` Production promotion and the signed-in Clerk audit remain
-separate gates."
-
-**Why it holds.** Public exposure is intentionally one service. By contract the scheduler only enqueues
-and the runner claims durable work; Postgres carries queue, checkpoints, evidence, findings, approvals,
-and audit data. The private entrypoints require the exact schema head and expose no public listener.
-Pre-deploy Alembic migrations use expand/contract discipline, `/health` proves liveness, `/ready` gates
-DB/schema/local-auth-config readiness, and deployment-history rollback is paired with Postgres PITR because
-rolling back a container does not roll back data.
-
-**If pushed — "what is actually live?"** "Staging Web is public at
-`https://web-staging-8e30.up.railway.app`; Runner and Scheduler are private, PostgreSQL is at `0021`,
-the public probes return `200`, a protected request without a token returns `401`, and the console shell
-loads. No one signed in, no campaign or provider/target call ran, rollback was not exercised, and
-production was not promoted."
-
-**Concede.** Railway private networking is not application authorization. Every service still uses
-least-privilege bindings and per-agent DB roles, and the Web service still defaults every non-allowlisted
-route to authenticated.
-
----
-
-### S4f — Clerk human identity and RBAC `must-land` → ADR-0002
-
-**Say.** "`[selected]` Clerk is the managed human IdP — no custom password, OAuth, or session database.
-Enrollment is restricted/invitation-only into the exact **Headshot** Organization; Personal Accounts and
-user-created Organizations are disabled; MFA is required with TOTP plus backup codes, never SMS-only.
-The backend accepts only a verified Clerk `session_token`, verifies it networklessly from a pinned PEM
-public key, checks exact non-wildcard authorized parties and the exact Organization ID, then authorizes
-from custom permission claims — never a frontend role label or Clerk system permission."
-
-**Why it holds.** The Principal is frozen and minimum-data: user ID, session ID, Organization ID, role for
-audit context, and an immutable custom-permission set. It never contains the bearer token or headers. Four
-roles map to exact permissions: Operator reads the full protected platform and audit history and adds
-launch, abort, target, and config management; Approver reads the same protected data and adds campaign
-authorization and finding approval/resolution. These are the only accepted human roles.
-
-**If pushed — "does an Approver role authorize a launch?"** "No. A verified custom permission authorizes
-the application action; the role is assignment/audit context. Campaign execution still crosses the Policy
-Gateway. Approval also proves a second identity — role or permission never overrides
-`approver.user_id != launcher_user_id`."
-
-**Concede.** `[implemented]` The React console obtains a session token at request time and FastAPI
-requires it as Bearer authentication; that code is present in the staged artifact. `[measured]` Staging
-proved config/readiness, shell delivery, and missing-token `401` only. `[planned]` Clerk Dashboard
-resources, exact Organization/permissions/MFA, two real users, cross-Organization denial, and the
-signed-in flow remain unverified. Application and database controls reject self-approval; queue
-completion cannot approve. Networkless JWT verification also means permission revocation freshness is
-bounded by session-token refresh/expiry; short-lived sessions and a future critical-action
-freshness/step-up check are the hardening path. Verifier/config failures fail closed (`503`), not open.
-
----
-
-### S5 — Threat model `must-land`
-
-**Say.** Six categories across the full attack surface — RAG, write-back, tools, uploads. Priority
-order: **injection → PHI exfiltration → tool misuse (write-back is a real action) → state corruption →
-DoS/cost → identity/role.** Each mapped to OWASP Web + LLM Top 10.
-
-**Why it holds.** Priority follows blast radius: write-back means an attack changes clinical state
-rather than merely leaking it.
-
-**If pushed — "what defenses exist today?"** "Stated honestly as *to-be-probed*. The platform
-establishes them empirically rather than assuming them."
-
-**Concede.** Categories the target cannot currently express are marked *modeled but not exercisable*,
-with the reason — the eval suite draws its ≥3 categories from the live-testable set.
-
----
-
-### S6 — Hard questions `reactive`
-
-| They ask | You answer |
-|---|---|
-| How do you keep the Judge honest / detect drift? | The invariant is **code, not model behavior**: a deterministic oracle/canary hit overrides the LLM Judge, ambiguity fails closed (`INDETERMINATE`/`ERROR`, never "safe"). Drift is caught by async dual-judging over the ground-truth set + a stratified live sample; crossing a drift threshold disables LLM-only dispositions for that category (`judge-calibration`). |
-| What stops the transcript from injecting your *own* Judge or Documentation agent? | A target response echoed back is a live injection aimed at the next LLM — so the Judge/Documentation treat transcript content as **untrusted data, not instructions**: rubric-as-system + fenced transcript, structured extraction, and Documentation renders from structured fields + escaped evidence. Platform-injection cases are in the Judge calibration set. |
-| Where did you deliberately *not* use AI? | The Policy Gateway (deterministic policy), evidence hashing + DB-role enforcement, the oracles/canaries, and validators shared by skill *and* CI: contract-compat, eval-case schema, duplicate-sequence, data-quality — plus Semgrep/ZAP. AI where judgment is needed, determinism where it isn't. |
-| How is this not turned against systems it shouldn't attack? | Allowlist + per-target credential binding + synthetic-data assertion + budget/rate caps + abort — all enforced in the **Policy Gateway's runtime code, independent of trigger** (not a skill flag). Every live run is fully traced. |
-| What if the Red Team produces genuinely harmful content? | Quarantined; holds no credentials; only ever executed via the trusted gateway against the allowlisted target; never runs against our control plane; treated as untrusted data even by the Judge/Documentation. |
-| How is cost not tokens × N? | Two line families on different functions: **hosting** is a step function of peak concurrency; **inference** is modeled *separately* — hosted = measured tokens × current rates (prompt-cache + Batch adjusted), local = amortized capacity — never a `list_price ÷ throughput` figure (that is dimensionally invalid). Each tier (100→100K) names the architectural change it forces. **Numbers are deferred to measurement.** |
-| Deploy / rollback? | `[measured]` Staging used the required Runner-first sequence from candidate `2069036e`, reached schema `0021`, then activated Scheduler and public Web; probes passed. `[planned]` Production and the rollback exercise remain. Deployment history reverts *code*; **expand/contract migrations + Postgres PITR** are the data-recovery design. |
-| Who can access the console/API? | `[measured]` In staging, public responses are limited to `/health`, `/ready`, built assets, and the non-data SPA/Clerk shell; a protected request without a token returned `401`. `[implemented]` The code accepts only an active Bearer `session_token` from the exact authorized party and Headshot Organization. `[planned]` Real-user Organization/permission/MFA verification remains. |
-| What happens if Clerk or auth config fails? | Issued sessions verify networklessly from the pinned PEM key, so JWKS is not a hot-path dependency. Missing/invalid auth is `401`, valid identity without org/permission/distinct approver is `403`, and SDK/verifier/security-config failure is fail-closed `503`. Never log the token or authorization header. |
-| Can the launcher approve their own campaign? | No. The authenticated launcher is persisted with the exact authorization scope; approval reloads it server-side, and both application logic and a database trigger compare immutable verified user IDs. The browser cannot provide launcher identity. Queue completion is not approval. There is no solo or emergency bypass. |
-| Is campaign launch operational? | The private staging Runner is deployed and healthy, but the deployment was smoke-only: no campaign, provider call, or target call ran. A live launch remains unverified until exact target authorization, a distinct approver, preflight, and the governed role composition all pass. Authentication or deployment readiness never bypasses those gates. |
-| What backs the queue, and what happens when it backs up? | One Postgres (`SKIP LOCKED`); jobs accumulate *durably* — nothing dropped — depth is visible, and the cost governor throttles new campaigns. Graceful, observable degradation. |
-| One honest weakness? | LangGraph checkpoints are crash-persistence, not exactly-once durable execution — mitigated with an app-level lock; DBOS-on-Postgres is the path if unattended multi-hour campaigns come into scope. |
-
----
-
-### S7 — Run of show `pre-flight`
-
-1. Finish **D2** + **D4** diagrams (Excalidraw + exported SVG/PNG) — **highest priority; S3 depends on them.**
-2. Confirm ADR-0001 reads clean.
-3. Confirm `THREAT_MODEL.md` summary + `USERS.md`.
-4. Dry-run S2–S4 aloud (~8 min).
-5. Stand up Langfuse Cloud Hobby so the demo shows inter-agent traces + per-agent cost.
-6. Confirm the deployed target URL is in hand (Stage-1 hard gate).
-7. Use the verified staging URL only for staging smoke claims; keep production marked `PENDING` until
-   its separate promotion passes.
-8. Verify Clerk Restricted mode, Headshot Organization, required MFA, the exact two-role permission
-   matrix, and two distinct test users before presenting auth as implemented.
-
----
-
-### S8 — Still-open `volunteer these`
-
-**Say.** "Eight things remain open or unverified. They do not change the architecture, but they do block
-specific deployed claims."
-
-- Target's exact auth mode + API shape — pending inspection.
-- Whether the target exposes a web surface for ZAP.
-- Real per-agent token profiles + Mac tok/s — measured at MVP **before any cost number is presented**.
-- PyRIT/Garak/Giskard wrapping deferred to post-MVP (D12 is the only `proposed` decision).
-- Railway staging services, domain, schema, and public probes are deployed; production and rollback
-  exercise remain open.
-- Clerk Dashboard resources, exact Operator/Approver assignments, two distinct users, and a signed-in
-  Railway auth smoke remain unverified.
-- Runner and Scheduler are deployed privately, but the governed q Red Team composition and a real
-  four-role campaign trace remain absent from staging evidence.
-- Server-prepared campaign composition, finding/evidence linkage, nonce-deduplicated verified coverage,
-  persisted traces, measured accounting, configuration snapshots, component heartbeats, and resilience
-  history — explicit unavailable states, never demo data.
-
-**Why it holds.** All eight are explicit here and in the corresponding planning, security, and deployment
-documents with acceptance gates — surfaced deliberately, not discovered live.
-
-**If pushed.** "Naming them is the point. A platform whose operator can't say what's unproven isn't one
-you'd trust with continuous testing."
+# AgentForge architecture defense
+
+**Updated:** 2026-07-26
+
+**Canonical requirements:** [`../../Week_3_AgentForge.pdf`](../../Week_3_AgentForge.pdf)
+
+**Exact state:** [`../CURRENT_STATE.md`](../CURRENT_STATE.md)
+
+This is the current defense briefing. Historical research and original decisions remain under
+`docs/planning/` and ADR-0001; ADR-0004 records the implemented runtime decision.
+
+## Thirty-second thesis
+
+AgentForge is a reusable multi-agent adversarial evaluation platform, not target-specific scripts. It
+attacks an externally deployed Clinical Co-Pilot only through a governed live URL. Clerk controls
+human access; exact two-person authorization controls campaign intent; a private Runner applies
+provider and target caps; PostgreSQL preserves evidence and recovery truth; an independent Judge
+cannot override a confirmed exploit; and Langfuse receives a sanitized, fail-soft projection.
+
+## What is actually deployed
+
+```mermaid
+flowchart LR
+    U["Headshot Operator / Approver"] --> C["Clerk"]
+    C --> W["Public Railway Web<br/>React + FastAPI"]
+    W --> DB[("Private PostgreSQL<br/>authority + queue + evidence")]
+    S["Private Scheduler"] --> DB
+    R["Private Runner"] --> DB
+    R --> OR["OpenRouter<br/>exact hosted routes"]
+    R --> LF["Langfuse<br/>fail-soft projection"]
+    R --> PG["Policy Gateway"]
+    PG --> T["Live Clinical Co-Pilot"]
+```
+
+- Python 3.12, FastAPI, Uvicorn, SQLAlchemy 2, psycopg 3, Alembic.
+- React 18, TypeScript 5.9, Vite 7, Clerk.
+- One Docker artifact for Web, Runner, and Scheduler.
+- PostgreSQL durable queue with leases/`SKIP LOCKED`; no LangGraph dependency.
+- Alembic sole head `0025`.
+- OpenRouter exact routes with fallback disabled.
+- Langfuse 4.14.1 as an external projection; PostgreSQL is authoritative.
+- Staging is release-aligned; production is currently release-skewed and blocked for campaigns.
+
+## Why this is multi-agent
+
+| Role | Current model | Independent responsibility |
+|---|---|---|
+| Orchestrator | Claude Opus 4.8 | bounded planning/prioritization |
+| Red Team | Qwen3.5 397B A17B | exact approved-corpus selection; untrusted |
+| Judge | Gemini 2.5 Pro | independent advisory evidence assessment |
+| Documentation | GPT-5.4 | draft-only report after trusted confirmation |
+
+Separation is not a diagram claim. Every role has its own prompt digest, model/upstream route,
+configuration identity, schema, context, logical execution, physical invocation, telemetry, and
+authority boundary. Red Team cannot judge or publish; Judge cannot mutate attacks or confirm an
+exploit without deterministic/human authority; Documentation cannot publish.
+
+The live selector cannot inject arbitrary model output into the target. Novel generation follows
+generation → quarantine → review → immutable workload → fresh authorization.
+
+## Why custom orchestration
+
+The platform must bind authorization, database leases, work-unit order, target side effects, physical
+provider billing, and evidence hashes. A generic graph checkpoint would not establish whether a target
+turn happened exactly once. The custom Runner makes those state transitions explicit in PostgreSQL.
+This buys precise governance and lineage at the cost of owning retry/resume correctness; `PLAN.md`
+tracks the remaining work.
+
+## Authorization and failure safety
+
+A live request binds:
+
+- exact Clerk organization and distinct launcher/approver identities;
+- target, surface, version, adapter, and credential generation;
+- synthetic-data attestation and canaries;
+- workload/manifest/provenance hashes;
+- logical cases, physical target turns, target retries/rate/timeout/spend;
+- hosted role set, upstreams, prompt/policy/configuration digests;
+- provider calls/tokens/retries/rate/concurrency/spend; and
+- expiry/lease long enough for the run.
+
+Preflight fails before provider or target I/O on a mismatch. A release restart invalidates stale
+heartbeats and any authorization whose bound policy/config no longer resolves. Clerk authentication
+never releases a target credential.
+
+## Judge invariant
+
+The target and Red Team are hostile evidence sources. Trusted oracle/canary/human facts outrank the
+model. A model may advise likely/no observed exploit; it cannot downgrade trusted confirmation.
+
+The current staging Judge identity lacks enabled exact calibration. Its 11 successful latest-run
+decisions therefore terminalized `INDETERMINATE`. That is honest uncertainty, not proof of safety.
+
+## Evidence and observability
+
+PostgreSQL records:
+
+- authorization and approval;
+- campaign/job/work-unit state;
+- attempts and target calls;
+- content hashes and attempt results;
+- logical agent executions;
+- physical provider invocations/events, usage, cost, model/upstream, and status;
+- verdicts, findings, drafts, and audit events; and
+- Langfuse delivery state.
+
+Langfuse is useful for trace exploration but cannot authorize, adjudicate, or repair a campaign.
+Delivery is proved only by authenticated exact query-back. The latest failed campaign exposed a real
+gap: 36 agent and 16 target projections remain queued, and the verifier rejects non-completed runs.
+
+## Measured latest-run evidence
+
+Release `456d6e5` ran 12 of 34 cases:
+
+- 12 attempts/results;
+- 36 provider calls;
+- 16 target calls, including one HTTP `422`;
+- 11 `INDETERMINATE` verdicts;
+- `$0.60731395` measured provider cost; and
+- no lineage-binding conflict.
+
+The maximum Red Team call took 65.9 seconds, proving the 180-second timeout is necessary. The batch
+failed on one HTTP-`200`, schema-invalid Judge response because retries were configured to zero and one
+attempt exception aborted the batch.
+
+## Honest gaps and remediation
+
+1. Retry schema-invalid Judge output once within explicit physical-call/token/cost authority.
+2. Convert exhausted eligible provider-format failures into case-local `ERROR`, not campaign abort.
+3. Resume without replaying known target side effects.
+4. Project/query-back complete, failed, and aborted traces, including physical provider attempts.
+5. Calibrate the exact current Judge model/upstream/prompt/policy identity.
+6. Remove ceremonial per-case hosted work that cannot affect exact manifest dispatch.
+7. Realign production from one reviewed release and capture genuine signed-in Clerk acceptance.
+
+The platform is implemented and has meaningful live evidence, but the full 34-case shard and 100-case
+suite have not completed. That statement is part of the defense, not a footnote.
+
+## Build versus configure
+
+- **Built:** governed Orchestrator/Red Team/Judge/Documentation roles, Policy Gateway, durable queue,
+  evidence lineage, contracts, calibration gates, console, and campaign lifecycle.
+- **Configured/wrapped:** Clerk, Railway, PostgreSQL, OpenRouter/upstreams, Langfuse, ZAP, Semgrep,
+  Garak, PyRIT, Giskard, and Promptfoo.
+- **Rejected:** commercial red-team platforms as the product, Redis/Celery as an unnecessary second
+  state plane, browser-held secrets, arbitrary target URLs, model fallback, and target code inside this
+  repository.
+
+## AI-use disclosure
+
+AI coding agents assisted with research, implementation, tests, audits, and documentation. No agent
+was treated as deployment, campaign, approval, or publication authority. Requirements, code,
+migrations, test results, read-only deployed-state checks, and human-gated external actions remain the
+sources of truth.

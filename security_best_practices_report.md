@@ -1,5 +1,12 @@
 # Headshot Security Best-Practices Review
 
+> **Historical review (2026-07-23).** The original findings below are retained for provenance and do
+> not describe the current hosted runtime. Release `456d6e5` composes all four hosted roles, records
+> provider usage/cost/lineage, and runs a 100-case workload in three shards; the current reliability,
+> observability, calibration, and production-skew gaps are in
+> [`docs/CURRENT_STATE.md`](docs/CURRENT_STATE.md), [`THREAT_MODEL.md`](THREAT_MODEL.md), and
+> [`PLAN.md`](PLAN.md).
+
 Date: 2026-07-23
 
 ## Scope

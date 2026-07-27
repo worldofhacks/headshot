@@ -1,5 +1,13 @@
 # OWASP Coverage Matrix — AgentForge / Headshot
 
+> **Current workload correction (2026-07-26).** The tables below are the historical nine-seed MVP
+> matrix. The active reviewed `headshot-live-100-v1` workload contains **100 cases / 121 target turns**
+> across prompt injection 20, data exfiltration 18, tool misuse 18, state corruption 15, denial of
+> service 14, and identity/role exploitation 15. It contains 69 boundary, 29 invariant, and 2
+> regression cases. Its authored mappings cover Web `A01,A03,A04,A05,A06,A07,A08,A09,A10` and LLM
+> `LLM01`–`LLM10`. Mapping is authored scope, not proof of successful execution or target safety.
+> See [`../CURRENT_STATE.md`](../CURRENT_STATE.md).
+
 Target under test: **OpenEMR Clinical Co-Pilot** (`target_ref: openemr-clinical-copilot`).
 Every mapping below is transcribed from a seed file actually read in `evals/seeds/*.json`; no
 mapping is invented. Category names come from `OWASP_NAMES` in

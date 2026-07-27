@@ -1,46 +1,58 @@
 # Railway service configuration
 
-These files are config-as-code inputs for three services built from the same reviewed image:
+The three manifests deploy one reviewed Docker artifact as separate services:
 
-- `/railway/web.json` — `python -m agentforge.web`; the only service permitted a public domain;
-- `/railway/runner.json` — `python -m agentforge.runner`; private, no HTTP ingress; and
-- `/railway/scheduler.json` — `python -m agentforge.scheduler`; private, no HTTP ingress.
+- `railway/web.json` — public React/FastAPI Web; the only service with a domain;
+- `railway/runner.json` — private durable campaign worker; and
+- `railway/scheduler.json` — private target-version/replay-plan scheduler.
 
-All three builds require the environment-specific, public `VITE_CLERK_PUBLISHABLE_KEY` build
-identifier because each independently compiles the shared Web image. No Clerk secret is a build
-argument or request-authentication dependency.
+PostgreSQL is a fourth private managed service.
 
-Railway configuration is per deployment. During authorized provisioning, set each service's config
-path to the corresponding absolute repository path. The JSON files do not create projects, services,
-domains, databases, variables, or private-network policy. A human must verify in both staging and
-production that Web alone has public ingress and that Runner, Scheduler, and PostgreSQL have none.
+## Current release contract
 
-Only Web runs the pre-deploy command `alembic upgrade head`. Runner and Scheduler must refuse to
-consume or enqueue work until their database is already at the one exact packaged head.
+- Web alone runs `alembic upgrade head`.
+- Runner and Scheduler refuse work until PostgreSQL is at the exact packaged head.
+- The current sole packaged head is `0025`.
+- Web, Runner, and Scheduler must expose the same hosted generation-policy digest and packaged policy
+  file hash before new campaign authorization is minted.
+- Staging currently satisfies that policy parity. Production does not; see
+  `docs/CURRENT_STATE.md`.
+- The hosted Red Team is composed in governed campaigns as a closed reviewed-corpus selector.
+- Provider and target calls occur only in Runner.
 
-For the `0017` → `0018` → `0019` release, “Runner before Web” means:
+The JSON files configure a service deployment; they do not create projects, environments, services,
+domains, databases, variables, private-network rules, Clerk configuration, or authorization.
 
-1. obtain the signed, environment-specific human deployment grant binding the exact commit/image,
-   public Web origin, service IDs, revision range, and packaged target head;
-2. close launches/scheduling and prove zero active leases, running hosted executions, and queued
-   dispatchable authorizations;
-3. scale the old Runner to zero—`runner.json` permits 30 seconds of process overlap, which is unsafe
-   for this migration;
-4. deploy the new Runner artifact first against `0017` and prove it remains inert at the exact-head
-   gate;
-5. stage Web without public promotion and let its sole migrator apply `0018`, `0019`, and every
-   later serialized revision through the exact packaged head;
-6. verify and activate the new private Runner; then
-7. promote Web publicly and complete the human-provided signed-in audit.
+## Required deployment order
 
-Here, deploying an artifact does not activate work consumption or public traffic. Do not perform
-any production step without the signed grant, and do not bypass the signed-in audit if production
-stops at `/sign-in`. See `docs/deployment/RAILWAY.md` for the complete sequencing, environment
-isolation, variables, rollback, and evidence requirements.
+Deployment is an explicit external operation:
 
-The private Runner is composed over the durable queue and remains fail-closed until its database,
-catalog, corpus, exact authorization, caps, and sealed credential reference all pass preflight.
-The current Red Team step is deterministic authorized-corpus selection; the traced q generator is
-not production-composed and must not be reported as a fourth live hosted role.
-The private Scheduler observes ready target versions and writes idempotent, append-only regression
-replay plans that remain blocked on human authorization. It does not enqueue or execute attacks.
+1. Obtain the reviewed exact commit and require GitHub and GitLab CI green.
+2. Push the same commit to `origin` and `gitlab`.
+3. Stop launches/scheduling and prove no active campaign leases, running hosted executions, or
+   dispatchable queued authorization.
+4. Deploy the new Runner artifact first. It must remain inert while the old schema is active.
+5. Deploy Web and allow its pre-deploy migration to reach the new sole head.
+6. Verify Web readiness and exact schema.
+7. Activate/verify Runner and its heartbeat.
+8. Deploy/verify Scheduler.
+9. Compare policy digest and packaged policy-file hash across all three services.
+10. Run target-free four-role acceptance and exact Langfuse query-back.
+11. Mint fresh target authorization only after all deployment checks pass.
+
+Do not deploy Web and Runner from different commits. A policy digest minted by Web is resolved again
+by Runner; version skew fails closed as `hosted_runtime_authority_invalid`.
+
+## Process behavior
+
+| Manifest | Important behavior |
+|---|---|
+| `web.json` | `/ready` health gate, pre-deploy Alembic migration, 30-second overlap, 60-second drain |
+| `runner.json` | no HTTP ingress, 30-second overlap, 60-second drain; prove quiescence before migrations that make overlap unsafe |
+| `scheduler.json` | no HTTP ingress, zero overlap, 30-second drain |
+
+All three builds need the environment's public `VITE_CLERK_PUBLISHABLE_KEY` because the shared image
+contains the compiled console. No Clerk, provider, target, database, or Langfuse secret is a Docker
+build argument.
+
+The full variable and rollback contract is in `docs/deployment/RAILWAY.md`.

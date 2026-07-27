@@ -1,11 +1,19 @@
 # ADR-0001 — Build vs Configure (security tooling + platform stack)
 
-- **Status:** Accepted (draft — ratified at Architecture Defense; binding after `/arch-finalize`)
+- **Status:** Accepted for tool/build boundaries; runtime-stack portions superseded by
+  [ADR-0004](0004-postgresql-native-hosted-runtime.md)
 - **Date:** 2026-07-20
 - **Deciders:** platform author; reviewed at the Architecture Defense
 - **Required by:** PRD "Optional Engineering Deliverables → Build-versus-configure decisions" (a graded
   Architecture Defense deliverable)
 - **Sources:** `docs/planning/RESEARCH.md` (July 2026, sourced); `docs/planning/DECISIONS.md`
+
+> **Current-reading note (2026-07-26):** This ADR preserves the original Architecture Defense
+> decision and its rationale. The implemented platform does **not** depend on LangGraph, does **not**
+> run a local Red Team model, and does **not** use the nine-case MVP corpus as its current workload.
+> It uses a custom PostgreSQL durable Runner, four exact hosted roles through OpenRouter, and a
+> 100-case/121-turn corpus split 34/33/33. ADR-0004 and
+> [`../CURRENT_STATE.md`](../CURRENT_STATE.md) govern those runtime facts.
 
 ## Context
 The platform must continuously red-team a live OpenEMR Clinical Co-Pilot (RAG + write-back + tools +

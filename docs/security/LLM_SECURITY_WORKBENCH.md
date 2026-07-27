@@ -1,6 +1,7 @@
 # Headshot LLM Security Workbench
 
-Verified: 2026-07-22.
+Tool integration evidence was verified 2026-07-22; the workload/runtime description was reconciled
+2026-07-26.
 
 Headshot implements the Burp-style workflow that is useful for a governed black-box LLM target; it
 does not claim that the commercial PortSwigger Burp Suite product is installed. PortSwigger's own
@@ -16,7 +17,7 @@ out-of-band/browser-specific tools:
 | Dashboard + Target | Targets, Campaigns, Coverage | Versioned ready targets and enabled surfaces only |
 | Proxy + Logger + Inspector | PostgreSQL target/agent ledgers, campaign-correlated Langfuse projection, sanitized Traces inspector | Every target request and all four agent roles are recorded; only hashes, sizes, timing, usage, cost, and status leave the Runner for Langfuse |
 | Repeater | Regression replay | Versioned corpus plus fresh exact-scope authorization; no arbitrary raw resend |
-| Intruder | Garak, PyRIT, Giskard and Promptfoo candidate/mutation toolchain | Five reviewed Garak/PyRIT/Promptfoo candidates join the 14-attempt full scan; Giskard remains analysis-only until it emits an explicit attack; PolicyGateway applies rate, attempt, timeout and cost caps |
+| Intruder | Garak, PyRIT, Giskard, Promptfoo, and hosted Red Team candidate/mutation toolchain | Reviewed candidates enter the 100-case workload only through immutable generation/review provenance; Giskard remains analysis-only until it emits an explicit attack; PolicyGateway applies exact rate, turn, timeout, retry, and cost caps |
 | Scanner | Exact-origin passive ZAP plus independent Judge | Scanner findings are advisory and publication remains human-gated |
 | Decoder | PyRIT Base64, ROT13 and ASCII-smuggling converters | Offline candidate transformation only |
 | Comparer | Attempt evidence, independent Verdict and resilience history | Attack generation cannot approve its own result |
@@ -36,8 +37,8 @@ Judge.
 
 - There is one target exit: the PolicyGateway. Neither the workbench nor an imported tool opens a
   second network path.
-- Repeater- and Intruder-style execution uses `headshot-full-scan-v1`, changes the baseline corpus
-  identity, and requires a fresh approval
+- Current Repeater-/Intruder-style live execution uses an exact `headshot-live-100-batch-*` workload,
+  changes the baseline corpus identity, and requires a fresh approval
   bound to target, surface, corpus hash, nonce, rate, attempts, timeout, and cost.
 - The target and agent ledgers store sanitized content and hashes. Raw prompts, target responses,
   credentials, and evidence bodies never reach Langfuse; the browser receives only bounded,

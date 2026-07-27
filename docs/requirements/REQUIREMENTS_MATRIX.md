@@ -1,5 +1,12 @@
 # Final requirements matrix
 
+> **Historical traceability snapshot.** This matrix records the evidence state at its audit commit. It
+> remains useful for requirement provenance but is not a live deployment ledger. Current architecture,
+> infrastructure, policy, release state, known reliability gaps, and the active remediation plan are in
+> [`../CURRENT_STATE.md`](../CURRENT_STATE.md), [`../../ARCHITECTURE.md`](../../ARCHITECTURE.md), and
+> [`../../PLAN.md`](../../PLAN.md). Reconcile this matrix against those sources before grading or
+> release sign-off.
+
 Audit timestamp: `2026-07-23T20:42:45Z`
 Audited parent commit: `215584f4a16522073b8aef9453c1578bdd243669`
 Canonical row-level ledger: [`REQUIREMENTS_MATRIX.csv`](REQUIREMENTS_MATRIX.csv)

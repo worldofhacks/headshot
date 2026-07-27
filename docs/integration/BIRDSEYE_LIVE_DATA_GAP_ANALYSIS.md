@@ -1,5 +1,9 @@
 # Birdseye live-data gap analysis
 
+> **Historical implementation audit.** The gap table records the console integration when it was
+> reviewed; current deployed behavior, latest run counts, and Langfuse limitations are in
+> [`../CURRENT_STATE.md`](../CURRENT_STATE.md) and [`../../console/README.md`](../../console/README.md).
+
 ## Scope
 
 This analysis compares the `Headshot Adversarial Testing Console-handoff.zip` reference with the

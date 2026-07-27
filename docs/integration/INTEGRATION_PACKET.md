@@ -1,5 +1,10 @@
 # Integration Packet — MVP Secure Local Spine + M11 Corpus + M5/M8 + Offline E2E
 
+> **Historical integration packet.** Preserve this as evidence for its 2026-07-22 base; it does not
+> describe current migration, corpus, hosted-role, deployment, or run status. Current integration is
+> summarized in [`../CURRENT_STATE.md`](../CURRENT_STATE.md) and
+> [`../../ARCHITECTURE.md`](../../ARCHITECTURE.md).
+
 ## Final integration supplement — 2026-07-22
 
 Current branch: `codex/final-integration-audit`; base commit: `7749fd598dee`. This supplement is
