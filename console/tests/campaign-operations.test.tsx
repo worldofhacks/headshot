@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import type { ApiClient } from "../src/api/client";
@@ -12,9 +12,12 @@ import {
   selectOperationsCampaign,
 } from "../src/screens/RunOperationsScreen";
 import type {
+  AttemptReadModel,
   CampaignOperationsReadModel,
   CampaignReadModel,
+  EvidenceReadModel,
 } from "../src/types";
+import { PERMISSIONS } from "../src/types";
 
 const at = "2026-07-26T22:00:00Z";
 
@@ -283,7 +286,7 @@ describe("run operations selection and presentation", () => {
       organization_permissions: ["org:console:read"],
     };
 
-    render(
+    const view = render(
       <RunOperationsScreen
         client={client}
         principal={principal}
@@ -300,6 +303,95 @@ describe("run operations selection and presentation", () => {
     expect(screen.getByText(
       "Selected campaign metadata is unavailable in the bounded campaign list. Loading the exact campaign-scoped operations projection.",
     )).not.toBeNull();
+    view.unmount();
+  });
+
+  it("expands an attempt in place and renders the exact recorded target request", async () => {
+    const selectedCampaign = campaign("campaign-failed", "failed", at);
+    const attempt: AttemptReadModel = {
+      attempt_id: "attempt-12",
+      ordinal: 12,
+      case_id: "case-12",
+      content_hash: "attempt-content",
+      executed_at: at,
+      trace_id: "trace-12",
+      verdict: "INDETERMINATE",
+      confidence: 0.8,
+      execution_profile: "live",
+      evidence_provenance: "live_target",
+      created_at: at,
+    };
+    const evidence: EvidenceReadModel = {
+      campaign_run_id: selectedCampaign.run_id,
+      attempt_id: attempt.attempt_id,
+      target_id: selectedCampaign.target_id,
+      target_version: selectedCampaign.target_version,
+      surface_id: selectedCampaign.surface_id,
+      surface_version: selectedCampaign.surface_version,
+      attack_attempt: { category: "prompt_injection" },
+      request_transcript: { request: ["Exact synthetic prompt sent to the target."] },
+      response_transcript: "Synthetic target response.",
+      policy_decision_id: "policy-12",
+      executed_at: at,
+      trace_id: attempt.trace_id,
+      content_hash: "evidence-content",
+      verdict: attempt.verdict,
+      confidence: attempt.confidence,
+      execution_profile: attempt.execution_profile,
+      evidence_provenance: attempt.evidence_provenance,
+    };
+    const client = {
+      read: vi.fn(async (path: string) => {
+        if (path === RESOURCE_PATHS.campaigns) {
+          return { state: "ready" as const, data: [selectedCampaign] };
+        }
+        if (path === RESOURCE_PATHS.campaignOperations(selectedCampaign.run_id)) {
+          return { state: "ready" as const, data: operations };
+        }
+        if (path === RESOURCE_PATHS.attempts(selectedCampaign.run_id)) {
+          return { state: "ready" as const, data: [attempt] };
+        }
+        if (path === RESOURCE_PATHS.campaignAgentActivity(selectedCampaign.run_id)) {
+          return { state: "empty" as const, data: [] };
+        }
+        if (path === RESOURCE_PATHS.evidence(attempt.attempt_id)) {
+          return { state: "ready" as const, data: evidence };
+        }
+        return { state: "empty" as const, data: null };
+      }),
+      command: vi.fn(),
+    } as unknown as ApiClient;
+    const principal: Principal = {
+      user_id: "user-1",
+      organization_id: "org-1",
+      organization_role: "org:operator",
+      organization_permissions: [PERMISSIONS.consoleRead, PERMISSIONS.evidenceRead],
+    };
+
+    const view = render(
+      <RunOperationsScreen
+        client={client}
+        principal={principal}
+        campaignId={selectedCampaign.run_id}
+      />,
+    );
+
+    const details = (await screen.findByText("Attempt 12")).closest("details");
+    expect(details).not.toBeNull();
+    expect(client.read).not.toHaveBeenCalledWith(
+      RESOURCE_PATHS.evidence(attempt.attempt_id),
+      expect.anything(),
+    );
+    details!.open = true;
+    fireEvent(details!, new Event("toggle"));
+
+    expect(await screen.findByText(/Exact synthetic prompt sent to the target/)).not.toBeNull();
+    expect(details!.open).toBe(true);
+    expect(client.read).toHaveBeenCalledWith(
+      RESOURCE_PATHS.evidence(attempt.attempt_id),
+      expect.any(AbortSignal),
+    );
+    view.unmount();
   });
 
   it("leads with exact failed progress, execution units, cost, and typed cause", () => {

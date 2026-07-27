@@ -8,12 +8,14 @@ import {
   decodeAttempts,
   decodeCampaignOperations,
   decodeCampaigns,
+  decodeEvidence,
 } from "../api/read-models";
 import { COMMAND_PATHS, RESOURCE_PATHS } from "../api/paths";
 import {
   ExpandableEvidence,
   PromptTranscript,
 } from "../components/ExpandableEvidence";
+import { AdversarialText } from "../components/AdversarialText";
 import {
   DistributionBars,
   EvidenceGrid,
@@ -39,6 +41,7 @@ import type {
   AttemptReadModel,
   CampaignOperationsReadModel,
   CampaignReadModel,
+  EvidenceReadModel,
 } from "../types";
 import { PERMISSIONS } from "../types";
 
@@ -48,7 +51,6 @@ export interface RunOperationsScreenProps {
   campaignId?: string | null;
   expandedAttemptId?: string | null;
   onCampaignSelect?: (campaignId: string) => void;
-  onAttemptSelect?: (attemptId: string) => void;
 }
 
 const latestFirst = (left: CampaignReadModel, right: CampaignReadModel) =>
@@ -299,14 +301,12 @@ function AttemptEvidenceList({
   activity,
   canReadEvidence,
   expandedAttemptId,
-  onAttemptSelect,
 }: {
   client: ApiClient;
   attempts: AttemptReadModel[];
   activity: AgentActivityReadModel[];
   canReadEvidence: boolean;
   expandedAttemptId?: string | null;
-  onAttemptSelect?: (attemptId: string) => void;
 }) {
   return (
     <div className="event-stack">
@@ -315,46 +315,111 @@ function AttemptEvidenceList({
           .filter((execution) => execution.attempt_id === attempt.attempt_id)
           .sort((left, right) => left.started_at.localeCompare(right.started_at));
         return (
-          <ExpandableEvidence
+          <AttemptEvidenceRecord
             key={attempt.attempt_id}
-            title={`Attempt ${count(attempt.ordinal)}`}
-            meta={`${attempt.verdict ?? "Verdict unavailable"} · case ${shortId(attempt.case_id)}`}
+            client={client}
+            attempt={attempt}
+            executions={executions}
+            canReadEvidence={canReadEvidence}
             defaultOpen={expandedAttemptId === attempt.attempt_id}
-            onToggle={(open) => {
-              if (open) onAttemptSelect?.(attempt.attempt_id);
-            }}
-          >
-            <EvidenceGrid
-              values={[
-                { label: "Case", value: shortId(attempt.case_id) },
-                { label: "Verdict", value: attempt.verdict ?? "Unavailable" },
-                {
-                  label: "Executed",
-                  value: attempt.executed_at === null ? "Unavailable" : time(attempt.executed_at),
-                },
-                { label: "Profile", value: attempt.execution_profile ?? "Unavailable" },
-                { label: "Provenance", value: attempt.evidence_provenance ?? "Unavailable" },
-              ]}
-            />
-            {executions.length === 0
-              ? (
-                <StateNotice
-                  state="empty"
-                  detail="No agent executions are correlated to this attempt."
-                />
-              )
-              : executions.map((execution) => (
-                <ExecutionEvidence
-                  key={execution.execution_id}
-                  client={client}
-                  execution={execution}
-                  canReadEvidence={canReadEvidence}
-                />
-              ))}
-          </ExpandableEvidence>
+          />
         );
       })}
     </div>
+  );
+}
+
+function TargetRequestEvidence({
+  client,
+  attemptId,
+}: {
+  client: ApiClient;
+  attemptId: string;
+}) {
+  const evidence = useResource<EvidenceReadModel>(
+    client,
+    RESOURCE_PATHS.evidence(attemptId),
+    decodeEvidence,
+  );
+  return (
+    <div>
+      <p className="field-label">Prompt sent to target</p>
+      <ResourceView
+        result={evidence.result}
+        emptyLabel="No target request has been recorded for this attempt yet."
+      >
+        {(data) => data.request_transcript === null
+          ? (
+            <StateNotice
+              state="empty"
+              detail="No target request has been recorded for this attempt yet."
+            />
+            )
+          : <AdversarialText>{JSON.stringify(data.request_transcript, null, 2)}</AdversarialText>}
+      </ResourceView>
+    </div>
+  );
+}
+
+function AttemptEvidenceRecord({
+  client,
+  attempt,
+  executions,
+  canReadEvidence,
+  defaultOpen,
+}: {
+  client: ApiClient;
+  attempt: AttemptReadModel;
+  executions: AgentActivityReadModel[];
+  canReadEvidence: boolean;
+  defaultOpen: boolean;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <ExpandableEvidence
+      title={`Attempt ${count(attempt.ordinal)}`}
+      meta={`${attempt.verdict ?? "Verdict unavailable"} · case ${shortId(attempt.case_id)}`}
+      defaultOpen={defaultOpen}
+      onToggle={setOpen}
+    >
+      <EvidenceGrid
+        values={[
+          { label: "Case", value: shortId(attempt.case_id) },
+          { label: "Verdict", value: attempt.verdict ?? "Unavailable" },
+          {
+            label: "Executed",
+            value: attempt.executed_at === null ? "Unavailable" : time(attempt.executed_at),
+          },
+          { label: "Profile", value: attempt.execution_profile ?? "Unavailable" },
+          { label: "Provenance", value: attempt.evidence_provenance ?? "Unavailable" },
+        ]}
+      />
+      {open && (
+        canReadEvidence
+          ? <TargetRequestEvidence client={client} attemptId={attempt.attempt_id} />
+          : (
+            <StateNotice
+              state="unavailable"
+              detail="The exact target request requires the org:evidence:read permission."
+            />
+            )
+      )}
+      {executions.length === 0
+        ? (
+          <StateNotice
+            state="empty"
+            detail="No agent executions are correlated to this attempt."
+          />
+          )
+        : executions.map((execution) => (
+          <ExecutionEvidence
+            key={execution.execution_id}
+            client={client}
+            execution={execution}
+            canReadEvidence={canReadEvidence}
+          />
+        ))}
+    </ExpandableEvidence>
   );
 }
 
@@ -363,13 +428,11 @@ function AttemptList({
   principal,
   campaignId,
   expandedAttemptId,
-  onAttemptSelect,
 }: {
   client: ApiClient;
   principal: Principal;
   campaignId: string;
   expandedAttemptId?: string | null;
-  onAttemptSelect?: (attemptId: string) => void;
 }) {
   const attempts = useResource<AttemptReadModel[]>(
     client,
@@ -423,7 +486,6 @@ function AttemptList({
             activity={activityData}
             canReadEvidence={principal.organization_permissions.includes(PERMISSIONS.evidenceRead)}
             expandedAttemptId={expandedAttemptId}
-            onAttemptSelect={onAttemptSelect}
           />
         )}
       </ResourceView>
@@ -653,13 +715,11 @@ function SelectedRunOperations({
   principal,
   campaignId,
   expandedAttemptId,
-  onAttemptSelect,
 }: {
   client: ApiClient;
   principal: Principal;
   campaignId: string;
   expandedAttemptId?: string | null;
-  onAttemptSelect?: (attemptId: string) => void;
 }) {
   const operations = useResource<CampaignOperationsReadModel>(
     client,
@@ -690,7 +750,6 @@ function SelectedRunOperations({
         principal={principal}
         campaignId={campaignId}
         expandedAttemptId={expandedAttemptId}
-        onAttemptSelect={onAttemptSelect}
       />
     </>
   );
@@ -702,7 +761,6 @@ export function RunOperationsScreen({
   campaignId = null,
   expandedAttemptId = null,
   onCampaignSelect,
-  onAttemptSelect,
 }: RunOperationsScreenProps) {
   const [localCampaignId, setLocalCampaignId] = useState<string | null>(null);
   const campaigns = useResource<CampaignReadModel[]>(
@@ -768,7 +826,6 @@ export function RunOperationsScreen({
               principal={principal}
               campaignId={selectedCampaignId}
               expandedAttemptId={expandedAttemptId}
-              onAttemptSelect={onAttemptSelect}
             />
           </>
         )}

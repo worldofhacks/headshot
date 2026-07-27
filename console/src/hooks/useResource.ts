@@ -55,7 +55,7 @@ export function useResource<T>(
     ? options.pollIntervalMs
     : fallbackPolling
       ? LIVE_RESOURCE_POLL_INTERVAL_MS
-      : undefined;
+      : options.pollIntervalMs;
   const resourceIdentity = useRef({ client, path });
   const lastSuccessful = useRef<ResourceResult<T> | null>(null);
   const identityChanged = resourceIdentity.current.client !== client

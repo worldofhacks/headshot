@@ -2383,11 +2383,6 @@ export function LegacyTargetsScreen({ client, principal }: ScreenProps) {
     RESOURCE_PATHS.targets,
     decodeTargets,
   );
-  const campaigns = useResource<CampaignReadModel[]>(
-    client,
-    RESOURCE_PATHS.campaigns,
-    decodeCampaigns,
-  );
   const [selectedIdentity, setSelectedIdentity] = useState<string | null>(null);
   const [catalogIdentity, setCatalogIdentity] = useState("");
   const records = targets.result.data ?? [];
@@ -2411,17 +2406,6 @@ export function LegacyTargetsScreen({ client, principal }: ScreenProps) {
         title="Targets"
         detail="Only persisted immutable target and attack-surface versions may be selected for dispatch."
       />
-      {records.flatMap((target) => (target.campaign_suite_templates ?? []).map((suite) => (
-        <FullCampaignSuite
-          key={`${target.target_id}:${target.version}:${suite.suite_id}`}
-          client={client}
-          principal={principal}
-          suite={suite}
-          target={target}
-          campaigns={campaigns.result.data ?? []}
-          refreshCampaigns={campaigns.refresh}
-        />
-      )))}
       <Panel
         title="Trusted target catalog"
         meta="server-owned registration"

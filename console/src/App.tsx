@@ -19,6 +19,7 @@ import {
   decodePrincipal,
 } from "./api/read-models";
 import {
+  LIVE_RESOURCE_POLL_INTERVAL_MS,
   useResource,
 } from "./hooks/useResource";
 import { shortId } from "./components/Analytics";
@@ -45,7 +46,6 @@ import type {
   BirdseyeSnapshotReadModel,
   CampaignReadModel,
 } from "./types";
-import { PERMISSIONS } from "./types";
 
 const navigation: Array<{ screen: PrimaryScreen; label: string; icon: string }> = [
   { screen: "runs", label: "Runs", icon: "M3 12h3.5l2.5 7 4.5-14 2.5 7H21" },
@@ -166,6 +166,7 @@ function ConsoleShellContent({
     client,
     RESOURCE_PATHS.campaigns,
     decodeCampaigns,
+    { pollIntervalMs: LIVE_RESOURCE_POLL_INTERVAL_MS },
   );
   const approvals = useResource<ApprovalReadModel[]>(
     client,
@@ -179,10 +180,12 @@ function ConsoleShellContent({
   );
   const campaignData = campaigns.result.data ?? [];
   const routedCampaignId = isCampaignScopedScreen(route.screen) ? route.entityId : null;
-  const explicitCampaignId = routedCampaignId ?? selectedCampaignId;
+  const explicitCampaignId = routedCampaignId
+    ?? (route.screen === "live" ? selectedCampaignId : null);
   const selectedCampaign = explicitCampaignId === null
-    ? campaignData.find((campaign) => campaign.state === "running")
-      ?? campaignData.find((campaign) => campaign.state === "queued")
+    ? [...campaignData]
+      .sort((left, right) => Date.parse(right.created_at) - Date.parse(left.created_at))
+      .find((campaign) => campaign.state === "running" || campaign.state === "queued")
       ?? [...campaignData].sort(
         (left, right) => Date.parse(right.created_at) - Date.parse(left.created_at),
       )[0]
@@ -204,16 +207,6 @@ function ConsoleShellContent({
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
   }, [theme]);
-  useEffect(() => {
-    if (isCampaignScopedScreen(route.screen) && route.entityId !== null) {
-      setSelectedCampaignId(route.entityId);
-    }
-  }, [route.screen, route.entityId]);
-  useEffect(() => {
-    if (selectedCampaign !== null && selectedCampaignId === null) {
-      setSelectedCampaignId(selectedCampaign.run_id);
-    }
-  }, [selectedCampaign?.run_id, selectedCampaignId]);
   const common = { client, principal, entityId: route.entityId, getToken };
   const workspace = workspaceRoute(route.screen);
 
@@ -232,12 +225,9 @@ function ConsoleShellContent({
             go({ screen: "runs", entityId: campaignId });
           }}
           onCampaignResolved={setSelectedCampaignId}
-          onAttemptSelect={principal.organization_permissions.includes(PERMISSIONS.evidenceRead)
-            ? (attemptId) => go({ screen: "live", entityId: attemptId })
-            : undefined}
           onViewChange={(view) => go({
             screen: view === "operations" ? "runs" : "targets",
-            entityId: activeCampaignId,
+            entityId: null,
           })}
         />
       );
@@ -308,9 +298,7 @@ function ConsoleShellContent({
               aria-current={workspace.screen === item.screen ? "page" : undefined}
               onClick={() => go({
                 screen: item.screen,
-                entityId: item.screen === "runs" || item.screen === "observability"
-                  ? activeCampaignId
-                  : null,
+                entityId: null,
               })}
             >
               <LineIcon path={item.icon} />
@@ -378,9 +366,7 @@ function ConsoleShellContent({
               className={workspace.screen === item.screen ? "active" : undefined}
               onClick={() => go({
                 screen: item.screen,
-                entityId: item.screen === "runs" || item.screen === "observability"
-                  ? activeCampaignId
-                  : null,
+                entityId: null,
               })}
             >
               {item.label}
