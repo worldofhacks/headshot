@@ -13,10 +13,11 @@ import { StateNotice } from "./ResourceView";
 import { ApiClientError, type ApiClient } from "../api/client";
 import type { Principal } from "../api/contracts";
 import { RESOURCE_PATHS } from "../api/paths";
-import { decodeProviderCallEvidence } from "../api/read-models";
+import { decodeEvidence, decodeProviderCallEvidence } from "../api/read-models";
 import type {
   ProviderCallEvidenceReadModel,
   ProviderCallReadModel,
+  EvidenceReadModel,
 } from "../types";
 import { PERMISSIONS } from "../types";
 
@@ -49,6 +50,136 @@ const langfuseProjection = (call: ProviderCallReadModel) => {
   if (call.langfuse_status === "not_attempted") return "Langfuse not attempted";
   return "Projected · per-call query-back pending";
 };
+
+type AttemptEvidenceState =
+  | { status: "idle" }
+  | { status: "loading" }
+  | { status: "ready"; evidence: EvidenceReadModel }
+  | { status: "unavailable"; detail: string };
+
+function AttemptTargetPayloadDisclosure({
+  call,
+  client,
+}: {
+  call: ProviderCallReadModel;
+  client: ApiClient;
+}) {
+  const [state, setState] = useState<AttemptEvidenceState>({ status: "idle" });
+  const [requested, setRequested] = useState(false);
+
+  if (call.attempt_id === null) {
+    return (
+      <p className="data-note provider-call-evidence-note">
+        This call is not associated with a durable attempt id, so the exact target payload
+        cannot be joined from attempt evidence.
+      </p>
+    );
+  }
+
+  if (call.agent_role !== "red_team") {
+    return (
+      <p className="data-note provider-call-evidence-note">
+        This role does not dispatch target traffic.
+      </p>
+    );
+  }
+
+  const load = async () => {
+    if (requested) return;
+    setRequested(true);
+    setState({ status: "loading" });
+    try {
+      const envelope = await client.read<unknown>(RESOURCE_PATHS.evidence(call.attempt_id ?? ""));
+      if (envelope.state !== "ready" && envelope.state !== "stale" && envelope.state !== "degraded") {
+        setState({
+          status: "unavailable",
+          detail: envelope.detail
+            ?? envelope.reason_code
+            ?? "No attempt evidence was available for this attempt.",
+        });
+        return;
+      }
+      if (envelope.data === null) {
+        setState({ status: "unavailable", detail: "Attempt evidence was not returned." });
+        return;
+      }
+      const decoded = decodeEvidence(envelope.data);
+      setState({ status: "ready", evidence: decoded });
+    } catch {
+      setState({ status: "unavailable", detail: "Attempt evidence could not be requested." });
+    }
+  };
+
+  const evidenceLabel = "Prompt sent to target";
+
+  return (
+    <ExpandableEvidence
+      title={evidenceLabel}
+      meta={`attempt ${call.attempt_id}`}
+      onToggle={(open) => {
+        if (open) void load();
+      }}
+    >
+      {state.status === "idle" && (
+        <p className="data-note provider-call-evidence-note">
+          Expand to load the exact attempt-level target payload for this call.
+        </p>
+      )}
+      {state.status === "loading" && (
+        <StateNotice
+          state="loading"
+          detail="Requesting target payload from attempt evidence."
+        />
+      )}
+      {state.status === "unavailable" && (
+        <StateNotice state="unavailable" detail={state.detail} />
+      )}
+      {state.status === "ready" && (
+        <div className="evidence-stack">
+          {state.evidence.request_transcript === null
+            ? (
+              <StateNotice
+                state="empty"
+                detail="No target request transcript was recorded for this attempt yet."
+              />
+            )
+            : (
+              <ExpandableEvidence title="Target request transcript" meta="from attempt evidence">
+                <AdversarialText>{JSON.stringify(state.evidence.request_transcript, null, 2)}</AdversarialText>
+              </ExpandableEvidence>
+            )}
+          {state.evidence.response_transcript === null
+            ? null
+            : (
+              <ExpandableEvidence title="Target response" meta="from attempt evidence">
+                <AdversarialText>{state.evidence.response_transcript}</AdversarialText>
+              </ExpandableEvidence>
+            )}
+        </div>
+      )}
+    </ExpandableEvidence>
+  );
+}
+
+function roleBehaviorNote(role: ProviderCallReadModel["agent_role"]) {
+  if (role === "judge") {
+    return (
+      <StateNotice
+        state="empty"
+        detail="Judge role runs adjudication, not target dispatch. Its OpenRouter call does not hit the live target."
+      />
+    );
+  }
+  if (role === "red_team") {
+    return (
+      <StateNotice
+        state="empty"
+        detail="Red Team target payload is shown under the linked attempt evidence row below."
+      />
+    );
+  }
+  return null;
+}
 
 type ProviderCallEvidenceState =
   | { status: "idle" }
@@ -205,6 +336,7 @@ export function ProviderCallEvidenceDisclosure({
       )}
       {state.status === "ready" && (
         <div className="evidence-stack">
+          {roleBehaviorNote(call.agent_role)}
           {state.evidence.prompt === null
             ? (
               <StateNotice
@@ -230,6 +362,7 @@ export function ProviderCallEvidenceDisclosure({
               />
             )
             : <ProviderCallResponseEvidence response={state.evidence.response} />}
+          <AttemptTargetPayloadDisclosure call={call} client={client} />
         </div>
       )}
     </ExpandableEvidence>
@@ -326,6 +459,11 @@ export function ProviderCallLedger({
                   <td>
                     <strong>{call.agent_role.replace("_", " ")}</strong>
                     <small className="table-subline mono">physical #{call.physical_sequence}</small>
+                    <small className="table-subline mono">
+                      {call.agent_role === "red_team"
+                        ? "sends target request"
+                        : "no live target dispatch"}
+                    </small>
                   </td>
                   <td>
                     <span className={`telemetry-status ${callStatusTone(call)}`}>

@@ -3267,18 +3267,23 @@ class PostgresApiBackend(ApiBackend):
                     # here, and the recorded response is credential-screened below.
                     evidence_rows = _rows(
                         connection,
-                        "SELECT e.invocation_id, e.campaign_run_id, "
-                        "e.campaign_attempt_id AS attempt_id, e.agent_role, "
-                        "e.physical_sequence, e.status, e.error_code, "
-                        "e.logical_execution_id, e.response_text, "
+                        "SELECT i.invocation_id, i.campaign_run_id, "
+                        "i.campaign_attempt_id AS attempt_id, i.agent_role, "
+                        "i.physical_sequence, coalesce(e.status, 'in_flight') AS status, "
+                        "e.error_code, e.response_text, "
                         "e.response_truncated, e.response_sha256, "
+                        "COALESCE(e.logical_execution_id, i.logical_execution_id) "
+                        "AS logical_execution_id, "
                         "s.execution_id AS snapshot_execution_id "
-                        "FROM provider_call_events e "
+                        "FROM provider_call_invocations i "
+                        "LEFT JOIN provider_call_events e "
+                        "ON e.organization_id = i.organization_id "
+                        "AND e.invocation_id = i.invocation_id "
                         "LEFT JOIN agent_prompt_snapshots s "
-                        "ON s.organization_id = e.organization_id "
-                        "AND s.execution_id = e.logical_execution_id "
-                        "WHERE e.organization_id = :org "
-                        "AND e.invocation_id = :invocation",
+                        "ON s.organization_id = i.organization_id "
+                        "AND s.execution_id = COALESCE(e.logical_execution_id, i.logical_execution_id) "
+                        "WHERE i.organization_id = :org "
+                        "AND i.invocation_id = :invocation",
                         {
                             "org": principal.organization_id,
                             "invocation": invocation_id,

@@ -114,8 +114,9 @@ export function PromptTranscript({
 }) {
   // One source of truth for "is message 1 just the system prompt again", so the rendered
   // disclosures and the character total cannot disagree about what was actually sent.
+  const normalizeMessage = (value: string) => value.trim();
   const duplicatesSystemPrompt = messages[0]?.role === "system"
-    && messages[0].content === systemPrompt;
+    && normalizeMessage(messages[0]?.content) === normalizeMessage(systemPrompt);
   const sentMessages = duplicatesSystemPrompt ? messages.slice(1) : messages;
   return (
     <div className="evidence-stack">
