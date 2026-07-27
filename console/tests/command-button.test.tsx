@@ -90,7 +90,10 @@ describe("non-optimistic command controls", () => {
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Launch approved campaign" }));
-    expect(await screen.findByText(/Backend denied this launch \(403\)/))
+    // The detail names the refused command. It used to say "this launch" for every command routed
+    // through this button, which sent operators looking for a launch fault after a refused
+    // authorization request or approval.
+    expect(await screen.findByText(/Backend denied "Launch approved campaign" \(403\)/))
       .toBeTruthy();
   });
 });

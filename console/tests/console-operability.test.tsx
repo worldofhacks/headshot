@@ -774,6 +774,7 @@ describe("target console operability", () => {
         corpus_id: "week-3",
         corpus_hash: "c".repeat(64),
         case_count: 2,
+        physical_request_count: 3,
         tool_sources: [],
         execution_profile: "live" as const,
         maximum_caps: target(true).safety_caps,

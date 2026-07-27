@@ -2223,7 +2223,7 @@ const decodeTarget = (value: unknown): TargetReadModel => {
   ) => {
     const template = record(value, templateName);
     exactKeys(template, [
-      ...(batch ? ["ordinal", "batch_id", "physical_request_count"] : []),
+      ...(batch ? ["ordinal", "batch_id"] : []),
       "target_id",
       "target_version",
       "surface_id",
@@ -2231,18 +2231,21 @@ const decodeTarget = (value: unknown): TargetReadModel => {
       "corpus_id",
       "corpus_hash",
       "case_count",
+      "physical_request_count",
       "tool_sources",
       "execution_profile",
       "maximum_caps",
       "hosted_run",
     ], templateName);
+    // Every template carries it now — the scan needs it to size physical_request_limit exactly,
+    // not only the suite batches.
+    number(template, "physical_request_count", templateName, {
+      integer: true,
+      minimum: 1,
+    });
     if (batch) {
       number(template, "ordinal", templateName, { integer: true, minimum: 1 });
       string(template, "batch_id", templateName);
-      number(template, "physical_request_count", templateName, {
-        integer: true,
-        minimum: 1,
-      });
     }
     for (const key of [
       "target_id",

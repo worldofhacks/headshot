@@ -961,6 +961,25 @@ def _resolved_live_suite_batch(batch_id: str) -> AuthoredCorpus:
     return resolve_workload(batch_id)
 
 
+def _corpus_physical_request_count(corpus: AuthoredCorpus) -> int:
+    """Sigma(turns) over a reviewed corpus — one full pass expressed in physical requests.
+
+    This is the same derivation the Runner applies to exact-manifest workloads, and the same
+    quantity the suite batches already publish as ``physical_request_count``. The single-corpus
+    ``campaign_template`` did not publish it, so the console could only compose the target's four
+    legacy ceiling caps into an authorization request.
+
+    That is not a cosmetic omission. ``record_physical_work_unit`` refuses every physical work unit
+    whose authorized scope carries no durable ``physical_request_limit`` or
+    ``target_retries_per_turn``, so a scan authorized with the legacy caps alone is denied at launch
+    with a 403 that names neither missing cap. Publishing the count server-side lets the console
+    request an exactly-sized scope instead of guessing one, while the caps the operator may edit —
+    and every backend ceiling check — stay exactly as they were.
+    """
+
+    return sum(len(case.payload["input_sequence"]) for case in corpus.cases)
+
+
 class PostgresApiBackend(ApiBackend):
     """Organization-scoped projections over the integrated schema."""
 
@@ -5130,6 +5149,9 @@ class PostgresApiBackend(ApiBackend):
                                 "corpus_id": self._corpus.corpus_id,
                                 "corpus_hash": self._corpus.content_hash,
                                 "case_count": len(self._corpus.cases),
+                                "physical_request_count": _corpus_physical_request_count(
+                                    self._corpus
+                                ),
                                 "tool_sources": list(self._corpus.tool_sources),
                                 "execution_profile": "synthetic"
                                 if row["target_id"] == SYNTHETIC_TARGET_ID

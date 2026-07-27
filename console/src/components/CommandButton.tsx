@@ -21,9 +21,13 @@ const unavailableMessage = (reasonCode: string | undefined): string => {
   }
 };
 
-const failureMessage = (error: unknown): string => {
+// Every command routed through this button reported a 403 as a denied *launch*, so a refused
+// approval or authorization request sent the operator hunting for a launch problem that did not
+// exist. Name the action that was actually refused.
+export const failureMessage = (error: unknown, action?: string): string => {
   if (error instanceof ApiClientError && error.status === 403) {
-    return "Backend denied this launch (403). Refresh first. If the approval was already used or no longer covers the full run, request a fresh approval; otherwise return as the original Operator.";
+    const subject = action?.trim() ? `"${action.trim()}"` : "this action";
+    return `Backend denied ${subject} (403). Refresh first. If the approval was already used or no longer covers the full run, request a fresh approval; otherwise return as the original Operator.`;
   }
   if (error instanceof ApiClientError && error.status === 401) {
     return "Authentication expired. Sign in again before retrying.";
@@ -90,7 +94,7 @@ export function CommandButton({
       setState("acknowledged");
       onAcknowledged?.(response);
     } catch (error) {
-      setDetail(failureMessage(error));
+      setDetail(failureMessage(error, label));
       setState("error");
     }
   };
