@@ -282,8 +282,10 @@ def test_agent_acceptance_migration_is_the_only_head() -> None:
     # particular revision. Chain: ... -> 0022 (attempt_result.resource_measurements)
     # -> 0023 (governed target-bound four-role acceptance authority)
     # -> 0024 (Chutes provider-lineage observation)
-    # -> 0025 (six supported categories + reviewed-workload provenance).
-    assert script.get_heads() == ["0025"]
+    # -> 0025 (six supported categories + reviewed-workload provenance)
+    # -> 0026 (decisive / indeterminate / operational-error counts on the campaign summary).
+    assert script.get_heads() == ["0026"]
+    assert script.get_revision("0026").down_revision == "0025"
     assert script.get_revision("0025").down_revision == "0024"
     assert script.get_revision("0024").down_revision == "0023"
     assert script.get_revision("0023").down_revision == "0022"

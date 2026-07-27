@@ -30,6 +30,7 @@ from agentforge.providers.openrouter import (
     HostedBudgetExceeded,
     HostedProviderError,
     HostedProviderResponseError,
+    HostedStructuredOutputInvalid,
     HostedUsageEnvelope,
     HostedUsageLedger,
     OpenRouterTransport,
@@ -1359,9 +1360,13 @@ def test_charged_invalid_output_exposes_exact_observed_usage() -> None:
         lineage_recorder=_ProviderRecorder(),
     )
 
+    # This fixture authorizes one retry (role and global max_retries=1), and schema-invalid
+    # output is now the one retryable provider failure. The mock returns the same bad payload
+    # both times, so the retry is exhausted and the typed cause survives — it must NOT collapse
+    # into the generic "failed after the authorized retry" error.
     with pytest.raises(
-        HostedProviderResponseError,
-        match="measured usage was observed",
+        HostedStructuredOutputInvalid,
+        match="structured output failed schema validation",
     ) as raised:
         transport.invoke(
             role="judge",
@@ -1381,6 +1386,8 @@ def test_charged_invalid_output_exposes_exact_observed_usage() -> None:
             provider_context=_provider_context(configuration),
         )
 
+    assert raised.value.code == "invalid_structured_output"
+    assert raised.value.provider_event_status == "invalid_output"
     observed = raised.value.observed_result
     assert observed.output == {}
     assert observed.returned_model == "google/gemini-2.5-pro"
@@ -1388,9 +1395,11 @@ def test_charged_invalid_output_exposes_exact_observed_usage() -> None:
     assert observed.input_tokens == 30
     assert observed.output_tokens == 5
     assert observed.reasoning_tokens == 5
+    # Per-response measurements stay per-response...
     assert observed.measured_cost_usd == Decimal("0.000065")
-    assert observed.physical_attempts == 1
-    assert transport.ledger.snapshot.measured_usd == Decimal("0.000065")
+    # ...while the logical execution accounts for BOTH measured physical calls.
+    assert observed.physical_attempts == 2
+    assert transport.ledger.snapshot.measured_usd == Decimal("0.00013")
 
 
 def test_transport_rejects_reasoning_outside_completion_total() -> None:

@@ -18,7 +18,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from decimal import Decimal, InvalidOperation
 from types import MappingProxyType
-from typing import Any
+from typing import Any, NoReturn
 
 import httpx
 from jsonschema import Draft202012Validator
@@ -618,6 +618,79 @@ class HostedProviderResponseError(HostedProviderError):
         self.provider_event_status = provider_event_status
 
 
+class HostedStructuredOutputInvalid(HostedProviderResponseError):
+    """A fully measured, correctly routed response whose JSON failed the role's schema.
+
+    This is the ONLY provider failure that may be retried. It is deliberately a distinct type
+    rather than a ``provider_event_status`` check, because settlement failures (budget and token
+    caps) previously shared ``HostedProviderResponseError`` with schema failures, and a single
+    handler could not tell "the model formatted its answer badly" apart from "this call breached
+    an authorized cap". Retrying the latter would spend authority a human never granted.
+
+    By the time this is raised the response has already passed identity, route, model-substitution
+    and usage/cost settlement, so a retry cannot launder any of those violations. The failed
+    physical attempt stays durably recorded with its measured tokens, cost, request id and
+    ``invalid_output`` status; the retry is a new physical sequence under the same logical
+    execution and attempt.
+    """
+
+    code = "invalid_structured_output"
+
+
+class HostedRetryAdmissionRefused(HostedProviderResponseError):
+    """A retry was refused before it could be sent, by authority rather than by formatting.
+
+    Deliberately NOT a :class:`HostedStructuredOutputInvalid`, even though a structured-output
+    failure is what prompted the retry. Exhausted call/token/cost/rate authority is a governance
+    fact about the whole campaign, so it must stay campaign-fatal; isolating it per case would let
+    a run continue past the point where its authorized envelope ran out, reported as a formatting
+    nuisance.
+
+    It still carries the FIRST attempt's ``observed_result`` so the measured tokens and cost of a
+    call that genuinely happened are never dropped from the logical execution, and the refusal
+    itself is retained as ``__cause__``.
+    """
+
+    code = "retry-admission-refused"
+
+
+class HostedSettlementFailed(HostedProviderResponseError):
+    """Usage was measured but could not be settled against the authorized ledger."""
+
+
+class HostedSettlementBudgetExceeded(HostedSettlementFailed):
+    """Settlement was refused because a token or cost cap is exhausted.
+
+    Separated from :class:`HostedSettlementAccountingInvalid` because the two demand different
+    operator responses: this one means the run legitimately reached its authorized ceiling, which
+    a human can raise through the governed configuration path.
+    """
+
+    code = "settlement-budget-exceeded"
+
+
+class HostedSettlementAccountingInvalid(HostedSettlementFailed):
+    """Settlement was refused because the usage record itself is not coherent.
+
+    A double-settled reservation or malformed usage is a correctness fault in accounting, not a
+    spending decision, and must never be mistaken for "we ran out of budget".
+    """
+
+    code = "settlement-accounting-invalid"
+
+
+class _StructuredOutputAmbiguous(HostedProviderError):
+    """Structured output whose meaning is not single-valued — refused, never retried.
+
+    Distinct from :class:`HostedStructuredOutputInvalid`: that one means "the model failed to
+    produce the shape we asked for", which a second attempt can legitimately fix. This one means
+    "the response can be read two different ways", which is a smuggling channel rather than a
+    formatting slip, and retrying it would simply re-offer the channel.
+    """
+
+    code = "provider-structured-output-ambiguous"
+
+
 class _ModelSubstituted(HostedProviderError):
     """A measured response whose observed model differs from its authorization."""
 
@@ -781,30 +854,69 @@ class OpenRouterTransport:
         last_error: Exception | None = None
         physical_attempts = 0
         conservative_input_bound = self._conservative_input_token_bound(messages)
+
+        def refuse_before_send(
+            exc: HostedProviderError,
+            *,
+            cause: BaseException | None = None,
+        ) -> NoReturn:
+            """Raise a pre-send failure so a retry never loses attempt 1's measurements.
+
+            Pacing, credential resolution, reservation and lineage all run BEFORE the physical
+            send, so failing there consumes no provider authority. On a first attempt there is
+            nothing to preserve and the original error is re-raised untouched — deliberately
+            WITHOUT ``from``, because chaining an exception to itself creates a self-referential
+            __cause__ that renders as a confusing repeated frame.
+
+            On a RETRY there is something to preserve: attempt 1 was really sent, really measured
+            and really charged. Letting a measurement-free refusal escape would drop that charge
+            from the logical execution and misreport a formatting fault as an authority fault. So
+            the refusal is re-shaped to carry attempt 1's observed result — while remaining its own
+            campaign-fatal type, never the case-isolatable structured-output type, because
+            exhausted authority is a fact about the whole run.
+
+            ``cause`` is the underlying non-Hosted exception when one exists (a raw pacing or
+            credential-resolver failure); it becomes __cause__ instead of ``exc`` itself.
+            """
+
+            if not isinstance(last_error, HostedStructuredOutputInvalid):
+                exc.account_physical_attempts(physical_attempts)
+                if cause is None or cause is exc:
+                    raise exc
+                raise exc from cause
+            refusal = HostedRetryAdmissionRefused(
+                "authorized retry was refused before it could be sent",
+                observed_result=last_error.observed_result,
+                code=HostedRetryAdmissionRefused.code,
+                provider_event_status="invalid_output",
+            )
+            refusal.account_physical_attempts(physical_attempts)
+            raise refusal from (exc if cause is None else cause)
+
         with self._concurrency:
             for attempt in range(1, attempts + 1):
                 try:
                     self._pace(configuration)
                 except HostedProviderError as exc:
-                    exc.account_physical_attempts(physical_attempts)
-                    raise
+                    refuse_before_send(exc)
                 except Exception as exc:
-                    raise HostedProviderError(
-                        "provider pacing failed before another physical send",
-                        physical_attempts=physical_attempts,
-                    ) from exc
+                    refuse_before_send(
+                        HostedProviderError(
+                            "provider pacing failed before another physical send",
+                        ),
+                        cause=exc,
+                    )
                 try:
                     credential = self._credential_resolver(configuration.credential_reference)
                     if not isinstance(credential, Secret) or not credential:
                         raise HostedProviderError("hosted credential reference is unavailable")
                 except HostedProviderError as exc:
-                    exc.account_physical_attempts(physical_attempts)
-                    raise
+                    refuse_before_send(exc)
                 except Exception as exc:
-                    raise HostedProviderError(
-                        "hosted credential reference is unavailable",
-                        physical_attempts=physical_attempts,
-                    ) from exc
+                    refuse_before_send(
+                        HostedProviderError("hosted credential reference is unavailable"),
+                        cause=exc,
+                    )
                 try:
                     reservation = self._ledger.reserve(
                         role,
@@ -816,16 +928,14 @@ class OpenRouterTransport:
                         reasoning_tokens=max_reasoning_tokens,
                     )
                 except HostedProviderError as exc:
-                    exc.account_physical_attempts(physical_attempts)
-                    raise
+                    refuse_before_send(exc)
                 try:
                     invocation = self._begin_physical_attempt(
                         provider_context,
                         sequence=attempt,
                     )
                 except HostedProviderError as exc:
-                    exc.account_physical_attempts(physical_attempts)
-                    raise
+                    refuse_before_send(exc)
                 physical_attempts = attempt
                 try:
                     result = self._send(
@@ -872,6 +982,21 @@ class OpenRouterTransport:
                                 "provider retry pacing failed",
                                 physical_attempts=physical_attempts,
                             ) from sleep_error
+                except HostedStructuredOutputInvalid as exc:
+                    # The one retryable provider failure. Ordered BEFORE the general
+                    # HostedProviderResponseError handler below, which must keep refusing every
+                    # settlement/identity/route/model failure without a second send.
+                    #
+                    # The failed attempt is recorded first, so its measured tokens, cost, request
+                    # id and invalid_output status survive regardless of what the retry does. On
+                    # exhaustion the typed cause is re-raised as-is rather than falling through to
+                    # the generic "failed after the authorized retry" error, so callers and the
+                    # console still see invalid_structured_output.
+                    self._record_observed_failure(invocation, exc)
+                    last_error = exc
+                    if attempt >= attempts:
+                        exc.account_physical_attempts(physical_attempts)
+                        raise
                 except HostedProviderResponseError as exc:
                     self._record_observed_failure(invocation, exc)
                     exc.account_physical_attempts(physical_attempts)
@@ -1308,20 +1433,42 @@ class OpenRouterTransport:
             ) from settle_error
 
         if settle_error is not None:
-            raise HostedProviderResponseError(
+            # Settlement fails for two materially different reasons and the old funnel erased the
+            # difference, so `except HostedBudgetExceeded` could not catch a settlement-time cap
+            # breach — only the string code survived. Budget exhaustion is a governed ceiling a
+            # human can raise; accounting corruption is a correctness fault that must never be
+            # mistaken for one.
+            settlement_type = (
+                HostedSettlementBudgetExceeded
+                if isinstance(settle_error, HostedBudgetExceeded)
+                else HostedSettlementAccountingInvalid
+            )
+            raise settlement_type(
                 "OpenRouter response failed after measured usage was observed",
                 observed_result=observed_result,
                 code=settle_error.code,
                 provider_event_status="invalid_usage",
             ) from settle_error
 
+        # Settlement (above) has already succeeded, so every cap this call could breach has been
+        # charged and accepted. What remains is purely a formatting question, which is why this —
+        # and only this — raises the retryable type.
         try:
             output = self._structured_output(payload, output_schema)
-        except HostedProviderError as exc:
+        except _StructuredOutputAmbiguous as exc:
+            # Ambiguity is a refusal, not a retry. Keep the original non-retryable type so the
+            # smuggling channel is terminalized at the wire exactly as before.
             raise HostedProviderResponseError(
                 "OpenRouter response failed after measured usage was observed",
                 observed_result=observed_result,
                 code=exc.code,
+                provider_event_status="invalid_output",
+            ) from exc
+        except HostedProviderError as exc:
+            raise HostedStructuredOutputInvalid(
+                "OpenRouter structured output failed schema validation after measured usage",
+                observed_result=observed_result,
+                code=HostedStructuredOutputInvalid.code,
                 provider_event_status="invalid_output",
             ) from exc
         return replace(observed_result, output=output)
@@ -1496,7 +1643,12 @@ class OpenRouterTransport:
             Draft202012Validator.check_schema(dict(output_schema))
             Draft202012Validator(dict(output_schema)).validate(decoded)
         except _DuplicateStructuredKey as exc:
-            raise HostedProviderError(
+            # NOT a formatting slip and NOT retryable. A repeated key validates against the FIRST
+            # value while json.loads keeps the LAST, so the payload that was screened is not the
+            # payload that gets stored — a smuggling channel through the generator's own output.
+            # Retrying would hand the same channel a second attempt, so this keeps its own type
+            # and terminalizes at the wire.
+            raise _StructuredOutputAmbiguous(
                 "OpenRouter structured output repeated an object key"
             ) from exc
         except Exception as exc:

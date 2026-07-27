@@ -24,11 +24,26 @@ from agentforge.secrets import looks_like_provider_key
 
 HOSTED_CONFIGURATION_SCHEMA_VERSION = "1"
 HOSTED_PROVIDER = "openrouter"
-# Per-role calls remain bounded at 56. The shared envelope is larger because all four independent
-# roles execute within one reviewed batch.
-HOSTED_MAX_PHYSICAL_CALLS = 56
-HOSTED_MAX_GLOBAL_PHYSICAL_CALLS = 136
-HOSTED_MAX_MEASURED_USD = Decimal("10")
+# Sized from the exact worst case of the largest reviewed batch, so the ceiling is a derivation
+# rather than a round number. batch-01 authorizes 34 cases and the generation policy requires one
+# logical call per case per role. Granting the Judge — and only the Judge — a single
+# structured-output retry doubles its physical calls:
+#
+#     orchestrator   34 x 1 =  34
+#     red_team       34 x 1 =  34
+#     judge          34 x 2 =  68   <- the per-role ceiling
+#     documentation  34 x 1 =  34
+#                    global   170   <- the shared ceiling
+#
+# These were 56 and 136, which is the same arithmetic with NO retry anywhere (34 x 4 = 136). That
+# is why one malformed Judge response could not be retried: the platform envelope had no room for
+# a second physical call, independently of what any configuration asked for. Raising the ceiling
+# does not grant retries — a governed configuration still has to allocate them, and every other
+# role stays at zero.
+HOSTED_MAX_PHYSICAL_CALLS = 68
+HOSTED_MAX_GLOBAL_PHYSICAL_CALLS = 170
+# Raised in step with the call ceiling so a run cannot exhaust spend before its authorized calls.
+HOSTED_MAX_MEASURED_USD = Decimal("12")
 HOSTED_MAX_LOGICAL_RETRIES = 1
 HOSTED_MAX_CONCURRENCY = 1
 HOSTED_ROLE_MODELS: Mapping[AgentRole, str] = MappingProxyType(

@@ -75,7 +75,11 @@ from agentforge.policy.scoped_credentials import (
     SealedEnvironmentCredentialResolver,
 )
 from agentforge.providers.lineage import ProviderLogicalContextV1
-from agentforge.providers.openrouter import HostedUsageLedger, OpenRouterTransport
+from agentforge.providers.openrouter import (
+    HostedStructuredOutputInvalid,
+    HostedUsageLedger,
+    OpenRouterTransport,
+)
 from agentforge.readiness import expected_alembic_head
 from agentforge.regression import RegressionAdmissionGate, RegressionLifecycle
 from agentforge.secrets import Secret
@@ -916,6 +920,51 @@ class DurableCampaignRunner:
                 self.telemetry.flush()
             with contextlib.suppress(Exception):
                 self.telemetry.heartbeat()
+
+    def _record_operational_error_verdict(
+        self,
+        *,
+        run_id: str,
+        attempt_id: str,
+        error_code: str,
+    ) -> dict[str, Any]:
+        """Persist a contract-valid ERROR verdict against already-observed evidence.
+
+        Reached only when adjudication failed after the target turns completed, so the immutable
+        evidence exists and the case is genuinely un-adjudicated rather than un-attempted. The
+        verdict records exactly that: ``state=ERROR`` at zero confidence with a typed reason, which
+        is neither a security finding nor a claim that the target behaved safely.
+
+        Fails closed: if the evidence hash cannot be recovered the exception propagates and the
+        campaign aborts, because silently continuing would leave an attempt with observed target
+        traffic and no durable adjudication record at all.
+        """
+
+        evidence_content_hash = self.store.persisted_evidence_content_hash(
+            run_id=run_id,
+            attempt_id=attempt_id,
+        )
+        if not evidence_content_hash:
+            raise CampaignAbort(
+                "adjudication failed and its evidence is unavailable",
+                code="attempt_evidence_unavailable",
+            )
+        verdict: dict[str, Any] = {
+            "schema_version": "1",
+            "campaign_run_id": run_id,
+            "attempt_id": attempt_id,
+            "state": "ERROR",
+            "confidence": 0.0,
+            "reason_codes": ["judge_invalid_structured_output"],
+            "error_code": error_code,
+        }
+        self.store.record_attempt_outcome(
+            run_id=run_id,
+            attempt_id=attempt_id,
+            verdict=verdict,
+            evidence_content_hash=evidence_content_hash,
+        )
+        return verdict
 
     def _ensure_attempt_for_case(
         self,
@@ -2073,34 +2122,53 @@ class DurableCampaignRunner:
         while True:
             case, proposal, attempt, current_red_team_execution = work
             dispatch_payload = verified_case_payload(case)
-            if pre_manifest_hosted_judge is None:
-                outcome = coordinator.run_case(
-                    dispatch_payload,
-                    attack_attempt=proposal,
-                    attempt_id=attempt.attempt_id,
-                    red_team_execution_id=current_red_team_execution,
-                )
-            else:
-                with pre_manifest_hosted_judge.attempt(
-                    attempt_id=attempt.attempt_id,
-                    expected_safe_behavior=str(dispatch_payload["expected_safe_behavior"]),
-                    parent_execution_id=current_red_team_execution,
-                ):
+            # Per-case fault isolation. A model that cannot format its answer is an operational
+            # fault about ONE case; it is not a reason to discard the authority to evaluate the
+            # other 33. Only HostedStructuredOutputInvalid is isolated, and only after the
+            # transport already exhausted its authorized retry. Every governance failure is a
+            # different type — CampaignAbort, DispatchUnavailable, credential, budget, route,
+            # identity, evidence integrity, lease loss, unknown outcome — and still propagates,
+            # aborting the run exactly as before.
+            try:
+                if pre_manifest_hosted_judge is None:
                     outcome = coordinator.run_case(
                         dispatch_payload,
                         attack_attempt=proposal,
                         attempt_id=attempt.attempt_id,
                         red_team_execution_id=current_red_team_execution,
                     )
-            if not outcome.integrity_ok:
-                raise CampaignAbort("evidence integrity failed", code="evidence_integrity_failed")
-            effective_verdict = outcome.verdict
-            finding_id = self.store.record_attempt_outcome(
-                run_id=authorized.run.run_id,
-                attempt_id=attempt.attempt_id,
-                verdict=effective_verdict,
-                evidence_content_hash=outcome.result.content_hash,
-            )
+                else:
+                    with pre_manifest_hosted_judge.attempt(
+                        attempt_id=attempt.attempt_id,
+                        expected_safe_behavior=str(dispatch_payload["expected_safe_behavior"]),
+                        parent_execution_id=current_red_team_execution,
+                    ):
+                        outcome = coordinator.run_case(
+                            dispatch_payload,
+                            attack_attempt=proposal,
+                            attempt_id=attempt.attempt_id,
+                            red_team_execution_id=current_red_team_execution,
+                        )
+                if not outcome.integrity_ok:
+                    raise CampaignAbort(
+                        "evidence integrity failed", code="evidence_integrity_failed"
+                    )
+                effective_verdict = outcome.verdict
+                finding_id = self.store.record_attempt_outcome(
+                    run_id=authorized.run.run_id,
+                    attempt_id=attempt.attempt_id,
+                    verdict=effective_verdict,
+                    evidence_content_hash=outcome.result.content_hash,
+                )
+            except HostedStructuredOutputInvalid as exc:
+                effective_verdict = self._record_operational_error_verdict(
+                    run_id=authorized.run.run_id,
+                    attempt_id=attempt.attempt_id,
+                    error_code=exc.code,
+                )
+                # ERROR is never a security signal, so it can never open a finding or trigger
+                # the Documentation agent.
+                finding_id = None
             if finding_id is not None:
                 report_input = self._documentation_input(
                     payload=dispatch_payload,
@@ -2347,6 +2415,12 @@ class DurableCampaignRunner:
                 label = type(cause).__name__
                 if isinstance(cause_code, str) and cause_code:
                     label += f"[{cause_code[:64]}]"
+                elif isinstance(cause, DispatchUnavailable | CampaignAbort):
+                    # These two carry their detail in the message, and that detail is always a
+                    # platform-generated blocker code (e.g. "preflight_blocked:exact_request_caps
+                    # _mismatch") — never provider or target text. Without it an operator sees
+                    # only the class name, which is what made the original failure undiagnosable.
+                    label += f"[{str(cause)[:120]}]"
                 failure_chain.append(label)
                 cause = cause.__cause__ or cause.__context__
             sanitized_chain = " <- ".join(failure_chain)
