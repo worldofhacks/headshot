@@ -22,6 +22,7 @@ import {
   decodeFinding,
   decodeFindings,
   decodeReports,
+  decodeCampaignReports,
   decodeTargetCatalog,
   decodeTargets,
 } from "../api/read-models";
@@ -83,6 +84,7 @@ import {
   type FindingVerificationReadModel,
   type HostedRunBindingReadModel,
   type ReportReadModel,
+  type CampaignReportReadModel,
   type SafetyCapsReadModel,
   type TargetCatalogEntryReadModel,
   type TargetReadModel,
@@ -1536,6 +1538,12 @@ export function ReportsScreen({ client, entityId }: ScreenProps) {
     decodeReports,
     { pollIntervalMs: LIVE_RESOURCE_POLL_INTERVAL_MS },
   );
+  const campaignReports = useResource<CampaignReportReadModel[]>(
+    client,
+    RESOURCE_PATHS.campaignReports,
+    decodeCampaignReports,
+    { pollIntervalMs: LIVE_RESOURCE_POLL_INTERVAL_MS },
+  );
   const completionCampaigns = completionReportCampaigns(campaigns.result.data ?? []);
   const [showAllReportCampaigns, setShowAllReportCampaigns] = useState(false);
   const selectedCampaign = entityId
@@ -1549,7 +1557,7 @@ export function ReportsScreen({ client, entityId }: ScreenProps) {
       <ScreenHeading
         title="Reports"
         eyebrow="CAMPAIGN OUTCOMES AND FINDINGS"
-        detail="Every terminal campaign has an operational completion report. Vulnerability reports are created only for confirmed exploits and remain unpublished until a separate human decision."
+        detail="Every terminal campaign has an operational completion report and one vulnerability report naming everything that run found. A finding the model flagged but no oracle corroborated appears as an unconfirmed candidate: reviewable, and never publishable while it remains one."
       />
       <ResourceView
         result={campaigns.result}
@@ -1598,7 +1606,87 @@ export function ReportsScreen({ client, entityId }: ScreenProps) {
       {selectedCampaign && (
         <CampaignCompletionReport client={client} campaign={selectedCampaign} />
       )}
-      <Panel title="Vulnerability reports" meta="confirmed findings only" eyebrow="DOCUMENTATION AGENT DRAFTS">
+      {/* The run-level report is the review surface: one artifact per campaign listing everything
+          that run found. The per-finding drafts below remain the unit the regression lifecycle
+          tracks and are reached by drilling in, rather than being the thing a reviewer scans. */}
+      <Panel
+        title="Campaign vulnerability report"
+        meta={selectedCampaign ? selectedCampaign.run_id : "select a campaign"}
+        eyebrow="ONE REPORT PER RUN"
+      >
+        <ResourceView
+          result={campaignReports.result}
+          emptyLabel="No campaign has produced a run report yet."
+        >
+          {(data) => {
+            const runReport = selectedCampaign
+              ? data.find((entry) => entry.campaign_run_id === selectedCampaign.run_id) ?? null
+              : data[0] ?? null;
+            if (!runReport) {
+              return (
+                <StateNotice
+                  state="empty"
+                  detail="This campaign has no run report. Reports are written when a run reaches a terminal state."
+                />
+              );
+            }
+            const { totals } = runReport;
+            return (
+              <>
+                {runReport.run_state !== "complete" && (
+                  <div className="candidate-banner">
+                    <p className="field-label">Partial coverage · run {runReport.run_state}</p>
+                    <AdversarialText>
+                      {"This run did not finish, so it examined only part of its corpus. What it "
+                        + "found is real, but the absence of a finding is not evidence of absence."}
+                    </AdversarialText>
+                  </div>
+                )}
+                {totals.candidate_finding_count > 0 && (
+                  <div className="candidate-banner">
+                    <p className="field-label">
+                      {count(totals.candidate_finding_count)} candidate · awaiting your review
+                    </p>
+                    <AdversarialText>
+                      {"No deterministic oracle, canary or human corroborated these. They rest on "
+                        + "the model evaluator's assessment and cannot be published as candidates."}
+                    </AdversarialText>
+                  </div>
+                )}
+                <MetricStrip label="Run outcome" values={[
+                  { label: "Attempts", value: count(totals.attempt_count), note: `${count(totals.decisive_verdict_count)} decisive, ${count(totals.indeterminate_verdict_count)} indeterminate` },
+                  { label: "Confirmed", value: count(totals.confirmed_finding_count), note: "Oracle, canary or human" },
+                  { label: "Candidates", value: count(totals.candidate_finding_count), note: "Model assessment only" },
+                  { label: "Not adjudicated", value: count(totals.operational_error_count), note: "Operational faults, never a security signal" },
+                ]} />
+                {runReport.findings.length === 0 ? (
+                  <StateNotice
+                    state="empty"
+                    detail="This run opened no findings. That is a result, not a missing report."
+                  />
+                ) : (
+                  <RecordTable
+                    data={runReport.findings}
+                    identityKeys={["finding_id"]}
+                    columns={[
+                      { key: "source_case_id", label: "Case", mono: true },
+                      { key: "severity", label: "Severity" },
+                      { key: "category", label: "Category" },
+                      { key: "confirmation_status", label: "Confirmation" },
+                      { key: "report_id", label: "Detail", mono: true },
+                    ]}
+                    onSelect={(record) => {
+                      const reportId = identity(record, ["report_id"]);
+                      if (reportId) navigateTo({ screen: "reports", entityId: reportId });
+                    }}
+                  />
+                )}
+              </>
+            );
+          }}
+        </ResourceView>
+      </Panel>
+      <Panel title="Vulnerability reports" meta="per finding · regression lifecycle unit" eyebrow="DOCUMENTATION AGENT DRAFTS">
         <ResourceView result={reports.result} emptyLabel="No confirmed exploit produced a vulnerability report.">
           {(data) => {
             const gated = data.filter(

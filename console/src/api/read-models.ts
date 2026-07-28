@@ -54,6 +54,8 @@ import type {
   ProviderCallReadModel,
   RegressionDispositionReadModel,
   ReportReadModel,
+  CampaignReportReadModel,
+  CampaignReportFinding,
   ResilienceReadModel,
   SafetyCapsReadModel,
   TargetCallEvidenceReadModel,
@@ -1293,6 +1295,72 @@ export const decodeReports: ReadModelDecoder<ReportReadModel[]> = (value) =>
   records(value, "reports", decodeReport);
 
 export const decodeReportDetail: ReadModelDecoder<ReportReadModel> = decodeReport;
+
+const decodeCampaignReportFinding = (value: unknown): CampaignReportFinding => {
+  const name = "campaign report finding";
+  const result = record(value, name);
+  exactKeys(result, [
+    "finding_id",
+    "source_case_id",
+    "severity",
+    "category",
+    "confirmation_status",
+    "criteria_hits",
+    "rationale",
+    "report_id",
+  ], name);
+  for (const key of ["finding_id", "source_case_id", "category"]) string(result, key, name);
+  literal(result, "severity", ["low", "medium", "high", "critical"], name);
+  literal(result, "confirmation_status", ["confirmed", "candidate_unconfirmed"], name);
+  if (result.criteria_hits !== undefined) stringArray(result, "criteria_hits", name);
+  if (result.rationale !== undefined) string(result, "rationale", name);
+  if (result.report_id !== undefined) string(result, "report_id", name);
+  return result as CampaignReportFinding;
+};
+
+const decodeCampaignReport = (value: unknown): CampaignReportReadModel => {
+  const name = "campaign report";
+  const result = record(value, name);
+  exactKeys(result, [
+    "schema_version",
+    "report_id",
+    "campaign_run_id",
+    "run_state",
+    "execution_profile",
+    "totals",
+    "findings",
+    "publication_state",
+    "created_at",
+  ], name);
+  literal(result, "schema_version", ["1"], name);
+  for (const key of ["report_id", "campaign_run_id"]) string(result, key, name);
+  // Required, never defaulted: a consumer that could not tell an aborted run from a complete one
+  // would present partial coverage as a finished assessment.
+  literal(result, "run_state", ["complete", "aborted", "failed"], name);
+  literal(result, "execution_profile", ["synthetic", "live"], name);
+  literal(result, "publication_state", [
+    "draft_unpublished",
+    "blocked_pending_human_approval",
+  ], name);
+  timestamp(result, "created_at", name);
+  const totals = record(result.totals, name);
+  for (const key of [
+    "attempt_count",
+    "decisive_verdict_count",
+    "indeterminate_verdict_count",
+    "operational_error_count",
+    "confirmed_finding_count",
+    "candidate_finding_count",
+  ]) number(totals, key, name, { integer: true, minimum: 0 });
+  result.findings = records(result.findings, name, decodeCampaignReportFinding);
+  return result as CampaignReportReadModel;
+};
+
+export const decodeCampaignReports: ReadModelDecoder<CampaignReportReadModel[]> = (value) =>
+  records(value, "campaign reports", decodeCampaignReport);
+
+export const decodeCampaignReportDetail: ReadModelDecoder<CampaignReportReadModel> =
+  decodeCampaignReport;
 
 const decodeAgentBudget = (value: unknown): AgentBudgetReadModel => {
   const name = "agent budget";

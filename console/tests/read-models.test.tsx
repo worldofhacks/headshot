@@ -22,6 +22,7 @@ import {
   decodeFindings,
   decodePrincipal,
   decodeReports,
+  decodeCampaignReports,
   decodeResilience,
   decodeTargetCatalog,
   decodeTargets,
@@ -1852,6 +1853,53 @@ describe("v1 read-model decoders", () => {
       ...snapshot,
       agent_activity: [{ ...terminal, duration_ms: null }],
     })).toThrow("Invalid Birdseye agent activity read model");
+  });
+
+  it("refuses a campaign report that cannot say how its run ended", () => {
+    const runReport = {
+      schema_version: "1",
+      report_id: "cr-1",
+      campaign_run_id: "run-1",
+      run_state: "complete",
+      execution_profile: "synthetic",
+      totals: {
+        attempt_count: 9,
+        decisive_verdict_count: 1,
+        indeterminate_verdict_count: 7,
+        operational_error_count: 1,
+        confirmed_finding_count: 0,
+        candidate_finding_count: 1,
+      },
+      findings: [{
+        finding_id: "finding-1",
+        source_case_id: "AF-M11-DX-001",
+        severity: "high",
+        category: "data_exfiltration",
+        confirmation_status: "candidate_unconfirmed",
+        criteria_hits: ["PII.PHI_Disclosed"],
+        rationale: "The model returned a patient record summary.",
+        report_id: "vr-1",
+      }],
+      publication_state: "blocked_pending_human_approval",
+      created_at: at,
+    };
+
+    expect(decodeCampaignReports([runReport])).toEqual([runReport]);
+
+    // An aborted run examined only part of its corpus, so run_state must survive decoding.
+    expect(decodeCampaignReports([{ ...runReport, run_state: "aborted" }]))
+      .toEqual([{ ...runReport, run_state: "aborted" }]);
+
+    // Absent or unknown is refused rather than defaulted to "complete", which would present
+    // partial coverage as a finished assessment.
+    const { run_state: _omitted, ...withoutState } = runReport;
+    expect(() => decodeCampaignReports([withoutState])).toThrow("Invalid campaign report");
+    expect(() => decodeCampaignReports([{ ...runReport, run_state: "partly" }]))
+      .toThrow("Invalid campaign report");
+
+    // A finding entry must state its own confirmation; aggregation cannot blur the two kinds.
+    const bad = { ...runReport, findings: [{ ...runReport.findings[0], confirmation_status: "maybe" }] };
+    expect(() => decodeCampaignReports([bad])).toThrow("Invalid campaign report finding");
   });
 
   it("refuses a report that omits or misstates its confirmation status", () => {

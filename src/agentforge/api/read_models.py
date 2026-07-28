@@ -685,6 +685,46 @@ class ReportReadModel(_ReadModel):
     verification: FindingVerificationReadModel
 
 
+class CampaignReportFindingReadModel(_ReadModel):
+    finding_id: str
+    source_case_id: str
+    severity: Literal["low", "medium", "high", "critical"]
+    category: str
+    confirmation_status: Literal["confirmed", "candidate_unconfirmed"]
+    # Absent rather than empty when none was recorded: a blank would read as the evaluator having
+    # said nothing, which is a different claim from nothing having been stored.
+    criteria_hits: tuple[str, ...] | None = None
+    rationale: str | None = None
+    # The per-finding VulnReport this entry summarises. The run report aggregates those reports; it
+    # does not replace them, and the regression lifecycle still keys off them.
+    report_id: str | None = None
+
+
+class CampaignReportTotalsReadModel(_ReadModel):
+    attempt_count: int = Field(ge=0)
+    decisive_verdict_count: int = Field(ge=0)
+    indeterminate_verdict_count: int = Field(ge=0)
+    operational_error_count: int = Field(ge=0)
+    confirmed_finding_count: int = Field(ge=0)
+    candidate_finding_count: int = Field(ge=0)
+
+
+class CampaignReportReadModel(_ReadModel):
+    """One report per run: what a reviewer reads before approving anything."""
+
+    schema_version: Literal["1"]
+    report_id: str
+    campaign_run_id: str
+    # Required with no default. A run that aborted partway examined only part of its corpus, and a
+    # consumer that could not see that would read partial coverage as a finished assessment.
+    run_state: Literal["complete", "aborted", "failed"]
+    execution_profile: Literal["synthetic", "live"]
+    totals: CampaignReportTotalsReadModel
+    findings: tuple[CampaignReportFindingReadModel, ...]
+    publication_state: Literal["draft_unpublished", "blocked_pending_human_approval"]
+    created_at: datetime.datetime
+
+
 class CoverageReadModel(_ReadModel):
     target_version: str
     verified_attempt_count: int = Field(ge=0)
@@ -2335,6 +2375,8 @@ _LIST_ADAPTERS = {
     "audit": TypeAdapter(list[AuditReadModel]),
     "findings": TypeAdapter(list[FindingReadModel]),
     "reports": TypeAdapter(list[ReportReadModel]),
+    "campaign_reports": TypeAdapter(list[CampaignReportReadModel]),
+    "campaign_report": TypeAdapter(CampaignReportReadModel),
     "coverage": TypeAdapter(list[CoverageReadModel]),
     "resilience": TypeAdapter(list[ResilienceReadModel]),
     "costs": TypeAdapter(list[CostReadModel]),

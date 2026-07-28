@@ -4114,6 +4114,42 @@ class PostgresApiBackend(ApiBackend):
                     projected_finding_counts = Counter(row["finding_id"] for row in rows)
                     if any(count != 1 for count in projected_finding_counts.values()):
                         return ResourceResult.unavailable("finding_evidence_identifier_ambiguous")
+                elif resource in {"campaign_reports", "campaign_report"}:
+                    # Projected straight from the stored payload. It was composed from durable rows
+                    # inside the run's terminal transaction and the schema asserts the columns and
+                    # the payload agree, so this read re-derives nothing and can add no claim the
+                    # run did not record.
+                    campaign_where = "organization_id = :org"
+                    campaign_parameters: dict[str, Any] = {"org": principal.organization_id}
+                    if resource == "campaign_report":
+                        campaign_where += " AND campaign_run_id = :run_id"
+                        campaign_parameters["run_id"] = identifiers.get("campaign_id", "")
+                    campaign_rows = _rows(
+                        connection,
+                        "SELECT contract_payload, created_at FROM campaign_reports "
+                        "WHERE " + campaign_where + " ORDER BY created_at DESC",
+                        **campaign_parameters,
+                    )
+                    rows = []
+                    for source in campaign_rows:
+                        payload = source["contract_payload"]
+                        if not isinstance(payload, Mapping):
+                            return ResourceResult.unavailable("campaign_report_integrity_failed")
+                        payload = dict(payload)
+                        try:
+                            validate_contract("campaign_report", payload)
+                        except Exception:
+                            return ResourceResult.unavailable("campaign_report_integrity_failed")
+                        rows.append(
+                            {
+                                **_redact_evidence_display(payload),
+                                "created_at": source["created_at"],
+                            }
+                        )
+                    if resource == "campaign_report":
+                        if not rows:
+                            return ResourceResult.empty()
+                        rows = rows[:1]
                 elif resource in {"reports", "report"}:
                     where = "vr.organization_id = :org"
                     parameters = {"org": principal.organization_id}

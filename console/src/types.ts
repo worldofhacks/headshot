@@ -339,6 +339,43 @@ export interface ReportModelAssessment extends JsonRecord {
   criteria_hits?: string[];
 }
 
+export interface CampaignReportFinding extends JsonRecord {
+  finding_id: string;
+  source_case_id: string;
+  severity: "low" | "medium" | "high" | "critical";
+  category: string;
+  confirmation_status: "confirmed" | "candidate_unconfirmed";
+  /** Absent when none was recorded. An empty value would read as the evaluator having said
+   *  nothing, which is a different claim from nothing having been stored. */
+  criteria_hits?: string[];
+  rationale?: string;
+  /** The per-finding VulnReport this entry summarises. The run report aggregates those reports
+   *  rather than replacing them; the regression lifecycle still keys off them. */
+  report_id?: string;
+}
+
+/** One report per campaign run: the artifact reviewed before anything is approved. */
+export interface CampaignReportReadModel extends JsonRecord {
+  schema_version: "1";
+  report_id: string;
+  campaign_run_id: string;
+  /** How the run ended. An aborted or failed run examined only part of its corpus, so this must
+   *  never be absent or a reader would take partial coverage for a finished assessment. */
+  run_state: "complete" | "aborted" | "failed";
+  execution_profile: "synthetic" | "live";
+  totals: {
+    attempt_count: number;
+    decisive_verdict_count: number;
+    indeterminate_verdict_count: number;
+    operational_error_count: number;
+    confirmed_finding_count: number;
+    candidate_finding_count: number;
+  };
+  findings: CampaignReportFinding[];
+  publication_state: "draft_unpublished" | "blocked_pending_human_approval";
+  created_at: string;
+}
+
 export interface ReportReadModel extends JsonRecord {
   schema_version: "1";
   report_id: string;

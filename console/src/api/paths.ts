@@ -16,6 +16,8 @@ export const RESOURCE_PATHS = {
   approval: (requestId: string) => `approvals/${segment(requestId)}`,
   reports: "reports",
   report: (reportId: string) => `reports/${segment(reportId)}`,
+  campaignReports: "campaign_reports",
+  campaignReport: (campaignId: string) => campaignScoped("campaign_report", campaignId),
   coverage: "coverage",
   resilience: "resilience",
   traces: "traces",
