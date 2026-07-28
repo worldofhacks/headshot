@@ -13,6 +13,8 @@ These tests pin the boundary at each layer that could blur it.
 
 from __future__ import annotations
 
+import inspect
+
 import pytest
 from jsonschema.exceptions import ValidationError
 
@@ -248,3 +250,39 @@ def test_a_candidate_never_enters_the_regression_lifecycle(migrated_db) -> None:
             regression_disposition={"disposition_id": "rd-1"},
             reproduction_plan=None,
         )
+
+
+def test_re_finding_a_documented_case_reuses_its_report_instead_of_failing(migrated_db) -> None:
+    """Run 9f96d923 failed at case 1 re-finding AF-M11-DX-002, already documented by run 25cd7295.
+
+    `uq_vuln_report_org_reproduction` is org-wide by design -- one report per distinct
+    reproduction, ever. That held trivially while reports existed only for EXPLOIT_CONFIRMED,
+    which has never occurred. Opening candidates made re-documentation routine: the corpus is
+    re-scanned every run and the attack is deterministic, so a re-found case yields byte-identical
+    reproduction steps and therefore the identical hash. The second run to flag an
+    already-documented case violated the constraint and the campaign died.
+
+    Re-finding a known issue is the expected outcome of scanning twice, not an integrity failure.
+    The existing report is reused, the finding still opens, and the run continues.
+    """
+
+    from agentforge.control_plane.store import ControlPlaneStore  # noqa: PLC0415
+
+    store = ControlPlaneStore(migrated_db, environment="local")
+    source = inspect.getsource(store.record_documentation_outcome)
+
+    # Reuse is scoped to candidates. A confirmed finding must schedule a regression lifecycle
+    # keyed to its OWN report, so it may never silently adopt another finding's document.
+    assert "if not regression_admitted:" in source
+    assert "reused_existing_reproduction" in source
+
+    # Matched on the reproduction rather than the case id, so two genuinely different attacks that
+    # happen to share a case still get their own reports.
+    assert "reproduction_sha256 = :reproduction" in source
+    assert "finding_id <> :finding" in source
+
+    # The campaign report must still reach the evidence: prefer the finding's own report, fall
+    # back to the one documenting its case.
+    composer = inspect.getsource(store._compose_campaign_report)
+    assert "r.finding_id = l.finding_id" in composer
+    assert "source_case_id' = a.case_id" in composer

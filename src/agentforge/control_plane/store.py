@@ -6344,6 +6344,60 @@ class ControlPlaneStore:
                         "reproduction plan is not bound to the persisted deterministic source"
                     )
 
+            # A candidate whose reproduction is already documented is a case this platform has
+            # found before, which is the normal outcome of scanning the same corpus twice -- the
+            # attack is deterministic, so re-finding it yields byte-identical reproduction steps
+            # and therefore the identical `reproduction_sha256`.
+            #
+            # `uq_vuln_report_org_reproduction` is org-wide and deliberately so: one report per
+            # distinct reproduction, ever. That held trivially while reports existed only for
+            # EXPLOIT_CONFIRMED, which never occurred. Opening candidates made re-documentation
+            # routine, and the second run to flag an already-documented case died on the constraint
+            # -- run 9f96d923 failed at case 1 re-finding AF-M11-DX-002 from run 25cd7295.
+            #
+            # The existing report is reused rather than duplicated. The finding still opens and the
+            # run's campaign report still lists the case, so what this run found is reported in
+            # full; only the evidence document is shared, which is exactly what the constraint
+            # exists to guarantee. A CONFIRMED finding is deliberately excluded: it must schedule
+            # its own regression lifecycle keyed to its own report, so it may not silently adopt
+            # another finding's document.
+            if not regression_admitted:
+                reused = (
+                    connection.execute(
+                        text(
+                            "SELECT report_id FROM vuln_reports WHERE organization_id = :org "
+                            "AND reproduction_sha256 = :reproduction AND finding_id <> :finding"
+                        ),
+                        {
+                            "org": organization_id,
+                            "reproduction": report_payload["reproduction_sha256"],
+                            "finding": finding_id,
+                        },
+                    )
+                    .scalars()
+                    .first()
+                )
+                if reused is not None:
+                    self._audit(
+                        connection,
+                        organization_id,
+                        "finding.documented",
+                        "finding",
+                        finding_id,
+                        None,
+                        {
+                            "report_id": str(reused),
+                            "reused_existing_reproduction": True,
+                            "publication_state": report_payload["publication_state"],
+                            "confirmation_status": report_payload["confirmation_status"],
+                            "regression_disposition_id": None,
+                            "admitted": False,
+                        },
+                        actor_user_id="agent:documentation",
+                        actor_session_id="runner:system",
+                    )
+                    return str(reused), None
+
             existing_report = connection.execute(
                 text(
                     "SELECT contract_payload FROM vuln_reports "
@@ -8724,8 +8778,18 @@ class ControlPlaneStore:
                     "JOIN verdict v ON v.id = l.verdict_id "
                     "JOIN campaign_attempts a ON a.organization_id = l.organization_id "
                     "AND a.run_id = l.campaign_run_id AND a.attempt_id = l.attempt_id "
-                    "LEFT JOIN vuln_reports vr ON vr.organization_id = l.organization_id "
-                    "AND vr.finding_id = l.finding_id "
+                    # Prefer the finding's own report; fall back to the report already documenting
+                    # this case. A candidate that re-found a known case reuses that document
+                    # instead of minting a duplicate, so without the fallback the run's report
+                    # would list the finding with no way to reach its evidence.
+                    "LEFT JOIN LATERAL ("
+                    "  SELECT r.report_id FROM vuln_reports r "
+                    "  WHERE r.organization_id = l.organization_id "
+                    "  AND (r.finding_id = l.finding_id "
+                    "       OR r.contract_payload->>'source_case_id' = a.case_id) "
+                    "  ORDER BY (r.finding_id = l.finding_id) DESC, r.created_at "
+                    "  LIMIT 1"
+                    ") vr ON true "
                     "WHERE l.organization_id = :org AND l.campaign_run_id = :run_id "
                     "ORDER BY a.case_id, f.finding_id"
                 ),
