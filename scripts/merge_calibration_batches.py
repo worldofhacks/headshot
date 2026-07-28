@@ -215,15 +215,15 @@ def _merge_langfuse_attestations(
             or attestation.get("attestation_kind") != "langfuse_query_back_verified"
             or attestation.get("judge_identity") != dict(judge_identity)
         ):
-            raise MergeRefused("a batch carries an invalid or identity-drifted Langfuse attestation")
+            raise MergeRefused(
+                "a batch carries an invalid or identity-drifted Langfuse attestation"
+            )
         bundle = _read_json(directory / "captured-results.json")
         samples = bundle.get("samples") if isinstance(bundle, Mapping) else None
         if not isinstance(samples, list):
             raise MergeRefused("a Langfuse-attested batch carries no captured samples")
         batch_request_ids = [str(sample.get("provider_request_id") or "") for sample in samples]
-        expected_digest = hashlib.sha256(
-            "\n".join(sorted(batch_request_ids)).encode()
-        ).hexdigest()
+        expected_digest = hashlib.sha256("\n".join(sorted(batch_request_ids)).encode()).hexdigest()
         if (
             len(set(batch_request_ids)) != len(batch_request_ids)
             or attestation.get("provider_request_ids_sha256") != expected_digest

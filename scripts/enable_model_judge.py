@@ -183,10 +183,7 @@ def _enable(args: argparse.Namespace) -> dict[str, Any]:
     ground_truth_tier, provider_tier = _classify(args, calibration=calibration)
     authority_mode: Literal["full", "positive_only"] = (
         "full"
-        if (
-            ground_truth_tier == "human_two_person"
-            and provider_tier == "usage_export_reconciled"
-        )
+        if (ground_truth_tier == "human_two_person" and provider_tier == "usage_export_reconciled")
         else "positive_only"
     )
     _require_governing_stratum_passes(

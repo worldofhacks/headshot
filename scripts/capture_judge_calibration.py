@@ -342,9 +342,7 @@ def main() -> int:
     finally:
         transport.close()
 
-    langfuse_attestation = (
-        None if langfuse is None else langfuse.verify(samples)
-    )
+    langfuse_attestation = None if langfuse is None else langfuse.verify(samples)
     if len(returned_models) != 1:
         raise CaptureError("provider returned more than one model identity across the capture")
     bundle = {
@@ -430,9 +428,7 @@ def main() -> int:
                 if langfuse_attestation is None
                 else {
                     "trace_id": langfuse_attestation["trace_id"],
-                    "matched_generation_count": langfuse_attestation[
-                        "matched_generation_count"
-                    ],
+                    "matched_generation_count": langfuse_attestation["matched_generation_count"],
                     "verified_at": langfuse_attestation["verified_at"],
                 }
             ),
@@ -524,9 +520,7 @@ class _LangfuseCaptureVerifier:
                 "Langfuse query-back did not reconcile the exact calibration generation set "
                 f"(missing={missing}, extra={extra})"
             )
-        request_id_digest = hashlib.sha256(
-            "\n".join(sorted(expected)).encode("utf-8")
-        ).hexdigest()
+        request_id_digest = hashlib.sha256("\n".join(sorted(expected)).encode("utf-8")).hexdigest()
         return {
             "schema_version": "1",
             "attestation_kind": "langfuse_query_back_verified",
