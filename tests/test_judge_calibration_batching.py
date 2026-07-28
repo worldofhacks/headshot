@@ -313,9 +313,10 @@ def test_merge_combines_complete_langfuse_query_back_attestations(tmp_path: Path
     assert merged["matched_generation_count"] == 4
     assert merged["batch_count"] == 2
     expected = [f"gen-L-{index}" for index in range(1, 5)]
-    assert merged["provider_request_ids_sha256"] == hashlib.sha256(
-        "\n".join(sorted(expected)).encode()
-    ).hexdigest()
+    assert (
+        merged["provider_request_ids_sha256"]
+        == hashlib.sha256("\n".join(sorted(expected)).encode()).hexdigest()
+    )
 
 
 def test_merge_refuses_when_a_batch_is_missing(tmp_path: Path) -> None:

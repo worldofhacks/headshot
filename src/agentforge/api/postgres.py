@@ -3334,7 +3334,8 @@ class PostgresApiBackend(ApiBackend):
                         "AND e.invocation_id = i.invocation_id "
                         "LEFT JOIN agent_prompt_snapshots s "
                         "ON s.organization_id = i.organization_id "
-                        "AND s.execution_id = COALESCE(e.logical_execution_id, i.logical_execution_id) "
+                        "AND s.execution_id = "
+                        "COALESCE(e.logical_execution_id, i.logical_execution_id) "
                         "WHERE i.organization_id = :org "
                         "AND i.invocation_id = :invocation",
                         {

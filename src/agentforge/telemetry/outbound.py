@@ -141,9 +141,8 @@ def _observation_field(value: Any, *names: str) -> Any:
     """Read a field from either an API object or a mapping."""
 
     for name in names:
-        if isinstance(value, dict):
-            if name in value:
-                return value[name]
+        if isinstance(value, dict) and name in value:
+            return value[name]
         if hasattr(value, name):
             return getattr(value, name)
     return None
@@ -1130,6 +1129,12 @@ class OutboundHttpTelemetry:
                 return None
         api = getattr(client, "api", None)
         observations = getattr(api, "observations", None)
+        if observations is None:
+            # Older Langfuse clients expose the observation endpoint directly on the client rather
+            # than under `.api`. Falling back keeps query-back working against those rather than
+            # silently returning no observations, which would leave every queued row stuck at
+            # `queued` forever and look like Langfuse had simply never received them.
+            observations = getattr(client, "observations", None)
         for candidate_name in ("get_many", "get"):
             get_api = getattr(observations, candidate_name, None)
             if callable(get_api):
@@ -1187,21 +1192,29 @@ class OutboundHttpTelemetry:
             return
 
         with self.engine.connect() as connection:
-            request_rows = connection.execute(
-                text(
-                    "SELECT request_id, trace_id "
-                    "FROM outbound_http_requests "
-                    "WHERE langfuse_status = 'queued' AND finished_at IS NOT NULL"
+            request_rows = (
+                connection.execute(
+                    text(
+                        "SELECT request_id, trace_id "
+                        "FROM outbound_http_requests "
+                        "WHERE langfuse_status = 'queued' AND finished_at IS NOT NULL"
+                    )
                 )
-            ).mappings().all()
-            agent_rows = connection.execute(
-                text(
-                    "SELECT execution_id, trace_id "
-                    "FROM agent_executions "
-                    "WHERE langfuse_status = 'queued' AND status <> 'running' "
-                    "AND finished_at IS NOT NULL"
+                .mappings()
+                .all()
+            )
+            agent_rows = (
+                connection.execute(
+                    text(
+                        "SELECT execution_id, trace_id "
+                        "FROM agent_executions "
+                        "WHERE langfuse_status = 'queued' AND status <> 'running' "
+                        "AND finished_at IS NOT NULL"
+                    )
                 )
-            ).mappings().all()
+                .mappings()
+                .all()
+            )
 
         if not request_rows and not agent_rows:
             return
@@ -1224,7 +1237,10 @@ class OutboundHttpTelemetry:
                     if isinstance(request_id, str) and request_id in request_ids:
                         observed_request_ids.add(request_id)
                     agent_execution_id = _observation_field(metadata, "agent.execution_id")
-                    if isinstance(agent_execution_id, str) and agent_execution_id in agent_execution_ids:
+                    if (
+                        isinstance(agent_execution_id, str)
+                        and agent_execution_id in agent_execution_ids
+                    ):
                         observed_agent_ids.add(agent_execution_id)
             except Exception as exc:
                 _logger.warning(
@@ -1242,7 +1258,8 @@ class OutboundHttpTelemetry:
                     connection.execute(
                         text(
                             "UPDATE outbound_http_requests SET langfuse_status = 'exported', "
-                            "langfuse_verified_at = COALESCE(langfuse_verified_at, clock_timestamp()) "
+                            "langfuse_verified_at = "
+                            "COALESCE(langfuse_verified_at, clock_timestamp()) "
                             "WHERE request_id = ANY(:request_ids) "
                             "AND langfuse_status = 'queued'"
                         ),
@@ -1252,7 +1269,8 @@ class OutboundHttpTelemetry:
                     connection.execute(
                         text(
                             "UPDATE agent_executions SET langfuse_status = 'exported', "
-                            "langfuse_verified_at = COALESCE(langfuse_verified_at, clock_timestamp()) "
+                            "langfuse_verified_at = "
+                            "COALESCE(langfuse_verified_at, clock_timestamp()) "
                             "WHERE execution_id = ANY(:execution_ids) "
                             "AND langfuse_status = 'queued'"
                         ),

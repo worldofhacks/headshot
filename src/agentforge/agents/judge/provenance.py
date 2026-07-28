@@ -194,9 +194,7 @@ def classify_provider_provenance(
             and matched >= len(samples)
         ):
             request_ids = [str(sample.get("provider_request_id") or "") for sample in samples]
-            expected_digest = hashlib.sha256(
-                "\n".join(sorted(request_ids)).encode()
-            ).hexdigest()
+            expected_digest = hashlib.sha256("\n".join(sorted(request_ids)).encode()).hexdigest()
             if (
                 len(set(request_ids)) == len(request_ids)
                 and attestation.get("provider_request_ids_sha256") == expected_digest

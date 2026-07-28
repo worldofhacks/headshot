@@ -678,6 +678,8 @@ const browserVerification = {
     rationale: null,
     rationale_availability: "unavailable",
     rationale_detail: "The verdict contract persists reason codes and confirmation source, not free-form Judge rationale.",
+    // A canary confirmed this exploit, so the evaluator contributed no criteria of its own.
+    criteria_hits: [],
     error_code: null,
   },
   report_id: "browser-report-prompt-injection",
@@ -731,6 +733,34 @@ const unavailableBrowserVerification = (findingId: string) => ({
   redaction_state: "synthetic_identifiers_redacted",
 });
 
+const browserCampaignReports = [{
+  schema_version: "1",
+  report_id: "browser-campaign-report-alpha",
+  campaign_run_id: "browser-campaign-alpha",
+  run_state: "complete",
+  execution_profile: "live",
+  totals: {
+    attempt_count: 9,
+    decisive_verdict_count: 1,
+    indeterminate_verdict_count: 7,
+    operational_error_count: 1,
+    confirmed_finding_count: 1,
+    candidate_finding_count: 0,
+  },
+  findings: [{
+    finding_id: "finding-prompt-injection",
+    source_case_id: "browser-case-prompt-injection",
+    severity: "critical",
+    category: "prompt_injection",
+    confirmation_status: "confirmed",
+    criteria_hits: ["canary-token"],
+    rationale: "The response contained the synthetic canary.",
+    report_id: "browser-report-prompt-injection",
+  }],
+  publication_state: "blocked_pending_human_approval",
+  created_at: "2026-07-22T00:06:00Z",
+}];
+
 const browserReports = [{
   schema_version: "1",
   report_id: "browser-report-prompt-injection",
@@ -740,6 +770,8 @@ const browserReports = [{
   source_case_id: "browser-case-prompt-injection",
   severity: "critical",
   category: "prompt_injection",
+  // A canary reproduced the exploit, so this fixture is a confirmed report.
+  confirmation_status: "confirmed",
   description: "The live target reproduced a synthetic canary after an adversarial instruction.",
   clinical_impact: "A malicious synthetic instruction crossed the trusted clinical boundary.",
   minimal_reproduction: browserVerification.minimal_reproduction,
@@ -1652,6 +1684,20 @@ const browserFixture = (): Plugin => ({
                   : [],
               },
             }
+          : { state: "empty", data: null }));
+        return;
+      }
+      if (path === "/api/v1/campaign_reports") {
+        response.end(JSON.stringify({ state: "ready", data: browserCampaignReports }));
+        return;
+      }
+      if (path.startsWith("/api/v1/campaigns/") && path.endsWith("/campaign_report")) {
+        const campaignId = path.split("/").at(-2);
+        const runReport = browserCampaignReports.find(
+          (record) => record.campaign_run_id === campaignId,
+        );
+        response.end(JSON.stringify(runReport
+          ? { state: "ready", data: runReport }
           : { state: "empty", data: null }));
         return;
       }

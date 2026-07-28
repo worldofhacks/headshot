@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+
 import pytest
 from sqlalchemy import Engine, text
 
@@ -100,7 +101,7 @@ class _LangfuseObservationClient:
             return _LangfuseObservationsResponse(self._observations_by_trace.get(trace_id, []))
 
     @property
-    def observations(self) -> "_LangfuseObservationClient._ObservationEndpoint":
+    def observations(self) -> _LangfuseObservationClient._ObservationEndpoint:
         return self._ObservationEndpoint(self.observations_by_trace)
 
 
@@ -126,13 +127,11 @@ class _LangfuseOnlyGetClient:
             page_index = 0 if cursor is None else 1
             return {
                 "data": page_one,
-                "meta": {"page": {"cursor": f"cursor-{page_index + 1}"}}
-                if page_index == 0
-                else {},
+                "meta": {"page": {"cursor": f"cursor-{page_index + 1}"}} if page_index == 0 else {},
             }
 
     @property
-    def observations(self) -> "_LangfuseOnlyGetClient._ObservationEndpoint":
+    def observations(self) -> _LangfuseOnlyGetClient._ObservationEndpoint:
         return self.endpoint
 
 
@@ -199,7 +198,7 @@ def test_physical_target_request_is_persisted_and_queued_for_queryback_without_c
     migrated_db: Engine,
 ) -> None:
     organization_id, run_id = _seed_campaign(migrated_db, suffix="physical-request")
-    ticks = iter((10.0, 10.125))
+    ticks = iter((10.0, 10.125, 100.0, 200.0, 300.0))  # trailing ticks feed the reconcile gate
     telemetry = OutboundHttpTelemetry(
         migrated_db,
         environment="staging",
@@ -281,7 +280,7 @@ def test_target_projection_uses_postgres_canonical_duration_and_cost(
     migrated_db: Engine,
 ) -> None:
     organization_id, run_id = _seed_campaign(migrated_db, suffix="canonical-accounting")
-    ticks = iter((10.0, 10.0012346))
+    ticks = iter((10.0, 10.0012346, 100.0, 200.0, 300.0))  # trailing ticks feed the reconcile gate
     telemetry = OutboundHttpTelemetry(
         migrated_db,
         environment="staging",
@@ -336,7 +335,9 @@ def test_many_requests_share_one_campaign_trace_and_reconcile_individually(
     migrated_db: Engine,
 ) -> None:
     organization_id, run_id = _seed_campaign(migrated_db, suffix="shared-trace")
-    ticks = iter((10.0, 10.010, 11.0, 11.020))
+    ticks = iter(
+        (10.0, 10.010, 11.0, 11.020, 100.0, 200.0, 300.0)
+    )  # trailing ticks feed the reconcile gate
     telemetry = OutboundHttpTelemetry(
         migrated_db,
         environment="staging",
@@ -445,18 +446,24 @@ def test_queued_rows_are_marked_exported_once_langfuse_query_back_confirms(
     telemetry.flush()
 
     with migrated_db.connect() as connection:
-        replayed = connection.execute(
-            text(
-                "SELECT langfuse_status, langfuse_verified_at FROM outbound_http_requests "
-                "WHERE request_id = :request_id"
-            ),
-            {"request_id": request_id},
-        ).mappings().one()
+        replayed = (
+            connection.execute(
+                text(
+                    "SELECT langfuse_status, langfuse_verified_at FROM outbound_http_requests "
+                    "WHERE request_id = :request_id"
+                ),
+                {"request_id": request_id},
+            )
+            .mappings()
+            .one()
+        )
     assert replayed["langfuse_status"] == "exported"
     assert replayed["langfuse_verified_at"] is not None
 
 
-def test_query_observations_reconciles_with_legacy_langfuse_payload_shape(migrated_db: Engine) -> None:
+def test_query_observations_reconciles_with_legacy_langfuse_payload_shape(
+    migrated_db: Engine,
+) -> None:
     telemetry = OutboundHttpTelemetry(migrated_db, environment="staging")
     request_id = "request-legacy-0001"
     trace_id = "legacy-trace-id"
