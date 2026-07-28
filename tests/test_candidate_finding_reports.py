@@ -176,3 +176,75 @@ def test_confirmation_status_is_required_so_a_report_can_never_be_silent_about_i
 
     with pytest.raises(ValidationError):
         validate("vuln_report", _report(confirmation_status="probably"))
+
+
+# ---------------------------------------------------------------------------------------
+# The regression lifecycle belongs to confirmed findings only.
+# ---------------------------------------------------------------------------------------
+
+
+def test_a_candidate_never_enters_the_regression_lifecycle(migrated_db) -> None:
+    """The defect that failed run ffb9f0ef at 1 of 34, pinned at the boundary that admitted it.
+
+    Opening a candidate finding made `finding_id` non-None, so the campaign loop entered the
+    documentation path and handed the verdict to `RegressionAdmissionGate.evaluate`, which requires
+    EXPLOIT_CONFIRMED. It raised, and the whole run failed on its first EXPLOIT_LIKELY.
+
+    Skipping the lifecycle for a candidate is not a workaround. Admission exists to prove a
+    CONFIRMED vulnerability does not return, and `plan_reproduction` must bind to the deterministic
+    oracle signal that confirmed it. A candidate has neither, so there is nothing to reproduce and
+    nothing to regress against; the lifecycle begins when a human promotes the finding.
+    """
+
+    from agentforge.control_plane.store import ControlPlaneStore  # noqa: PLC0415
+    from agentforge.regression import (  # noqa: PLC0415
+        RegressionAdmissionError,
+        RegressionAdmissionGate,
+    )
+
+    # The gate itself still refuses a candidate. This is the behaviour the runner must respect
+    # rather than something to be relaxed.
+    with pytest.raises(RegressionAdmissionError):
+        RegressionAdmissionGate().evaluate(
+            verdict=_verdict("EXPLOIT_LIKELY", "calibrated_model"),
+            finding_id="f" * 64,
+            report_id="report-0001",
+            reproduction_attempted=False,
+            deterministic_reproduction=False,
+            passes_for_right_reason=False,
+            human_approved=False,
+        )
+
+    store = ControlPlaneStore(migrated_db, environment="local")
+
+    # A candidate report that smuggles in a disposition is refused: it would claim a lifecycle its
+    # evidence cannot support.
+    with pytest.raises(Exception, match="regression lifecycle before promotion"):
+        store.record_documentation_outcome(
+            organization_id="org_test",
+            report=_report(),
+            regression_disposition={"disposition_id": "rd-1"},
+            reproduction_plan={"replay_id": "rp-1"},
+        )
+
+    # And a CONFIRMED report that omits one is refused too, so this change cannot become a way to
+    # skip scheduling the proof-of-non-recurrence a confirmed finding owes.
+    with pytest.raises(Exception, match="must schedule its regression"):
+        store.record_documentation_outcome(
+            organization_id="org_test",
+            report=_report(
+                confirmation_status="confirmed",
+                publication_state="draft_unpublished",
+            ),
+            regression_disposition=None,
+            reproduction_plan=None,
+        )
+
+    # Half a lifecycle is refused in either direction.
+    with pytest.raises(Exception, match="supplied together"):
+        store.record_documentation_outcome(
+            organization_id="org_test",
+            report=_report(),
+            regression_disposition={"disposition_id": "rd-1"},
+            reproduction_plan=None,
+        )

@@ -6124,63 +6124,103 @@ class ControlPlaneStore:
         *,
         organization_id: str,
         report: Mapping[str, Any],
-        regression_disposition: Mapping[str, Any],
-        reproduction_plan: Mapping[str, Any],
-    ) -> tuple[str, str]:
-        """Persist a report, pending disposition, and blocked reproduction trigger atomically.
+        regression_disposition: Mapping[str, Any] | None,
+        reproduction_plan: Mapping[str, Any] | None,
+    ) -> tuple[str, str | None]:
+        """Persist a report, and — for a confirmed finding — its disposition and reproduction.
 
-        This boundary revalidates all three contracts and their evidence lineage.  The replay
+        This boundary revalidates every supplied contract and its evidence lineage.  The replay
         plan remains execution-blocked and has no authorization scope; it is durable work to be
         reviewed and authorized, never authority to contact a target.  This method accepts no
         published report and no claimed human approval.  Identical retries are idempotent, while
         any immutable-content drift fails.
+
+        A CANDIDATE report passes both regression arguments as ``None``, and that is not a
+        weakening.  The regression lifecycle exists to prove a *confirmed* vulnerability does not
+        return: admission requires ``EXPLOIT_CONFIRMED``, and a reproduction plan requires the
+        deterministic oracle signal that confirmed it.  A candidate has neither — nothing
+        corroborated it, so there is nothing to reproduce and nothing to regress against.  Passing
+        a synthesized disposition would fabricate a lifecycle the evidence does not support.  The
+        pair is admitted when a human promotes the finding out of ``candidate``.
+
+        Both must be present or both absent; a disposition without its plan, or the reverse, is a
+        half-written lifecycle and is refused.
         """
 
         report_payload = dict(report)
-        disposition_payload = dict(regression_disposition)
-        plan_payload = dict(reproduction_plan)
+        if (regression_disposition is None) != (reproduction_plan is None):
+            raise InvalidControlPlaneInput(
+                "regression disposition and reproduction plan must be supplied together"
+            )
+        regression_admitted = regression_disposition is not None
         try:
             validate_contract("vuln_report", report_payload)
-            validate_contract("regression_disposition", disposition_payload)
-            validate_contract("regression_replay_plan", plan_payload)
         except Exception as exc:
             raise InvalidControlPlaneInput(
                 f"documentation outcome fails its published contract: {exc}"
             ) from exc
+        # A confirmed report without its regression lifecycle would silently drop the durable
+        # proof-of-non-recurrence the confirmed path is required to schedule.
+        if report_payload.get("confirmation_status") == "confirmed" and not regression_admitted:
+            raise InvalidControlPlaneInput(
+                "a confirmed report must schedule its regression disposition and reproduction"
+            )
+        if report_payload.get("confirmation_status") == "candidate_unconfirmed" and (
+            regression_admitted
+        ):
+            raise InvalidControlPlaneInput(
+                "a candidate report may not enter the regression lifecycle before promotion"
+            )
         if not isinstance(organization_id, str) or not organization_id.startswith("org_"):
             raise InvalidControlPlaneInput("documentation organization is invalid")
-        for key in ("finding_id", "campaign_run_id", "attempt_id", "report_id"):
-            report_key = "report_id" if key == "report_id" else key
-            if disposition_payload[key] != report_payload[report_key]:
+
+        disposition_payload: dict[str, Any] = {}
+        plan_payload: dict[str, Any] = {}
+        disposition_id: str | None = None
+        replay_id: str | None = None
+        if regression_admitted:
+            disposition_payload = dict(regression_disposition or {})
+            plan_payload = dict(reproduction_plan or {})
+            try:
+                validate_contract("regression_disposition", disposition_payload)
+                validate_contract("regression_replay_plan", plan_payload)
+            except Exception as exc:
                 raise InvalidControlPlaneInput(
-                    "report and regression disposition correlation differs"
+                    f"documentation outcome fails its published contract: {exc}"
+                ) from exc
+            for key in ("finding_id", "campaign_run_id", "attempt_id", "report_id"):
+                report_key = "report_id" if key == "report_id" else key
+                if disposition_payload[key] != report_payload[report_key]:
+                    raise InvalidControlPlaneInput(
+                        "report and regression disposition correlation differs"
+                    )
+            if disposition_payload["human_approved"] or disposition_payload["admitted"]:
+                raise AuthorizationDeniedError(
+                    "regression admission requires a separately bound human approval command"
                 )
-        if disposition_payload["human_approved"] or disposition_payload["admitted"]:
-            raise AuthorizationDeniedError(
-                "regression admission requires a separately bound human approval command"
-            )
-        if (
-            disposition_payload["state"] != "pending_deterministic_reproduction"
-            or plan_payload["trigger"] != "deterministic_reproduction"
-            or plan_payload["authorization_state"] != "pending_human_authorization"
-            or plan_payload["authorization_scope_hash"] is not None
-            or plan_payload["execution_state"] != "blocked"
-        ):
-            raise AuthorizationDeniedError(
-                "documentation may only schedule an execution-blocked deterministic reproduction"
-            )
-        for key in ("finding_id", "report_id"):
             if (
-                plan_payload[key] != report_payload[key]
-                or plan_payload[key] != disposition_payload[key]
+                disposition_payload["state"] != "pending_deterministic_reproduction"
+                or plan_payload["trigger"] != "deterministic_reproduction"
+                or plan_payload["authorization_state"] != "pending_human_authorization"
+                or plan_payload["authorization_scope_hash"] is not None
+                or plan_payload["execution_state"] != "blocked"
             ):
-                raise InvalidControlPlaneInput(
-                    "reproduction plan does not match documentation lineage"
+                raise AuthorizationDeniedError(
+                    "documentation may only schedule an execution-blocked deterministic "
+                    "reproduction"
                 )
+            for key in ("finding_id", "report_id"):
+                if (
+                    plan_payload[key] != report_payload[key]
+                    or plan_payload[key] != disposition_payload[key]
+                ):
+                    raise InvalidControlPlaneInput(
+                        "reproduction plan does not match documentation lineage"
+                    )
+            disposition_id = str(disposition_payload["disposition_id"])
+            replay_id = str(plan_payload["replay_id"])
 
         report_id = str(report_payload["report_id"])
-        disposition_id = str(disposition_payload["disposition_id"])
-        replay_id = str(plan_payload["replay_id"])
         finding_id = str(report_payload["finding_id"])
         run_id = str(report_payload["campaign_run_id"])
         attempt_id = str(report_payload["attempt_id"])
@@ -6218,9 +6258,15 @@ class ControlPlaneStore:
                 .mappings()
                 .one_or_none()
             )
-            if lineage is None or lineage["state"] != "EXPLOIT_CONFIRMED":
+            # The verdict state the lineage must show is the one the report claims. A candidate is
+            # required to be EXPLOIT_LIKELY here for the same reason a confirmed report is required
+            # to be EXPLOIT_CONFIRMED: the durable verdict, not the caller, decides what this
+            # report is allowed to be.
+            required_state = "EXPLOIT_CONFIRMED" if regression_admitted else "EXPLOIT_LIKELY"
+            if lineage is None or lineage["state"] != required_state:
                 raise AuthorizationDeniedError(
-                    "documentation requires a confirmed finding with authoritative lineage"
+                    "documentation requires a finding whose authoritative lineage matches its "
+                    "claimed confirmation status"
                 )
             expected_reference = f"evidence://sha256/{lineage['evidence_content_hash']}"
             if (
@@ -6232,37 +6278,41 @@ class ControlPlaneStore:
                 raise AuthorizationDeniedError(
                     "documentation taxonomy or evidence reference does not match the finding"
                 )
-            scope_payload = dict(lineage["scope_payload"])
-            if (
-                plan_payload["source_case_ref"]["case_id"] != lineage["case_id"]
-                or plan_payload["attack_attempt"] != dict(lineage["attack_attempt"])
-                or plan_payload["target_id"] != scope_payload.get("target_id")
-                or plan_payload["source_target_version"] != scope_payload.get("target_version")
-                or plan_payload["replay_target_version"] != scope_payload.get("target_version")
-            ):
-                raise AuthorizationDeniedError(
-                    "reproduction plan differs from the authorization-bound source attempt"
-                )
-            expected_attack_hash = hashlib.sha256(
-                json.dumps(
-                    plan_payload["attack_attempt"]["input_sequence"],
-                    allow_nan=False,
-                    ensure_ascii=False,
-                    separators=(",", ":"),
-                    sort_keys=True,
-                ).encode("utf-8")
-            ).hexdigest()
-            if plan_payload["attack_sequence_sha256"] != expected_attack_hash:
-                raise AuthorizationDeniedError("reproduction attack sequence integrity failed")
-            # AttemptResult v1 does not persist the trusted signal identifier. The exact ID is
-            # carried from the just-evaluated coordinator outcome into this still-blocked plan,
-            # while the durable verdict independently proves only its oracle/canary class. A
-            # future result writer must fail closed until exact signal IDs and replay-manifest
-            # authorization are durable; this planning write grants no execution authority.
-            if lineage["confirmation_source"] not in {"oracle", "canary"}:
-                raise AuthorizationDeniedError(
-                    "reproduction plan is not bound to the persisted deterministic source"
-                )
+            # Every check below concerns the reproduction plan, which a candidate does not have.
+            # They are not skipped for convenience: each one binds the plan to the deterministic
+            # signal that confirmed the exploit, and a candidate has no such signal to bind to.
+            if regression_admitted:
+                scope_payload = dict(lineage["scope_payload"])
+                if (
+                    plan_payload["source_case_ref"]["case_id"] != lineage["case_id"]
+                    or plan_payload["attack_attempt"] != dict(lineage["attack_attempt"])
+                    or plan_payload["target_id"] != scope_payload.get("target_id")
+                    or plan_payload["source_target_version"] != scope_payload.get("target_version")
+                    or plan_payload["replay_target_version"] != scope_payload.get("target_version")
+                ):
+                    raise AuthorizationDeniedError(
+                        "reproduction plan differs from the authorization-bound source attempt"
+                    )
+                expected_attack_hash = hashlib.sha256(
+                    json.dumps(
+                        plan_payload["attack_attempt"]["input_sequence"],
+                        allow_nan=False,
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                        sort_keys=True,
+                    ).encode("utf-8")
+                ).hexdigest()
+                if plan_payload["attack_sequence_sha256"] != expected_attack_hash:
+                    raise AuthorizationDeniedError("reproduction attack sequence integrity failed")
+                # AttemptResult v1 does not persist the trusted signal identifier. The exact ID is
+                # carried from the just-evaluated coordinator outcome into this still-blocked plan,
+                # while the durable verdict independently proves only its oracle/canary class. A
+                # future result writer must fail closed until exact signal IDs and replay-manifest
+                # authorization are durable; this planning write grants no execution authority.
+                if lineage["confirmation_source"] not in {"oracle", "canary"}:
+                    raise AuthorizationDeniedError(
+                        "reproduction plan is not bound to the persisted deterministic source"
+                    )
 
             existing_report = connection.execute(
                 text(
@@ -6271,13 +6321,17 @@ class ControlPlaneStore:
                 ),
                 {"org": organization_id, "report": report_id},
             ).scalar_one_or_none()
-            existing_disposition = connection.execute(
-                text(
-                    "SELECT contract_payload FROM regression_dispositions "
-                    "WHERE organization_id = :org AND disposition_id = :disposition"
-                ),
-                {"org": organization_id, "disposition": disposition_id},
-            ).scalar_one_or_none()
+            existing_disposition = (
+                connection.execute(
+                    text(
+                        "SELECT contract_payload FROM regression_dispositions "
+                        "WHERE organization_id = :org AND disposition_id = :disposition"
+                    ),
+                    {"org": organization_id, "disposition": disposition_id},
+                ).scalar_one_or_none()
+                if regression_admitted
+                else None
+            )
             existing_plan = (
                 connection.execute(
                     text(
@@ -6291,13 +6345,23 @@ class ControlPlaneStore:
                 .mappings()
                 .one_or_none()
             )
+            # Idempotency is asserted over exactly the records this call is responsible for. For a
+            # candidate that is the report alone, so requiring a disposition here would turn every
+            # honest retry into a spurious conflict.
             if existing_report is not None or existing_disposition is not None:
-                if (
+                drifted = (
                     existing_report is None
-                    or existing_disposition is None
                     or dict(existing_report) != report_payload
-                    or dict(existing_disposition) != disposition_payload
-                ):
+                    or (
+                        regression_admitted
+                        and (
+                            existing_disposition is None
+                            or dict(existing_disposition) != disposition_payload
+                        )
+                    )
+                    or (not regression_admitted and existing_disposition is not None)
+                )
+                if drifted:
                     raise RecordConflictError(
                         "immutable documentation outcome differs from its existing record"
                     )
@@ -6328,26 +6392,49 @@ class ControlPlaneStore:
                         "payload": canonical_json(report_payload),
                     },
                 )
-                connection.execute(
-                    text(
-                        "INSERT INTO regression_dispositions "
-                        "(organization_id, disposition_id, finding_id, report_id, campaign_run_id, "
-                        "attempt_id, state, admitted, contract_payload) VALUES "
-                        "(:org, :disposition, :finding, :report, :run_id, :attempt_id, :state, "
-                        ":admitted, CAST(:payload AS jsonb))"
-                    ),
+                if regression_admitted:
+                    connection.execute(
+                        text(
+                            "INSERT INTO regression_dispositions "
+                            "(organization_id, disposition_id, finding_id, report_id, "
+                            "campaign_run_id, attempt_id, state, admitted, contract_payload) "
+                            "VALUES "
+                            "(:org, :disposition, :finding, :report, :run_id, :attempt_id, :state, "
+                            ":admitted, CAST(:payload AS jsonb))"
+                        ),
+                        {
+                            "org": organization_id,
+                            "disposition": disposition_id,
+                            "finding": finding_id,
+                            "report": report_id,
+                            "run_id": run_id,
+                            "attempt_id": attempt_id,
+                            "state": disposition_payload["state"],
+                            "admitted": disposition_payload["admitted"],
+                            "payload": canonical_json(disposition_payload),
+                        },
+                    )
+            if not regression_admitted:
+                # A candidate's documentation is complete once its report is durable. It schedules
+                # no reproduction, so it records the report and stops here.
+                self._audit(
+                    connection,
+                    organization_id,
+                    "finding.documented",
+                    "finding",
+                    finding_id,
+                    None,
                     {
-                        "org": organization_id,
-                        "disposition": disposition_id,
-                        "finding": finding_id,
-                        "report": report_id,
-                        "run_id": run_id,
-                        "attempt_id": attempt_id,
-                        "state": disposition_payload["state"],
-                        "admitted": disposition_payload["admitted"],
-                        "payload": canonical_json(disposition_payload),
+                        "report_id": report_id,
+                        "publication_state": report_payload["publication_state"],
+                        "confirmation_status": report_payload["confirmation_status"],
+                        "regression_disposition_id": None,
+                        "admitted": False,
                     },
+                    actor_user_id="agent:documentation",
+                    actor_session_id="runner:system",
                 )
+                return report_id, None
             if existing_plan is not None:
                 if (
                     existing_plan["replay_id"] != replay_id

@@ -2480,35 +2480,49 @@ class DurableCampaignRunner:
                             )
                         documentation_execution = report_writer_result.execution_id
                         report = dict(report_writer_result.report)
-                    disposition = self.regression_admission.evaluate(
-                        verdict=effective_verdict,
-                        finding_id=finding_id,
-                        report_id=report["report_id"],
-                        reproduction_attempted=False,
-                        deterministic_reproduction=False,
-                        passes_for_right_reason=False,
-                        human_approved=False,
-                    )
-                    oracle_id = outcome.oracle_signal.get("id")
-                    if (
-                        outcome.oracle_signal.get("hit") is not True
-                        or outcome.oracle_signal.get("provenance") != "code"
-                        or not isinstance(oracle_id, str)
-                        or not oracle_id
-                    ):
-                        raise CampaignAbort(
-                            "confirmed finding lacks a deterministic trusted signal",
-                            code="regression_reproduction_signal_missing",
+                    # The regression lifecycle proves a CONFIRMED vulnerability does not return. A
+                    # candidate has nothing to prove that about: admission requires
+                    # EXPLOIT_CONFIRMED, and plan_reproduction must bind to the deterministic
+                    # oracle signal that confirmed it -- which by definition did not fire here.
+                    #
+                    # Routing candidates through it is what failed run ffb9f0ef at 1 of 34 on
+                    # RegressionAdmissionError: opening a candidate finding made `finding_id` non
+                    # None, the documentation path ran, and admission rejected the verdict state it
+                    # is built to require. A candidate's documentation ends at its report; the
+                    # lifecycle begins when a human promotes the finding out of `candidate`.
+                    if str(effective_verdict.get("state")) == "EXPLOIT_CONFIRMED":
+                        disposition = self.regression_admission.evaluate(
+                            verdict=effective_verdict,
+                            finding_id=finding_id,
+                            report_id=report["report_id"],
+                            reproduction_attempted=False,
+                            deterministic_reproduction=False,
+                            passes_for_right_reason=False,
+                            human_approved=False,
                         )
-                    reproduction_plan = self.regression_lifecycle.plan_reproduction(
-                        pending_disposition=disposition,
-                        report=report,
-                        attack_attempt=proposal,
-                        source_case_version=str(dispatch_payload["case_version"]),
-                        target_id=scope.target_id,
-                        target_version=scope.target_version,
-                        required_oracle_ids=(oracle_id,),
-                    )
+                        oracle_id = outcome.oracle_signal.get("id")
+                        if (
+                            outcome.oracle_signal.get("hit") is not True
+                            or outcome.oracle_signal.get("provenance") != "code"
+                            or not isinstance(oracle_id, str)
+                            or not oracle_id
+                        ):
+                            raise CampaignAbort(
+                                "confirmed finding lacks a deterministic trusted signal",
+                                code="regression_reproduction_signal_missing",
+                            )
+                        reproduction_plan = self.regression_lifecycle.plan_reproduction(
+                            pending_disposition=disposition,
+                            report=report,
+                            attack_attempt=proposal,
+                            source_case_version=str(dispatch_payload["case_version"]),
+                            target_id=scope.target_id,
+                            target_version=scope.target_version,
+                            required_oracle_ids=(oracle_id,),
+                        )
+                    else:
+                        disposition = None
+                        reproduction_plan = None
                     self.store.record_documentation_outcome(
                         organization_id=authorized.run.organization_id,
                         report=report,
