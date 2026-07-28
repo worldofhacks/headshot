@@ -405,6 +405,22 @@ def report(request: Request, report_id: str, principal: FindingEvidencePrincipal
     return _read(request, "report", principal, {"report_id": report_id})
 
 
+# The run-level report aggregates the per-finding reports above and is gated on the same
+# finding-evidence principal, because it carries the same evaluator reasoning and case identities.
+@router.get("/campaign_reports")
+def campaign_reports(request: Request, principal: FindingEvidencePrincipal) -> JSONResponse:
+    return _read(request, "campaign_reports", principal)
+
+
+@router.get("/campaigns/{campaign_id}/campaign_report")
+def campaign_report(
+    request: Request,
+    campaign_id: str,
+    principal: FindingEvidencePrincipal,
+) -> JSONResponse:
+    return _read(request, "campaign_report", principal, {"campaign_id": campaign_id})
+
+
 @router.get("/campaign-authorization-requests/{request_id}/preflight")
 def campaign_authorization_preflight(
     request: Request,
