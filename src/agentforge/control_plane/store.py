@@ -5953,6 +5953,25 @@ class ControlPlaneStore:
                     recorder, row
                 ):
                     continue
+                # A candidate is withheld from the Planner because there is nothing it may
+                # authorize about one. The only mechanism for acting on an unresolved finding is a
+                # regression trigger, and a trigger is valid only against an entry in
+                # ``regressions`` -- which fails closed as empty until replay lineage exists, and
+                # which a candidate can never reach because candidates do not enter the regression
+                # lifecycle at all.
+                #
+                # Advertising a finding with no authorized action available is what aborted run
+                # 009f7d3c at case 1: the Planner saw an unresolved critical finding, proposed
+                # `regression_triggers: [<candidate finding id>]` with mutation policy
+                # `validate_unresolved_finding`, and clamping rejected it as an unauthorized
+                # trigger. The model's proposal was reasonable; the snapshot was not.
+                #
+                # This is deliberately keyed on the durable finding STATE rather than on `status`
+                # below, which reports "documented" as soon as a report exists -- and a candidate
+                # now always has one, so status alone would hide exactly the rows to withhold.
+                # Revisit when a promotion path makes a candidate actionable.
+                if row["finding_state"] == "candidate":
+                    continue
                 finding_id = row["linked_finding_id"]
                 findings[finding_id] = {
                     "finding_id": finding_id,

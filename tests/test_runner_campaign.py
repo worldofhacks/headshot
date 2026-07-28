@@ -1023,6 +1023,28 @@ def test_legacy_regression_row_never_becomes_verified_orchestrator_signal(
 
     assert snapshot["regressions"] == []
 
+    # Run 009f7d3c aborted at case 1 on HostedPlannerError. The Planner saw an unresolved critical
+    # finding in this snapshot and proposed `regression_triggers: [<candidate finding id>]` to
+    # validate it; clamping rejected that as an unauthorized trigger and the whole run died. The
+    # proposal was reasonable -- the snapshot was not. A trigger is valid only against an entry in
+    # `regressions`, which the assertion above pins as permanently empty, and a candidate can never
+    # appear there because candidates do not enter the regression lifecycle at all. Advertising a
+    # finding the Planner has no authorized way to act on is the defect.
+    advertised = {item["finding_id"] for item in snapshot["findings"]}
+    assert finding_id in advertised, "a confirmed finding is legitimate steering signal"
+    with migrated_db.begin() as connection:
+        connection.execute(
+            text("UPDATE finding SET state = 'candidate'::finding_state WHERE finding_id = :f"),
+            {"f": finding_id},
+        )
+    demoted_snapshot = authorized.store.load_orchestration_snapshot(
+        run_id=authorized.run.run_id,
+        case_counts=case_counts,
+    )
+    assert {item["finding_id"] for item in demoted_snapshot["findings"]} == advertised - {
+        finding_id
+    }, "a candidate must be withheld from the Planner while confirmed findings still reach it"
+
 
 def test_confirmed_findings_persist_only_blocked_reproduction_plans(
     migrated_db: Engine,
