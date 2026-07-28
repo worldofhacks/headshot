@@ -57,7 +57,7 @@ All services build `Dockerfile`. The runtime image contains:
 Only `railway/web.json` declares `alembic upgrade head`. Runner and Scheduler call an exact-head
 readiness check before consuming/enqueuing work. The canonical repository chain is `0025` reviewed
 workload provenance → `0026` campaign outcome breakdown → `0027` immutable prompt snapshots →
-`0028` physical provider response evidence → `0029` verdict evaluator rationale → `0030` advisory reasoning in reports → `0031` reviewable reports for unconfirmed candidate findings. Never hard-code a
+`0028` physical provider response evidence → `0029` verdict evaluator rationale → `0030` advisory reasoning in reports → `0031` reviewable reports for unconfirmed candidate findings → `0032` one report per campaign run. Never hard-code a
 revision into automation that should
 derive the packaged or deployed head.
 

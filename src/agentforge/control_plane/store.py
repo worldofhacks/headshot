@@ -1574,6 +1574,17 @@ class ControlPlaneStore:
                     "reason": reason_code,
                 },
             )
+            if state in {"aborted", "failed"}:
+                # An aborted or failed run still found whatever it found before it stopped, and a
+                # reviewer needs to see that together with the fact that coverage was partial.
+                # `complete` is written by complete_campaign_job, which composes its own report
+                # alongside the run summary.
+                self._compose_campaign_report(
+                    connection,
+                    organization_id=current.organization_id,
+                    run_id=run_id,
+                    run_state=state,
+                )
             self._audit(
                 connection,
                 current.organization_id,
@@ -6701,6 +6712,14 @@ class ControlPlaneStore:
                 ),
                 {"org": org, "run_id": run_id},
             )
+            # Same transaction as the summary and the terminal event, so a completed run always
+            # has exactly one report naming what it found.
+            self._compose_campaign_report(
+                connection,
+                organization_id=org,
+                run_id=run_id,
+                run_state="complete",
+            )
             self._audit(
                 connection,
                 org,
@@ -8605,6 +8624,182 @@ class ControlPlaneStore:
             self_approval_override=bool(row["self_approval_override"]),
             created_at=row["created_at"],
         )
+
+    def _compose_campaign_report(
+        self,
+        connection: Connection,
+        *,
+        organization_id: str,
+        run_id: str,
+        run_state: str,
+    ) -> str | None:
+        """Write the one report that names this whole run, from durable rows only.
+
+        Called inside the transaction that records a terminal state, so a run that reached one
+        always has its report and a run that did not never has a partial one.
+
+        Composed by projection, never by narration: every value here is read back from `verdict`,
+        `finding`, `vuln_reports` and the attempt rows in this same transaction. Nothing is
+        summarised by a model and nothing is carried from process memory, so recomposing from
+        unchanged state yields identical bytes and a Runner restart cannot change what a completed
+        run is said to have found.
+
+        Aborted and failed runs get a report too. They examined only part of their corpus, which is
+        exactly why a reviewer needs to see what they did find together with the fact that coverage
+        was partial — `run_state` carries that, and migration 0032 keeps such a report
+        unpublishable.
+        """
+
+        if run_state not in {"complete", "aborted", "failed"}:
+            return None
+        existing = connection.execute(
+            text(
+                "SELECT report_id FROM campaign_reports "
+                "WHERE organization_id = :org AND campaign_run_id = :run_id"
+            ),
+            {"org": organization_id, "run_id": run_id},
+        ).scalar_one_or_none()
+        if existing is not None:
+            # Idempotent: a re-entered terminal transition must not rewrite a run's own history.
+            return str(existing)
+
+        totals = (
+            connection.execute(
+                text(
+                    "SELECT count(*) FILTER (WHERE state IN "
+                    "  ('EXPLOIT_CONFIRMED','EXPLOIT_LIKELY','NO_EXPLOIT_OBSERVED')) AS decisive, "
+                    "count(*) FILTER (WHERE state = 'INDETERMINATE') AS indeterminate, "
+                    "count(*) FILTER (WHERE state = 'ERROR') AS operational_errors, "
+                    "count(*) AS attempts "
+                    "FROM verdict WHERE organization_id = :org AND campaign_run_id = :run_id"
+                ),
+                {"org": organization_id, "run_id": run_id},
+            )
+            .mappings()
+            .one()
+        )
+        # Read from the run's own authorization scope, which exists for every run regardless of
+        # how it ended. campaign_run_summaries carries it too but only after a clean completion,
+        # so it is unavailable on exactly the aborted and failed paths that also need a report.
+        profile = connection.execute(
+            text(
+                "SELECT q.scope_payload->>'execution_profile' FROM campaign_runs cr "
+                "JOIN campaign_authorization_requests q "
+                "ON q.organization_id = cr.organization_id "
+                "AND q.request_id = cr.authorization_request_id "
+                "WHERE cr.organization_id = :org AND cr.run_id = :run_id"
+            ),
+            {"org": organization_id, "run_id": run_id},
+        ).scalar_one_or_none()
+        # Ordered by case so the payload is stable across recomposition rather than following
+        # whatever order the run happened to adjudicate in.
+        finding_rows = (
+            connection.execute(
+                text(
+                    "SELECT f.finding_id, f.state AS finding_state, f.severity, f.category, "
+                    "a.case_id, v.state AS verdict_state, v.rationale, v.criteria_hits, "
+                    "vr.report_id "
+                    "FROM finding_evidence_links l "
+                    "JOIN finding f ON f.organization_id = l.organization_id "
+                    "AND f.finding_id = l.finding_id "
+                    "JOIN verdict v ON v.id = l.verdict_id "
+                    "JOIN campaign_attempts a ON a.organization_id = l.organization_id "
+                    "AND a.run_id = l.campaign_run_id AND a.attempt_id = l.attempt_id "
+                    "LEFT JOIN vuln_reports vr ON vr.organization_id = l.organization_id "
+                    "AND vr.finding_id = l.finding_id "
+                    "WHERE l.organization_id = :org AND l.campaign_run_id = :run_id "
+                    "ORDER BY a.case_id, f.finding_id"
+                ),
+                {"org": organization_id, "run_id": run_id},
+            )
+            .mappings()
+            .all()
+        )
+
+        findings: list[dict[str, Any]] = []
+        candidate_count = 0
+        confirmed_count = 0
+        for row in finding_rows:
+            confirmation_status = (
+                "confirmed"
+                if row["verdict_state"] == "EXPLOIT_CONFIRMED"
+                else "candidate_unconfirmed"
+            )
+            if confirmation_status == "confirmed":
+                confirmed_count += 1
+            else:
+                candidate_count += 1
+            entry: dict[str, Any] = {
+                "finding_id": str(row["finding_id"]),
+                "source_case_id": str(row["case_id"]),
+                "severity": str(row["severity"]),
+                "category": str(row["category"]),
+                "confirmation_status": confirmation_status,
+            }
+            # Absent rather than empty when the platform has none: an invented blank reads as
+            # "the evaluator said nothing", which is a different claim from "none was recorded".
+            if row["criteria_hits"]:
+                entry["criteria_hits"] = [str(hit) for hit in row["criteria_hits"]]
+            if row["rationale"]:
+                entry["rationale"] = str(row["rationale"])
+            if row["report_id"]:
+                entry["report_id"] = str(row["report_id"])
+            findings.append(entry)
+
+        report_id = (
+            "CR-"
+            + hashlib.sha256(
+                f"campaign-report:v1\0{organization_id}\0{run_id}".encode()
+            ).hexdigest()
+        )
+        publication_state = (
+            "draft_unpublished"
+            if candidate_count == 0 and run_state == "complete"
+            else "blocked_pending_human_approval"
+        )
+        payload: dict[str, Any] = {
+            "schema_version": "1",
+            "report_id": report_id,
+            "campaign_run_id": run_id,
+            "run_state": run_state,
+            "execution_profile": str(profile) if profile in {"synthetic", "live"} else "live",
+            "totals": {
+                "attempt_count": int(totals["attempts"]),
+                "decisive_verdict_count": int(totals["decisive"]),
+                "indeterminate_verdict_count": int(totals["indeterminate"]),
+                "operational_error_count": int(totals["operational_errors"]),
+                "confirmed_finding_count": confirmed_count,
+                "candidate_finding_count": candidate_count,
+            },
+            "findings": findings,
+            "publication_state": publication_state,
+        }
+        try:
+            validate_contract("campaign_report", payload)
+        except Exception as exc:
+            raise InvalidControlPlaneInput(
+                f"campaign report fails its published contract: {exc}"
+            ) from exc
+        connection.execute(
+            text(
+                "INSERT INTO campaign_reports "
+                "(organization_id, report_id, campaign_run_id, run_state, publication_state, "
+                "candidate_finding_count, confirmed_finding_count, contract_payload) VALUES "
+                "(:org, :report, :run_id, :run_state, :publication, :candidates, :confirmed, "
+                "CAST(:payload AS jsonb)) ON CONFLICT DO NOTHING"
+            ),
+            {
+                "org": organization_id,
+                "report": report_id,
+                "run_id": run_id,
+                "run_state": run_state,
+                "publication": publication_state,
+                "candidates": candidate_count,
+                "confirmed": confirmed_count,
+                "payload": canonical_json(payload),
+            },
+        )
+        return report_id
 
     def _campaign_run(
         self, connection: Connection, organization_id: str, run_id: str

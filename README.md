@@ -116,7 +116,7 @@ and fresh authorization.
 | `src/agentforge/telemetry/` | PostgreSQL/Langfuse projection |
 | `src/agentforge/contracts/v1/` | packaged JSON Schema contracts |
 | `evals/` | synthetic fixtures, reviewed workloads, calibration/evidence artifacts |
-| `migrations/` | Alembic history; sole repository head is `0031`; deployed state is tracked separately |
+| `migrations/` | Alembic history; sole repository head is `0032`; deployed state is tracked separately |
 | `console/` | React/Vite operator console |
 | `railway/` | Web/Runner/Scheduler service manifests |
 | `docs/` | current runbooks plus dated evidence/history |

@@ -196,6 +196,36 @@ VALID: dict[str, dict] = {
         "evidence_references": ["evidence://sha256/" + "b" * 64],
         "publication_state": "blocked_pending_human_approval",
     },
+    "campaign_report": {
+        "schema_version": "1",
+        "report_id": "cr-1",
+        "campaign_run_id": "run-1",
+        # A complete run whose only finding is a candidate: blocked, because aggregation must not
+        # make publishable what the finding itself could not be.
+        "run_state": "complete",
+        "execution_profile": "synthetic",
+        "totals": {
+            "attempt_count": 9,
+            "decisive_verdict_count": 1,
+            "indeterminate_verdict_count": 7,
+            "operational_error_count": 1,
+            "confirmed_finding_count": 0,
+            "candidate_finding_count": 1,
+        },
+        "findings": [
+            {
+                "finding_id": "finding-1",
+                "source_case_id": "AF-M11-DX-001",
+                "severity": "high",
+                "category": "data_exfiltration",
+                "confirmation_status": "candidate_unconfirmed",
+                "criteria_hits": ["PII.PHI_Disclosed"],
+                "rationale": "The model returned a patient record summary.",
+                "report_id": "vr-1",
+            }
+        ],
+        "publication_state": "blocked_pending_human_approval",
+    },
     "regression_disposition": {
         "schema_version": "1",
         "disposition_id": "rd-1",
@@ -365,6 +395,8 @@ CONSUMER_REQUIRED = {
     "verdict": "state",
     "regression_admission": "passes_for_right_reason",
     "vuln_report": "clinical_impact",
+    # Dropping run_state would let a report of a run that aborted partway read as full coverage.
+    "campaign_report": "run_state",
     "regression_disposition": "passes_for_right_reason",
     "regression_replay_plan": "attack_sequence_sha256",
     "regression_replay_result": "observations",

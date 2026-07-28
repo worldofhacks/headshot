@@ -286,8 +286,8 @@ def test_agent_acceptance_migration_chain_has_one_prompt_snapshot_head() -> None
     # -> 0026 (decisive / indeterminate / operational-error counts on the campaign summary).
     # -> 0027 (immutable hosted prompt snapshots).
     # -> 0028 (bounded, append-only physical provider response evidence).
-    assert script.get_heads() == ["0031"]
-    assert script.get_revision("0031").down_revision == "0030"
+    assert script.get_heads() == ["0032"]
+    assert script.get_revision("0032").down_revision == "0031"
     assert script.get_revision("0029").down_revision == "0028"
     assert script.get_revision("0028").down_revision == "0027"
     assert script.get_revision("0027").down_revision == "0026"

@@ -51,6 +51,7 @@ SUCCESS_SCHEMAS: tuple[str, ...] = (
     "verdict",
     "regression_admission",
     "vuln_report",
+    "campaign_report",
     "regression_disposition",
     "regression_replay_plan",
     "regression_replay_result",

@@ -2084,6 +2084,43 @@ def test_synthetic_campaign_executes_all_nine_cases_and_completes_atomically(
         item["publication_status"] == "blocked_pending_human_approval"
         for item in findings_projection.data
     )
+    # --- exactly one report names the whole run, composed in the completing transaction ------
+    # Per-finding reports remain the regression lifecycle's unit; this is the artifact a reviewer
+    # reads after a run. Composed from durable rows in the same transaction as the terminal event,
+    # so a completed run can never lack one.
+    with migrated_db.connect() as connection:
+        campaign_reports = (
+            connection.execute(
+                text(
+                    "SELECT report_id, run_state, publication_state, "
+                    "candidate_finding_count, confirmed_finding_count, contract_payload "
+                    "FROM campaign_reports WHERE campaign_run_id = :r"
+                ),
+                {"r": run.run_id},
+            )
+            .mappings()
+            .all()
+        )
+    assert len(campaign_reports) == 1, "a completed run owns exactly one campaign report"
+    campaign_report = campaign_reports[0]
+    assert campaign_report["run_state"] == "complete"
+    payload = dict(campaign_report["contract_payload"])
+    # Every finding the run opened appears in it, and its counts agree with the finding rows.
+    assert len(payload["findings"]) == findings
+    assert (
+        campaign_report["confirmed_finding_count"] + campaign_report["candidate_finding_count"]
+        == findings
+    )
+    assert payload["totals"]["attempt_count"] == len(corpus.cases)
+    # This fixture confirms via oracle, so the run carries no candidate and may be draft.
+    assert campaign_report["candidate_finding_count"] == 0
+    assert campaign_report["publication_state"] == "draft_unpublished"
+    assert all(item["confirmation_status"] == "confirmed" for item in payload["findings"])
+    # Each entry points back at the per-finding report rather than replacing it.
+    assert {item["report_id"] for item in payload["findings"]} == {
+        item["report_id"] for item in reports_projection.data
+    }
+
     assert reports_projection.state == "ready"
     assert len(reports_projection.data) == findings
     assert all(item["report_integrity"] == "verified" for item in reports_projection.data)

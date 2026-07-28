@@ -103,8 +103,8 @@ unless the database is at the exact packaged head — the head compiled into the
 run, which is not necessarily the newest head in the repository. The canonical migration chain is
 `0025` reviewed workload provenance → `0026` campaign outcome breakdown → `0027` immutable prompt
 snapshots → `0028` physical provider response evidence → `0029` verdict evaluator rationale →
-`0030` advisory reasoning in reports, and `0031` reviewable reports for unconfirmed candidate
-findings. Candidate, packaged, and deployed heads are
+`0030` advisory reasoning in reports, `0031` reviewable reports for unconfirmed candidate
+findings, and `0032` one report per campaign run. Candidate, packaged, and deployed heads are
 distinct facts; the exact deployed state lives in `docs/CURRENT_STATE.md`.
 
 Staging currently has one policy-aligned service set. Production is reachable but release-skewed and
@@ -384,7 +384,7 @@ process; provider concurrency is one in the current configuration. Command mutat
 keys.
 
 Alembic applies an expand/contract history and rejects schema skew. The current sole repository
-head is `0031`: `0026` preserves the reviewed campaign-resilience outcome migration, `0027`
+head is `0032`: `0026` preserves the reviewed campaign-resilience outcome migration, `0027`
 adds immutable prompt snapshots, `0028` adds bounded append-only provider response evidence, and
 `0029` records the evaluator rationale on the verdict it produced.
 Runner and Scheduler do not migrate.
